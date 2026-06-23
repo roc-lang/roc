@@ -24,7 +24,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v6: string-pattern captures are explicit borrowed Str views.
 /// v7: string-pattern match sets add grouped arm storage.
 /// v8: LIR statements carry explicit checked source regions for diagnostics.
-pub const FORMAT_VERSION: u32 = 8;
+/// v9: LIR store carries static-data symbol names.
+pub const FORMAT_VERSION: u32 = 9;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -83,6 +84,7 @@ pub const LirStoreImage = extern struct {
     locals: ArrayRef,
     local_ids: ArrayRef,
     proc_specs: ArrayRef,
+    static_data_symbols: ArrayRef,
     strings: StringLiteralStoreImage,
     next_synthetic_symbol: u64,
     source_file_bytes: ArrayRef,
@@ -103,6 +105,7 @@ pub const LirStoreImage = extern struct {
             .locals = try arrayRef(base_ptr, image_size, store.locals.items),
             .local_ids = try arrayRef(base_ptr, image_size, store.local_ids.items),
             .proc_specs = try arrayRef(base_ptr, image_size, store.proc_specs.items),
+            .static_data_symbols = try arrayRef(base_ptr, image_size, store.static_data_symbols.items),
             .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, &store.strings),
             .next_synthetic_symbol = store.next_synthetic_symbol,
             .source_file_bytes = try arrayRef(base_ptr, image_size, store.source_file_bytes.items),
@@ -125,6 +128,7 @@ pub const LirStoreImage = extern struct {
             .locals = try arrayListFromRef(LIR.Local, base_ptr, image_size, self.locals),
             .local_ids = try arrayListFromRef(LIR.LocalId, base_ptr, image_size, self.local_ids),
             .proc_specs = try arrayListFromRef(LIR.LirProcSpec, base_ptr, image_size, self.proc_specs),
+            .static_data_symbols = try arrayListFromRef(base.StringLiteral.Idx, base_ptr, image_size, self.static_data_symbols),
             .strings = try self.strings.view(base_ptr, image_size),
             .allocator = allocator,
             .next_synthetic_symbol = self.next_synthetic_symbol,

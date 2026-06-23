@@ -10,6 +10,7 @@ const eval = @import("eval");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 
+const static_data_exports = @import("../static_data_exports.zig");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
@@ -362,6 +363,115 @@ test "imported checked bodies restore their module's hoisted constants" {
         .{ .target_usize = base.target.TargetUsize.native },
     );
     defer lowered.deinit();
+}
+
+test "reachable top-level data lowers to internal static data exports" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\top_bytes : List(U8)
+        \\top_bytes = [17, 34, 51, 68, 85, 102]
+        \\
+        \\top_record = { data: top_bytes, width: 3.U32, height: 2.U32 }
+        \\other_record = { data: top_bytes, width: 6.U32, height: 1.U32 }
+        \\
+        \\unused_bytes : List(U8)
+        \\unused_bytes = [201, 202, 203, 204, 205, 206]
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % 6
+        \\    reachable = match List.get(top_record.data, index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    other_index = (index + 1) % 6
+        \\    other = match List.get(other_record.data, other_index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = reachable + other
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(lowered.lir_result.static_data_values.items.len >= 1);
+    try std.testing.expect(countStaticDataLiteralAssignments(&lowered.lir_result.store) >= 1);
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68, 85, 102 }));
+    try std.testing.expect(!exportsContainSequence(exports, &.{ 201, 202, 203, 204, 205, 206 }));
 }
 
 test "hoisted constant crash reports original source region" {
@@ -1401,6 +1511,42 @@ fn expectReportDoesNotContain(
     };
 
     try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) == null);
+}
+
+fn countStaticDataLiteralAssignments(store: *const lir.LirStore) usize {
+    var count: usize = 0;
+    for (store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => count += 1,
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countInternalStaticValueExports(exports: []const @import("backend").StaticDataExport) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        if (std.mem.startsWith(u8, static_export.symbol_name, "roc__static_value_")) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn exportsContainSequence(exports: []const @import("backend").StaticDataExport, sequence: []const u8) bool {
+    return countExportsContainingSequence(exports, sequence) != 0;
+}
+
+fn countExportsContainingSequence(exports: []const @import("backend").StaticDataExport, sequence: []const u8) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        if (std.mem.indexOf(u8, static_export.bytes, sequence) != null) count += 1;
+    }
+    return count;
 }
 
 fn findStoredCompileTimeRootI64(

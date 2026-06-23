@@ -995,6 +995,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             immediate_f64: f64,
             /// Immediate 128-bit value
             immediate_i128: i128,
+            /// Readonly data object whose bytes represent the assigned value.
+            static_data: LIR.StaticDataId,
             /// Code path that never produces a value (crash/runtime_error).
             /// A trap instruction has been emitted; execution will never reach here.
             noreturn: void,
@@ -10737,6 +10739,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Load ptr (first 8 bytes of list struct)
                     try self.codegen.emitLoadStack(.w64, target_reg, list_info.struct_offset);
                 },
+                .static_data => |id| {
+                    try self.codegen.emitLoadDataAddress(target_reg, self.store.getStaticDataSymbolName(id));
+                },
                 .float_reg => |freg| {
                     // Calls use general argument registers; pass float values as raw bits.
                     const slot = self.codegen.allocStackSlot(8);
@@ -11040,6 +11045,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset);
                     return reg;
                 },
+                .static_data => |id| {
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadDataAddress(reg, self.store.getStaticDataSymbolName(id));
+                    return reg;
+                },
                 .float_reg => |freg| {
                     // Some call paths pass all args in general regs; preserve float bits.
                     const reg = try self.allocTempGeneral();
@@ -11204,6 +11214,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stack_str,
                 .list_stack,
                 => .{ .general_reg = try self.ensureInGeneralReg(loc) },
+                .static_data => loc,
                 .noreturn => unreachable,
             };
         }
@@ -11262,7 +11273,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const f_val: f64 = @floatFromInt(val);
                     loc = .{ .immediate_f64 = f_val };
                 },
-                .general_reg, .immediate_i128, .stack_i128, .stack_str, .list_stack => {
+                .general_reg, .immediate_i128, .stack_i128, .stack_str, .list_stack, .static_data => {
                     unreachable;
                 },
                 .noreturn => unreachable,
@@ -11779,6 +11790,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const temp_reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(temp_reg);
                     try self.copyChunked(temp_reg, frame_ptr, info.struct_offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                .static_data => |id| {
+                    const src_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(src_reg);
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.codegen.emitLoadDataAddress(src_reg, self.store.getStaticDataSymbolName(id));
+                    try self.copyChunked(temp_reg, src_reg, 0, frame_ptr, dest_offset, size);
                     return;
                 },
                 else => {},
@@ -14007,6 +14027,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .f32_literal => |lit| .{ .immediate_f64 = @floatCast(lit) },
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
                                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+                                .static_data => |id| .{ .static_data = id },
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .proc_ref => |proc_id| blk: {
                                     const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;

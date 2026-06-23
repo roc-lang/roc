@@ -13,7 +13,7 @@ const stack_probe = embedded_lld.stack_probe;
 const CodeSignature = @import("vendor_macho").CodeSignature;
 const DwarfSplice = @import("macho/DwarfSplice.zig");
 const RocTarget = @import("roc_target").RocTarget;
-const WasmModule = @import("backend").wasm.WasmModule;
+const backend = @import("backend");
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
@@ -26,6 +26,32 @@ const suppress_linker_warnings = builtin.mode != .Debug;
 
 /// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
+const binaryen_available = if (@import("builtin").is_test) false else @import("config").binaryen;
+
+const RocBinaryenOptimizeConfig = extern struct {
+    optimize_level: c_int,
+    shrink_level: c_int,
+    zero_filled_memory: u8,
+    debug_info: u8,
+    strip_debug: u8,
+    strip_producers: u8,
+    validate: u8,
+};
+
+const RocBinaryenBuffer = extern struct {
+    ptr: ?[*]u8,
+    len: usize,
+};
+
+const binaryen_externs = if (binaryen_available) struct {
+    extern fn RocBinaryenOptimizeWasm(
+        input: [*]const u8,
+        input_len: usize,
+        config: RocBinaryenOptimizeConfig,
+        output: *RocBinaryenBuffer,
+    ) c_int;
+    extern fn RocBinaryenFree(ptr: ?*anyopaque) void;
+} else struct {};
 
 /// Supported target formats for linking
 pub const TargetFormat = embedded_lld.Format;
@@ -47,6 +73,12 @@ pub const OutputKind = enum {
     exe,
     /// Shared/dynamic library (.so, .dylib, .dll).
     shared_lib,
+};
+
+pub const WasmOptimizeMode = enum {
+    none,
+    size,
+    speed,
 };
 
 /// Default WASM initial memory: 64MB
@@ -127,6 +159,12 @@ pub const LinkConfig = struct {
 
     /// Whether the final WASM memory is guaranteed to start zero-filled.
     wasm_zero_filled_memory: bool = false,
+
+    /// Whether to preserve debug information when optimizing linked wasm output.
+    wasm_debug_info: bool = false,
+
+    /// Whether to run Binaryen over linked wasm output.
+    wasm_optimize: WasmOptimizeMode = .none,
 
     /// Optional data/global base for freestanding WASM links.
     wasm_global_base: ?u32 = null,
@@ -231,6 +269,7 @@ pub const LinkError = error{
     OutOfMemory,
     InvalidArguments,
     LLVMNotAvailable,
+    BinaryenNotAvailable,
     WindowsSDKNotFound,
     DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
@@ -810,9 +849,9 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         error.LinkFailed => return LinkError.LinkFailed,
     };
 
-    if (config.target_format == .wasm and config.wasm_zero_filled_memory and !config.disable_output) {
-        omitNoopZeroActiveDataSegments(ctx, config.output_path) catch |err| {
-            std.log.warn("Failed to omit zero-filled wasm data segments from {s}: {}", .{ config.output_path, err });
+    if (config.target_format == .wasm and config.wasm_optimize != .none and !config.disable_output) {
+        optimizeWasmOutput(ctx, config) catch |err| {
+            std.log.warn("Failed to optimize wasm output {s}: {}", .{ config.output_path, err });
             return LinkError.LinkFailed;
         };
     }
@@ -842,14 +881,68 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     }
 }
 
-fn omitNoopZeroActiveDataSegments(ctx: *CliCtx, output_path: []const u8) anyerror!void {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, output_path, ctx.gpa, .limited(std.math.maxInt(u32)));
+fn binaryenStatusName(status: c_int) []const u8 {
+    return switch (status) {
+        1 => "invalid arguments",
+        2 => "read failed",
+        3 => "validation failed",
+        4 => "write failed",
+        else => "unknown error",
+    };
+}
+
+fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
+    const Levels = struct {
+        optimize: c_int,
+        shrink: c_int,
+    };
+    const levels: Levels = switch (config.wasm_optimize) {
+        .none => unreachable,
+        .size => .{ .optimize = 2, .shrink = 2 },
+        .speed => .{ .optimize = 3, .shrink = 0 },
+    };
+    return .{
+        .optimize_level = levels.optimize,
+        .shrink_level = levels.shrink,
+        .zero_filled_memory = @intFromBool(config.wasm_zero_filled_memory),
+        .debug_info = @intFromBool(config.wasm_debug_info),
+        .strip_debug = @intFromBool(!config.wasm_debug_info),
+        .strip_producers = 1,
+        .validate = 1,
+    };
+}
+
+fn optimizeWasmOutput(ctx: *CliCtx, config: LinkConfig) LinkError!void {
+    if (comptime !binaryen_available) {
+        return LinkError.BinaryenNotAvailable;
+    }
+
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, config.output_path, ctx.gpa, .limited(std.math.maxInt(u32))) catch |err| switch (err) {
+        error.OutOfMemory => return LinkError.OutOfMemory,
+        else => return LinkError.LinkFailed,
+    };
     defer ctx.gpa.free(bytes);
 
-    const rewritten = try WasmModule.omitNoopZeroActiveDataSegments(ctx.gpa, bytes) orelse return;
-    defer ctx.gpa.free(rewritten);
+    var output = RocBinaryenBuffer{ .ptr = null, .len = 0 };
+    const status = binaryen_externs.RocBinaryenOptimizeWasm(
+        bytes.ptr,
+        bytes.len,
+        binaryenConfig(config),
+        &output,
+    );
+    defer if (output.ptr) |ptr| binaryen_externs.RocBinaryenFree(@ptrCast(ptr));
 
-    try @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, output_path, rewritten);
+    if (status != 0) {
+        std.log.err("Binaryen failed for {s}: {s}", .{ config.output_path, binaryenStatusName(status) });
+        return LinkError.LinkFailed;
+    }
+
+    const output_ptr = output.ptr orelse return LinkError.LinkFailed;
+    const output_bytes = output_ptr[0..output.len];
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, config.output_path, output_bytes) catch |err| switch (err) {
+        error.OutOfMemory => return LinkError.OutOfMemory,
+        else => return LinkError.LinkFailed,
+    };
 }
 
 const macho = std.macho;

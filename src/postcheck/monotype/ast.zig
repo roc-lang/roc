@@ -44,6 +44,12 @@ pub const StringLiteral = struct {
     }
 };
 
+/// Use of a compile-time constant that runtime lowering will read from static data.
+pub const StaticConst = struct {
+    const_ref: checked.ConstRef,
+    checked_type: checked.CheckedTypeId,
+};
+
 /// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -289,6 +295,7 @@ pub const ExprData = union(enum) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
+    static_const: StaticConst,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

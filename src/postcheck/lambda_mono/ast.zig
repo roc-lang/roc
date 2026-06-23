@@ -147,6 +147,7 @@ pub const ExprData = union(enum) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
+    static_const: Mono.StaticConst,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

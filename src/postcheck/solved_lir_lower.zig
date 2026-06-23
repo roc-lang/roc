@@ -238,6 +238,28 @@ const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
+const StaticConstUse = struct {
+    const_ref: check.CheckedModule.ConstRef,
+    checked_type: check.CheckedModule.CheckedTypeId,
+    ty: Type.TypeId,
+};
+
+const StaticConstUseContext = struct {
+    pub fn hash(_: StaticConstUseContext, use: StaticConstUse) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, use.const_ref);
+        std.hash.autoHash(&hasher, @intFromEnum(use.checked_type));
+        std.hash.autoHash(&hasher, @intFromEnum(use.ty));
+        return hasher.final();
+    }
+
+    pub fn eql(_: StaticConstUseContext, lhs: StaticConstUse, rhs: StaticConstUse) bool {
+        return std.meta.eql(lhs.const_ref, rhs.const_ref) and
+            lhs.checked_type == rhs.checked_type and
+            lhs.ty == rhs.ty;
+    }
+};
+
 const CaptureSource = union(enum) {
     record: LIR.LocalId,
     erased_ptr: LIR.LocalId,
@@ -276,6 +298,7 @@ const Lowerer = struct {
     roots: std.ArrayList(RootEntry),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    static_const_uses: std.HashMap(StaticConstUse, LIR.StaticDataId, StaticConstUseContext, std.hash_map.default_max_load_percentage),
     type_layouts: std.AutoHashMap(Type.TypeId, layout.Idx),
     const_plan_map: std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId),
     symbols: Common.SymbolGen,
@@ -336,6 +359,7 @@ const Lowerer = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .static_const_uses = std.HashMap(StaticConstUse, LIR.StaticDataId, StaticConstUseContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .type_layouts = std.AutoHashMap(Type.TypeId, layout.Idx).init(allocator),
             .const_plan_map = std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
@@ -352,6 +376,7 @@ const Lowerer = struct {
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
         self.type_layouts.deinit();
+        self.static_const_uses.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -381,6 +406,7 @@ const Lowerer = struct {
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
         self.type_layouts.deinit();
+        self.static_const_uses.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -401,6 +427,7 @@ const Lowerer = struct {
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.folded_map_matches = .empty;
+        self.static_const_uses = std.HashMap(StaticConstUse, LIR.StaticDataId, StaticConstUseContext, std.hash_map.default_max_load_percentage).initContext(self.allocator, .{});
         return output;
     }
 
@@ -977,6 +1004,32 @@ const Lowerer = struct {
         return try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len);
     }
 
+    fn staticDataId(self: *Lowerer, value: Mono.StaticConst, ty: Type.TypeId) Common.LowerError!LIR.StaticDataId {
+        const use: StaticConstUse = .{
+            .const_ref = value.const_ref,
+            .checked_type = value.checked_type,
+            .ty = ty,
+        };
+        if (self.static_const_uses.get(use)) |existing| return existing;
+
+        const ordinal = self.result.static_data_values.items.len;
+        const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__static_value_{d}", .{ordinal});
+        defer self.allocator.free(symbol_name);
+
+        const id = try self.result.store.addStaticDataSymbolName(symbol_name);
+        const layout_idx = try self.layoutOfType(ty);
+        const plan = try self.constPlanOfType(ty);
+        try self.result.static_data_values.append(self.allocator, .{
+            .id = id,
+            .const_ref = value.const_ref,
+            .checked_type = value.checked_type,
+            .layout_idx = layout_idx,
+            .plan = plan,
+        });
+        try self.static_const_uses.put(use, id);
+        return id;
+    }
+
     fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
         if (self.current_proc_locals) |locals| {
             try locals.put(self.allocator, @intFromEnum(local), {});
@@ -1543,6 +1596,11 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
+            .static_const => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = try self.staticDataId(value, expr_ty) },
+                .next = next,
+            } }),
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_ty, fields, next),

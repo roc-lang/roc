@@ -1059,6 +1059,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         extra_modules.items,
         &builtin_module_owned_by_artifact,
         pre_published_builtin,
+        problem_reporting,
     );
     errdefer {
         for (import_artifacts) |*artifact| artifact.deinit(allocator);
@@ -1361,6 +1362,7 @@ fn publishImportArtifacts(
     extra_modules: []CheckedModule,
     builtin_module_owned_by_artifact: *bool,
     pre_published_builtin: ?PrePublishedBuiltin,
+    problem_reporting: ComptimeProblemReporting,
 ) anyerror![]check.CheckedArtifact.CheckedModuleArtifact {
     const extra_module_count = extra_modules.len;
     var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
@@ -1431,6 +1433,10 @@ fn publishImportArtifacts(
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
                     .imports = published_keys.items,
                     .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+                    .problem_store = switch (problem_reporting) {
+                        .ignore_comptime_problems => null,
+                        .report_comptime_problems => &extra_modules[extra_i].checker.problems,
+                    },
                 },
             );
             extra_modules[extra_i].published_owns_module_env = true;

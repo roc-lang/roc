@@ -799,6 +799,44 @@ fn resolveUndefinedFunctionSymbols(
     return first_match;
 }
 
+fn isUndefinedDataNamed(self: *const Self, sym: WasmLinking.SymInfo, name: []const u8) bool {
+    if (sym.kind != .data or !sym.isUndefined()) return false;
+    const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return false;
+    return std.mem.eql(u8, sym_name, name);
+}
+
+fn resolveUndefinedDataSymbols(
+    self: *Self,
+    name: []const u8,
+    segment_index: u32,
+    data_offset: u32,
+    data_size: u32,
+    defined_flags: u32,
+    defined_name: ?[]const u8,
+) ?u32 {
+    var first_match: ?u32 = null;
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        if (!self.isUndefinedDataNamed(sym, name)) continue;
+        if (first_match == null) first_match = @intCast(i);
+    }
+
+    if (first_match == null) return null;
+
+    for (self.linking.symbol_table.items) |*sym| {
+        if (!self.isUndefinedDataNamed(sym.*, name)) continue;
+        sym.* = .{
+            .kind = .data,
+            .flags = defined_flags & ~WasmLinking.SymFlag.UNDEFINED,
+            .name = defined_name orelse name,
+            .index = segment_index,
+            .data_offset = data_offset,
+            .data_size = data_size,
+        };
+    }
+
+    return first_match;
+}
+
 /// Return the wasm type index for an imported or defined function.
 pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
     const raw = function.raw();
@@ -920,6 +958,53 @@ pub fn addDataSymbol(
     return SymbolIndex.fromRaw(raw_symbol);
 }
 
+/// Add an undefined data symbol that a later `addStaticDataExports` call can define.
+pub fn addUndefinedDataSymbol(
+    self: *Self,
+    name: []const u8,
+    flags: u32,
+) Allocator.Error!SymbolIndex {
+    if (self.findSymbolByNameAndKind(name, .data)) |existing| {
+        return SymbolIndex.fromRaw(existing);
+    }
+
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .data,
+        .flags = flags | WasmLinking.SymFlag.UNDEFINED,
+        .name = name,
+        .index = 0,
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
+}
+
+fn addOrDefineDataSymbol(
+    self: *Self,
+    segment_index: u32,
+    name: []const u8,
+    data_offset: u32,
+    size: u32,
+    flags: u32,
+) Allocator.Error!SymbolIndex {
+    std.debug.assert(segment_index < self.data_segments.items.len);
+    if (self.findSymbolByNameAndKind(name, .data)) |existing| {
+        const sym = &self.linking.symbol_table.items[existing];
+        if (sym.isUndefined()) {
+            sym.* = .{
+                .kind = .data,
+                .flags = flags,
+                .name = name,
+                .index = segment_index,
+                .data_offset = data_offset,
+                .data_size = size,
+            };
+        }
+        return SymbolIndex.fromRaw(existing);
+    }
+
+    return try self.addDataSymbol(segment_index, name, data_offset, size, flags);
+}
+
 /// Build a relocatable data-only module from materialized static data exports.
 pub fn staticDataModule(allocator: Allocator, exports: []const StaticDataExport) StaticDataError!Self {
     var module = Self.init(allocator);
@@ -949,7 +1034,7 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
         else
             WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN;
         const symbol_offset: usize = @intCast(data_export.symbol_offset);
-        _ = try self.addDataSymbol(
+        _ = try self.addOrDefineDataSymbol(
             segment_indices[i],
             data_export.symbol_name,
             data_export.symbol_offset,
@@ -1612,11 +1697,24 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                     // Defined data — keep the symbol's segment-relative offset.
                     // The segment itself was remapped above; final relocation
                     // resolution computes the absolute address from the segment.
-                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                     const new_segment_idx = if (src_sym.index < data_segment_remap.len)
                         data_segment_remap[src_sym.index]
                     else
                         src_sym.index;
+                    if (src_name) |name| {
+                        if (self.resolveUndefinedDataSymbols(
+                            name,
+                            new_segment_idx,
+                            src_sym.data_offset,
+                            src_sym.data_size,
+                            src_sym.flags,
+                            src_sym.name,
+                        )) |existing| {
+                            symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                    }
+                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                     try self.linking.symbol_table.append(gpa, .{
                         .kind = .data,
                         .flags = src_sym.flags,
@@ -3583,185 +3681,6 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8), om
     try output.append(gpa, @intFromEnum(SectionId.data_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
-}
-
-pub const ZeroDataRewriteError = Allocator.Error || ParseError;
-
-const DataSectionRewrite = struct {
-    payload: []u8,
-    original_count: u32,
-    rewritten_count: u32,
-    changed: bool,
-
-    fn deinit(self: DataSectionRewrite, gpa: Allocator) void {
-        gpa.free(self.payload);
-    }
-};
-
-fn appendRawSection(gpa: Allocator, output: *std.ArrayList(u8), section_id: u8, payload: []const u8) Allocator.Error!void {
-    try output.append(gpa, section_id);
-    try leb128WriteU32(gpa, output, @intCast(payload.len));
-    try output.appendSlice(gpa, payload);
-}
-
-fn allZero(bytes: []const u8) bool {
-    for (bytes) |byte| {
-        if (byte != 0) return false;
-    }
-    return true;
-}
-
-fn rewriteDataSectionOmittingZeroActiveSegments(gpa: Allocator, payload: []const u8) ZeroDataRewriteError!DataSectionRewrite {
-    var cursor: usize = 0;
-    const original_count = try readU32(payload, &cursor);
-
-    var segments: std.ArrayList(u8) = .empty;
-    defer segments.deinit(gpa);
-
-    var rewritten_count: u32 = 0;
-    var changed = false;
-
-    for (0..original_count) |_| {
-        const segment_start = cursor;
-        const flags = try readU32(payload, &cursor);
-        const active = switch (flags) {
-            0 => true,
-            1 => false,
-            2 => blk: {
-                _ = try readU32(payload, &cursor);
-                break :blk true;
-            },
-            else => return error.InvalidSection,
-        };
-
-        if (active) {
-            if (cursor >= payload.len) return error.UnexpectedEnd;
-            if (payload[cursor] != Op.i32_const) return error.InvalidSection;
-            cursor += 1;
-            _ = try readI32(payload, &cursor);
-            if (cursor >= payload.len) return error.UnexpectedEnd;
-            if (payload[cursor] != Op.end) return error.InvalidSection;
-            cursor += 1;
-        }
-
-        const data_len = try readU32(payload, &cursor);
-        const data_start = cursor;
-        const data_end = cursor + data_len;
-        if (data_end > payload.len) return error.UnexpectedEnd;
-        cursor = data_end;
-
-        if (active and allZero(payload[data_start..data_end])) {
-            changed = true;
-            continue;
-        }
-
-        try segments.appendSlice(gpa, payload[segment_start..cursor]);
-        rewritten_count += 1;
-    }
-
-    if (cursor != payload.len) return error.InvalidSection;
-
-    var rewritten: std.ArrayList(u8) = .empty;
-    errdefer rewritten.deinit(gpa);
-    try leb128WriteU32(gpa, &rewritten, rewritten_count);
-    try rewritten.appendSlice(gpa, segments.items);
-
-    return .{
-        .payload = try rewritten.toOwnedSlice(gpa),
-        .original_count = original_count,
-        .rewritten_count = rewritten_count,
-        .changed = changed,
-    };
-}
-
-/// Remove no-op zero active data segments from a final wasm binary.
-///
-/// This is only semantics-preserving when the final memory is guaranteed to
-/// start zero-filled. Passive segments are retained because code may reference
-/// them with bulk-memory instructions.
-pub fn omitNoopZeroActiveDataSegments(gpa: Allocator, bytes: []const u8) ZeroDataRewriteError!?[]u8 {
-    if (bytes.len < 8) return error.UnexpectedEnd;
-    if (!std.mem.eql(u8, bytes[0..4], wasm_magic)) return error.InvalidMagic;
-    if (std.mem.readInt(u32, bytes[4..8], .little) != wasm_version) return error.InvalidVersion;
-
-    var cursor: usize = 8;
-    var data_payload_start: ?usize = null;
-    var data_payload_end: ?usize = null;
-    var data_count_payload_start: ?usize = null;
-    var data_count_payload_end: ?usize = null;
-    var declared_data_count: ?u32 = null;
-    var rewrite: ?DataSectionRewrite = null;
-    errdefer if (rewrite) |rewritten| rewritten.deinit(gpa);
-
-    while (cursor < bytes.len) {
-        const section_start = cursor;
-        const section_id = bytes[cursor];
-        cursor += 1;
-        const section_size = try readU32(bytes, &cursor);
-        const section_payload_start = cursor;
-        const section_payload_end = cursor + section_size;
-        if (section_payload_end > bytes.len) return error.UnexpectedEnd;
-
-        if (section_id == @intFromEnum(SectionId.data_count_section)) {
-            var count_cursor = section_payload_start;
-            const count = try readU32(bytes, &count_cursor);
-            if (count_cursor != section_payload_end) return error.InvalidSection;
-            data_count_payload_start = section_payload_start;
-            data_count_payload_end = section_payload_end;
-            declared_data_count = count;
-        } else if (section_id == @intFromEnum(SectionId.data_section)) {
-            data_payload_start = section_payload_start;
-            data_payload_end = section_payload_end;
-            rewrite = try rewriteDataSectionOmittingZeroActiveSegments(gpa, bytes[section_payload_start..section_payload_end]);
-        }
-
-        cursor = section_payload_end;
-        _ = section_start;
-    }
-
-    const rewritten = rewrite orelse return null;
-    if (!rewritten.changed) {
-        rewritten.deinit(gpa);
-        rewrite = null;
-        return null;
-    }
-    if (declared_data_count) |count| {
-        if (count != rewritten.original_count) return error.InvalidSection;
-    }
-
-    var output: std.ArrayList(u8) = .empty;
-    errdefer output.deinit(gpa);
-    try output.appendSlice(gpa, bytes[0..8]);
-
-    cursor = 8;
-    while (cursor < bytes.len) {
-        const section_start = cursor;
-        const section_id = bytes[cursor];
-        cursor += 1;
-        const section_size = try readU32(bytes, &cursor);
-        const section_payload_start = cursor;
-        const section_payload_end = cursor + section_size;
-        if (section_payload_end > bytes.len) return error.UnexpectedEnd;
-
-        if (data_count_payload_start != null and section_payload_start == data_count_payload_start.? and section_payload_end == data_count_payload_end.?) {
-            var data_count_payload: std.ArrayList(u8) = .empty;
-            defer data_count_payload.deinit(gpa);
-            try leb128WriteU32(gpa, &data_count_payload, rewritten.rewritten_count);
-            try appendRawSection(gpa, &output, section_id, data_count_payload.items);
-        } else if (section_payload_start == data_payload_start.? and section_payload_end == data_payload_end.?) {
-            if (rewritten.rewritten_count > 0) {
-                try appendRawSection(gpa, &output, section_id, rewritten.payload);
-            }
-        } else {
-            try output.appendSlice(gpa, bytes[section_start..section_payload_end]);
-        }
-
-        cursor = section_payload_end;
-    }
-
-    rewritten.deinit(gpa);
-    rewrite = null;
-    return try output.toOwnedSlice(gpa);
 }
 
 fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
@@ -5804,35 +5723,6 @@ test "encode — keeps bss payload when imported memory may be uninitialized" {
     try std.testing.expectEqual(@as(u32, 68), summary.payload_len);
 }
 
-test "omitNoopZeroActiveDataSegments — removes zero active payload from final wasm" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    _ = try module.addDataSegmentWithInfo("DATA", 4, ".data.test", 0);
-    _ = try module.addDataSegmentWithInfo(&([_]u8{0} ** 64), 16, ".bss.heap", 0);
-
-    try module.finalizeMemoryAndTableWithConfig(.{
-        .stack_bytes = 16,
-        .import_memory = true,
-        .imported_memory_zeroed = false,
-        .minimum_memory = 65536,
-        .maximum_memory = 65536,
-        .export_memory = false,
-    });
-
-    const encoded = try module.encode(allocator);
-    defer allocator.free(encoded);
-    try std.testing.expectEqual(@as(u32, 68), (try encodedDataSummary(encoded)).payload_len);
-
-    const rewritten = (try omitNoopZeroActiveDataSegments(allocator, encoded)) orelse return error.TestUnexpectedResult;
-    defer allocator.free(rewritten);
-
-    const summary = try encodedDataSummary(rewritten);
-    try std.testing.expectEqual(@as(u32, 1), summary.count);
-    try std.testing.expectEqual(@as(u32, 4), summary.payload_len);
-}
-
 test "mergeModule — element section entries remapped and appended" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
@@ -6286,6 +6176,79 @@ test "mergeModule final link - resolves stack pointer import to global zero" {
 
     app.resolveCodeRelocations();
     try std.testing.expectEqual(@as(u32, 0), decodePaddedU32(app.code_bytes.items[1..6]));
+}
+
+test "addStaticDataExports defines forward data symbols used by code relocations" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addDataSegment(&.{ 0xaa, 0xbb, 0xcc }, 1);
+    const symbol = try module.addUndefinedDataSymbol(
+        "roc__static_value_0",
+        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+    );
+
+    try module.code_bytes.append(allocator, Op.i32_const);
+    try appendPaddedI32(allocator, &module.code_bytes, 0);
+    try module.reloc_code.entries.append(allocator, .{ .offset = .{
+        .type_id = .memory_addr_sleb,
+        .offset = 1,
+        .symbol_index = symbol.raw(),
+        .addend = 2,
+    } });
+
+    const exports = [_]StaticDataExport{.{
+        .symbol_name = "roc__static_value_0",
+        .bytes = &.{ 9, 8, 7, 6 },
+        .alignment = 4,
+        .is_global = false,
+        .relocations = &.{},
+    }};
+    try module.addStaticDataExports(&exports);
+
+    const sym = module.linking.symbol_table.items[symbol.raw()];
+    try std.testing.expect(!sym.isUndefined());
+    try std.testing.expectEqual(WasmLinking.SymKind.data, sym.kind);
+    try std.testing.expectEqualStrings("roc__static_value_0", sym.name.?);
+    try std.testing.expectEqual(@as(u32, 0), sym.data_offset);
+    try std.testing.expectEqual(@as(u32, 4), sym.data_size);
+
+    module.resolveCodeRelocations();
+    const expected_addr: i32 = @intCast(module.data_segments.items[sym.index].offset + 2);
+    try std.testing.expectEqual(expected_addr, decodePaddedI32(module.code_bytes.items[1..6]));
+}
+
+test "mergeModuleForObject resolves undefined static data symbols" {
+    const allocator = std.testing.allocator;
+    var app = Self.init(allocator);
+    defer app.deinit();
+
+    const symbol = try app.addUndefinedDataSymbol(
+        "roc__static_value_0",
+        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+    );
+
+    const exports = [_]StaticDataExport{.{
+        .symbol_name = "roc__static_value_0",
+        .bytes = &.{ 9, 8, 7, 6 },
+        .alignment = 4,
+        .is_global = false,
+        .relocations = &.{},
+    }};
+    var static_module = try Self.staticDataModule(allocator, &exports);
+    defer static_module.deinit();
+
+    var result = try app.mergeModuleForObject(&static_module);
+    defer result.deinit();
+
+    const sym = app.linking.symbol_table.items[symbol.raw()];
+    try std.testing.expect(!sym.isUndefined());
+    try std.testing.expectEqual(WasmLinking.SymKind.data, sym.kind);
+    try std.testing.expectEqualStrings("roc__static_value_0", sym.name.?);
+    try std.testing.expectEqual(@as(u32, 0), sym.data_offset);
+    try std.testing.expectEqual(@as(u32, 4), sym.data_size);
+    try app.verifyNoLinkObjectContract();
 }
 
 test "encodeRelocatable roundtrip - preserves data symbols and data relocations" {

@@ -23,6 +23,15 @@ pub const RequestedLayout = struct {
     plan: ConstPlanId,
 };
 
+/// One reachable compile-time constant that must be emitted as readonly data.
+pub const StaticDataValue = struct {
+    id: LIR.StaticDataId,
+    const_ref: checked.ConstRef,
+    checked_type: checked.CheckedTypeId,
+    layout_idx: layout.Idx,
+    plan: ConstPlanId,
+};
+
 /// Identifier for a finite callable set in the LIR program.
 pub const FnSetId = enum(u32) { _ };
 /// Identifier for an erased callable entry set in the LIR program.
@@ -130,6 +139,7 @@ pub const Result = struct {
     erased_fns: std.ArrayList(ErasedFns),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
+    static_data_values: std.ArrayList(StaticDataValue),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
 
     pub fn init(allocator: Allocator, target_usize: @import("base").target.TargetUsize) Allocator.Error!Result {
@@ -143,6 +153,7 @@ pub const Result = struct {
             .erased_fns = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
+            .static_data_values = .empty,
             .comptime_sites = .empty,
         };
     }
@@ -153,6 +164,7 @@ pub const Result = struct {
             allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(allocator);
+        self.static_data_values.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
         self.const_plans.deinit(allocator);

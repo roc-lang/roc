@@ -89,6 +89,33 @@ const dbg_does_not_halt =
     \\main = x
 ;
 
+const unused_top_level_dbg_does_not_halt =
+    \\unused : I64
+    \\unused = {
+    \\    dbg 40
+    \\    1.I64
+    \\}
+    \\main = 42
+;
+
+const unused_top_level_expect_failure =
+    \\unused : I64
+    \\unused = {
+    \\    expect False
+    \\    1.I64
+    \\}
+    \\main = 42
+;
+
+const unused_top_level_crash =
+    \\unused : I64
+    \\unused = {
+    \\    crash "unused top-level constant crash"
+    \\    1.I64
+    \\}
+    \\main = 42
+;
+
 const folded_multiply =
     \\x = 6 * 7
     \\main = x
@@ -727,6 +754,30 @@ const import_crash_module =
     \\safe = 42
 ;
 
+const import_unused_expect_module =
+    \\module [safe]
+    \\
+    \\hidden_bad : I64
+    \\hidden_bad = {
+    \\    expect False
+    \\    0.I64
+    \\}
+    \\
+    \\safe = 42
+;
+
+const import_unused_crash_module =
+    \\module [safe]
+    \\
+    \\hidden_bad : I64
+    \\hidden_bad = {
+    \\    crash "imported unused top-level constant crash"
+    \\    0.I64
+    \\}
+    \\
+    \\safe = 42
+;
+
 const crash_other_defs =
     \\good = 42
     \\bad : {} -> I64
@@ -768,6 +819,11 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - crash does not halt other defs", .source_kind = .module, .source = crash_other_defs, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - expect failure does not halt evaluation", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - dbg does not halt evaluation", .source_kind = .module, .source = dbg_does_not_halt, .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "comptime eval - unused top-level dbg still evaluates", .source_kind = .module, .source = unused_top_level_dbg_does_not_halt, .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "comptime eval - unused top-level constant expect failure is reported", .source_kind = .module, .source = unused_top_level_expect_failure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - unused top-level constant crash is reported", .source_kind = .module, .source = unused_top_level_crash, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - imported unused top-level expect failure is reported", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = import_unused_expect_module }}, .source = "import Util\nmain = Util.safe", .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - imported unused top-level crash is reported", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = import_unused_crash_module }}, .source = "import Util\nmain = Util.safe", .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - crash in first def does not halt other defs", .source_kind = .module, .source = crash_first_other_defs, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - crash halts within single def", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "comptime eval - constant folding multiplication", .source_kind = .module, .source = folded_multiply, .expected = .{ .inspect_str = "42.0" } },

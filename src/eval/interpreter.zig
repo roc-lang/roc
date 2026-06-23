@@ -2611,6 +2611,7 @@ pub const Interpreter = struct {
             .f32_literal => |value| self.evalF32Literal(value),
             .dec_literal => |value| self.evalDecLiteral(value),
             .str_literal => |idx| self.evalStrLiteral(idx),
+            .static_data => self.invariantFailed("LIR/interpreter invariant violated: static data literal reached compile-time interpreter", .{}),
             .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
         };

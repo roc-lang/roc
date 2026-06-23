@@ -208,7 +208,10 @@ pub fn lowerCheckedModulesToLir(
         allocator,
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
-        .{ .proc_debug_names = target.proc_debug_names },
+        .{
+            .proc_debug_names = target.proc_debug_names,
+            .static_data_uses = roots.include_static_data_exports and target.checked_module_state == .complete,
+        },
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();

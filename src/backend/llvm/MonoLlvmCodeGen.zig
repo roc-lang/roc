@@ -160,6 +160,7 @@ pub const MonoLlvmCodeGen = struct {
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
+    static_data_globals: std.StringHashMap(LlvmBuilder.Value),
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     join_points: std.AutoHashMap(u32, JoinInfo),
     compiled_joins: std.AutoHashMap(u32, void),
@@ -286,6 +287,7 @@ pub const MonoLlvmCodeGen = struct {
             .store = store,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
+            .static_data_globals = std.StringHashMap(LlvmBuilder.Value).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .join_points = std.AutoHashMap(u32, JoinInfo).init(allocator),
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
@@ -320,6 +322,7 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_types.deinit();
         self.proc_registry.deinit();
         self.builtin_functions.deinit();
+        self.static_data_globals.deinit();
         self.rc_helpers.deinit();
         self.join_points.deinit();
         self.compiled_joins.deinit();
@@ -331,6 +334,7 @@ pub const MonoLlvmCodeGen = struct {
     pub fn reset(self: *MonoLlvmCodeGen) void {
         self.proc_registry.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
+        self.static_data_globals.clearRetainingCapacity();
         self.rc_helpers.clearRetainingCapacity();
         self.join_points.clearRetainingCapacity();
         self.compiled_joins.clearRetainingCapacity();
@@ -2018,6 +2022,7 @@ pub const MonoLlvmCodeGen = struct {
             .f32_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f32, lit),
             .dec_literal => |lit| try self.storeI128Literal(slot_v.ptr, .dec, lit),
             .str_literal => |str_idx| try self.emitStrLiteral(slot_v.ptr, str_idx),
+            .static_data => |id| try self.emitStaticDataLiteral(slot_v.ptr, slot_v.layout_idx, id),
             .null_ptr => {
                 if (slot_v.size > 0) try self.zeroBytes(slot_v.ptr, slot_v.size);
             },
@@ -2026,6 +2031,13 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storePointer(slot_v.ptr, func.toValue(self.builder.?));
             },
         }
+    }
+
+    fn emitStaticDataLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, layout_idx: layout.Idx, id: lir.LIR.StaticDataId) Error!void {
+        const size = self.layoutByteSize(layout_idx);
+        if (size == 0) return;
+        const static_global = try self.staticDataGlobal(id, size);
+        try self.copyBytes(out, static_global, size, self.alignmentForLayout(layout_idx));
     }
 
     fn emitDirectCall(self: *MonoLlvmCodeGen, target: LocalId, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
@@ -4086,6 +4098,20 @@ pub const MonoLlvmCodeGen = struct {
         variable.setMutability(.constant, builder);
         variable.setInitializer(builder.stringConst(builder.string(actual) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
         return variable.toValue(builder);
+    }
+
+    fn staticDataGlobal(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId, size: u32) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const symbol_name = self.store.getStaticDataSymbolName(id);
+        if (self.static_data_globals.get(symbol_name)) |value| return value;
+
+        const arr_ty = builder.arrayType(@max(size, 1), .i8) catch return error.OutOfMemory;
+        const name = builder.strtabString(symbol_name) catch return error.OutOfMemory;
+        const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
+        variable.ptrConst(builder).global.setLinkage(.external, builder);
+        const value = variable.toValue(builder);
+        try self.static_data_globals.put(symbol_name, value);
+        return value;
     }
 
     fn emitStrByteSliceForLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!StrByteSlice {

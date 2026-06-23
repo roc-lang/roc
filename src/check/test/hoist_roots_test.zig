@@ -163,6 +163,44 @@ test "hoist roots select closed ordinary call child expressions" {
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
+test "hoist roots select closed call inside record with runtime field" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |arg| {
+        \\    record = { static: add_one(41.I64), runtime: arg }
+        \\    record.runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try expectExprTag(&test_env, roots[0].expr, .e_call);
+}
+
+test "hoist roots select rocci-shaped cell child inside runtime record" {
+    var test_env = try TestEnv.init("Test",
+        \\mk_sprite = |n| { data: [1.U8, 2.U8, 3.U8], region: { x: n, y: 0.I64 } }
+        \\
+        \\main = |frame_count| {
+        \\    anim = {
+        \\        last_updated: frame_count,
+        \\        cells: [
+        \\            { frames: 5.I64, sprite: mk_sprite(41.I64) },
+        \\        ],
+        \\    }
+        \\    anim.last_updated
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expect(countExprRootsByTag(&test_env, .e_list) >= 2);
+}
+
 test "hoist roots selected for closed pure static dispatch call binding RHS" {
     var test_env = try TestEnv.init("Test",
         \\DispatchBox := [Val(I64)].{
@@ -461,7 +499,7 @@ test "hoist roots are not selected for runtime-dependent multi-branch match" {
     try std.testing.expectEqual(@as(usize, 0), countMatchExprRoots(&test_env));
 }
 
-test "hoist roots are not selected for runtime-controlled match branch bodies" {
+test "hoist roots selected for closed child inside runtime-controlled match branch" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    input : Try(I64, I64)
@@ -479,7 +517,7 @@ test "hoist roots are not selected for runtime-controlled match branch bodies" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
 }
 
 test "hoist roots are not selected for local values depending on function arguments" {
@@ -846,7 +884,7 @@ test "hoist roots are not selected inside ordinary top-level constants" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected for runtime-controlled branch bodies" {
+test "hoist roots selected for closed child inside runtime-controlled branch body" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    if arg == 0.I64 {
@@ -859,7 +897,46 @@ test "hoist roots are not selected for runtime-controlled branch bodies" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_block));
+}
+
+test "hoist roots are not selected for branch body call with runtime argument" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\main = |arg| {
+        \\    if arg == 0.I64 {
+        \\        add_one(arg)
+        \\    } else {
+        \\        arg
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for branch body call with observable reachable body" {
+    var test_env = try TestEnv.init("Test",
+        \\dbg_value = || {
+        \\    dbg 1.I64
+        \\    42.I64
+        \\}
+        \\
+        \\main = |arg| {
+        \\    if arg == 0.I64 {
+        \\        dbg_value()
+        \\    } else {
+        \\        0.I64
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
 }
 
 test "hoist roots selected for whole closed conditional expressions" {

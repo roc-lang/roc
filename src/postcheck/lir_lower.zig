@@ -117,6 +117,28 @@ pub fn run(
     return lowerer.finish();
 }
 
+const StaticConstUse = struct {
+    const_ref: check.CheckedModule.ConstRef,
+    checked_type: check.CheckedModule.CheckedTypeId,
+    ty: Type.TypeId,
+};
+
+const StaticConstUseContext = struct {
+    pub fn hash(_: StaticConstUseContext, use: StaticConstUse) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, use.const_ref);
+        std.hash.autoHash(&hasher, @intFromEnum(use.checked_type));
+        std.hash.autoHash(&hasher, @intFromEnum(use.ty));
+        return hasher.final();
+    }
+
+    pub fn eql(_: StaticConstUseContext, lhs: StaticConstUse, rhs: StaticConstUse) bool {
+        return std.meta.eql(lhs.const_ref, rhs.const_ref) and
+            lhs.checked_type == rhs.checked_type and
+            lhs.ty == rhs.ty;
+    }
+};
+
 const Lowerer = struct {
     allocator: std.mem.Allocator,
     program: *const LambdaMono.Program,
@@ -127,6 +149,7 @@ const Lowerer = struct {
     comptime_site_map: []?LIR.ComptimeSiteId,
     type_layouts: []?layout.Idx,
     const_plan_map: []?LirProgram.ConstPlanId,
+    static_const_uses: std.HashMap(StaticConstUse, LIR.StaticDataId, StaticConstUseContext, std.hash_map.default_max_load_percentage),
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     current_ret_ty: ?Type.TypeId = null,
@@ -176,12 +199,14 @@ const Lowerer = struct {
             .comptime_site_map = comptime_site_map,
             .type_layouts = type_layouts,
             .const_plan_map = const_plan_map,
+            .static_const_uses = std.HashMap(StaticConstUse, LIR.StaticDataId, StaticConstUseContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .loop_stack = .empty,
         };
     }
 
     fn deinit(self: *Lowerer) void {
         self.loop_stack.deinit(self.allocator);
+        self.static_const_uses.deinit();
         self.allocator.free(self.const_plan_map);
         self.allocator.free(self.type_layouts);
         self.allocator.free(self.comptime_site_map);
@@ -197,6 +222,7 @@ const Lowerer = struct {
             .runtime_schemas = self.runtime_schemas,
         };
         self.loop_stack.deinit(self.allocator);
+        self.static_const_uses.deinit();
         self.allocator.free(self.const_plan_map);
         self.allocator.free(self.type_layouts);
         self.allocator.free(self.local_map);
@@ -207,6 +233,7 @@ const Lowerer = struct {
         self.local_map = &.{};
         self.type_layouts = &.{};
         self.const_plan_map = &.{};
+        self.static_const_uses = std.HashMap(StaticConstUse, LIR.StaticDataId, StaticConstUseContext, std.hash_map.default_max_load_percentage).initContext(self.allocator, .{});
         self.loop_stack = .empty;
         return output;
     }
@@ -280,6 +307,32 @@ const Lowerer = struct {
         for (self.result.store.getLocalSpan(span)) |local| {
             try self.noteLocal(local);
         }
+    }
+
+    fn staticDataId(self: *Lowerer, value: Mono.StaticConst, ty: Type.TypeId) Common.LowerError!LIR.StaticDataId {
+        const use: StaticConstUse = .{
+            .const_ref = value.const_ref,
+            .checked_type = value.checked_type,
+            .ty = ty,
+        };
+        if (self.static_const_uses.get(use)) |existing| return existing;
+
+        const ordinal = self.result.static_data_values.items.len;
+        const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__static_value_{d}", .{ordinal});
+        defer self.allocator.free(symbol_name);
+
+        const id = try self.result.store.addStaticDataSymbolName(symbol_name);
+        const layout_idx = try self.layoutOfType(ty);
+        const plan = try self.constPlanOfType(ty);
+        try self.result.static_data_values.append(self.allocator, .{
+            .id = id,
+            .const_ref = value.const_ref,
+            .checked_type = value.checked_type,
+            .layout_idx = layout_idx,
+            .plan = plan,
+        });
+        try self.static_const_uses.put(use, id);
+        return id;
     }
 
     fn lowerComptimeSite(self: *Lowerer, site: LambdaMono.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
@@ -745,6 +798,11 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
+            .static_const => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = try self.staticDataId(value, expr_data.ty) },
+                .next = next,
+            } }),
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_data.ty, fields, next),

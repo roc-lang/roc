@@ -5139,14 +5139,20 @@ fn addMainExe(
         }
     }
 
+    const use_bundled_deps = !use_system_llvm and user_llvm_path == null;
+
     const config = b.addOptions();
     config.addOption(bool, "llvm", true);
+    config.addOption(bool, "binaryen", use_bundled_deps);
     exe.root_module.addOptions("config", config);
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
     exe.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
     exe.root_module.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
+    if (use_bundled_deps) {
+        addStaticBinaryenOptionsToModule(exe.root_module);
+    }
     try addStaticLlvmOptionsToModule(exe.root_module);
 
     add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
@@ -5442,6 +5448,18 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
         mod.linkSystemLibrary("uuid", .{});
         mod.linkSystemLibrary("ole32", .{});
     }
+}
+
+fn addStaticBinaryenOptionsToModule(mod: *std.Build.Module) void {
+    const link_static = std.Build.Module.LinkSystemLibraryOptions{
+        .preferred_link_mode = .static,
+        .search_strategy = .mode_first,
+    };
+    mod.addCSourceFile(.{
+        .file = .{ .cwd_relative = "src/build/zig_binaryen.cpp" },
+        .flags = &exe_cflags,
+    });
+    mod.linkSystemLibrary("binaryen", link_static);
 }
 
 const cpp_sources = [_][]const u8{

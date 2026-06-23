@@ -425,7 +425,8 @@ const Pass = struct {
     }
 
     fn collectCallPatterns(self: *Pass, original_fn_count: usize) Allocator.Error!void {
-        for (self.program.fns.items[0..original_fn_count], 0..) |fn_, index| {
+        for (0..original_fn_count) |index| {
+            const fn_ = self.program.fns.items[index];
             const body = switch (fn_.body) {
                 .roc => |body| body,
                 .hosted => continue,
@@ -483,6 +484,7 @@ const Pass = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .static_const,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -604,6 +606,7 @@ const Pass = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .static_const,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -834,7 +837,8 @@ const Pass = struct {
         @memset(done, false);
 
         const fn_count = self.program.fns.items.len;
-        for (self.program.fns.items[0..fn_count]) |fn_| {
+        for (0..fn_count) |index| {
+            const fn_ = self.program.fns.items[index];
             const body = switch (fn_.body) {
                 .roc => |body| body,
                 .hosted => continue,
@@ -858,6 +862,7 @@ const Pass = struct {
             .dec_lit,
             .str_lit,
             .fn_ref,
+            .static_const,
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
@@ -1610,6 +1615,7 @@ const Cloner = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .static_const => |value| .{ .static_const = value },
             .list => |items| .{ .list = try self.cloneExprSpan(items) },
             .tuple => |items| .{ .tuple = try self.cloneExprSpan(items) },
             .record => |fields| .{ .record = try self.cloneFieldExprSpan(fields) },
@@ -3154,6 +3160,7 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .frac_f64_lit,
         .dec_lit,
         .str_lit,
+        .static_const,
         .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
@@ -3247,6 +3254,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .frac_f64_lit,
         .dec_lit,
         .str_lit,
+        .static_const,
         .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
@@ -3356,6 +3364,7 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .frac_f64_lit,
         .dec_lit,
         .str_lit,
+        .static_const,
         .fn_ref,
         => {},
         .crash, .comptime_exhaustiveness_failed => scan.seen_effect = true,

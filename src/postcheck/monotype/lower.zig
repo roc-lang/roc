@@ -32,6 +32,9 @@ pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
+    /// Runtime build lowering should reference reachable stored constants as
+    /// static data instead of rebuilding their ConstStore value as expressions.
+    static_data_uses: bool = false,
 };
 
 /// Lower checked modules and explicit roots into Monotype IR.
@@ -329,6 +332,7 @@ const Builder = struct {
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
+    options: Options,
     proc_debug_names: bool,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
@@ -359,6 +363,7 @@ const Builder = struct {
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .program = program,
+            .options = options,
             .proc_debug_names = options.proc_debug_names,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
@@ -3647,7 +3652,15 @@ const BodyContext = struct {
         try self.constrainTypeToMono(entry.checked_type, ty);
         const template = self.view.const_templates.get(entry.const_ref);
         return switch (template.state) {
-            .stored_const => |stored| try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty),
+            .stored_const => |stored| {
+                if (self.builder.options.static_data_uses) {
+                    return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .static_const = .{
+                        .const_ref = entry.const_ref,
+                        .checked_type = entry.checked_type,
+                    } } });
+                }
+                return try self.restoreConstNodeAtType(self.view, self.view, stored.node, ty);
+            },
             .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, self.hoistedConstSourceRegion(entry)),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
         };
@@ -4575,7 +4588,15 @@ const BodyContext = struct {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
-            .stored_const => |stored| try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty),
+            .stored_const => |stored| {
+                if (self.builder.options.static_data_uses) {
+                    return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .static_const = .{
+                        .const_ref = const_use.const_ref,
+                        .checked_type = requested_ty,
+                    } } });
+                }
+                return try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty);
+            },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null),
         };

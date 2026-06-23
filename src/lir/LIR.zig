@@ -123,6 +123,11 @@ pub const StrLiteral = struct {
     len: u32,
 };
 
+/// Identifier for one readonly data object emitted by static-data materialization.
+pub const StaticDataId = enum(u32) {
+    _,
+};
+
 /// How a string interpolation pattern must finish after its last step.
 pub const StrPatternEnd = enum {
     exact,
@@ -251,6 +256,7 @@ pub const LiteralValue = union(enum) {
     f32_literal: f32,
     dec_literal: i128,
     str_literal: StrLiteral,
+    static_data: StaticDataId,
     null_ptr,
     proc_ref: LirProcSpecId,
 };

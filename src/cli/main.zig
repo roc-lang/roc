@@ -5498,6 +5498,8 @@ fn rocBuildWasmSurgical(
             .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
             .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
             .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .wasm_debug_info = args.debug,
+            .wasm_optimize = wasmOptimizeMode(args.opt),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .wasm_exports = wasm_exports,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -5700,6 +5702,14 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
             }
             unreachable;
         },
+    };
+}
+
+fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
+    return switch (opt) {
+        .size => .size,
+        .speed => .speed,
+        .dev, .interpreter => .none,
     };
 }
 
@@ -5983,6 +5993,8 @@ fn rocBuildWasmLlvm(
             .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
             .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
             .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .wasm_debug_info = args.debug,
+            .wasm_optimize = wasmOptimizeMode(args.opt),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .wasm_exports = wasm_exports,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -6969,6 +6981,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
             .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
             .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .wasm_debug_info = args.debug,
+            .wasm_optimize = wasmOptimizeMode(args.opt),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .platform_files_dir = link_inputs.platform_files_dir,
             .scratch_dir = build_cache_dir,
