@@ -124,6 +124,10 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Checker-local source-site mapping for method/equality rewrites.
 constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
+/// Hidden field-access expressions preallocated for method-call nodes. If a
+/// method call resolves to a record field function, the checker rewrites the
+/// method call to an ordinary call using this field access as the callee.
+method_field_access_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, CIR.Expr.Idx),
 /// Interpolation metadata records keyed by their static dispatch constraint function.
 interpolation_constraint_ids_by_fn_var: std.AutoHashMap(Var, InterpolationConstraintId),
 /// Metadata produced when checking interpolation expressions and consumed when
@@ -297,6 +301,15 @@ instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
 /// whole type store. Append-only within a probe scope — `Probe.rollback`
 /// truncates it alongside the other Check-side buffers a probe grows.
 open_literal_vars: std.ArrayListUnmanaged(Var),
+/// Exact numeral facts for entries in `open_literal_vars` whose conversion came
+/// from `from_numeral`. This is retained even after the literal var resolves to
+/// a concrete number type, so range validation does not depend on flex content
+/// still being present in the union-find root.
+open_numeral_literals: std.ArrayListUnmanaged(OpenNumeralLiteral),
+/// Tuple field accesses whose receiver was still unresolved when checked.
+/// A later call-site or annotation may resolve the receiver to a concrete tuple;
+/// otherwise the final sweep reports that the tuple arity needs an annotation.
+pending_tuple_accesses: std.ArrayListUnmanaged(PendingTupleAccess),
 /// Scratch for the end-of-check ambiguity sweep: the pinnable set (every
 /// resolved var some caller can still pin). Init-allocated; cleared and reused
 /// each `checkFile`.
@@ -1047,6 +1060,7 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
+        .method_field_access_exprs = .{},
         .interpolation_constraint_ids_by_fn_var = std.AutoHashMap(Var, InterpolationConstraintId).init(gpa),
         .interpolation_constraint_metadata = .empty,
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -1079,6 +1093,8 @@ fn initAssumePrepared(
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
         .instantiation_dispatchers = .empty,
         .open_literal_vars = .empty,
+        .open_numeral_literals = .empty,
+        .pending_tuple_accesses = .empty,
         .pinnable_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_dispatch_vars = std.AutoHashMap(Var, void).init(gpa),
         .pinnable_spine_visited = std.AutoHashMap(Var, void).init(gpa),
@@ -1185,6 +1201,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
+    self.method_field_access_exprs.deinit(self.gpa);
     self.interpolation_constraint_ids_by_fn_var.deinit();
     self.interpolation_constraint_metadata.deinit(self.gpa);
     self.reported_constraint_errors.deinit();
@@ -1196,6 +1213,8 @@ pub fn deinit(self: *Self) void {
     self.deferred_def_unifications.deinit(self.gpa);
     self.instantiation_dispatchers.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
+    self.open_numeral_literals.deinit(self.gpa);
+    self.pending_tuple_accesses.deinit(self.gpa);
     self.pinnable_vars.deinit();
     self.reported_dispatch_vars.deinit();
     self.pinnable_spine_visited.deinit();
@@ -2460,6 +2479,32 @@ inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     }
 }
 
+fn prepareMethodFieldAccessExprs(self: *Self) Allocator.Error!void {
+    const initial_node_count = self.cir.store.nodes.len();
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < initial_node_count) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        if (self.method_field_access_exprs.contains(expr_idx)) continue;
+
+        switch (self.cir.store.getExpr(expr_idx)) {
+            .e_method_call => |method_call| {
+                const expr_region = self.cir.store.getExprRegion(expr_idx);
+                const field_expr_idx = try self.cir.addExpr(.{ .e_field_access = .{
+                    .receiver = method_call.receiver,
+                    .field_name = method_call.method_name,
+                    .field_name_region = method_call.method_name_region,
+                } }, expr_region);
+                _ = try self.regions.append(self.gpa, expr_region);
+                try self.method_field_access_exprs.put(self.gpa, expr_idx, field_expr_idx);
+            },
+            else => {},
+        }
+    }
+}
+
 // import caches //
 
 /// Key for the import cache: module index + expression index in that module
@@ -2496,6 +2541,18 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
         return a.resolved_module_idx == b.resolved_module_idx and a.node_idx == b.node_idx;
     }
 }, 80);
+
+const OpenNumeralLiteral = struct {
+    var_: Var,
+    info: types_mod.NumeralInfo,
+};
+
+const PendingTupleAccess = struct {
+    tuple_var: Var,
+    result_var: Var,
+    elem_index: u32,
+    region: Region,
+};
 
 // env //
 
@@ -2668,6 +2725,207 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
         },
     }
 }
+
+fn expectedTupleVarForAccess(
+    self: *Self,
+    min_elems: u32,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const scratch_vars_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+    for (0..min_elems) |_| {
+        const fresh_var = try self.fresh(env, region);
+        try self.scratch_vars.append(fresh_var);
+    }
+    const elem_vars = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
+    return try self.freshFromContent(.{ .structure = .{
+        .tuple = .{ .elems = elem_vars },
+    } }, env, region);
+}
+
+fn resolvePendingTupleAccess(
+    self: *Self,
+    pending: PendingTupleAccess,
+    env: *Env,
+    final: bool,
+) Allocator.Error!bool {
+    const tuple_resolved = self.types.resolveVar(pending.tuple_var);
+    switch (tuple_resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .tuple => |tuple| {
+                const elems = self.types.sliceVars(tuple.elems);
+                if (pending.elem_index < elems.len) {
+                    _ = try self.unify(pending.result_var, elems[pending.elem_index], env);
+                } else {
+                    const expected_tuple_var = try self.expectedTupleVarForAccess(pending.elem_index + 1, env, pending.region);
+                    _ = try self.unify(expected_tuple_var, pending.tuple_var, env);
+                    try self.unifyWith(pending.result_var, .err, env);
+                }
+                return true;
+            },
+            else => {
+                const expected_tuple_var = try self.expectedTupleVarForAccess(pending.elem_index + 1, env, pending.region);
+                _ = try self.unify(pending.tuple_var, expected_tuple_var, env);
+                try self.unifyWith(pending.result_var, .err, env);
+                return true;
+            },
+        },
+        .alias => |alias| {
+            const backing_var = self.types.getAliasBackingVar(alias);
+            const alias_pending = PendingTupleAccess{
+                .tuple_var = backing_var,
+                .result_var = pending.result_var,
+                .elem_index = pending.elem_index,
+                .region = pending.region,
+            };
+            return try self.resolvePendingTupleAccess(alias_pending, env, final);
+        },
+        .err => {
+            try self.unifyWith(pending.result_var, .err, env);
+            return true;
+        },
+        .flex, .rigid => {
+            if (!final) return false;
+
+            _ = try self.problems.appendProblem(self.gpa, .{ .tuple_access_needs_annotation = .{
+                .region = pending.region,
+                .elem_index = pending.elem_index,
+            } });
+            try self.unifyWith(pending.result_var, .err, env);
+            try self.unifyWith(pending.tuple_var, .err, env);
+            return true;
+        },
+    }
+}
+
+fn resolvePendingTupleAccesses(
+    self: *Self,
+    env: *Env,
+    final: bool,
+) Allocator.Error!void {
+    var write_i: usize = 0;
+    var read_i: usize = 0;
+    while (read_i < self.pending_tuple_accesses.items.len) : (read_i += 1) {
+        const pending = self.pending_tuple_accesses.items[read_i];
+        if (try self.resolvePendingTupleAccess(pending, env, final)) continue;
+
+        self.pending_tuple_accesses.items[write_i] = pending;
+        write_i += 1;
+    }
+    self.pending_tuple_accesses.shrinkRetainingCapacity(write_i);
+}
+
+fn recordFieldVarByName(
+    self: *Self,
+    fields: types_mod.RecordField.SafeMultiList.Range,
+    field_name: Ident.Idx,
+) ?Var {
+    const field_slice = self.types.getRecordFieldsSlice(fields);
+    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
+        if (name.eql(field_name)) return field_var;
+    }
+    return null;
+}
+
+fn recordTypeFieldVarByName(self: *Self, record_var: Var, field_name: Ident.Idx) ?Var {
+    var current = record_var;
+    var guard = types_mod.debug.IterationGuard.init("recordTypeFieldVarByName");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .record => |record| {
+                    if (self.recordFieldVarByName(record.fields, field_name)) |field_var| return field_var;
+                    current = record.ext;
+                },
+                .record_unbound => |fields| return self.recordFieldVarByName(fields, field_name),
+                else => return null,
+            },
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            else => return null,
+        }
+    }
+}
+
+fn tryResolveStructuralRecordFieldDispatch(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!bool {
+    switch (constraint.origin) {
+        .method_call => {},
+        else => return false,
+    }
+
+    const field_var = self.recordTypeFieldVarByName(dispatcher_var, constraint.fn_name) orelse return false;
+    const expr_idx = self.constraintExprForFnVar(constraint.fn_var) orelse return false;
+    const expr_region = self.cir.store.getExprRegion(expr_idx);
+
+    const dispatch_call = switch (self.cir.store.getExpr(expr_idx)) {
+        .e_dispatch_call => |dispatch_call| dispatch_call,
+        else => return false,
+    };
+
+    if (!dispatch_call.method_name.eql(constraint.fn_name)) return false;
+
+    const dispatch_constraint_root = self.types.resolveVar(dispatch_call.constraint_fn_var).var_;
+    const constraint_root = self.types.resolveVar(constraint.fn_var).var_;
+    if (dispatch_constraint_root != constraint_root) return false;
+
+    const constraint_fn = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
+    const arg_expr_idxs = self.cir.store.sliceExpr(dispatch_call.args);
+    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.get();
+    const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
+    defer arg_vars_alloc.free(arg_vars);
+    for (arg_expr_idxs, 0..) |arg_expr_idx, arg_i| {
+        arg_vars[arg_i] = ModuleEnv.varFrom(arg_expr_idx);
+    }
+
+    const field_expr_idx = self.method_field_access_exprs.get(expr_idx) orelse return false;
+
+    const callable_field_var = blk: {
+        const resolved = self.types.resolveVar(field_var);
+        if (resolved.desc.rank == Rank.generalized) {
+            break :blk try self.instantiateVar(field_var, env, .use_last_var);
+        }
+        break :blk field_var;
+    };
+
+    const field_expr_var = ModuleEnv.varFrom(field_expr_idx);
+    _ = try self.unify(field_expr_var, callable_field_var, env);
+
+    const call_func_content = try self.types.mkFuncUnbound(arg_vars, constraint_fn.ret);
+    const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
+    const result = try self.unify(callable_field_var, call_func_var, env);
+    if (!result.isProblem()) {
+        try self.linkConstraintMetadata(callable_field_var, call_func_var);
+        try self.reportEffectfulDispatchInExpect(constraint);
+    }
+
+    const published_constraint_args = try self.types.appendVars(arg_vars);
+    const published_constraint_func = Func{
+        .args = published_constraint_args,
+        .ret = constraint_fn.ret,
+        .needs_instantiation = false,
+    };
+    const published_constraint_fn_var = try self.freshFromContent(.{ .structure = .{
+        .fn_unbound = published_constraint_func,
+    } }, env, expr_region);
+
+    try self.cir.store.replaceExprWithCallConstraint(
+        expr_idx,
+        field_expr_idx,
+        dispatch_call.args,
+        .apply,
+        published_constraint_fn_var,
+    );
+    return true;
+}
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -2835,7 +3093,7 @@ fn instantiateVarHelp(
                         }
                     }
                     if (has_literal_constraint) {
-                        try self.open_literal_vars.append(self.gpa, fresh_var);
+                        try self.recordOpenLiteralVar(fresh_var, constraints);
                     }
                     if (has_other_constraint) {
                         try self.instantiation_dispatchers.append(self.gpa, .{
@@ -3548,6 +3806,33 @@ fn typedLiteralTargetsBuiltin(self: *const Self, expr_idx: CIR.Expr.Idx, num_kin
     };
 }
 
+fn recordOpenLiteralVar(
+    self: *Self,
+    literal_var: Var,
+    constraints: []const StaticDispatchConstraint,
+) Allocator.Error!void {
+    var has_literal = false;
+    for (constraints) |constraint| {
+        switch (constraint.origin) {
+            .from_literal => |lit| {
+                has_literal = true;
+                switch (lit) {
+                    .numeral => |info| try self.open_numeral_literals.append(self.gpa, .{
+                        .var_ = literal_var,
+                        .info = info,
+                    }),
+                    .quote, .interpolation => {},
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (has_literal) {
+        try self.open_literal_vars.append(self.gpa, literal_var);
+    }
+}
+
 /// Create a flex variable with a from_numeral constraint for numeric literals.
 /// This constraint will be checked during deferred constraint checking to validate
 /// that the numeric literal can be converted to the unified type.
@@ -3624,7 +3909,7 @@ fn mkFlexWithFromNumeralConstraint(
         },
     };
     try self.unifyWith(flex_var, flex_content, env);
-    try self.open_literal_vars.append(self.gpa, flex_var);
+    try self.recordOpenLiteralVar(flex_var, &.{constraint});
 
     return flex_var;
 }
@@ -3696,9 +3981,7 @@ fn mkFlexWithFromQuoteConstraint(
         },
     };
     try self.unifyWith(flex_var, flex_content, env);
-    // Shares the open-literal worklist with numerals: the literal-defaulting
-    // and constraint-compatibility sweeps it gates handle every literal kind.
-    try self.open_literal_vars.append(self.gpa, flex_var);
+    try self.recordOpenLiteralVar(flex_var, &.{constraint});
 
     return flex_var;
 }
@@ -4124,6 +4407,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try self.prepareMethodFieldAccessExprs();
+
     // Fill in types store up to the size of CIR nodes
     try ensureTypeStoreIsFilled(self);
 
@@ -4291,6 +4576,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolvePendingTupleAccesses(&env, false);
+    try self.checkAllConstraints(&env);
 
     try self.resolveNumericLiteralsFromContext(&env);
 
@@ -4306,7 +4593,10 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.validateToInspectMethodTypes(&env);
     try self.checkAllFromNumeralFlexConstraintCompatibility(&env, true);
+    try self.validateResolvedOpenNumeralLiterals(&env, true);
     try self.checkInstantiatedStaticDispatchConstraints(&env, true);
+    try self.resolvePendingTupleAccesses(&env, true);
+    try self.checkAllConstraints(&env);
 
     // After solving all deferred constraints, check for infinite types
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -6683,6 +6973,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try self.prepareMethodFieldAccessExprs();
+
     try ensureTypeStoreIsFilled(self);
 
     // Copy builtin types into this module's type store
@@ -6710,6 +7002,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolvePendingTupleAccesses(&env, false);
+    try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeLiteralDefaults(&env);
 
@@ -6722,6 +7016,9 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
     try self.checkFlexVarConstraintCompatibility(expr_var, &env, true);
+    try self.validateResolvedOpenNumeralLiterals(&env, true);
+    try self.resolvePendingTupleAccesses(&env, true);
+    try self.checkAllConstraints(&env);
     try self.reportPolymorphicConstrainedExpr(expr_idx);
 
     // Check for infinite types
@@ -6732,6 +7029,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    try self.prepareMethodFieldAccessExprs();
 
     try ensureTypeStoreIsFilled(self);
 
@@ -6780,6 +7079,8 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolvePendingTupleAccesses(&env, false);
+    try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeLiteralDefaults(&env);
 
@@ -6804,6 +7105,9 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // recursive, neither of which is covered by the per-def checks above.
     const expr_var = ModuleEnv.varFrom(expr_idx);
     try self.checkFlexVarConstraintCompatibility(expr_var, &env, true);
+    try self.validateResolvedOpenNumeralLiterals(&env, true);
+    try self.resolvePendingTupleAccesses(&env, true);
+    try self.checkAllConstraints(&env);
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
@@ -9387,26 +9691,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                 },
                 .flex => {
-                    // The tuple is still a flex var - create tuple constraint
-                    const min_elems = tuple_access.elem_index + 1;
-                    const scratch_vars_top = self.scratch_vars.top();
-                    defer self.scratch_vars.clearFrom(scratch_vars_top);
-
-                    for (0..min_elems) |_| {
-                        const fresh_var = try self.fresh(env, expr_region);
-                        try self.scratch_vars.append(fresh_var);
-                    }
-                    const elem_vars = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
-
-                    const expected_tuple_var = try self.freshFromContent(.{ .structure = .{
-                        .tuple = .{ .elems = elem_vars },
-                    } }, env, expr_region);
-
-                    _ = try self.unify(tuple_var, expected_tuple_var, env);
-
-                    // The result type is the element at the index
-                    const result_var = self.types.sliceVars(elem_vars)[tuple_access.elem_index];
-                    _ = try self.unify(expr_var, result_var, env);
+                    try self.pending_tuple_accesses.append(self.gpa, .{
+                        .tuple_var = resolved.var_,
+                        .result_var = expr_var,
+                        .elem_index = tuple_access.elem_index,
+                        .region = expr_region,
+                    });
                 },
                 .err => {
                     // Propagate error
@@ -9967,6 +10257,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Only processes early_return/try_suffix_return constraints; anonymous
             // constraints (e.g. from recursive lookups) are left for later.
             try self.processReturnConstraints(env);
+
+            try self.checkForInfiniteType(CIR.Expr.Idx, lambda.body);
 
             // Create the function type
             if (body_does_fx) {
@@ -13239,9 +13531,7 @@ fn mkInterpolationConstraint(
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
 
-    // Shares the open-literal worklist with numerals and quoted strings: the
-    // literal-defaulting and constraint-compatibility sweeps handle every kind.
-    try self.open_literal_vars.append(self.gpa, constrained_var);
+    try self.recordOpenLiteralVar(constrained_var, &.{constraint});
 
     return constraint_fn_var;
 }
@@ -13417,9 +13707,10 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
             // bookkeeping the other literal-creation sites do.
             const fresh_content = self.types.resolveVar(fresh_var).desc.content;
             if (fresh_content == .flex) {
-                for (self.types.sliceStaticDispatchConstraints(fresh_content.flex.constraints)) |c| {
+                const constraints = self.types.sliceStaticDispatchConstraints(fresh_content.flex.constraints);
+                for (constraints) |c| {
                     if (c.origin == .from_literal) {
-                        try self.open_literal_vars.append(self.gpa, fresh_var);
+                        try self.recordOpenLiteralVar(fresh_var, constraints);
                         break;
                     }
                 }
@@ -13661,6 +13952,8 @@ const Probe = struct {
     regions_len: usize,
     instantiation_dispatchers_len: usize,
     open_literal_vars_len: usize,
+    open_numeral_literals_len: usize,
+    pending_tuple_accesses_len: usize,
 
     fn rollback(self: *Probe) void {
         self.check.types.rollbackToSavepoint(&self.savepoint);
@@ -13671,6 +13964,8 @@ const Probe = struct {
         // Likewise, open literals registered during the probe (by in-probe
         // instantiation) reference vars the savepoint rollback just discarded.
         self.check.open_literal_vars.shrinkRetainingCapacity(self.open_literal_vars_len);
+        self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
+        self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
     }
 
     /// Close the probe scope KEEPING everything it did: the type-store
@@ -13686,11 +13981,15 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const regions_len = self.regions.items.items.len;
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
+    const open_numeral_literals_len = self.open_numeral_literals.items.len;
+    const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     return .{
         .check = self,
         .regions_len = regions_len,
         .instantiation_dispatchers_len = instantiation_dispatchers_len,
         .open_literal_vars_len = open_literal_vars_len,
+        .open_numeral_literals_len = open_numeral_literals_len,
+        .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .savepoint = try self.types.createSavepoint(),
     };
 }
@@ -15747,6 +16046,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                         }
                     } else {
+                        if (try self.tryResolveStructuralRecordFieldDispatch(
+                            deferred_constraint.var_,
+                            constraint,
+                            env,
+                        )) {
+                            continue;
+                        }
+
                         // Structural types (other than is_eq, parser_for, and encode_to)
                         // cannot have methods called on them. The user must explicitly wrap
                         // the value in a nominal type.
@@ -16510,6 +16817,36 @@ fn validateFromNumeralLiteralForBuiltinAlias(
     _: bool,
 ) Allocator.Error!bool {
     return true;
+}
+
+fn validateResolvedOpenNumeralLiterals(
+    self: *Self,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) Allocator.Error!void {
+    const literal_count = self.open_numeral_literals.items.len;
+    var i: usize = 0;
+    while (i < literal_count) : (i += 1) {
+        const entry = self.open_numeral_literals.items[i];
+        const resolved = self.types.resolveVar(entry.var_);
+        const nominal_type = switch (resolved.desc.content) {
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nominal| nominal,
+                else => continue,
+            },
+            .err => continue,
+            else => continue,
+        };
+        const num_kind = self.builtinNumKindFromNominalType(nominal_type) orelse continue;
+        if (is_numeric_default_pass and
+            !entry.info.explicit_suffix and
+            num_kind == .dec and
+            !entry.info.is_fractional)
+        {
+            continue;
+        }
+        _ = try self.reportInvalidBuiltinFromNumeralInfo(resolved.var_, num_kind, entry.info, env);
+    }
 }
 
 fn satisfyDerivedIsEqConstraint(

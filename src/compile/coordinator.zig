@@ -1956,6 +1956,9 @@ pub const Coordinator = struct {
         var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
         defer validation_snapshot.deinit(self.gpa);
 
+        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
+        if (self.hasUserErrors()) return;
+
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
             .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
             .platform_requirement_context = requirement_context,
@@ -2030,6 +2033,9 @@ pub const Coordinator = struct {
         const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
         var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
         defer validation_snapshot.deinit(self.gpa);
+
+        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
+        if (self.hasUserErrors()) return;
 
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
             .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
@@ -2132,8 +2138,15 @@ pub const Coordinator = struct {
         validation_snapshot: *const PlatformRequiredValidationSnapshot,
     ) Allocator.Error!void {
         for (app_artifact.static_dispatch_plans.plans, 0..) |plan, plan_index| {
-            if (!validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan)) continue;
             if (plan.result_mode != .value) continue;
+
+            if (try self.appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
+                app_mod,
+                app_artifact,
+                plan,
+            )) continue;
+
+            if (!validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan)) continue;
 
             switch (plan.resolution) {
                 .resolved_target => |target| {
@@ -2185,6 +2198,93 @@ pub const Coordinator = struct {
                 plan.iter.method,
                 plan.iter.dispatcher_ty,
             );
+        }
+    }
+
+    fn appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
+    ) Allocator.Error!bool {
+        const method_name = app_artifact.canonical_names.methodNameText(plan.method);
+        if (!std.mem.eql(u8, method_name, "from_numeral")) return false;
+
+        const builtin_nominal = check.CheckedArtifact.checkedTypeBuiltinNominal(
+            app_artifact,
+            plan.dispatcher_ty,
+        ) orelse return false;
+        if (!check.CheckedArtifact.builtinNominalAcceptsNumeralLiteral(builtin_nominal)) return false;
+
+        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
+        if (args.len != 1) return false;
+        const literal = switch (args[0]) {
+            .generated_numeral => |literal| literal,
+            else => return false,
+        };
+
+        const expr = app_artifact.checked_bodies.expr(plan.expr);
+        const has_suffix = switch (expr.data) {
+            .typed_num_from_numeral => true,
+            else => false,
+        };
+
+        const module_env = app_mod.moduleEnv() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator missing module env for platform-required numeral validation", .{});
+            }
+            unreachable;
+        };
+        if (try check.CheckedArtifact.numeralLiteralFitsBuiltin(
+            self.gpa,
+            module_env,
+            literal,
+            builtin_nominal,
+            has_suffix,
+        )) return false;
+
+        try self.appendPlatformRequiredInvalidNumericExpressionReport(
+            app_mod,
+            builtin_nominal,
+        );
+        return true;
+    }
+
+    fn appendPlatformRequiredInvalidNumericExpressionReports(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        const expectations = try check.CheckedArtifact.collectPlatformRequiredNumericExpectations(
+            self.gpa,
+            platform_artifact,
+            app_artifact,
+        );
+        defer self.gpa.free(expectations);
+        if (expectations.len == 0) return;
+
+        var raw_expr: usize = 0;
+        while (raw_expr < app_artifact.checked_bodies.exprCount()) : (raw_expr += 1) {
+            const expr_id: check.CheckedArtifact.CheckedExprId = @enumFromInt(raw_expr);
+            const expr = app_artifact.checked_bodies.expr(expr_id);
+
+            const int_value = switch (expr.data) {
+                .num => |num| num.value,
+                .typed_int => |typed| typed.value,
+                else => continue,
+            };
+            const expr_key = check.CheckedArtifact.checkedTypeRootKey(app_artifact, expr.ty);
+            for (expectations) |expectation| {
+                if (!std.meta.eql(expectation.app_type.bytes, expr_key.bytes)) continue;
+                if (check.CheckedArtifact.intLiteralFitsBuiltin(int_value, expectation.expected_builtin)) continue;
+
+                try self.appendPlatformRequiredInvalidNumericExpressionReport(
+                    app_mod,
+                    expectation.expected_builtin,
+                );
+                break;
+            }
         }
     }
 
@@ -2250,6 +2350,50 @@ pub const Coordinator = struct {
                 pattern.ty,
             );
         }
+    }
+
+    fn appendPlatformRequiredInvalidNumericExpressionReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        expected_builtin: check.CheckedArtifact.CheckedBuiltinNominal,
+    ) Allocator.Error!void {
+        var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This numeric literal does not fit in the type required by the platform.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("The platform-required signature expects:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(platformRequiredBuiltinNominalText(expected_builtin));
+
+        try app_mod.reports.append(self.gpa, report);
+    }
+
+    fn platformRequiredBuiltinNominalText(builtin_nominal: check.CheckedArtifact.CheckedBuiltinNominal) []const u8 {
+        return switch (builtin_nominal) {
+            .u8 => "Builtin.Num.U8",
+            .i8 => "Builtin.Num.I8",
+            .u16 => "Builtin.Num.U16",
+            .i16 => "Builtin.Num.I16",
+            .u32 => "Builtin.Num.U32",
+            .i32 => "Builtin.Num.I32",
+            .u64 => "Builtin.Num.U64",
+            .i64 => "Builtin.Num.I64",
+            .u128 => "Builtin.Num.U128",
+            .i128 => "Builtin.Num.I128",
+            .f32 => "Builtin.Num.F32",
+            .f64 => "Builtin.Num.F64",
+            .dec => "Builtin.Num.Dec",
+            .str => "Builtin.Str",
+            .bool => "Builtin.Bool",
+            .list => "Builtin.List",
+            .box => "Builtin.Box",
+            .parse_tag_union_spec => "Builtin.ParseTagUnionSpec",
+            .fields => "Builtin.Fields",
+            .field => "Builtin.Field",
+        };
     }
 
     fn appendPlatformRequiredNumericPatternTypeMismatchReport(
