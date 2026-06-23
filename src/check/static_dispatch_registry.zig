@@ -450,6 +450,12 @@ pub const StaticDispatchResultMode = union(enum) {
         structural_allowed: bool,
         negated: bool,
     },
+    /// A `to_hash : self, Hasher -> Hasher` dispatch whose receiver is an
+    /// anonymous structural type. When `structural_allowed` is set, lowering
+    /// decomposes the hash structurally instead of dispatching to a method.
+    hash: struct {
+        structural_allowed: bool,
+    },
     parser_for: struct {
         structural_allowed: bool,
     },
@@ -1058,6 +1064,12 @@ fn staticDispatchResultModeForCheckedValueCall(
     constraint_fn_var: Var,
 ) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
+    if (method_name.eql(common.to_hash)) {
+        if (sourceCallableHasHashShape(module, constraint_fn_var)) {
+            return .{ .hash = .{ .structural_allowed = true } };
+        }
+        return .value;
+    }
     if (method_name.eql(common.parser_for)) {
         return .{ .parser_for = .{
             .structural_allowed = true,
@@ -1088,6 +1100,27 @@ fn staticDispatchResultModeForCheckedValueCall(
     }
 
     return .value;
+}
+
+/// True when `fn_var` has the `to_hash` shape `(self, Hasher) -> Hasher`: two
+/// arguments where the second (the Hasher) is threaded straight through to the
+/// return type.
+fn sourceCallableHasHashShape(
+    module: TypedCIR.Module,
+    fn_var: Var,
+) bool {
+    const store = module.typeStoreConst();
+    const resolved = store.resolveVar(fn_var);
+    const func = resolved.desc.content.unwrapFunc() orelse return false;
+    const args = store.sliceVars(func.args);
+    // `to_hash : self, Hasher -> Hasher` always has two arguments. Arity is the
+    // only check needed here: the `to_hash` method name has already been matched
+    // and this is only reached for an anonymous-structural dispatcher with no
+    // method owner, so the constraint is the derived to_hash signature. (Unlike
+    // the equality-shape check we cannot tie the second arg to the return — the
+    // two `Hasher` occurrences are distinct vars, not a shared one like is_eq's
+    // `self`, and there is no builtin-Hasher owner to match against.)
+    return args.len == 2;
 }
 
 fn sourceCallableHasEqualityShape(
@@ -1139,14 +1172,35 @@ fn resolveStaticDispatchPlan(
 }
 
 fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
-    const raw = @intFromEnum(ty);
-    if (raw >= checked_types.store.payloads.items.len) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
+    var current = ty;
+    // Aliases are transparent for static dispatch: an alias's method owner is its
+    // backing's owner. Walk the (finite) alias chain so an alias-over-nominal,
+    // alias-over-alias, or alias-over-builtin resolves to the underlying owner
+    // rather than the alias's own identity, where no methods are registered. The
+    // bound on iterations is the store size, so a cyclic chain cannot loop here.
+    var remaining = checked_types.store.payloads.items.len;
+    while (true) {
+        const raw = @intFromEnum(current);
+        if (raw >= checked_types.store.payloads.items.len) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
+            }
+            unreachable;
         }
-        unreachable;
+        switch (checked_types.store.payloads.items[raw]) {
+            .alias => |alias| {
+                if (remaining == 0) {
+                    if (@import("builtin").mode == .Debug) {
+                        std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
+                    }
+                    unreachable;
+                }
+                remaining -= 1;
+                current = alias.backing;
+            },
+            else => |payload| return methodOwnerForCheckedPayload(payload),
+        }
     }
-    return methodOwnerForCheckedPayload(checked_types.store.payloads.items[raw]);
 }
 
 fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
@@ -1162,17 +1216,6 @@ fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
             .{ .nominal = .{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
-                .source_decl = null,
-            } },
-        .alias => |alias| if (alias.source_decl) |source_decl|
-            .{ .source_decl = .{
-                .module_name = alias.origin_module,
-                .statement = source_decl,
-            } }
-        else
-            .{ .nominal = .{
-                .module_name = alias.origin_module,
-                .type_name = alias.name,
                 .source_decl = null,
             } },
         else => null,
