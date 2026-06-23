@@ -543,6 +543,10 @@ const Pass = struct {
                 try self.markArgUsesInExpr(fn_id, eq.lhs, changed);
                 try self.markArgUsesInExpr(fn_id, eq.rhs, changed);
             },
+            .structural_hash => |h| {
+                try self.markArgUsesInExpr(fn_id, h.value, changed);
+                try self.markArgUsesInExpr(fn_id, h.hasher, changed);
+            },
             .match_ => |match| {
                 self.markArgUseIfLocal(fn_id, match.scrutinee, changed);
                 try self.markArgUsesInExpr(fn_id, match.scrutinee, changed);
@@ -665,6 +669,10 @@ const Pass = struct {
             .structural_eq => |eq| {
                 try self.collectCallPatternsInExpr(owner, eq.lhs);
                 try self.collectCallPatternsInExpr(owner, eq.rhs);
+            },
+            .structural_hash => |h| {
+                try self.collectCallPatternsInExpr(owner, h.value);
+                try self.collectCallPatternsInExpr(owner, h.hasher);
             },
             .match_ => |match| {
                 try self.collectCallPatternsInExpr(owner, match.scrutinee);
@@ -932,6 +940,10 @@ const Pass = struct {
             .structural_eq => |eq| {
                 try self.rewriteCallsInExpr(eq.lhs, done);
                 try self.rewriteCallsInExpr(eq.rhs, done);
+            },
+            .structural_hash => |h| {
+                try self.rewriteCallsInExpr(h.value, done);
+                try self.rewriteCallsInExpr(h.hasher, done);
             },
             .match_ => |match| {
                 try self.rewriteCallsInExpr(match.scrutinee, done);
@@ -1694,6 +1706,10 @@ const Cloner = struct {
                 .lhs = try self.cloneExpr(eq.lhs),
                 .rhs = try self.cloneExpr(eq.rhs),
                 .negated = eq.negated,
+            } },
+            .structural_hash => |h| .{ .structural_hash = .{
+                .value = try self.cloneExpr(h.value),
+                .hasher = try self.cloneExpr(h.hasher),
             } },
             .match_ => |match| return try self.cloneMatch(expr.ty, match),
             .if_ => |if_| .{ .if_ = .{
@@ -3379,6 +3395,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .field_access => |field| localUseCountInExpr(program, local, field.receiver),
         .tuple_access => |access| localUseCountInExpr(program, local, access.tuple),
         .structural_eq => |eq| localUseCountInExpr(program, local, eq.lhs) + localUseCountInExpr(program, local, eq.rhs),
+        .structural_hash => |h| localUseCountInExpr(program, local, h.value) + localUseCountInExpr(program, local, h.hasher),
         .match_ => |match| blk: {
             var count = localUseCountInExpr(program, local, match.scrutinee);
             for (program.branchSpan(match.branches)) |branch| {
@@ -3520,6 +3537,11 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .structural_eq => |eq| {
             scanLocalUseInExpr(program, local, eq.lhs, scan);
             scanLocalUseInExpr(program, local, eq.rhs, scan);
+            scan.seen_effect = true;
+        },
+        .structural_hash => |h| {
+            scanLocalUseInExpr(program, local, h.value, scan);
+            scanLocalUseInExpr(program, local, h.hasher, scan);
             scan.seen_effect = true;
         },
         .match_ => |match| {
