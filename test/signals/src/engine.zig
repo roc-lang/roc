@@ -1841,6 +1841,9 @@ pub fn Engine(comptime Ctx: type) type {
         root_elem: ?abi.Elem = null,
         last_runtime_metrics: Metrics = Ctx.zeroMetrics(),
         pending_roc_metrics: Metrics = Ctx.zeroMetrics(),
+        // Render-command accumulator (patches/create/append/remove/...) folded into
+        // last_runtime_metrics at finish. Engine-owned so both hosts share it.
+        render_metrics: render.Metrics = .{},
         dirty_signal_generation: u64 = 0,
 
         pub fn init() Self {

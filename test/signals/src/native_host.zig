@@ -754,7 +754,6 @@ const HostEnv = struct {
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
-    render_metrics: HostRenderMetrics = .{},
     dispatch_metrics: HostDispatchMetrics = .{},
 
     fn init() HostEnv {
@@ -2862,7 +2861,7 @@ const HostEnv = struct {
         const children = streamDirectChildren(allocator, &self.engine.active_stream, site.parent_elem_id);
         defer allocator.free(children);
         self.engine.replaceRenderChildrenForMoves(self, site.parent_elem_id, children, &counts);
-        self.render_metrics.addCommandCounts(counts);
+        self.engine.render_metrics.addCommandCounts(counts);
         return counts;
     }
 
@@ -5076,7 +5075,7 @@ fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_no
         }
     }
 
-    host.render_metrics.addCommandCounts(counts);
+    host.engine.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -5445,7 +5444,7 @@ fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, s
     host.engine.debugAssertRenderCacheMatchesSink(host);
 
     host.rebuildActiveSignalGraphFromStream(stream);
-    host.render_metrics.addCommandCounts(counts);
+    host.engine.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -5513,7 +5512,7 @@ fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *Ho
     host.engine.debugAssertRenderCacheMatchesStream(host, stream);
     host.engine.debugAssertRenderCacheMatchesSink(host);
     host.rebuildActiveSignalGraphFromStream(stream);
-    host.render_metrics.addCommandCounts(counts);
+    host.engine.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -5582,7 +5581,7 @@ fn applySplicedStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.Roc
 
     host.engine.debugAssertRenderCacheMatchesStream(host, &host.engine.active_stream);
     host.engine.debugAssertRenderCacheMatchesSink(host);
-    host.render_metrics.addCommandCounts(counts);
+    host.engine.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -5691,7 +5690,7 @@ fn applyStructuralNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, s
     host.engine.debugAssertRenderCacheMatchesSink(host);
 
     host.rebuildActiveSignalGraphFromStream(stream);
-    host.render_metrics.addCommandCounts(counts);
+    host.engine.render_metrics.addCommandCounts(counts);
     return counts;
 }
 
@@ -5767,18 +5766,18 @@ fn validateEventPayloadKind(desc: HostActiveEventDesc, actual_payload_kind: Even
 
 fn finishHostMetrics(host: *HostEnv) void {
     var metrics = addRuntimeMetrics(host.engine.last_runtime_metrics, host.engine.pending_roc_metrics);
-    metrics.patches_emitted = host.render_metrics.patches_emitted;
-    metrics.reset_dom = host.render_metrics.reset_dom;
-    metrics.create_element = host.render_metrics.create_element;
-    metrics.append_child = host.render_metrics.append_child;
-    metrics.remove_node = host.render_metrics.remove_node;
-    metrics.move_before = host.render_metrics.move_before;
-    metrics.set_text = host.render_metrics.set_text;
-    metrics.set_value = host.render_metrics.set_value;
-    metrics.set_checked = host.render_metrics.set_checked;
-    metrics.set_disabled = host.render_metrics.set_disabled;
-    metrics.set_metadata = host.render_metrics.set_metadata;
-    metrics.bind_event = host.render_metrics.bind_event;
+    metrics.patches_emitted = host.engine.render_metrics.patches_emitted;
+    metrics.reset_dom = host.engine.render_metrics.reset_dom;
+    metrics.create_element = host.engine.render_metrics.create_element;
+    metrics.append_child = host.engine.render_metrics.append_child;
+    metrics.remove_node = host.engine.render_metrics.remove_node;
+    metrics.move_before = host.engine.render_metrics.move_before;
+    metrics.set_text = host.engine.render_metrics.set_text;
+    metrics.set_value = host.engine.render_metrics.set_value;
+    metrics.set_checked = host.engine.render_metrics.set_checked;
+    metrics.set_disabled = host.engine.render_metrics.set_disabled;
+    metrics.set_metadata = host.engine.render_metrics.set_metadata;
+    metrics.bind_event = host.engine.render_metrics.bind_event;
     metrics.retained_alloc_delta = @as(i64, @intCast(host.alloc_count)) - @as(i64, @intCast(host.dealloc_count));
     metrics.events_processed = host.dispatch_metrics.events_processed;
     metrics.recompute_batches = host.dispatch_metrics.recompute_batches;
@@ -7487,14 +7486,14 @@ test "signals host patches dirty leaf sinks without descriptor rebuild" {
     defer host.gpa.allocator().free(dirty_structural_signals);
     try std.testing.expectEqual(@as(usize, 0), dirty_structural_signals.len);
 
-    const patch_start = host.render_metrics.patches_emitted;
+    const patch_start = host.engine.render_metrics.patches_emitted;
     const patch_counts = applyDirtyRenderSinks(&host, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.create_element);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.append_child);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.set_text);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.total);
-    try std.testing.expectEqual(patch_start + 1, host.render_metrics.patches_emitted);
+    try std.testing.expectEqual(patch_start + 1, host.engine.render_metrics.patches_emitted);
     try std.testing.expectEqual(@as(usize, 2), host.dom_elements.items.len);
     try std.testing.expectEqualStrings("second", host.dom_elements.items[1].text.?);
 
@@ -7954,7 +7953,7 @@ test "signals host dirty each append patches only changed row" {
     const rows_created_start = host.engine.pending_roc_metrics.rows_created;
     const rows_removed_start = host.engine.pending_roc_metrics.rows_removed;
     const row_call_start = test_row_elem_call_count;
-    const patch_start = host.render_metrics.patches_emitted;
+    const patch_start = host.engine.render_metrics.patches_emitted;
     const graph_rebuild_start = host.engine.pending_roc_metrics.active_graph_records_rebuilt;
 
     const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
@@ -7968,7 +7967,7 @@ test "signals host dirty each append patches only changed row" {
     try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.set_text);
     try std.testing.expectEqual(@as(u64, 3), patch_counts.total);
-    try std.testing.expectEqual(patch_start + 3, host.render_metrics.patches_emitted);
+    try std.testing.expectEqual(patch_start + 3, host.engine.render_metrics.patches_emitted);
     try std.testing.expect(activeTextElementId(&host, "row-25-25") != null);
 }
 
@@ -8027,7 +8026,7 @@ test "signals host dirty each reorder moves rows without recollecting bodies" {
     const rows_created_start = host.engine.pending_roc_metrics.rows_created;
     const rows_removed_start = host.engine.pending_roc_metrics.rows_removed;
     const row_call_start = test_row_elem_call_count;
-    const patch_start = host.render_metrics.patches_emitted;
+    const patch_start = host.engine.render_metrics.patches_emitted;
     const graph_rebuild_start = host.engine.pending_roc_metrics.active_graph_records_rebuilt;
 
     const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
@@ -8043,7 +8042,7 @@ test "signals host dirty each reorder moves rows without recollecting bodies" {
     try std.testing.expectEqual(@as(u64, 1), patch_counts.move_before);
     try std.testing.expectEqual(@as(u64, 0), patch_counts.set_text);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.total);
-    try std.testing.expectEqual(patch_start + 1, host.render_metrics.patches_emitted);
+    try std.testing.expectEqual(patch_start + 1, host.engine.render_metrics.patches_emitted);
     try std.testing.expectEqualSlices(u64, &.{ row_3_id, row_1_id, row_2_id }, host.dom_elements.items[@intCast(section_id)].children.items);
 }
 
@@ -8102,7 +8101,7 @@ test "signals host dirty each mixed churn splices changed rows and moves survivo
     const rows_created_start = host.engine.pending_roc_metrics.rows_created;
     const rows_removed_start = host.engine.pending_roc_metrics.rows_removed;
     const row_call_start = test_row_elem_call_count;
-    const patch_start = host.render_metrics.patches_emitted;
+    const patch_start = host.engine.render_metrics.patches_emitted;
     const graph_rebuild_start = host.engine.pending_roc_metrics.active_graph_records_rebuilt;
 
     const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
@@ -8118,7 +8117,7 @@ test "signals host dirty each mixed churn splices changed rows and moves survivo
     try std.testing.expectEqual(@as(u64, 2), patch_counts.move_before);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.set_text);
     try std.testing.expectEqual(@as(u64, 6), patch_counts.total);
-    try std.testing.expectEqual(patch_start + 6, host.render_metrics.patches_emitted);
+    try std.testing.expectEqual(patch_start + 6, host.engine.render_metrics.patches_emitted);
     const row_4_id = activeTextElementId(&host, "row-4-4") orelse unreachable;
     try std.testing.expectEqual(row_1_id, activeTextElementId(&host, "row-1-1") orelse unreachable);
     try std.testing.expectEqual(row_3_id, activeTextElementId(&host, "row-3-3") orelse unreachable);
