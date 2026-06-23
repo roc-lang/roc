@@ -3329,6 +3329,16 @@ fn collectProcLocals(
                 }
                 try work.append(wa, assign.next);
             },
+            .store_struct => |assign| {
+                try recordProcLocal(locals, assign.dest);
+                for (self.store.getLocalSpan(assign.fields)) |field| try recordProcLocal(locals, field);
+                try work.append(wa, assign.next);
+            },
+            .store_tag => |assign| {
+                try recordProcLocal(locals, assign.dest);
+                if (assign.payload) |payload| try recordProcLocal(locals, payload);
+                try work.append(wa, assign.next);
+            },
             .set_local => |assign| {
                 try recordProcLocal(locals, assign.target);
                 try recordProcLocal(locals, assign.value);
@@ -7448,6 +7458,24 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
+        .store_struct => |assign| {
+            try self.generateStoreStruct(.{
+                .dest = assign.dest,
+                .fields = assign.fields,
+                .struct_layout = assign.struct_layout,
+            });
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .store_tag => |assign| {
+            try self.generateStoreTag(.{
+                .dest = assign.dest,
+                .union_layout = assign.tag_layout,
+                .variant_index = assign.variant_index,
+                .discriminant = assign.discriminant,
+                .payload = assign.payload,
+            });
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
         .set_local => |assign| {
             try self.emitProcLocal(assign.value);
             try self.emitLocalSet(try self.getOrAllocTypedLocal(assign.target, try self.procLocalValType(assign.target)));
@@ -9132,6 +9160,57 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     // Push base pointer
     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_local) catch return error.OutOfMemory;
+}
+
+fn generateStoreStruct(self: *Self, s: anytype) Allocator.Error!void {
+    try self.generateStoreAggregateValue(s.dest, s.struct_layout, .{ .struct_ = .{
+        .fields = s.fields,
+        .struct_layout = s.struct_layout,
+    } });
+}
+
+fn generateStoreTag(self: *Self, t: anytype) Allocator.Error!void {
+    try self.generateStoreAggregateValue(t.dest, t.union_layout, .{ .tag = .{
+        .union_layout = t.union_layout,
+        .variant_index = t.variant_index,
+        .discriminant = t.discriminant,
+        .payload = t.payload,
+    } });
+}
+
+fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: layout.Idx, value: union(enum) {
+    struct_: struct {
+        fields: ProcLocalSpan,
+        struct_layout: layout.Idx,
+    },
+    tag: struct {
+        union_layout: layout.Idx,
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?ProcLocalId,
+    },
+}) Allocator.Error!void {
+    const value_size = try self.layoutByteSize(value_layout);
+
+    try self.emitProcLocal(dest);
+    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(ptr_local);
+
+    if (value_size == 0) return;
+
+    switch (value) {
+        .struct_ => |s| try self.generateStruct(s),
+        .tag => |t| try self.generateTag(t),
+    }
+
+    if (try self.isCompositeLayout(value_layout)) {
+        const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalSet(src_local);
+        try self.emitMemCopy(ptr_local, 0, src_local, value_size);
+    } else {
+        const value_vt = try self.resolveValType(value_layout);
+        try self.emitStoreToMemSized(ptr_local, 0, value_vt, value_size);
+    }
 }
 
 /// Generate a discriminant switch expression.

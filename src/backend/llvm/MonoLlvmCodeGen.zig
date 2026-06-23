@@ -1957,6 +1957,8 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
+                .store_struct,
+                .store_tag,
                 .set_local,
                 .debug,
                 .expect,
@@ -2145,6 +2147,14 @@ pub const MonoLlvmCodeGen = struct {
             },
             .assign_tag => |assign| {
                 try self.emitTagLiteral(assign.target, assign.discriminant, assign.payload);
+                try work.append(wa, .{ .node = assign.next });
+            },
+            .store_struct => |assign| {
+                try self.emitStoreStruct(assign.dest, assign.struct_layout, assign.fields);
+                try work.append(wa, .{ .node = assign.next });
+            },
+            .store_tag => |assign| {
+                try self.emitStoreTag(assign.dest, assign.tag_layout, assign.discriminant, assign.payload);
                 try work.append(wa, .{ .node = assign.next });
             },
             .set_local => |assign| {
@@ -2510,6 +2520,43 @@ pub const MonoLlvmCodeGen = struct {
                 try self.copyBytes(allocated.ptr, self.slot(payload_local).ptr, payload_size, self.alignmentForLayout(payload_layout));
             }
         }
+    }
+
+    fn emitStoreStruct(self: *MonoLlvmCodeGen, dest: LocalId, struct_layout: layout.Idx, fields: LocalSpan) Error!void {
+        const field_locals = self.store.getLocalSpan(fields);
+        try self.materializeLocalSpanIfDeferred(field_locals);
+
+        const base_layout = self.layoutValue(struct_layout);
+        if (base_layout.tag != .struct_) return;
+
+        const dst = try self.loadPointer(self.slot(dest).ptr);
+        try self.zeroBytes(dst, self.layoutByteSize(struct_layout));
+        for (field_locals, 0..) |field_local, i| {
+            const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
+            const field_size = self.layoutByteSize(field_layout);
+            if (field_size == 0) continue;
+            const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
+            const field_dst = try self.offsetPtr(dst, offset);
+            try self.copyBytes(field_dst, self.slot(field_local).ptr, field_size, self.alignmentForLayout(field_layout));
+        }
+    }
+
+    fn emitStoreTag(self: *MonoLlvmCodeGen, dest: LocalId, tag_layout: layout.Idx, discriminant: u16, payload: ?LocalId) Error!void {
+        if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
+
+        const dst = try self.loadPointer(self.slot(dest).ptr);
+        const layout_size = self.layoutByteSize(tag_layout);
+        if (layout_size == 0) return;
+
+        try self.zeroBytes(dst, layout_size);
+        if (payload) |payload_local| {
+            const payload_layout = self.tagPayloadLayout(tag_layout, discriminant);
+            const payload_size = self.layoutByteSize(payload_layout);
+            if (payload_size > 0) {
+                try self.copyBytes(dst, self.slot(payload_local).ptr, payload_size, self.alignmentForLayout(payload_layout));
+            }
+        }
+        try self.writeTagDiscriminant(dst, tag_layout, discriminant);
     }
 
     fn allocAggregateTarget(self: *MonoLlvmCodeGen, target: LocalId) Error!ResolvedBase {
