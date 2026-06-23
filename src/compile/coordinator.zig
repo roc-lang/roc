@@ -173,22 +173,22 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v3";
-const checked_module_cache_format_version: u64 = 3;
+const checked_module_cache_magic = "roc-mod-cache-v4";
+const checked_module_cache_format_version: u64 = 4;
 // Header: magic, format version (u64), artifact-layout version hash (32), artifact
-// key (32), body hash (32), env-blob length (u64), artifact-blob length (u64). The
-// two length-prefixed bodies (env blob then artifact blob) follow the header. The
-// layout hash guards against relocating a cached artifact whose `Serialized` layout
-// differs from the running compiler's — important in development, where
-// `compiler_version` is a fixed release string that does not move between rebuilds.
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32 + 32 + 8 + 8;
-
-fn hashCacheBodies(env_body: []const u8, artifact_body: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(env_body);
-    hasher.update(artifact_body);
-    return hasher.finalResult();
-}
+// key (32), env-blob length (u64), artifact-blob length (u64). The two length-prefixed
+// bodies (env blob then artifact blob) follow the header. The layout hash guards
+// against relocating a cached artifact whose `Serialized` layout differs from the
+// running compiler's — important in development, where `compiler_version` is a fixed
+// release string that does not move between rebuilds.
+//
+// There is no body checksum: cache entries are written to a temp file and atomically
+// renamed into place (so a torn write never replaces a valid entry), the length fields
+// below reject any truncated/over-long entry, the magic+version+layout-hash+key reject
+// stale or wrong entries, and relocation bounds-checks every marker against the blob.
+// A corrupt-but-right-length body is the only residue, which for a recomputable local
+// cache does not justify hashing the whole blob on every read and write.
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32 + 8 + 8;
 
 /// Two length-prefixed cache bodies decoded from a checked-module cache entry:
 /// the relocatable `ModuleEnv` blob and the relocatable
@@ -198,36 +198,27 @@ const CheckedModuleCacheBodies = struct {
     artifact_body: []const u8,
 };
 
-fn encodeCheckedModuleCacheEntry(
-    allocator: Allocator,
+/// Write the fixed-size checked-module cache header into the first
+/// `checked_module_cache_header_len` bytes of `dest`. The caller gathers the two
+/// relocatable bodies (env blob then artifact blob) into `dest` after the header.
+fn writeCheckedModuleCacheHeader(
+    dest: []u8,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    env_body: []const u8,
-    artifact_body: []const u8,
-) Allocator.Error![]u8 {
-    const bytes = try allocator.alloc(u8, checked_module_cache_header_len + env_body.len + artifact_body.len);
-    errdefer allocator.free(bytes);
-
+    env_len: usize,
+    artifact_len: usize,
+) void {
     var offset: usize = 0;
-    @memcpy(bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
+    @memcpy(dest[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
     offset += checked_module_cache_magic.len;
-    std.mem.writeInt(u64, bytes[offset..][0..8], checked_module_cache_format_version, .little);
+    std.mem.writeInt(u64, dest[offset..][0..8], checked_module_cache_format_version, .little);
     offset += 8;
-    @memcpy(bytes[offset..][0..32], &check.CheckedArtifact.CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
+    @memcpy(dest[offset..][0..32], &check.CheckedArtifact.CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
     offset += 32;
-    @memcpy(bytes[offset..][0..32], &key.bytes);
+    @memcpy(dest[offset..][0..32], &key.bytes);
     offset += 32;
-    const body_hash = hashCacheBodies(env_body, artifact_body);
-    @memcpy(bytes[offset..][0..32], &body_hash);
-    offset += 32;
-    std.mem.writeInt(u64, bytes[offset..][0..8], env_body.len, .little);
+    std.mem.writeInt(u64, dest[offset..][0..8], env_len, .little);
     offset += 8;
-    std.mem.writeInt(u64, bytes[offset..][0..8], artifact_body.len, .little);
-    offset += 8;
-    @memcpy(bytes[offset..][0..env_body.len], env_body);
-    offset += env_body.len;
-    @memcpy(bytes[offset..][0..artifact_body.len], artifact_body);
-
-    return bytes;
+    std.mem.writeInt(u64, dest[offset..][0..8], artifact_len, .little);
 }
 
 fn decodeCheckedModuleCacheEntry(
@@ -245,8 +236,6 @@ fn decodeCheckedModuleCacheEntry(
     if (!check.CheckedArtifact.CheckedModuleArtifact.expectSerializedVersion(bytes[offset..][0..32])) return null;
     offset += 32;
     if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
-    offset += 32;
-    const stored_hash = bytes[offset..][0..32];
     offset += 32;
     // Cast the on-disk u64 lengths to usize up front: this both keeps every
     // downstream index/slice in usize (so the cache compiles for 32-bit targets
@@ -266,8 +255,6 @@ fn decodeCheckedModuleCacheEntry(
     offset += env_len;
     const artifact_body = bytes[offset..][0..artifact_len];
 
-    const actual_hash = hashCacheBodies(env_body, artifact_body);
-    if (!std.mem.eql(u8, stored_hash, &actual_hash)) return null;
     if (env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
     if (artifact_body.len < @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
     return .{ .env_body = env_body, .artifact_body = artifact_body };
@@ -2940,40 +2927,19 @@ pub const Coordinator = struct {
         return reports;
     }
 
-    fn serializeModuleEnvForCache(self: *Coordinator, env: *const ModuleEnv) Allocator.Error![]u8 {
-        const allocator = self.cache_manager.?.allocator;
-        var arena = base.SingleThreadArena.init(allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-
-        var writer = CompactWriter.init();
-        defer writer.deinit(arena_alloc);
-
-        const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
-        try serialized.serialize(env, arena_alloc, &writer);
-
-        const body = try allocator.alloc(u8, writer.total_bytes);
-        errdefer allocator.free(body);
-        _ = writer.writeToBuffer(body) catch unreachable;
-        return body;
-    }
-
-    fn serializeArtifactForCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![]u8 {
-        const allocator = self.cache_manager.?.allocator;
-        var arena = base.SingleThreadArena.init(allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-
-        var writer = CompactWriter.init();
-        defer writer.deinit(arena_alloc);
-
-        const serialized = try writer.appendAlloc(arena_alloc, check.CheckedArtifact.CheckedModuleArtifact.Serialized);
-        try serialized.serialize(artifact, arena_alloc, &writer);
-
-        const body = try allocator.alloc(u8, writer.total_bytes);
-        errdefer allocator.free(body);
-        _ = writer.writeToBuffer(body) catch unreachable;
-        return body;
+    /// Serialize `value` into `writer`, allocating all scratch from `arena_alloc`.
+    /// `T.Serialized` is appended first as the relocation header, then `serialize`
+    /// fills it and appends the rest as iovecs. The caller gathers `writer` into the
+    /// final cache buffer once all bodies are built, so this never materializes the
+    /// serialized body in its own allocation.
+    fn serializeForCache(
+        comptime T: type,
+        value: *const T,
+        writer: *CompactWriter,
+        arena_alloc: Allocator,
+    ) Allocator.Error!void {
+        const serialized = try writer.appendAlloc(arena_alloc, T.Serialized);
+        try serialized.serialize(value, arena_alloc, writer);
     }
 
     fn checkedModuleCacheKey(
@@ -3028,23 +2994,41 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(entries_dir);
 
-        const env_body = self.serializeModuleEnvForCache(artifact.moduleEnvConst()) catch {
+        // Serialize the env and artifact into scatter-gather writers, then gather both
+        // directly into a single cache-entry buffer laid out as
+        // [header][env blob][artifact blob]. Gathering straight into the final buffer
+        // avoids materializing each body in its own allocation and then concatenating
+        // header + bodies into a third buffer. The writers' iovecs alias the arena
+        // (relocation headers) and the live artifact/env, both of which outlive the
+        // gather below.
+        var arena = base.SingleThreadArena.init(manager.allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var env_writer = CompactWriter.init();
+        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
             manager.stats.recordStoreFailure();
             return;
         };
-        defer manager.allocator.free(env_body);
 
-        const artifact_body = self.serializeArtifactForCache(artifact) catch {
+        var artifact_writer = CompactWriter.init();
+        serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, artifact, &artifact_writer, arena_alloc) catch {
             manager.stats.recordStoreFailure();
             return;
         };
-        defer manager.allocator.free(artifact_body);
 
-        const entry = encodeCheckedModuleCacheEntry(manager.allocator, artifact.key, env_body, artifact_body) catch {
+        const env_len = env_writer.total_bytes;
+        const artifact_len = artifact_writer.total_bytes;
+
+        const entry = manager.allocator.alloc(u8, checked_module_cache_header_len + env_len + artifact_len) catch {
             manager.stats.recordStoreFailure();
             return;
         };
         defer manager.allocator.free(entry);
+
+        writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], artifact.key, env_len, artifact_len);
+        _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
+        _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
 
         manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
     }
