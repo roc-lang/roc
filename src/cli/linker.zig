@@ -245,6 +245,7 @@ const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositi
 };
 
 const ResignMachoError = Allocator.Error || CodeSignature.WriteError || std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
+    CodeSignatureNotAtEnd,
     MissingLinkeditSegment,
     MissingTextSegment,
     NotMacho64,
