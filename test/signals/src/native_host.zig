@@ -1189,103 +1189,15 @@ const HostEnv = struct {
     }
 
     fn clearActiveSignalGraph(self: *HostEnv) void {
-        const allocator = self.gpa.allocator();
-        const roc_host = self.engine.roc_host orelse {
-            if (self.engine.active_signal_graph.items.len != 0) failHost("active signal graph cannot release records without a Roc host");
-            self.engine.active_signal_graph.items.len = 0;
-            return;
-        };
-        for (self.engine.active_signal_graph.items, 0..) |node, index| {
-            allocator.free(node.dependents);
-            const active_graph_id = node.record.active_graph_id orelse failHost("active signal graph record was missing its dense id");
-            if (active_graph_id != index) failHost("active signal graph record dense id did not match its slot");
-            node.record.active_graph_id = null;
-            node.record.active_use_count = 0;
-            node.record.release(allocator, roc_host, &self.engine.pending_roc_metrics);
-        }
-        self.engine.active_signal_graph.items.len = 0;
+        return self.engine.clearActiveSignalGraph(self);
     }
 
     fn clearActiveSignalRoutes(self: *HostEnv) void {
-        const allocator = self.gpa.allocator();
-        for (self.engine.active_source_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_source_signal_routes.items.len = 0;
-
-        for (self.engine.active_text_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_text_signal_routes.items.len = 0;
-
-        for (self.engine.active_bool_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_bool_signal_routes.items.len = 0;
-
-        for (self.engine.active_change_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_change_signal_routes.items.len = 0;
-
-        for (self.engine.active_structural_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_structural_signal_routes.items.len = 0;
-    }
-
-    fn clearActiveSinkSignalRoutes(self: *HostEnv) void {
-        const allocator = self.gpa.allocator();
-        for (self.engine.active_text_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_text_signal_routes.items.len = 0;
-
-        for (self.engine.active_bool_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_bool_signal_routes.items.len = 0;
-
-        for (self.engine.active_change_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_change_signal_routes.items.len = 0;
-
-        for (self.engine.active_structural_signal_routes.items) |*route| {
-            route.deinit(allocator);
-        }
-        self.engine.active_structural_signal_routes.items.len = 0;
-    }
-
-    fn activeSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) ?u64 {
-        const record_id = record.active_graph_id orelse return null;
-        if (record_id >= self.engine.active_signal_graph.items.len) failHost("active signal record dense id exceeded the graph table");
-        if (self.engine.active_signal_graph.items[@intCast(record_id)].record != record) {
-            failHost("active signal record dense id pointed at a different record");
-        }
-        return record_id;
+        return self.engine.clearActiveSignalRoutes(self);
     }
 
     fn requireActiveSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) u64 {
-        return self.activeSignalRecordId(record) orelse failHost("active signal graph referenced a record that was not registered");
-    }
-
-    fn appendActiveSignalGraphNode(self: *HostEnv, record: *HostSignalRecord, rank: u64) u64 {
-        const allocator = self.gpa.allocator();
-        const record_id: u64 = @intCast(self.engine.active_signal_graph.items.len);
-        self.engine.active_signal_graph.append(allocator, .{
-            .record = record.retain(),
-            .rank = rank,
-        }) catch std.process.exit(1);
-        record.active_graph_id = record_id;
-        self.engine.pending_roc_metrics.bump(.active_graph_records_rebuilt, 1);
-        return record_id;
-    }
-
-    fn appendActiveSignalDependentId(self: *HostEnv, input_record_id: u64, dependent_record_id: u64) void {
-        signal_graph.appendDependent(HostSignalRecord, self.gpa.allocator(), self.engine.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| {
-            failSignalGraphError(err, "active signal dependent referenced an unknown input record", "active signal dependent insertion missed its edge");
-        };
+        return self.engine.requireActiveSignalRecordId(record);
     }
 
     fn removeActiveSignalDependentId(self: *HostEnv, input_record_id: u64, dependent_record_id: u64) void {
@@ -1298,13 +1210,6 @@ const HostEnv = struct {
         signal_graph.replaceDependent(HostSignalRecord, self.engine.active_signal_graph.items, input_record_id, old_dependent_id, new_dependent_id) catch |err| {
             failSignalGraphError(err, "active signal dependent rewrite referenced an unknown input record", "active signal dependent rewrite missed its edge");
         };
-    }
-
-    fn appendActiveSourceSignalRoute(self: *HostEnv, source_node_id: u64, record_id: u64) void {
-        const route = self.ensureActiveSourceSignalRoute(source_node_id);
-        if (!u64SliceContains(route.items, record_id)) {
-            route.append(self.gpa.allocator(), record_id) catch std.process.exit(1);
-        }
     }
 
     fn removeActiveSourceSignalRoute(self: *HostEnv, source_node_id: u64, record_id: u64) void {
@@ -1352,62 +1257,7 @@ const HostEnv = struct {
     }
 
     fn retainActiveSignalRecord(self: *HostEnv, record: *HostSignalRecord) void {
-        if (record.active_use_count != 0) {
-            record.active_use_count += 1;
-            return;
-        }
-
-        record.active_use_count = 1;
-        var rank: u64 = 0;
-
-        switch (record.payload) {
-            .ref, .const_value, .task_source, .interval_source => {},
-            .map => |payload| {
-                self.retainActiveSignalRecord(payload.input);
-                const input_id = self.requireActiveSignalRecordId(payload.input);
-                rank = self.engine.active_signal_graph.items[@intCast(input_id)].rank + 1;
-            },
-            .map2 => |payload| {
-                self.retainActiveSignalRecord(payload.left);
-                if (payload.right != payload.left) {
-                    self.retainActiveSignalRecord(payload.right);
-                }
-                const left_id = self.requireActiveSignalRecordId(payload.left);
-                const right_id = self.requireActiveSignalRecordId(payload.right);
-                rank = @max(
-                    self.engine.active_signal_graph.items[@intCast(left_id)].rank,
-                    self.engine.active_signal_graph.items[@intCast(right_id)].rank,
-                ) + 1;
-            },
-            .combine => |payload| {
-                for (payload.children, 0..) |child, index| {
-                    if (HostEngine.recordSliceContains(payload.children[0..index], child)) continue;
-                    self.retainActiveSignalRecord(child);
-                    const child_id = self.requireActiveSignalRecordId(child);
-                    rank = @max(rank, self.engine.active_signal_graph.items[@intCast(child_id)].rank + 1);
-                }
-            },
-        }
-
-        const record_id = self.appendActiveSignalGraphNode(record, rank);
-
-        switch (record.payload) {
-            .ref => |source_node_id| self.appendActiveSourceSignalRoute(source_node_id, record_id),
-            .const_value, .task_source, .interval_source => {},
-            .map => |payload| self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(payload.input), record_id),
-            .map2 => |payload| {
-                self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(payload.left), record_id);
-                if (payload.right != payload.left) {
-                    self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(payload.right), record_id);
-                }
-            },
-            .combine => |payload| {
-                for (payload.children, 0..) |child, index| {
-                    if (HostEngine.recordSliceContains(payload.children[0..index], child)) continue;
-                    self.appendActiveSignalDependentId(self.requireActiveSignalRecordId(child), record_id);
-                }
-            },
-        }
+        return self.engine.retainActiveSignalRecord(self, record);
     }
 
     fn updateMovedActiveSignalRecordEdges(self: *HostEnv, moved_record: *HostSignalRecord, old_record_id: u64, new_record_id: u64) void {
@@ -1480,131 +1330,12 @@ const HostEnv = struct {
         }
     }
 
-    fn ensureActiveSourceSignalRoute(self: *HostEnv, source_node_id: u64) *std.ArrayListUnmanaged(u64) {
-        if (source_node_id >= self.engine.node_identities.items.len) failHost("active source signal route referenced an unknown source node");
-        const allocator = self.gpa.allocator();
-        const route_index: usize = @intCast(source_node_id);
-        while (self.engine.active_source_signal_routes.items.len <= route_index) {
-            self.engine.active_source_signal_routes.append(allocator, .empty) catch std.process.exit(1);
-        }
-        return &self.engine.active_source_signal_routes.items[route_index];
-    }
-
-    fn ensureActiveTextSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
-        if (record_id >= self.engine.active_signal_graph.items.len) failHost("active text signal route referenced an unknown signal record");
-        const allocator = self.gpa.allocator();
-        const route_index: usize = @intCast(record_id);
-        while (self.engine.active_text_signal_routes.items.len <= route_index) {
-            self.engine.active_text_signal_routes.append(allocator, .empty) catch std.process.exit(1);
-        }
-        return &self.engine.active_text_signal_routes.items[route_index];
-    }
-
-    fn ensureActiveBoolSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
-        if (record_id >= self.engine.active_signal_graph.items.len) failHost("active bool signal route referenced an unknown signal record");
-        const allocator = self.gpa.allocator();
-        const route_index: usize = @intCast(record_id);
-        while (self.engine.active_bool_signal_routes.items.len <= route_index) {
-            self.engine.active_bool_signal_routes.append(allocator, .empty) catch std.process.exit(1);
-        }
-        return &self.engine.active_bool_signal_routes.items[route_index];
-    }
-
-    fn ensureActiveChangeSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveChangeSignalSink) {
-        if (record_id >= self.engine.active_signal_graph.items.len) failHost("active change signal route referenced an unknown signal record");
-        const allocator = self.gpa.allocator();
-        const route_index: usize = @intCast(record_id);
-        while (self.engine.active_change_signal_routes.items.len <= route_index) {
-            self.engine.active_change_signal_routes.append(allocator, .empty) catch std.process.exit(1);
-        }
-        return &self.engine.active_change_signal_routes.items[route_index];
-    }
-
-    fn ensureActiveStructuralSignalRoute(self: *HostEnv, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
-        if (record_id >= self.engine.active_signal_graph.items.len) failHost("active structural signal route referenced an unknown signal record");
-        const allocator = self.gpa.allocator();
-        const route_index: usize = @intCast(record_id);
-        while (self.engine.active_structural_signal_routes.items.len <= route_index) {
-            self.engine.active_structural_signal_routes.append(allocator, .empty) catch std.process.exit(1);
-        }
-        return &self.engine.active_structural_signal_routes.items[route_index];
-    }
-
     fn rebuildActiveSinkSignalRoutesFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
-        const allocator = self.gpa.allocator();
-        self.clearActiveSinkSignalRoutes();
-
-        for (stream.signal_text_nodes.items, 0..) |desc, index| {
-            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-            self.ensureActiveTextSignalRoute(record_id).append(allocator, .{
-                .kind = .text_node,
-                .index = index,
-            }) catch std.process.exit(1);
-        }
-
-        for (stream.signal_text_attrs.items, 0..) |desc, index| {
-            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-            self.ensureActiveTextSignalRoute(record_id).append(allocator, .{
-                .kind = .text_attr,
-                .index = index,
-            }) catch std.process.exit(1);
-        }
-
-        for (stream.signal_bool_attrs.items, 0..) |desc, index| {
-            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-            self.ensureActiveBoolSignalRoute(record_id).append(allocator, .{
-                .index = index,
-            }) catch std.process.exit(1);
-        }
-
-        for (stream.on_changes.items, 0..) |desc, index| {
-            const record_id = self.requireActiveSignalRecordId(desc.signal.record);
-            self.ensureActiveChangeSignalRoute(record_id).append(allocator, .{
-                .index = index,
-            }) catch std.process.exit(1);
-        }
-
-        for (stream.whens.items, 0..) |desc, index| {
-            const record_id = self.requireActiveSignalRecordId(desc.condition.record);
-            self.ensureActiveStructuralSignalRoute(record_id).append(allocator, .{
-                .kind = .when,
-                .index = index,
-            }) catch std.process.exit(1);
-        }
-
-        for (stream.eaches.items, 0..) |desc, index| {
-            const record_id = self.requireActiveSignalRecordId(desc.items.record);
-            self.ensureActiveStructuralSignalRoute(record_id).append(allocator, .{
-                .kind = .each,
-                .index = index,
-            }) catch std.process.exit(1);
-        }
+        return self.engine.rebuildActiveSinkSignalRoutesFromStream(self, stream);
     }
 
     fn rebuildActiveSignalGraphFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
-        self.clearActiveSignalRoutes();
-        self.clearActiveSignalGraph();
-
-        for (stream.signal_text_nodes.items) |*desc| {
-            self.retainActiveSignalRecord(desc.signal.record);
-        }
-        for (stream.signal_text_attrs.items) |*desc| {
-            self.retainActiveSignalRecord(desc.signal.record);
-        }
-        for (stream.signal_bool_attrs.items) |*desc| {
-            self.retainActiveSignalRecord(desc.signal.record);
-        }
-        for (stream.on_changes.items) |*desc| {
-            self.retainActiveSignalRecord(desc.signal.record);
-        }
-        for (stream.whens.items) |*desc| {
-            self.retainActiveSignalRecord(desc.condition.record);
-        }
-        for (stream.eaches.items) |*desc| {
-            self.retainActiveSignalRecord(desc.items.record);
-        }
-
-        self.rebuildActiveSinkSignalRoutesFromStream(stream);
+        return self.engine.rebuildActiveSignalGraphFromStream(self, stream);
     }
 
     fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {

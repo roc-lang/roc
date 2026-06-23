@@ -3439,6 +3439,301 @@ pub fn Engine(comptime Ctx: type) type {
             self.collectActiveElemDescriptors(ctx, roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
         }
 
+        pub fn clearActiveSignalGraph(self: *Self, ctx: anytype) void {
+            const allocator = Ctx.allocator(ctx);
+            const roc_host = self.roc_host orelse {
+                if (self.active_signal_graph.items.len != 0) @panic("active signal graph cannot release records without a Roc host");
+                self.active_signal_graph.items.len = 0;
+                return;
+            };
+            for (self.active_signal_graph.items, 0..) |node, index| {
+                allocator.free(node.dependents);
+                const active_graph_id = node.record.active_graph_id orelse @panic("active signal graph record was missing its dense id");
+                if (active_graph_id != index) @panic("active signal graph record dense id did not match its slot");
+                node.record.active_graph_id = null;
+                node.record.active_use_count = 0;
+                node.record.release(allocator, roc_host, &self.pending_roc_metrics);
+            }
+            self.active_signal_graph.items.len = 0;
+        }
+
+        pub fn clearActiveSignalRoutes(self: *Self, ctx: anytype) void {
+            const allocator = Ctx.allocator(ctx);
+            for (self.active_source_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_source_signal_routes.items.len = 0;
+
+            for (self.active_text_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_text_signal_routes.items.len = 0;
+
+            for (self.active_bool_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_bool_signal_routes.items.len = 0;
+
+            for (self.active_change_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_change_signal_routes.items.len = 0;
+
+            for (self.active_structural_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_structural_signal_routes.items.len = 0;
+        }
+
+        pub fn clearActiveSinkSignalRoutes(self: *Self, ctx: anytype) void {
+            const allocator = Ctx.allocator(ctx);
+            for (self.active_text_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_text_signal_routes.items.len = 0;
+
+            for (self.active_bool_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_bool_signal_routes.items.len = 0;
+
+            for (self.active_change_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_change_signal_routes.items.len = 0;
+
+            for (self.active_structural_signal_routes.items) |*route| {
+                route.deinit(allocator);
+            }
+            self.active_structural_signal_routes.items.len = 0;
+        }
+
+        pub fn activeSignalRecordId(self: *Self, record: *const HostSignalRecord) ?u64 {
+            const record_id = record.active_graph_id orelse return null;
+            if (record_id >= self.active_signal_graph.items.len) @panic("active signal record dense id exceeded the graph table");
+            if (self.active_signal_graph.items[@intCast(record_id)].record != record) {
+                @panic("active signal record dense id pointed at a different record");
+            }
+            return record_id;
+        }
+
+        pub fn requireActiveSignalRecordId(self: *Self, record: *const HostSignalRecord) u64 {
+            return self.activeSignalRecordId(record) orelse @panic("active signal graph referenced a record that was not registered");
+        }
+
+        pub fn appendActiveSignalGraphNode(self: *Self, ctx: anytype, record: *HostSignalRecord, rank: u64) u64 {
+            const allocator = Ctx.allocator(ctx);
+            const record_id: u64 = @intCast(self.active_signal_graph.items.len);
+            self.active_signal_graph.append(allocator, .{
+                .record = record.retain(),
+                .rank = rank,
+            }) catch @panic("out of memory");
+            record.active_graph_id = record_id;
+            self.pending_roc_metrics.bump(.active_graph_records_rebuilt, 1);
+            return record_id;
+        }
+
+        pub fn appendActiveSignalDependentId(self: *Self, ctx: anytype, input_record_id: u64, dependent_record_id: u64) void {
+            signal_graph.appendDependent(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| switch (err) {
+                error.OutOfMemory => @panic("out of memory"),
+                error.UnknownNode => @panic("active signal dependent referenced an unknown input record"),
+                else => @panic("active signal dependent insertion missed its edge"),
+            };
+        }
+
+        pub fn appendActiveSourceSignalRoute(self: *Self, ctx: anytype, source_node_id: u64, record_id: u64) void {
+            const route = self.ensureActiveSourceSignalRoute(ctx, source_node_id);
+            if (!u64SliceContains(route.items, record_id)) {
+                route.append(Ctx.allocator(ctx), record_id) catch @panic("out of memory");
+            }
+        }
+
+        pub fn retainActiveSignalRecord(self: *Self, ctx: anytype, record: *HostSignalRecord) void {
+            if (record.active_use_count != 0) {
+                record.active_use_count += 1;
+                return;
+            }
+
+            record.active_use_count = 1;
+            var rank: u64 = 0;
+
+            switch (record.payload) {
+                .ref, .const_value, .task_source, .interval_source => {},
+                .map => |payload| {
+                    self.retainActiveSignalRecord(ctx, payload.input);
+                    const input_id = self.requireActiveSignalRecordId(payload.input);
+                    rank = self.active_signal_graph.items[@intCast(input_id)].rank + 1;
+                },
+                .map2 => |payload| {
+                    self.retainActiveSignalRecord(ctx, payload.left);
+                    if (payload.right != payload.left) {
+                        self.retainActiveSignalRecord(ctx, payload.right);
+                    }
+                    const left_id = self.requireActiveSignalRecordId(payload.left);
+                    const right_id = self.requireActiveSignalRecordId(payload.right);
+                    rank = @max(
+                        self.active_signal_graph.items[@intCast(left_id)].rank,
+                        self.active_signal_graph.items[@intCast(right_id)].rank,
+                    ) + 1;
+                },
+                .combine => |payload| {
+                    for (payload.children, 0..) |child, index| {
+                        if (recordSliceContains(payload.children[0..index], child)) continue;
+                        self.retainActiveSignalRecord(ctx, child);
+                        const child_id = self.requireActiveSignalRecordId(child);
+                        rank = @max(rank, self.active_signal_graph.items[@intCast(child_id)].rank + 1);
+                    }
+                },
+            }
+
+            const record_id = self.appendActiveSignalGraphNode(ctx, record, rank);
+
+            switch (record.payload) {
+                .ref => |source_node_id| self.appendActiveSourceSignalRoute(ctx, source_node_id, record_id),
+                .const_value, .task_source, .interval_source => {},
+                .map => |payload| self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.input), record_id),
+                .map2 => |payload| {
+                    self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.left), record_id);
+                    if (payload.right != payload.left) {
+                        self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(payload.right), record_id);
+                    }
+                },
+                .combine => |payload| {
+                    for (payload.children, 0..) |child, index| {
+                        if (recordSliceContains(payload.children[0..index], child)) continue;
+                        self.appendActiveSignalDependentId(ctx, self.requireActiveSignalRecordId(child), record_id);
+                    }
+                },
+            }
+        }
+
+        pub fn ensureActiveSourceSignalRoute(self: *Self, ctx: anytype, source_node_id: u64) *std.ArrayListUnmanaged(u64) {
+            if (source_node_id >= self.node_identities.items.len) @panic("active source signal route referenced an unknown source node");
+            const allocator = Ctx.allocator(ctx);
+            const route_index: usize = @intCast(source_node_id);
+            while (self.active_source_signal_routes.items.len <= route_index) {
+                self.active_source_signal_routes.append(allocator, .empty) catch @panic("out of memory");
+            }
+            return &self.active_source_signal_routes.items[route_index];
+        }
+
+        pub fn ensureActiveTextSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
+            if (record_id >= self.active_signal_graph.items.len) @panic("active text signal route referenced an unknown signal record");
+            const allocator = Ctx.allocator(ctx);
+            const route_index: usize = @intCast(record_id);
+            while (self.active_text_signal_routes.items.len <= route_index) {
+                self.active_text_signal_routes.append(allocator, .empty) catch @panic("out of memory");
+            }
+            return &self.active_text_signal_routes.items[route_index];
+        }
+
+        pub fn ensureActiveBoolSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
+            if (record_id >= self.active_signal_graph.items.len) @panic("active bool signal route referenced an unknown signal record");
+            const allocator = Ctx.allocator(ctx);
+            const route_index: usize = @intCast(record_id);
+            while (self.active_bool_signal_routes.items.len <= route_index) {
+                self.active_bool_signal_routes.append(allocator, .empty) catch @panic("out of memory");
+            }
+            return &self.active_bool_signal_routes.items[route_index];
+        }
+
+        pub fn ensureActiveChangeSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveChangeSignalSink) {
+            if (record_id >= self.active_signal_graph.items.len) @panic("active change signal route referenced an unknown signal record");
+            const allocator = Ctx.allocator(ctx);
+            const route_index: usize = @intCast(record_id);
+            while (self.active_change_signal_routes.items.len <= route_index) {
+                self.active_change_signal_routes.append(allocator, .empty) catch @panic("out of memory");
+            }
+            return &self.active_change_signal_routes.items[route_index];
+        }
+
+        pub fn ensureActiveStructuralSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
+            if (record_id >= self.active_signal_graph.items.len) @panic("active structural signal route referenced an unknown signal record");
+            const allocator = Ctx.allocator(ctx);
+            const route_index: usize = @intCast(record_id);
+            while (self.active_structural_signal_routes.items.len <= route_index) {
+                self.active_structural_signal_routes.append(allocator, .empty) catch @panic("out of memory");
+            }
+            return &self.active_structural_signal_routes.items[route_index];
+        }
+
+        pub fn rebuildActiveSinkSignalRoutesFromStream(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream) void {
+            const allocator = Ctx.allocator(ctx);
+            self.clearActiveSinkSignalRoutes(ctx);
+
+            for (stream.signal_text_nodes.items, 0..) |desc, index| {
+                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+                self.ensureActiveTextSignalRoute(ctx, record_id).append(allocator, .{
+                    .kind = .text_node,
+                    .index = index,
+                }) catch @panic("out of memory");
+            }
+
+            for (stream.signal_text_attrs.items, 0..) |desc, index| {
+                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+                self.ensureActiveTextSignalRoute(ctx, record_id).append(allocator, .{
+                    .kind = .text_attr,
+                    .index = index,
+                }) catch @panic("out of memory");
+            }
+
+            for (stream.signal_bool_attrs.items, 0..) |desc, index| {
+                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+                self.ensureActiveBoolSignalRoute(ctx, record_id).append(allocator, .{
+                    .index = index,
+                }) catch @panic("out of memory");
+            }
+
+            for (stream.on_changes.items, 0..) |desc, index| {
+                const record_id = self.requireActiveSignalRecordId(desc.signal.record);
+                self.ensureActiveChangeSignalRoute(ctx, record_id).append(allocator, .{
+                    .index = index,
+                }) catch @panic("out of memory");
+            }
+
+            for (stream.whens.items, 0..) |desc, index| {
+                const record_id = self.requireActiveSignalRecordId(desc.condition.record);
+                self.ensureActiveStructuralSignalRoute(ctx, record_id).append(allocator, .{
+                    .kind = .when,
+                    .index = index,
+                }) catch @panic("out of memory");
+            }
+
+            for (stream.eaches.items, 0..) |desc, index| {
+                const record_id = self.requireActiveSignalRecordId(desc.items.record);
+                self.ensureActiveStructuralSignalRoute(ctx, record_id).append(allocator, .{
+                    .kind = .each,
+                    .index = index,
+                }) catch @panic("out of memory");
+            }
+        }
+
+        pub fn rebuildActiveSignalGraphFromStream(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream) void {
+            self.clearActiveSignalRoutes(ctx);
+            self.clearActiveSignalGraph(ctx);
+
+            for (stream.signal_text_nodes.items) |*desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            for (stream.signal_text_attrs.items) |*desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            for (stream.signal_bool_attrs.items) |*desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            for (stream.on_changes.items) |*desc| {
+                self.retainActiveSignalRecord(ctx, desc.signal.record);
+            }
+            for (stream.whens.items) |*desc| {
+                self.retainActiveSignalRecord(ctx, desc.condition.record);
+            }
+            for (stream.eaches.items) |*desc| {
+                self.retainActiveSignalRecord(ctx, desc.items.record);
+            }
+
+            self.rebuildActiveSinkSignalRoutesFromStream(ctx, stream);
+        }
+
         pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: anytype, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
             cache_slot.replace(roc_host, &self.pending_roc_metrics, value, eq, drop);
             return self.cloneCachedSignalValue(ctx, cache_slot);
