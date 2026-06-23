@@ -5990,6 +5990,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (assign.payload) |payload| try locals.put(localKey(payload), payload);
                         try stack.append(sa, assign.next);
                     },
+                    .store_struct => |assign| {
+                        try locals.put(localKey(assign.dest), assign.dest);
+                        for (self.store.getLocalSpan(assign.fields)) |field| {
+                            try locals.put(localKey(field), field);
+                        }
+                        try stack.append(sa, assign.next);
+                    },
+                    .store_tag => |assign| {
+                        try locals.put(localKey(assign.dest), assign.dest);
+                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
+                        try stack.append(sa, assign.next);
+                    },
                     .set_local => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         try locals.put(localKey(assign.value), assign.value);
@@ -6137,6 +6149,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .assign_tag => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
+                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
+                        try stack.append(sa, assign.next);
+                    },
+                    .store_struct => |assign| {
+                        try locals.put(localKey(assign.dest), assign.dest);
+                        for (self.store.getLocalSpan(assign.fields)) |field| {
+                            try locals.put(localKey(field), field);
+                        }
+                        try stack.append(sa, assign.next);
+                    },
+                    .store_tag => |assign| {
+                        try locals.put(localKey(assign.dest), assign.dest);
                         if (assign.payload) |payload| try locals.put(localKey(payload), payload);
                         try stack.append(sa, assign.next);
                     },
@@ -14692,6 +14716,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn copyValueToPointer(self: *Self, value_loc: ValueLocation, value_layout: layout.Idx, ptr_local: LocalId) Allocator.Error!void {
+            const ls = self.layout_store;
+            const runtime_layout = self.runtimeRepresentationLayoutIdx(value_layout);
+            const layout_val = ls.getLayout(runtime_layout);
+            const value_size = ls.layoutSizeAlign(layout_val).size;
+
+            if (value_size == 0) {
+                _ = try self.emitValueLocal(ptr_local);
+                return;
+            }
+
+            const value_offset: i32 = switch (value_loc) {
+                .stack => |s| s.offset,
+                .list_stack => |info| info.struct_offset,
+                .stack_str => |off| off,
+                .stack_i128 => |off| off,
+                else => try self.ensureOnStack(value_loc, value_size),
+            };
+
+            const ptr_loc = try self.emitValueLocal(ptr_local);
+            const ptr_reg = try self.ensureInGeneralReg(ptr_loc);
+            const temp_reg = try self.allocTempGeneral();
+            try self.copyChunked(temp_reg, frame_ptr, value_offset, ptr_reg, 0, value_size);
+            self.codegen.freeGeneral(temp_reg);
+            self.codegen.freeGeneral(ptr_reg);
+        }
+
         /// Generate code for a control flow statement
         // Per-switch state shared across the explicit-stack continuations that
         // emit a multi-arm switch. Heap-allocated so every continuation that
@@ -14900,6 +14951,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .payload = assign.payload,
                             });
                             try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .store_struct => |assign| {
+                            const value_loc = try self.generateStruct(.{
+                                .fields = assign.fields,
+                                .target_layout = assign.struct_layout,
+                            });
+                            try self.copyValueToPointer(value_loc, assign.struct_layout, assign.dest);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .store_tag => |assign| {
+                            const value_loc = try self.generateTag(.{
+                                .target_layout = assign.tag_layout,
+                                .variant_index = assign.variant_index,
+                                .discriminant = assign.discriminant,
+                                .payload = assign.payload,
+                            });
+                            try self.copyValueToPointer(value_loc, assign.tag_layout, assign.dest);
                             try work.append(wa, .{ .node = assign.next });
                         },
 
@@ -17578,6 +17649,135 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const root_proc = try addNoArgProc(&store, alloca, .u64);
 
     try std.testing.expectEqual(@as(u64, 41), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
+}
+
+test "store_struct writes aggregate fields through pointer destination" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const record_layout = try test_state.layout_store.putStructFields(&.{
+        .{ .index = 0, .layout = .u64 },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const ptr_record = try test_state.layout_store.insertPtr(record_layout);
+
+    const slot = try addLocal(&store, ptr_record);
+    const first = try addLocal(&store, .u64);
+    const second = try addLocal(&store, .u64);
+    const loaded = try addLocal(&store, record_layout);
+    const result = try addLocal(&store, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const read_second = try store.addCFStmt(.{ .assign_ref = .{
+        .target = result,
+        .op = .{ .field = .{ .source = loaded, .field_idx = 1 } },
+        .next = ret,
+    } });
+    const load_args = try store.addLocalSpan(&.{slot});
+    const load = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = loaded,
+        .op = .ptr_load,
+        .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
+        .args = load_args,
+        .next = read_second,
+    } });
+    const fields = try store.addLocalSpan(&.{ first, second });
+    const store_record = try store.addCFStmt(.{ .store_struct = .{
+        .dest = slot,
+        .struct_layout = record_layout,
+        .fields = fields,
+        .next = load,
+    } });
+    const assign_second = try store.addCFStmt(.{ .assign_literal = .{
+        .target = second,
+        .value = .{ .i64_literal = .{ .value = 222, .layout_idx = .u64 } },
+        .next = store_record,
+    } });
+    const assign_first = try store.addCFStmt(.{ .assign_literal = .{
+        .target = first,
+        .value = .{ .i64_literal = .{ .value = 111, .layout_idx = .u64 } },
+        .next = assign_second,
+    } });
+    const alloca = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = slot,
+        .op = .ptr_alloca,
+        .rc_effect = lir.LowLevel.ptr_alloca.rcEffect(),
+        .args = try store.addLocalSpan(&.{}),
+        .next = assign_first,
+    } });
+    const root_proc = try addNoArgProc(&store, alloca, .u64);
+
+    try std.testing.expectEqual(@as(u64, 222), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
+}
+
+test "store_tag writes payload through pointer destination" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const tag_union_layout = try test_state.layout_store.putTagUnion(&.{.u64});
+    const ptr_tag_union = try test_state.layout_store.insertPtr(tag_union_layout);
+
+    const slot = try addLocal(&store, ptr_tag_union);
+    const payload = try addLocal(&store, .u64);
+    const loaded = try addLocal(&store, tag_union_layout);
+    const result = try addLocal(&store, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const read_payload = try store.addCFStmt(.{ .assign_ref = .{
+        .target = result,
+        .op = .{ .tag_payload = .{
+            .source = loaded,
+            .payload_idx = 0,
+            .variant_index = 0,
+            .tag_discriminant = 0,
+        } },
+        .next = ret,
+    } });
+    const load_args = try store.addLocalSpan(&.{slot});
+    const load = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = loaded,
+        .op = .ptr_load,
+        .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
+        .args = load_args,
+        .next = read_payload,
+    } });
+    const store_tag = try store.addCFStmt(.{ .store_tag = .{
+        .dest = slot,
+        .tag_layout = tag_union_layout,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = payload,
+        .next = load,
+    } });
+    const assign_payload = try store.addCFStmt(.{ .assign_literal = .{
+        .target = payload,
+        .value = .{ .i64_literal = .{ .value = 1234, .layout_idx = .u64 } },
+        .next = store_tag,
+    } });
+    const alloca = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = slot,
+        .op = .ptr_alloca,
+        .rc_effect = lir.LowLevel.ptr_alloca.rcEffect(),
+        .args = try store.addLocalSpan(&.{}),
+        .next = assign_payload,
+    } });
+    const root_proc = try addNoArgProc(&store, alloca, .u64);
+
+    try std.testing.expectEqual(@as(u64, 1234), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
 }
 
 test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by decref" {

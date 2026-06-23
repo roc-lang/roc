@@ -550,6 +550,8 @@ fn collectAssignCallProcs(
             .assign_list => |stmt| try work.append(allocator, stmt.next),
             .assign_struct => |stmt| try work.append(allocator, stmt.next),
             .assign_tag => |stmt| try work.append(allocator, stmt.next),
+            .store_struct => |stmt| try work.append(allocator, stmt.next),
+            .store_tag => |stmt| try work.append(allocator, stmt.next),
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
@@ -686,6 +688,8 @@ fn collectProcShape(
                 shape.tag_assign_count += 1;
                 try work.append(allocator, stmt.next);
             },
+            .store_struct => |stmt| try work.append(allocator, stmt.next),
+            .store_tag => |stmt| try work.append(allocator, stmt.next),
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
@@ -2169,6 +2173,8 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_list,
             .assign_struct,
             .assign_tag,
+            .store_struct,
+            .store_tag,
             .set_local,
             .debug,
             .expect,

@@ -157,6 +157,24 @@ const Printer = struct {
                     try writer.writeAll("\n");
                     current = s.next;
                 },
+                .store_struct => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("store_struct l{d} layout=", .{@intFromEnum(s.dest)});
+                    try writeLayout(self.layouts, s.struct_layout, writer);
+                    try writer.writeAll("(");
+                    try self.writeLocals(s.fields, writer);
+                    try writer.writeAll(")\n");
+                    current = s.next;
+                },
+                .store_tag => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("store_tag l{d} layout=", .{@intFromEnum(s.dest)});
+                    try writeLayout(self.layouts, s.tag_layout, writer);
+                    try writer.print(" v{d} d{d}", .{ s.variant_index, s.discriminant });
+                    if (s.payload) |payload| try writer.print(" (l{d})", .{@intFromEnum(payload)});
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
                 .set_local => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("set l{d} := l{d} ({s})\n", .{ @intFromEnum(s.target), @intFromEnum(s.value), @tagName(s.mode) });

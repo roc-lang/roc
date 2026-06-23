@@ -826,6 +826,36 @@ const Inserter = struct {
                     });
                     path.cursor = assign.next;
                 },
+                .store_struct => |assign| {
+                    const transfer_mask = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.dest, &path.owned, path.options.loop_keep);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.fields, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_mask = transfer_mask,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .store_tag => |assign| {
+                    var transfer_single = false;
+                    if (assign.payload) |payload| {
+                        transfer_single = try self.singleTransfer(payload, assign.next, assign.dest, &path.owned, path.options.loop_keep);
+                    }
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
                 .set_local => |assign| {
                     var retain_set_target = assign.target != assign.value;
                     if (assign.target != assign.value) {
@@ -1141,6 +1171,30 @@ const Inserter = struct {
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = assign.target,
+                    .variant_index = assign.variant_index,
+                    .discriminant = assign.discriminant,
+                    .payload = assign.payload,
+                    .next = next,
+                } });
+            },
+            .store_struct => |assign| {
+                next = try self.retainSpanExcept(assign.fields, frame.transfer_mask, next);
+                cloned = try self.store.addCFStmt(.{ .store_struct = .{
+                    .dest = assign.dest,
+                    .struct_layout = assign.struct_layout,
+                    .fields = assign.fields,
+                    .next = next,
+                } });
+            },
+            .store_tag => |assign| {
+                if (assign.payload) |payload| {
+                    if (!frame.transfer_single) {
+                        next = try self.retainLocalIfRc(payload, next);
+                    }
+                }
+                cloned = try self.store.addCFStmt(.{ .store_tag = .{
+                    .dest = assign.dest,
+                    .tag_layout = assign.tag_layout,
                     .variant_index = assign.variant_index,
                     .discriminant = assign.discriminant,
                     .payload = assign.payload,
@@ -1887,6 +1941,19 @@ const Inserter = struct {
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
+                .store_struct => |assign| {
+                    _ = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.dest, &path.owned, path.loop_keep);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.fields, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .store_tag => |assign| {
+                    if (assign.payload) |payload| {
+                        _ = try self.singleTransfer(payload, assign.next, assign.dest, &path.owned, path.loop_keep);
+                    }
+                    const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
                 .set_local => |assign| {
                     if (assign.target != assign.value) {
                         const move_value = try self.canMoveSetLocalValue(&path.owned, assign.value, assign.next, path.loop_keep);
@@ -2562,6 +2629,8 @@ const Inserter = struct {
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
+                .store_struct,
+                .store_tag,
                 .set_local,
                 .debug,
                 .expect,
@@ -2794,6 +2863,8 @@ const Inserter = struct {
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
                 .set_local => |assign| try stack.append(self.store.allocator, assign.next),
                 .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
                 .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
@@ -2892,6 +2963,8 @@ const Inserter = struct {
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
                 .set_local => |assign| try stack.append(self.store.allocator, assign.next),
                 .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
                 .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
@@ -3127,6 +3200,16 @@ const Inserter = struct {
                 .assign_tag => |assign| {
                     if (assign.payload) |payload| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, payload);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .store_struct => |assign| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.fields);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .store_tag => |assign| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    if (assign.payload) |payload| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, payload);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .set_local => |assign| {
@@ -3373,6 +3456,14 @@ const Inserter = struct {
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
+                .store_struct => |assign| {
+                    if (assign.dest == needle or self.spanUsesLocal(assign.fields, needle)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .store_tag => |assign| {
+                    if (assign.dest == needle or (assign.payload != null and assign.payload.? == needle)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
                 .set_local => |assign| {
                     if (assign.value == needle) return true;
                     if (assign.target == needle) continue;
@@ -3568,6 +3659,14 @@ const Inserter = struct {
                 },
                 .assign_tag => |assign| {
                     if (assign.payload != null and needles.contains(assign.payload.?)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .store_struct => |assign| {
+                    if (needles.contains(assign.dest) or self.spanUsesAny(assign.fields, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .store_tag => |assign| {
+                    if (needles.contains(assign.dest) or (assign.payload != null and needles.contains(assign.payload.?))) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .set_local => |assign| {
@@ -4318,7 +4417,7 @@ const ArcTest = struct {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -4376,6 +4475,8 @@ const ArcTest = struct {
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
                 .assign_tag => |assign| cursor = assign.next,
+                .store_struct => |assign| cursor = assign.next,
+                .store_tag => |assign| cursor = assign.next,
                 .set_local => |assign| cursor = assign.next,
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
@@ -4428,6 +4529,8 @@ const ArcTest = struct {
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
                 .assign_tag => |assign| cursor = assign.next,
+                .store_struct => |assign| cursor = assign.next,
+                .store_tag => |assign| cursor = assign.next,
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,

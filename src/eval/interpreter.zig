@@ -1499,6 +1499,22 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
+                .store_struct => |assign| debugPrint(
+                    "  stmt {d}: {any} store_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(assign.struct_layout),
+                    },
+                ),
+                .store_tag => |assign| debugPrint(
+                    "  stmt {d}: {any} store_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(assign.tag_layout),
+                    },
+                ),
                 .set_local => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d} target_layout_data={any}\n",
                     .{
@@ -1521,6 +1537,8 @@ pub const Interpreter = struct {
                 .assign_list => |assign| assign.next,
                 .assign_struct => |assign| assign.next,
                 .assign_tag => |assign| assign.next,
+                .store_struct => |assign| assign.next,
+                .store_tag => |assign| assign.next,
                 .set_local => |assign| assign.next,
                 .debug => |stmt_next| stmt_next.next,
                 .expect => |stmt_next| stmt_next.next,
@@ -1894,6 +1912,24 @@ pub const Interpreter = struct {
                         assign.payload,
                         self.store.getLocal(assign.target).layout_idx,
                     ));
+                    current = assign.next;
+                },
+                .store_struct => |assign| {
+                    const dest = try self.getLocalChecked(frame, assign.dest);
+                    const value = try self.evalStructLiteral(frame, assign.fields, assign.struct_layout);
+                    _ = try self.evalPtrStore(dest, value, assign.struct_layout);
+                    current = assign.next;
+                },
+                .store_tag => |assign| {
+                    const dest = try self.getLocalChecked(frame, assign.dest);
+                    const value = try self.evalTagLiteral(
+                        frame,
+                        assign.variant_index,
+                        assign.discriminant,
+                        assign.payload,
+                        assign.tag_layout,
+                    );
+                    _ = try self.evalPtrStore(dest, value, assign.tag_layout);
                     current = assign.next;
                 },
                 .set_local => |assign| {
@@ -2282,6 +2318,29 @@ pub const Interpreter = struct {
                     debugPrint("    {d}: assign_tag target={d} variant={d} discrim={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
+                        assign.variant_index,
+                        assign.discriminant,
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.evalAllocator(), assign.next) catch return;
+                },
+                .store_struct => |assign| {
+                    debugPrint("    {d}: store_struct dest={d} fields=", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.dest),
+                    });
+                    for (self.store.getLocalSpan(assign.fields)) |field_local| {
+                        debugPrint("{d} ", .{@intFromEnum(field_local)});
+                    }
+                    debugPrint("next={d}\n", .{
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.evalAllocator(), assign.next) catch return;
+                },
+                .store_tag => |assign| {
+                    debugPrint("    {d}: store_tag dest={d} variant={d} discrim={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.dest),
                         assign.variant_index,
                         assign.discriminant,
                         @intFromEnum(assign.next),

@@ -472,6 +472,20 @@ pub const CFStmt = union(enum) {
         payload: ?LocalId,
         next: CFStmtId,
     },
+    store_struct: struct {
+        dest: LocalId,
+        struct_layout: layout.Idx,
+        fields: LocalSpan,
+        next: CFStmtId,
+    },
+    store_tag: struct {
+        dest: LocalId,
+        tag_layout: layout.Idx,
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?LocalId,
+        next: CFStmtId,
+    },
     set_local: struct {
         target: LocalId,
         value: LocalId,

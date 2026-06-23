@@ -675,7 +675,7 @@ fn retLenders(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
             .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -740,7 +740,7 @@ fn retAllUnique(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
             .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -947,6 +947,18 @@ fn collectStmt(
         },
         .assign_tag => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
+            if (assign.payload) |payload| noteDemand(solver, payload);
+            try solver.stack.append(allocator, assign.next);
+        },
+        .store_struct => |assign| {
+            noteDemand(solver, assign.dest);
+            for (store.getLocalSpan(assign.fields)) |field| {
+                noteDemand(solver, field);
+            }
+            try solver.stack.append(allocator, assign.next);
+        },
+        .store_tag => |assign| {
+            noteDemand(solver, assign.dest);
             if (assign.payload) |payload| noteDemand(solver, payload);
             try solver.stack.append(allocator, assign.next);
         },
@@ -1189,7 +1201,7 @@ pub fn computeVisibility(
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -1273,6 +1285,7 @@ pub fn computeVisibility(
                     try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(payload));
                 }
             },
+            .store_struct, .store_tag => {},
             .assign_packed_erased_fn => |assign| {
                 if (assign.capture) |capture| {
                     try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(capture));
@@ -1728,6 +1741,14 @@ pub fn computeUniqueness(
                 marks.noteBirth(&born, assign.target);
                 if (assign.payload) |payload| marks.destroy(&destroyed, payload);
             },
+            .store_struct => |assign| {
+                for (store.getLocalSpan(assign.fields)) |field| {
+                    marks.destroy(&destroyed, field);
+                }
+            },
+            .store_tag => |assign| {
+                if (assign.payload) |payload| marks.destroy(&destroyed, payload);
+            },
             .set_local => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
@@ -1863,7 +1884,7 @@ fn computeSccs(solver: *Solver) SolveError!void {
                     try solver.stack.append(allocator, j.body);
                     try solver.stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try solver.stack.append(allocator, s.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},

@@ -250,7 +250,7 @@ fn certifyUniqueArgs(
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -390,7 +390,7 @@ fn writeFailureContext(
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -508,6 +508,8 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
         .assign_tag => |a| a.target == needle or (a.payload != null and a.payload.? == needle),
+        .store_struct => |a| a.dest == needle or spanHasLocal(store, a.fields, needle),
+        .store_tag => |a| a.dest == needle or (a.payload != null and a.payload.? == needle),
         .set_local => |a| a.target == needle or a.value == needle,
         .init_uninitialized => |a| a.target == needle,
         .debug => |d| d.message == needle,
@@ -1220,6 +1222,16 @@ const Certifier = struct {
                     if (assign.payload) |payload| try self.noteProcLocal(payload);
                     try stack.append(self.allocator, assign.next);
                 },
+                .store_struct => |assign| {
+                    try self.noteProcLocal(assign.dest);
+                    try self.noteProcLocalSpan(assign.fields);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .store_tag => |assign| {
+                    try self.noteProcLocal(assign.dest);
+                    if (assign.payload) |payload| try self.noteProcLocal(payload);
+                    try stack.append(self.allocator, assign.next);
+                },
                 .set_local => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.value);
@@ -1489,6 +1501,16 @@ const Certifier = struct {
                 .assign_tag => |assign| {
                     if (assign.payload) |payload| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, payload);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .store_struct => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.fields);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .store_tag => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    if (assign.payload) |payload| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, payload);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .set_local => |assign| {
@@ -2041,6 +2063,18 @@ const Certifier = struct {
                     }
                     cursor = assign.next;
                 },
+                .store_struct => |assign| {
+                    try self.applyAggregateStore(&state, assign.dest, self.store.getLocalSpan(assign.fields));
+                    cursor = assign.next;
+                },
+                .store_tag => |assign| {
+                    if (assign.payload) |payload| {
+                        try self.applyAggregateStore(&state, assign.dest, &.{payload});
+                    } else {
+                        try self.applyAggregateStore(&state, assign.dest, &.{});
+                    }
+                    cursor = assign.next;
+                },
                 .set_local => |assign| {
                     if (assign.target != assign.value) {
                         _ = try self.requireLive(&state, assign.value);
@@ -2462,6 +2496,30 @@ const Certifier = struct {
             else
                 state.valueOf(operand);
             try self.consumeIntoHolder(state, value, target_value);
+        }
+    }
+
+    fn applyAggregateStore(
+        self: *Certifier,
+        state: *State,
+        dest: LIR.LocalId,
+        operands: []const LIR.LocalId,
+    ) CertifyError!void {
+        _ = try self.requireLive(state, dest);
+
+        var operand_values_buffer: [64]ValueId = undefined;
+        for (operands, 0..) |operand, index| {
+            const value = try self.requireLive(state, operand);
+            if (index < operand_values_buffer.len) operand_values_buffer[index] = value;
+        }
+
+        for (operands, 0..) |operand, index| {
+            if (!self.isRc(operand)) continue;
+            const value = if (index < operand_values_buffer.len)
+                operand_values_buffer[index]
+            else
+                state.valueOf(operand);
+            try self.consumeIntoHolder(state, value, no_value);
         }
     }
 };
