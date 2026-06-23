@@ -1,3 +1,6 @@
 answer = 1E80000
 
-main! = |_| answer
+main! = |_| {
+    _ = answer
+    Ok({})
+}

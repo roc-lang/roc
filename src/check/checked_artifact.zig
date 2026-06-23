@@ -14142,6 +14142,12 @@ fn collectPlatformRequiredSignatureSubstitutions(
     const actual_payload = store.payload(actual);
 
     if (checkedTypePayloadIsIdentity(actual_payload)) {
+        if (checkedTypePayloadIsIdentity(expected_payload)) return;
+        if (checkedTypePayloadIsLiteralDefaultPinnedVar(actual_payload) and
+            checkedTypePayloadIsStructuralAggregate(expected_payload))
+        {
+            return;
+        }
         try appendUniquePlatformForClauseSubstitution(formals, actuals, allocator, actual, expected);
         return;
     }
