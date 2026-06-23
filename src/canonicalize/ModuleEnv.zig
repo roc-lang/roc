@@ -1003,6 +1003,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_literal = try report.addOwnedString(literal_text);
             try report.headline.addReflowingText("This number literal is not valid: ");
             try report.headline.addInlineCode(owned_literal);
+            try report.headline.addReflowingText(".");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -1261,7 +1262,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Variable ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is defined here and then never used:");
+            try report.headline.addReflowingText(" is defined here and then never used.");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -1655,6 +1656,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_feature = try report.addOwnedString(feature);
             try report.headline.addReflowingText("This feature is not yet implemented: ");
             try report.headline.addAnnotatedText(owned_feature, .emphasized);
+            try report.headline.addReflowingText(".");
             const owned_filename = try report.addOwnedString(filename);
             const region_info = self.calcRegionInfo(data.region);
             try report.document.addSourceRegion(
@@ -1812,7 +1814,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "Empty Tuple Not Allowed", "I am part way through parsing this tuple, but it is empty:", .runtime_error);
+            var report = try Report.init(allocator, "Empty Tuple Not Allowed", "I am part way through parsing this tuple, but it is empty.", .runtime_error);
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1874,6 +1876,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_literal = try report.addOwnedString(literal_text);
             try report.headline.addText("This floating-point literal cannot be used in a pattern match: ");
             try report.headline.addInlineCode(owned_literal);
+            try report.headline.addReflowingText(".");
 
             try report.document.addReflowingText("This number exceeds the precision range of Roc's ");
             try report.document.addInlineCode("Dec");
@@ -2253,7 +2256,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(type_name);
             try report.headline.addReflowingText(" is used in a record builder expression, but does not implement ");
             try report.headline.addInlineCode("map2");
-            try report.headline.addReflowingText(":");
+            try report.headline.addReflowingText(".");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2327,7 +2330,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Open Ext Not Allowed In Type Declaration", "", .warning);
             try report.headline.addText("You cannot use a ");
             try report.headline.addInlineCode("..");
-            try report.headline.addReflowingText(" inside a type declaration:");
+            try report.headline.addReflowingText(" inside a type declaration.");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2355,7 +2358,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("_");
             try report.headline.addReflowingText(" or ");
             try report.headline.addInlineCode("_name");
-            try report.headline.addReflowingText(") are only allowed in nominal record type declarations, not in structural record types:");
+            try report.headline.addReflowingText(") are only allowed in nominal record type declarations, not in structural record types.");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2881,7 +2884,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const suggested = self.getString(data.suggested);
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "Deprecated Number Suffix", "This number literal uses a deprecated suffix syntax:", .runtime_error);
+            var report = try Report.init(allocator, "Deprecated Number Suffix", "This number literal uses a deprecated suffix syntax.", .runtime_error);
             const owned_suffix = try report.addOwnedString(suffix);
             const owned_suggested = try report.addOwnedString(suggested);
 

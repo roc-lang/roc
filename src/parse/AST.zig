@@ -308,7 +308,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .multi_arrow_needs_parens => "Function types with multiple arrows need parentheses.",
         .type_alias_cannot_have_associated => "Type aliases cannot have associated items (such as types or methods).",
         .nominal_associated_cannot_have_final_expression => "Associated items (such as types or methods) can only have associated types and values, not plain expressions.",
-        .deprecated_number_suffix => "This number literal uses a deprecated suffix syntax:",
+        .deprecated_number_suffix => "This number literal uses a deprecated suffix syntax.",
         .expr_double_dot_is_not_range => ".. is not an operator. For an exclusive range use ..<; for an inclusive range use ..=.",
         else => "",
     };

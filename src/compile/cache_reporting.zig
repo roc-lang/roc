@@ -86,10 +86,10 @@ pub fn getUnitString(unit: DataSizeUnit) []const u8 {
 pub fn createCacheStatsReport(allocator: Allocator, stats: CacheStats) Allocator.Error!Report {
     const total_ops = stats.getTotalOps();
     if (total_ops == 0) {
-        return try Report.init(allocator, "Cache Statistics", "No cache operations performed", .info);
+        return try Report.init(allocator, "Cache Statistics", "No cache operations performed.", .info);
     }
 
-    const headline = try std.fmt.allocPrint(allocator, "Total operations: {} ({} hits, {} misses)", .{ total_ops, stats.hits, stats.misses });
+    const headline = try std.fmt.allocPrint(allocator, "Total operations: {} ({} hits, {} misses).", .{ total_ops, stats.hits, stats.misses });
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Cache Statistics", headline, .info);
 

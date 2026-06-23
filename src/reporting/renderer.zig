@@ -2,6 +2,7 @@
 //! output formats without the complexity of vtables or interfaces.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const source_region = @import("source_region.zig");
 const Allocator = std.mem.Allocator;
@@ -39,6 +40,32 @@ pub const RenderTarget = enum {
     html,
     language_server,
 };
+
+/// In debug builds, enforce that a report's headline reads as a complete
+/// sentence: its last non-whitespace character must be a period. The headline
+/// is the one-sentence summary on the box's top edge (or under the title in the
+/// markdown/HTML/LSP layouts). Compiled out of release builds. Reports that have
+/// not yet been migrated to a headline (none of the elements carry text) are
+/// exempt.
+fn assertValidHeadline(report: *const Report) void {
+    if (builtin.mode != .Debug) return;
+
+    var last: u8 = 0;
+    for (report.headline.elements.items) |el| {
+        const text = el.getText() orelse continue;
+        var i: usize = text.len;
+        while (i > 0) : (i -= 1) {
+            const c = text[i - 1];
+            if (c != ' ' and c != '\t' and c != '\n') {
+                last = c;
+                break;
+            }
+        }
+    }
+    // `last` stays 0 when the headline has no text content at all (legacy
+    // reports without a headline) — those are exempt.
+    std.debug.assert(last == 0 or last == '.');
+}
 
 /// Render a report to the specified target format.
 pub fn renderReport(report: *const Report, writer: *std.Io.Writer, target: RenderTarget) (Allocator.Error || error{WriteFailed})!void {
@@ -78,6 +105,7 @@ pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, pal
 /// Render a report to plain markdown. This is the stable, machine-friendly
 /// format used by internal tests and EXPECTED-section tooling.
 pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    assertValidHeadline(report);
     try writer.writeAll("**");
     try writer.writeAll(report.title);
     try writer.writeAll("**\n");
@@ -97,22 +125,27 @@ pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, con
 
 // Boxed report rendering.
 //
-// Lays a report out as a box drawn around the offending source snippet:
+// Lays a report out as a box drawn around the offending source snippet, with an
+// ALL-CAPS label box in the upper-left poking one column out past the main box:
 //
-//     ┌─────────────┐
-//     │ TYPE MISMATCH ├── <one-line summary> ──────────── ... ──────┐
-//     └┬──────────────┘                                             │
-//      │                                                            │
-//      │  <source code>                                             │
+//     ┌───────────────┐
+//     │ TYPE MISMATCH ├─ <one-line summary> ───────────── ... ─────┐
+//     └┬──────────────┘                                            │
+//      │                                                           │
+//      │  <source code>                                            │
 //      │         ‾‾‾‾‾                                              │
-//      └─────────────────────────────── path/to/file.roc:6:8 ──────┘
+//      └──────────────────────────────── path/to/file.roc:6:8 ─────┘
 //
-//         <detailed explanation, indented under the box>
+//        <detailed explanation, indented under the box>
 //
 // The summary rides the top edge (wrapping under its own start when long, and
-// growing the box for 3+ lines). The same layout is used for the colored
-// terminal output and the plain markdown/snapshot output — the only difference
-// is the palette (ANSI vs NO_COLOR).
+// growing the box for 3+ lines). The location is tucked into the bottom-right
+// corner, right-aligned; if it would overrun the wall it drops to its own line
+// beneath instead. There is always a blank row above the snippet, and a
+// blank-equivalent row above the bottom edge (a single-line region's underline
+// counts as blank). The same layout is used for the colored terminal output and
+// the plain markdown/snapshot output — the only difference is the palette (ANSI
+// vs NO_COLOR).
 
 /// The thin red rule under the offending span. U+203E sits at the top of its
 /// cell so it visually underlines the source line above it.
@@ -165,22 +198,68 @@ fn findBoxedRegion(elements: []const DocumentElement) ?BoxedRegion {
     return null;
 }
 
-/// Append the plain text content of a run of elements (line breaks become spaces).
-fn collectPlainText(elements: []const DocumentElement, buf: *std.array_list.Managed(u8)) Allocator.Error!void {
+/// Append the plain text of a run of elements (line breaks become spaces), and
+/// record the terminal color of each appended byte so the box's top edge can
+/// keep inline code, symbols, etc. colored. `colors` ends up the same length as
+/// `plain`. In a no-color palette every color is "" and this is just plain text.
+fn collectStyledText(
+    elements: []const DocumentElement,
+    palette: ColorPalette,
+    plain: *std.array_list.Managed(u8),
+    colors: *std.array_list.Managed([]const u8),
+) Allocator.Error!void {
     for (elements) |el| {
         switch (el) {
-            .text => |t| try buf.appendSlice(t),
-            .reflowing_text => |t| try buf.appendSlice(t),
-            .raw => |t| try buf.appendSlice(t),
-            .annotated => |a| try buf.appendSlice(a.content),
-            .line_break => try buf.append(' '),
+            .text, .reflowing_text, .raw => |t| for (t) |b| {
+                try plain.append(b);
+                try colors.append(palette.secondary);
+            },
+            .annotated => |a| {
+                const c = palette.colorForAnnotation(a.annotation);
+                for (a.content) |b| {
+                    try plain.append(b);
+                    try colors.append(c);
+                }
+            },
+            .line_break => {
+                try plain.append(' ');
+                try colors.append(palette.secondary);
+            },
             .space => |n| {
                 var i: u32 = 0;
-                while (i < n) : (i += 1) try buf.append(' ');
+                while (i < n) : (i += 1) {
+                    try plain.append(' ');
+                    try colors.append(palette.secondary);
+                }
             },
             else => {},
         }
     }
+}
+
+/// Emit `line` (a slice of `plain`) with its per-byte `colors`, then reset to
+/// `sec`. The ANSI color codes don't count toward display width, so the caller's
+/// column accounting (computed from the plain text) stays correct.
+fn writeColoredSummary(
+    writer: *std.Io.Writer,
+    line: []const u8,
+    plain: []const u8,
+    colors: []const []const u8,
+    sec: []const u8,
+) error{WriteFailed}!void {
+    if (line.len == 0) return;
+    const base = @intFromPtr(line.ptr) - @intFromPtr(plain.ptr);
+    var cur: usize = 0;
+    for (line, 0..) |b, k| {
+        const c = colors[base + k];
+        const cp = @intFromPtr(c.ptr);
+        if (cp != cur) {
+            try writer.writeAll(c);
+            cur = cp;
+        }
+        try writer.writeByte(b);
+    }
+    try writer.writeAll(sec);
 }
 
 /// Greedy word-wrap `text` into lines no wider than `width` columns.
@@ -237,14 +316,6 @@ fn closeRow(writer: *std.Io.Writer, palette: ColorPalette, col: usize, rw: usize
     try writer.writeByte('\n');
 }
 
-/// A blank interior row: `│ ... │`.
-fn sepRow(writer: *std.Io.Writer, palette: ColorPalette, rw: usize) error{WriteFailed}!void {
-    try writer.writeAll(palette.secondary);
-    try writer.writeAll("│");
-    try writer.writeAll(palette.reset);
-    try closeRow(writer, palette, 1, rw);
-}
-
 /// The byte offset in `line` at display column `target_col`, clamped to a UTF-8
 /// boundary and never overshooting `target_col`. Tabs count as one column.
 fn byteAtDisplayCol(line: []const u8, target_col: usize) usize {
@@ -292,6 +363,7 @@ fn windowSourceLine(line: []const u8, focus: usize, avail: usize) CodeWindow {
 
 /// Render the report as a box around its source snippet.
 pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    assertValidHeadline(report);
     const gpa = report.document.allocator;
     const elements = report.document.elements.items;
 
@@ -306,11 +378,12 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     // the lead text up to the first line break before the region.
     var summary_buf = std.array_list.Managed(u8).init(gpa);
     defer summary_buf.deinit();
+    var color_buf = std.array_list.Managed([]const u8).init(gpa);
+    defer color_buf.deinit();
     var below_start: usize = 0;
     if (report.headline.elementCount() > 0) {
-        // The headline is rich content; flatten it to plain text for the gray
-        // top edge (which doesn't carry inline styling).
-        try collectPlainText(report.headline.elements.items, &summary_buf);
+        // The rich headline rides the top edge; keep its inline styling.
+        try collectStyledText(report.headline.elements.items, palette, &summary_buf, &color_buf);
     } else {
         // Fallback: derive the summary from the lead text up to the first line
         // break before the region (reports with an empty headline).
@@ -322,26 +395,28 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
                 break;
             }
         }
-        try collectPlainText(elements[0..summary_end], &summary_buf);
+        try collectStyledText(elements[0..summary_end], palette, &summary_buf, &color_buf);
         below_start = if (summary_end < region.index) summary_end + 1 else region.index;
     }
     const summary = std.mem.trim(u8, summary_buf.items, " ");
 
     const title = report.title;
 
-    // The label box is right-aligned: its right edge is the last column, and it
-    // pokes one column past the main box's right wall.
+    // The label box sits flush left and sticks out one column to the left of the
+    // indented main box; the title's name rides its middle row, with the summary
+    // flowing to the right.
     const inner_len = title.len + 2; // " TITLE "
     const tbw = inner_len + 2; // label box width
     // Grow the box past the configured width if the title is so wide that the
-    // label box plus a minimal summary slot (col 4 start + an 8-column summary)
-    // wouldn't otherwise fit — so the walls stay aligned on narrow terminals
-    // (the whole box just wraps in the terminal) instead of overrunning.
-    const total: usize = @max(config.getMaxLineWidth(), tbw + 12);
-    const tb_left = @max((total + 1) -| tbw, 2); // 1-based column of the label box's left edge
+    // label box plus a minimal summary slot wouldn't otherwise fit — so the
+    // walls stay aligned on narrow terminals (the whole box just wraps in the
+    // terminal) instead of overrunning.
+    const total: usize = @max(config.getMaxLineWidth(), tbw + 15);
     const rw = total -| 1; // main box right wall column
-    // Summary starts at column 4 (after "┌─ ") and wraps before the label box.
-    const avail: usize = @max(tb_left -| 5, 8);
+    // Every summary line starts at this column (just past "│ TITLE ├─ "), so the
+    // headline's left edge is consistent however many lines it wraps to.
+    const sum_indent = tbw + 2;
+    const avail: usize = @max((rw -| sum_indent) -| 3, 8);
 
     var lines = std.array_list.Managed([]const u8).init(gpa);
     defer lines.deinit();
@@ -350,8 +425,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     const sec = palette.secondary;
     const rst = palette.reset;
 
-    // Row 1: label box top (right-aligned).
-    try writer.splatByteAll(' ', tb_left -| 1);
+    // Row 1: label box top, flush left.
     try writer.writeAll(sec);
     try writer.writeAll("┌");
     try writer.splatBytesAll("─", inner_len);
@@ -359,80 +433,143 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     try writer.writeAll(rst);
     try writer.writeByte('\n');
 
-    // Row 2: top edge — "┌─ <summary[0]> ─…─┤ TITLE │".
+    // Row 2: "│ TITLE ├─ <summary[0]> ─…─┐".
     {
         var col: usize = 0;
         try writer.writeAll(sec);
-        try writer.writeAll("┌─ ");
-        col += 3;
-        const line0: []const u8 = if (lines.items.len > 0) lines.items[0] else "";
-        try writer.writeAll(line0);
-        col += source_region.displayWidth(line0);
-        try writer.writeAll(" ");
-        col += 1;
-        try writer.splatBytesAll("─", (tb_left -| 1) -| col);
-        try writer.writeAll("┤ ");
+        try writer.writeAll("│ ");
+        col += 2;
         try writer.writeAll(palette.bold);
         try writer.writeAll(palette.primary);
         try writeShouted(writer, title);
         try writer.writeAll(rst);
+        col += title.len;
         try writer.writeAll(sec);
-        try writer.writeAll(" │");
+        try writer.writeAll(" ├─ ");
+        col += 4;
+        const line0: []const u8 = if (lines.items.len > 0) lines.items[0] else "";
+        try writeColoredSummary(writer, line0, summary_buf.items, color_buf.items, sec);
+        col += source_region.displayWidth(line0);
+        try writer.writeAll(" ");
+        col += 1;
+        try writer.splatBytesAll("─", (rw -| 1) -| col);
+        try writer.writeAll("┐");
         try writer.writeAll(rst);
         try writer.writeByte('\n');
     }
 
-    // Row 3: main left wall, summary line 1 (if present), then the label box
-    // bottom (└─…─┬┘) whose ┬ drops the main box's right wall.
+    // Row 3: "└┬─…─┘" — the ┬ becomes the indented main left wall — then summary
+    // line 1 (if any), aligned under summary line 0.
     {
         var col: usize = 0;
         try writer.writeAll(sec);
-        try writer.writeAll("│");
+        try writer.writeAll("└┬");
+        col += 2;
+        try writer.splatBytesAll("─", tbw -| 3);
+        col += tbw -| 3;
+        try writer.writeAll("┘");
         col += 1;
         if (lines.items.len > 1) {
-            try writer.writeAll("  ");
-            col += 2;
-            try writer.writeAll(lines.items[1]);
+            try padTo(writer, col, sum_indent);
+            col = @max(col, sum_indent);
+            try writer.writeAll(sec);
+            try writeColoredSummary(writer, lines.items[1], summary_buf.items, color_buf.items, sec);
             col += source_region.displayWidth(lines.items[1]);
         }
-        try padTo(writer, col, tb_left -| 1);
-        try writer.writeAll("└");
-        try writer.splatBytesAll("─", tbw -| 3);
-        try writer.writeAll("┬┘");
-        try writer.writeAll(rst);
-        try writer.writeByte('\n');
+        try closeRow(writer, palette, col, rw);
     }
 
-    // Summary lines 2+ each get their own row (growing the box).
+    // Summary lines 2+ each get their own row: the indented left wall, then the
+    // summary aligned under line 0.
     if (lines.items.len > 2) {
         for (lines.items[2..]) |ln| {
+            try writer.writeByte(' ');
             try writer.writeAll(sec);
             try writer.writeAll("│");
             try writer.writeAll(rst);
-            try writer.writeAll("  ");
+            try padTo(writer, 2, sum_indent);
             try writer.writeAll(sec);
-            try writer.writeAll(ln);
-            try closeRow(writer, palette, 3 + source_region.displayWidth(ln), rw);
+            try writeColoredSummary(writer, ln, summary_buf.items, color_buf.items, sec);
+            try closeRow(writer, palette, sum_indent + source_region.displayWidth(ln), rw);
         }
     }
 
-    // Blank separator row, then the source line(s) and underline. Lines that
+    // Blank separator row, then the source line(s) and underline. Each body row
+    // is indented one column (the label box sticks out left of it). Lines that
     // would overrun the right wall are windowed around the underlined span.
-    const code_avail = rw -| 4;
-    try sepRow(writer, palette, rw);
+    const code_avail = rw -| 5;
+    {
+        try writer.writeByte(' ');
+        try writer.writeAll(sec);
+        try writer.writeAll("│");
+        try writer.writeAll(rst);
+        try closeRow(writer, palette, 2, rw);
+    }
+    // Normalize snippet indentation: expand leading tabs to 4 spaces, then strip
+    // the common leading-space prefix shared by every non-blank line. This keeps
+    // relative indentation intact while left-aligning the whole snippet, so the
+    // box supplies the only indentation the reader sees.
+    var snippet = std.array_list.Managed([]u8).init(gpa);
+    defer {
+        for (snippet.items) |l| gpa.free(l);
+        snippet.deinit();
+    }
+    var leads = std.array_list.Managed(usize).init(gpa);
+    defer leads.deinit();
+    {
+        var it = std.mem.splitScalar(u8, region.line_text, '\n');
+        while (it.next()) |line| {
+            var i: usize = 0;
+            var lead: usize = 0;
+            while (i < line.len and (line[i] == ' ' or line[i] == '\t')) : (i += 1) {
+                lead += if (line[i] == '\t') 4 else 1;
+            }
+            const rest = line[i..];
+            const buf = try gpa.alloc(u8, lead + rest.len);
+            @memset(buf[0..lead], ' ');
+            @memcpy(buf[lead..], rest);
+            try snippet.append(buf);
+            try leads.append(lead);
+        }
+    }
+    // The common indent is the smallest expanded leading-space count across the
+    // non-blank lines (a line is blank when nothing follows its whitespace).
+    var common: usize = std.math.maxInt(usize);
+    for (snippet.items, leads.items) |l, lead| {
+        if (lead < l.len) common = @min(common, lead);
+    }
+    if (common == std.math.maxInt(usize)) common = 0;
+
+    // Shift the underline columns (1-based byte offsets into the first line) to
+    // track tab expansion and the stripped common indent.
+    var start_col_adj = region.start_column;
+    var end_col_adj = region.end_column;
+    {
+        var orig_lead: usize = 0;
+        while (orig_lead < region.line_text.len and
+            (region.line_text[orig_lead] == ' ' or region.line_text[orig_lead] == '\t')) : (orig_lead += 1)
+        {}
+        const exp0: i64 = if (leads.items.len > 0) @intCast(leads.items[0]) else 0;
+        const delta: i64 = exp0 - @as(i64, @intCast(common)) - @as(i64, @intCast(orig_lead));
+        start_col_adj = @intCast(@max(@as(i64, @intCast(region.start_column)) + delta, 1));
+        end_col_adj = @intCast(@max(@as(i64, @intCast(region.end_column)) + delta, 1));
+    }
+
     {
         var line_no = region.start_line;
-        var it = std.mem.splitScalar(u8, region.line_text, '\n');
-        while (it.next()) |code_line| {
+        for (snippet.items) |full_line| {
+            const code_line = full_line[@min(common, full_line.len)..];
             const is_underline_line = region.start_line == region.end_line and line_no == region.start_line;
             // Underline byte span (meaningful only on the underlined line); also
             // the window's focus so the span stays visible when the line is long.
-            const start_byte = @min(@as(usize, region.start_column -| 1), code_line.len);
-            const end_byte = @max(@min(@as(usize, region.end_column -| 1), code_line.len), start_byte);
+            const start_byte = @min(@as(usize, start_col_adj -| 1), code_line.len);
+            const end_byte = @max(@min(@as(usize, end_col_adj -| 1), code_line.len), start_byte);
             const win = windowSourceLine(code_line, if (is_underline_line) start_byte else 0, code_avail);
             const shown = code_line[win.start_byte..win.end_byte];
 
             var col: usize = 0;
+            try writer.writeByte(' ');
+            col += 1;
             try writer.writeAll(sec);
             try writer.writeAll("│");
             try writer.writeAll(rst);
@@ -455,6 +592,8 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
 
             if (is_underline_line) {
                 var ucol: usize = 0;
+                try writer.writeByte(' ');
+                ucol += 1;
                 try writer.writeAll(sec);
                 try writer.writeAll("│");
                 try writer.writeAll(rst);
@@ -482,6 +621,17 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         }
     }
 
+    // Keep a blank-equivalent row directly above the bottom edge. A single-line
+    // region's underline already reads as blank, so only multi-line snippets
+    // (which have no underline) need an explicit blank row added here.
+    if (region.start_line != region.end_line) {
+        try writer.writeByte(' ');
+        try writer.writeAll(sec);
+        try writer.writeAll("│");
+        try writer.writeAll(rst);
+        try closeRow(writer, palette, 2, rw);
+    }
+
     // Bottom edge with the location tucked into the bottom-right corner
     // (`└─…─ file:line:col ┘`). If the location is too long to fit inside the
     // box without overrunning a wall, fall back to a plain rule with the
@@ -492,11 +642,12 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         defer gpa.free(loc);
         const loc_w = source_region.displayWidth(loc);
 
+        try writer.writeByte(' ');
         try writer.writeAll(sec);
         try writer.writeAll("└");
-        if (loc_w + 4 <= rw) {
+        if (loc_w + 5 <= rw) {
             // Fits: └ + dashes + " loc " + ┘, with the location right-aligned.
-            try writer.splatBytesAll("─", (rw -| 4) -| loc_w);
+            try writer.splatBytesAll("─", (rw -| 5) -| loc_w);
             try writer.writeAll(" ");
             try writer.writeAll(loc);
             try writer.writeAll(" ┘");
@@ -504,7 +655,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
             try writer.writeByte('\n');
         } else {
             // Too long: plain rule, location on its own line beneath.
-            try writer.splatBytesAll("─", rw -| 2);
+            try writer.splatBytesAll("─", rw -| 3);
             try writer.writeAll("┘");
             try writer.writeAll(rst);
             try writer.writeByte('\n');
@@ -669,6 +820,7 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
 
 /// Render a report to HTML.
 pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    assertValidHeadline(report);
     const title_class = switch (report.severity) {
         .info => "info",
         .fatal => "error",
@@ -691,6 +843,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 
 /// Render a report for language server protocol.
 pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    assertValidHeadline(report);
     // LSP typically wants plain text without formatting
     try writeShouted(writer, report.title);
     try writer.writeAll("\n\n");

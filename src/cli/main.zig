@@ -8017,7 +8017,21 @@ fn printTestProblem(
         break :blk null;
     };
 
-    var report = try reporting.Report.init(allocator, label, doc_comment orelse "", severity);
+    // The headline is the test's doc comment, if any. House style requires a
+    // headline to end in a period, so append one when it's missing.
+    var headline: []const u8 = "";
+    var headline_owned = false;
+    if (doc_comment) |dc| {
+        if (std.mem.endsWith(u8, dc, ".")) {
+            headline = dc;
+        } else {
+            headline = try std.fmt.allocPrint(allocator, "{s}.", .{dc});
+            headline_owned = true;
+        }
+    }
+    defer if (headline_owned) allocator.free(headline);
+
+    var report = try reporting.Report.init(allocator, label, headline, severity);
     defer report.deinit();
 
     try report.addSourceContext(region_info, path, src, env.getLineStarts());

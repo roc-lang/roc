@@ -85,29 +85,40 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // we'll have to QA the old fashioned way.
 
     // Plain-text box (the layout used for snapshots and non-color output).
-    // Assert the alignment invariant: every row that reaches the right edge has
-    // the same display width, so the right wall lines up. The right-aligned
-    // label box pokes one column past the main box, so rows are 79 or 80 wide
-    // at the default 80-column width.
+    // Assert the alignment invariant: every row that reaches the main box's
+    // right wall has the same display width, so the wall lines up vertically.
+    // The label box in the upper-left pokes out past the main box's left wall,
+    // and its short top edge (`┌──┐`) does not reach the right wall, so it is
+    // excluded.
     writer.clearRetainingCapacity();
     try reporting.renderReportToBoxPlain(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
     const box = writer.written();
     try testing.expect(std.mem.find(u8, box, "SYNTAX PROBLEM") != null);
     try testing.expect(std.mem.find(u8, box, "example.roc:1:10") != null);
     var box_lines = std.mem.splitScalar(u8, box, '\n');
+    var wall_width: ?usize = null;
     var box_rows: usize = 0;
+    var seen_label_top = false;
     while (box_lines.next()) |line| {
-        if (std.mem.endsWith(u8, line, "│") or
+        const reaches_edge = std.mem.endsWith(u8, line, "│") or
             std.mem.endsWith(u8, line, "┐") or
-            std.mem.endsWith(u8, line, "┘"))
-        {
-            const w = reporting.source_region.displayWidth(line);
-            try testing.expect(w == 79 or w == 80);
-            box_rows += 1;
+            std.mem.endsWith(u8, line, "┘");
+        if (!reaches_edge) continue;
+        if (!seen_label_top and std.mem.endsWith(u8, line, "┐")) {
+            // The label box's top edge — short, doesn't reach the right wall.
+            seen_label_top = true;
+            continue;
         }
+        const w = reporting.source_region.displayWidth(line);
+        if (wall_width) |ww| {
+            try testing.expectEqual(ww, w);
+        } else {
+            wall_width = w;
+        }
+        box_rows += 1;
     }
-    // top edge, title-box bottom, separator, source line, underline, bottom edge
-    try testing.expect(box_rows >= 6);
+    // title-box bottom, blank, source line, underline, bottom edge
+    try testing.expect(box_rows >= 5);
 }
 
 fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {

@@ -444,7 +444,7 @@ pub fn createValidationReport(
         },
 
         .linker_failed => |info| {
-            const headline = try std.fmt.allocPrint(allocator, "Failed to create executable: {s}", .{info.reason});
+            const headline = try std.fmt.allocPrint(allocator, "Failed to create executable: {s}.", .{info.reason});
             defer allocator.free(headline);
             var report = try Report.init(allocator, "Linker Failed", headline, .runtime_error);
 
@@ -479,7 +479,7 @@ pub fn createValidationReport(
             const headline = if (info.is_access_violation)
                 try allocator.dupe(u8, "The program crashed with an access violation (segmentation fault).")
             else
-                try std.fmt.allocPrint(allocator, "The program crashed with exception code: 0x{X}", .{info.exit_code});
+                try std.fmt.allocPrint(allocator, "The program crashed with exception code: 0x{X}.", .{info.exit_code});
             defer allocator.free(headline);
             var report = try Report.init(allocator, "Process Crashed", headline, .runtime_error);
 
@@ -511,7 +511,7 @@ pub fn createValidationReport(
                 else => "Unknown signal",
             };
 
-            const headline = try std.fmt.allocPrint(allocator, "The program was killed by signal {d}: {s}", .{ info.signal, signal_name });
+            const headline = try std.fmt.allocPrint(allocator, "The program was killed by signal {d}: {s}.", .{ info.signal, signal_name });
             defer allocator.free(headline);
             var report = try Report.init(allocator, "Process Killed By Signal", headline, .runtime_error);
 

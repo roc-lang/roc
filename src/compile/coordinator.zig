@@ -2693,9 +2693,9 @@ pub const Coordinator = struct {
         path: []const u8,
         err: anyerror,
     ) void {
-        const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
+        const msg = std.fmt.allocPrint(allocator, "{s}: {s}.", .{ path, @errorName(err) }) catch null;
         defer if (msg) |owned| allocator.free(owned);
-        var rep = Report.init(allocator, title, msg orelse @errorName(err), .fatal) catch |headline_err| {
+        var rep = Report.init(allocator, title, msg orelse "A compilation worker failed.", .fatal) catch |headline_err| {
             self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(headline_err) });
             return;
         };

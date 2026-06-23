@@ -340,7 +340,7 @@ pub const FileContext = enum {
 // Report Generation Functions
 
 fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not find the {s}", .{info.context.description()});
+    const headline = try std.fmt.allocPrint(allocator, "I could not find the {s}.", .{info.context.description()});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "File Not Found", headline, .fatal);
 
@@ -354,7 +354,7 @@ fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error
 }
 
 fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not read the file {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "I could not read the file {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "File Read Failed", headline, .runtime_error);
 
@@ -365,7 +365,7 @@ fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
 }
 
 fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not write to the file {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "I could not write to the file {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "File Write Failed", headline, .runtime_error);
 
@@ -376,7 +376,7 @@ fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Er
 }
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not create the directory {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "I could not create the directory {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Directory Create Failed", headline, .runtime_error);
 
@@ -387,7 +387,7 @@ fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Alloca
 }
 
 fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Directory Not Found", "The directory does not exist: ", .runtime_error);
+    var report = try Report.init(allocator, "Directory Not Found", "The directory does not exist.", .runtime_error);
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.path, .path);
@@ -428,7 +428,7 @@ fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Er
 }
 
 fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Platform Not Found", "I could not find the platform file:", .fatal);
+    var report = try Report.init(allocator, "Platform Not Found", "I could not find the platform file.", .fatal);
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_path, .path);
@@ -457,7 +457,7 @@ fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The platform at {s}", .{info.platform_path});
+    const headline = try std.fmt.allocPrint(allocator, "The platform at {s}.", .{info.platform_path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Missing Platform Module", headline, .runtime_error);
 
@@ -468,7 +468,7 @@ fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) Alloca
 }
 
 fn createMissingTypeInModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Module {s} does not expose a type named {s}", .{ info.module_name, info.type_name });
+    const headline = try std.fmt.allocPrint(allocator, "Module {s} does not expose a type named {s}.", .{ info.module_name, info.type_name });
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Missing Type In Module", headline, .runtime_error);
 
@@ -478,7 +478,7 @@ fn createMissingTypeInModuleReport(allocator: Allocator, info: anytype) Allocato
 }
 
 fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Circular Platform Dependency", "A circular dependency was detected in the platform modules:", .runtime_error);
+    var report = try Report.init(allocator, "Circular Platform Dependency", "A circular dependency was detected in the platform modules.", .runtime_error);
 
     for (info.module_chain) |mod| {
         try report.document.addText("    ");
@@ -491,7 +491,7 @@ fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) A
 }
 
 fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "{s}", .{info.message});
+    const headline = try std.fmt.allocPrint(allocator, "{s}.", .{info.message});
     defer allocator.free(headline);
     const report = try Report.init(allocator, "Platform Validation Failed", headline, .runtime_error);
 
@@ -499,7 +499,7 @@ fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) All
 }
 
 fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Absolute Platform Path", "Absolute paths are not allowed for platform specifications:", .runtime_error);
+    var report = try Report.init(allocator, "Absolute Platform Path", "Absolute paths are not allowed for platform specifications.", .runtime_error);
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_spec, .path);
@@ -533,7 +533,7 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.E
 }
 
 fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The file {s} is a headerless app, which uses a simple builtin platform", .{info.app_path});
+    const headline = try std.fmt.allocPrint(allocator, "The file {s} is a headerless app, which uses a simple builtin platform.", .{info.app_path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Build Not Supported", headline, .fatal);
 
@@ -584,7 +584,7 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The platform's host inputs for target {s} do not define these symbols the application references:", .{info.target});
+    const headline = try std.fmt.allocPrint(allocator, "The platform's host inputs for target {s} do not define these symbols the application references.", .{info.target});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Missing Host Symbols", headline, .fatal);
 
@@ -605,7 +605,7 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The linker failed while building for target {s}", .{info.target});
+    const headline = try std.fmt.allocPrint(allocator, "The linker failed while building for target {s}.", .{info.target});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Linker Failed", headline, .fatal);
 
@@ -616,7 +616,7 @@ fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error
 }
 
 fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to compile object file for {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "Failed to compile object file for {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Object Compilation Failed", headline, .runtime_error);
 
@@ -636,7 +636,7 @@ fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) Allocat
 }
 
 fn createInvalidUrlReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The URL is invalid: {s}", .{info.url});
+    const headline = try std.fmt.allocPrint(allocator, "The URL is invalid: {s}.", .{info.url});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Invalid URL", headline, .runtime_error);
 
@@ -648,8 +648,8 @@ fn createInvalidUrlReport(allocator: Allocator, info: anytype) Allocator.Error!R
 
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     const headline = switch (info.err) {
-        error.InvalidHash => try std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(info.err)}),
-        else => try std.fmt.allocPrint(allocator, "Failed to download from {s}", .{info.url}),
+        error.InvalidHash => try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)}),
+        else => try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url}),
     };
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Download Failed", headline, .runtime_error);
@@ -689,7 +689,7 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
 }
 
 fn createPackageCacheErrorReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Error with cached package {s}", .{info.package});
+    const headline = try std.fmt.allocPrint(allocator, "Error with cached package {s}.", .{info.package});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Package Cache Error", headline, .runtime_error);
 
@@ -700,7 +700,7 @@ fn createPackageCacheErrorReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to start process: {s}", .{info.command});
+    const headline = try std.fmt.allocPrint(allocator, "Failed to start process: {s}.", .{info.command});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Process Spawn Failed", headline, .runtime_error);
 
@@ -711,7 +711,7 @@ fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) Allo
 }
 
 fn createChildProcessFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Process {s} exited with code {d}", .{ info.command, info.exit_code });
+    const headline = try std.fmt.allocPrint(allocator, "Process {s} exited with code {d}.", .{ info.command, info.exit_code });
     defer allocator.free(headline);
     const report = try Report.init(allocator, "Process Failed", headline, .runtime_error);
 
@@ -719,7 +719,7 @@ fn createChildProcessFailedReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Process {s} was terminated by signal {d}", .{ info.command, info.signal });
+    const headline = try std.fmt.allocPrint(allocator, "Process {s} was terminated by signal {d}.", .{ info.command, info.signal });
     defer allocator.free(headline);
     const report = try Report.init(allocator, "Process Signaled", headline, .runtime_error);
 
@@ -727,7 +727,7 @@ fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) Allocat
 }
 
 fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to wait for process {s}", .{info.command});
+    const headline = try std.fmt.allocPrint(allocator, "Failed to wait for process {s}.", .{info.command});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Process Wait Failed", headline, .runtime_error);
 
@@ -749,7 +749,7 @@ fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Expected an app header in {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "Expected an app header in {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Expected App Header", headline, .runtime_error);
 
@@ -775,7 +775,7 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Expected a platform string in the app header of {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "Expected a platform string in the app header of {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Expected Platform String", headline, .runtime_error);
 
@@ -789,7 +789,7 @@ fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to initialize module {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "Failed to initialize module {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Module Initialization Failed", headline, .runtime_error);
 
@@ -800,7 +800,7 @@ fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.E
 }
 
 fn createNoExportsFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "No exports were found in {s}", .{info.path});
+    const headline = try std.fmt.allocPrint(allocator, "No exports were found in {s}.", .{info.path});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "No Exports Found", headline, .runtime_error);
 

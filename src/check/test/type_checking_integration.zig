@@ -511,7 +511,7 @@ test "check type - record - field typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way:
+        \\This expression is used in an unexpected way.
         \\**test:6:13:6:31:**
         \\```roc
         \\my_record = { helo : "world" }
@@ -544,7 +544,7 @@ test "check type - record - field missing" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way:
+        \\This expression is used in an unexpected way.
         \\**test:6:13:6:32:**
         \\```roc
         \\my_record = { hello : "world" }
@@ -576,7 +576,7 @@ test "check type - record - ext - field missing" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way:
+        \\This expression is used in an unexpected way.
         \\**test:6:13:6:32:**
         \\```roc
         \\my_record = { hello : "world" }
@@ -815,7 +815,7 @@ test "check type - tag union - tag typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way:
+        \\This expression is used in an unexpected way.
         \\**test:6:9:6:15:**
         \\```roc
         \\color = Greeen
@@ -847,7 +847,7 @@ test "check type - tag - ext - typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way:
+        \\This expression is used in an unexpected way.
         \\**test:6:9:6:15:**
         \\```roc
         \\color = Greeen
@@ -1040,7 +1040,7 @@ test "check type - def - wrong arg" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:6:22:6:29:**
         \\```roc
         \\test = func("hello", "world")
@@ -1176,7 +1176,7 @@ test "check type - def - call with wrong fn arity - too many" {
         source,
         .fail_with,
         \\**Too Many Args**
-        \\The `idStr` function expects 1 argument, but it got 2 instead:
+        \\The `idStr` function expects 1 argument, but it got 2 instead.
         \\**test:4:8:4:29:**
         \\```roc
         \\test = idStr("hello", 10.U8)
@@ -1203,7 +1203,7 @@ test "check type - def - call with wrong fn arity - too few" {
         source,
         .fail_with,
         \\**Too Few Args**
-        \\The `idStr` function expects 2 arguments, but it got 1 instead:
+        \\The `idStr` function expects 2 arguments, but it got 1 instead.
         \\**test:4:8:4:22:**
         \\```roc
         \\test = idStr("hello")
@@ -1232,7 +1232,7 @@ test "check type - def - call with mismatch arg" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:4:23:4:30:**
         \\```roc
         \\test = idStr("hello", "world")
@@ -1720,7 +1720,7 @@ test "check type - nominal - local record value - fail" {
         source,
         .fail_with,
         \\**Missing Method**
-        \\This **encode_str** method is being called on a value whose type doesn't have that method:
+        \\This **encode_str** method is being called on a value whose type doesn't have that method.
         \\**test:9:3:9:13:**
         \\```roc
         \\  Str.encode("hi", fmt)
@@ -1753,7 +1753,7 @@ test "check type - nominal - local method type - fail" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\The `encode_str` method on `Utf8Format` has an incompatible type:
+        \\The `encode_str` method on `Utf8Format` has an incompatible type.
         \\**test:9:20:9:23:**
         \\```roc
         \\  Str.encode("hi", fmt)
@@ -1825,7 +1825,7 @@ test "check type - if else - invalid condition 1" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This `if` condition must evaluate to a `Bool` – either `True` or `False`:
+        \\This `if` condition must evaluate to a `Bool` – either `True` or `False`.
         \\**test:2:8:2:13:**
         \\```roc
         \\x = if 5.I64 "true" else "false"
@@ -1868,7 +1868,7 @@ test "check type - if else - different branch types 1" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:1:13:1:19:**
         \\```roc
         \\x = if True "true" else 10.U8
@@ -1917,7 +1917,7 @@ test "check type - if else - dual-kind literal branches (number first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:1:20:1:23:**
         \\```roc
         \\x = if True 1 else "s"
@@ -1941,7 +1941,7 @@ test "check type - if else - dual-kind literal branches (string first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:1:13:1:16:**
         \\```roc
         \\x = if True "s" else 1
@@ -2039,7 +2039,7 @@ test "check type - match - diff cond types 1" {
         source,
         .fail_with,
         \\**Missing Method**
-        \\This **from_quote** method is being called on a value whose type doesn't have that method:
+        \\This **from_quote** method is being called on a value whose type doesn't have that method.
         \\**test:2:9:2:16:**
         \\```roc
         \\  match "hello" {
@@ -2090,7 +2090,7 @@ test "check type - match alternative binders reject incompatible types" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:1:32:1:35:**
         \\```roc
         \\value = if True A(1.U8) else B("x")
@@ -2241,7 +2241,7 @@ test "check type - record access - field typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `helo` field:
+        \\This record does not have a `helo` field.
         \\**test:9:6:9:11:**
         \\```roc
         \\x = r.helo
@@ -2329,7 +2329,7 @@ test "check type - record - update - fail - empty record" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The `r` record does not have a `hello` field:
+        \\The `r` record does not have a `hello` field.
         \\**test:5:7:5:8:**
         \\```roc
         \\  { ..r, hello: 10.U8 }
@@ -2354,7 +2354,7 @@ test "check type - record - update - fail - missing field" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `hllo` field:
+        \\This record does not have a `hllo` field.
         \\**test:5:7:5:8:**
         \\```roc
         \\  { ..r, hllo: "goodbye" }
@@ -2384,7 +2384,7 @@ test "check type - record - update - fail - field mismatch" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:4:16:4:23:**
         \\```roc
         \\  r = { hello: "world" }
@@ -2410,7 +2410,7 @@ test "check type - record - update - fail - field mismatch 2" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:4:16:4:23:**
         \\```roc
         \\  r = { hello: "world", nice: 10.U8 }
@@ -2436,7 +2436,7 @@ test "check type - record - update - fail - field mismatch 3" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The type of the field `nice` is incompatible:
+        \\The type of the field `nice` is incompatible.
         \\**test:5:16:5:22:**
         \\```roc
         \\  { ..r, nice: 10.Dec }
@@ -2466,7 +2466,7 @@ test "check type - record - update - fail 2" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:3:28:3:35:**
         \\```roc
         \\updated = set_data({ data: "hello" }, 10.U8)
@@ -2913,7 +2913,7 @@ test "check type - expect not bool" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`:
+        \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`.
         \\**test:3:10:3:11:**
         \\```roc
         \\  expect x
@@ -3992,7 +3992,7 @@ test "check type - recursive type - infinite" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Infinite Type**
-        \\I am inferring a weird self-referential type:
+        \\I am inferring a weird self-referential type.
         \\**test:1:1:1:21:**
         \\```roc
         \\func = |a| func([a])
@@ -4014,7 +4014,7 @@ test "check type - recursive type - recursive alias" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Recursive Alias**
-        \\The type alias _LinkedList_ references itself, which is not allowed:
+        \\The type alias _LinkedList_ references itself, which is not allowed.
         \\**test:1:31:1:44:**
         \\```roc
         \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
@@ -4037,7 +4037,7 @@ test "check type - recursive type - anonymous recursion" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Anonymous Recursion**
-        \\I am inferring a recursive type that has no name somewhere in `len`:
+        \\I am inferring a recursive type that has no name somewhere in `len`.
         \\**test:1:1:5:4:**
         \\```roc
         \\len = |linked_list|
@@ -4582,7 +4582,7 @@ test "check type - record ext - arg inferred as open" {
     // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
-        \\The first argument being passed to this function has the wrong type:
+        \\The first argument being passed to this function has the wrong type.
         \\**test:3:5:**
         \\```roc
         \\    use_record(rec)
@@ -4912,7 +4912,7 @@ test "check type - early return - fail" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:3:12:3:19:**
         \\```roc
         \\    return "hello"
@@ -4939,7 +4939,7 @@ test "check type - early return - ? - fail" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed:
+        \\This string literal is being used where a non-string type is needed.
         \\**test:2:18:2:25:**
         \\```roc
         \\  _val = Try.Err("hello")?
@@ -4998,7 +4998,7 @@ test "check type - self recursive function - fibonacci - fail" {
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\The recursive definition `fib` is used in an unexpected way:
+        \\The recursive definition `fib` is used in an unexpected way.
         \\**test:5:5:5:8:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
@@ -5867,7 +5867,7 @@ test "check type - zulip repro" {
     // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
-        \\The first argument being passed to this function has the wrong type:
+        \\The first argument being passed to this function has the wrong type.
         \\**test:3:5:**
         \\```roc
         \\    use_record(rec)
@@ -6608,7 +6608,7 @@ test "check type - exhaustive match close with value reuse after match" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The first argument being passed to this function has the wrong type:
+        \\The first argument being passed to this function has the wrong type.
         \\**test:17:18:**
         \\```roc
         \\  broad_result = accept_broad(val)
@@ -6652,7 +6652,7 @@ test "check type - exhaustive match close with value reuse - no static dispatch"
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The first argument being passed to this function has the wrong type:
+        \\The first argument being passed to this function has the wrong type.
         \\**test:15:18:**
         \\```roc
         \\  broad_result = accept_broad(val)
@@ -6791,7 +6791,7 @@ test "check type - annotated open return type still closed by exhaustive match w
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The first argument being passed to this function has the wrong type:
+        \\The first argument being passed to this function has the wrong type.
         \\**test:16:18:**
         \\```roc
         \\  broad_result = accept_broad(val)
@@ -6835,7 +6835,7 @@ test "check type - annotated open arg not closed even with exhaustive match" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The first argument being passed to this function has the wrong type:
+        \\The first argument being passed to this function has the wrong type.
         \\**test:14:3:**
         \\```roc
         \\  accept_broad(x)
@@ -6866,7 +6866,7 @@ test "check type - tag union - ext hints 1" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way:
+        \\This expression is used in an unexpected way.
         \\**test:5:13:5:21:**
         \\```roc
         \\foo = |tag| bar(tag)
@@ -6894,7 +6894,7 @@ test "check type - tag union - ext hints 2" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way:
+        \\This expression is used in an unexpected way.
         \\**test:2:11:2:12:**
         \\```roc
         \\foo = |a| a

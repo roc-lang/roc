@@ -374,7 +374,7 @@ pub const Resolver = struct {
         const root_node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), root_path) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
-                try self.addDiagnostic("Invalid Package Header", "Could not load the header of {s}: {s}", .{ root_path, @errorName(err) });
+                try self.addDiagnostic("Invalid Package Header", "Could not load the header of {s}: {s}.", .{ root_path, @errorName(err) });
                 return error.ResolutionFailed;
             },
         };
@@ -662,7 +662,7 @@ pub const Resolver = struct {
             const node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), abs) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => {
-                    try self.addDiagnostic("Invalid Package Dependency", "Could not load the package at {s}: {s}", .{ abs, @errorName(err) });
+                    try self.addDiagnostic("Invalid Package Dependency", "Could not load the package at {s}: {s}.", .{ abs, @errorName(err) });
                     continue;
                 },
             };
@@ -740,7 +740,7 @@ pub const Resolver = struct {
                 else => {
                     try self.addDiagnostic(
                         "Package Download Failed",
-                        "Failed to download and extract this package:\n\n    {s}\n\nError: {s}",
+                        "Failed to download and extract this package:\n\n    {s}\n\nError: {s}.",
                         .{ task.missing.url, @errorName(err) },
                     );
                     continue;
@@ -852,7 +852,7 @@ pub const Resolver = struct {
                         ),
                         .unparsable_url => try self.addDiagnostic(
                             "Invalid Package URL",
-                            "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}",
+                            "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}.",
                             .{ owner, edge.spec },
                         ),
                     }

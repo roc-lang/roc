@@ -1142,7 +1142,7 @@ pub const BuildEnv = struct {
         const src = self.readFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
-                    const headline = try std.fmt.allocPrint(self.gpa, "I could not find the file {s}", .{file_abs});
+                    const headline = try std.fmt.allocPrint(self.gpa, "I could not find the file {s}.", .{file_abs});
                     defer self.gpa.free(headline);
                     var report = try Report.init(self.gpa, "File Not Found", headline, .fatal);
                     try report.document.addText("Make sure the file exists and you do not have any typos in its name or path.");
@@ -1150,7 +1150,7 @@ pub const BuildEnv = struct {
                 },
 
                 else => {
-                    const headline = try std.fmt.allocPrint(self.gpa, "I could not read the file {s}", .{file_abs});
+                    const headline = try std.fmt.allocPrint(self.gpa, "I could not read the file {s}.", .{file_abs});
                     defer self.gpa.free(headline);
                     var report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
                     try report.document.addText("I did get the following error: ");

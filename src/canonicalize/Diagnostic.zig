@@ -463,6 +463,7 @@ pub const Diagnostic = union(enum) {
         const owned_feature = try report.addOwnedString(feature);
         try report.headline.addReflowingText("This feature is not yet implemented: ");
         try report.headline.addAnnotatedText(owned_feature, reporting.Annotation.emphasized);
+        try report.headline.addReflowingText(".");
         try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
         return report;
     }
@@ -506,6 +507,7 @@ pub const Diagnostic = union(enum) {
 
         try report.headline.addReflowingText("This number literal is not valid: ");
         try report.headline.addInlineCode(owned_literal);
+        try report.headline.addReflowingText(".");
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -750,7 +752,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Unknown Operator", "This looks like an operator, but it's not one I recognize!", .runtime_error);
+        var report = try Report.init(allocator, "Unknown Operator", "This looks like an operator, but it's not one I recognize.", .runtime_error);
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -914,7 +916,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Empty Tuple Not Allowed", "I am part way through parsing this tuple, but it is empty:", .runtime_error);
+        var report = try Report.init(allocator, "Empty Tuple Not Allowed", "I am part way through parsing this tuple, but it is empty.", .runtime_error);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -1271,7 +1273,7 @@ pub const Diagnostic = union(enum) {
 
         try report.headline.addReflowingText("Variable ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is defined here and then never used:");
+        try report.headline.addReflowingText(" is defined here and then never used.");
 
         try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
         const ident_with_underscore = try std.fmt.allocPrint(gpa, "_{s}", .{owned_ident});
@@ -1390,6 +1392,7 @@ pub const Diagnostic = union(enum) {
 
         try report.headline.addText("This floating-point literal cannot be used in a pattern match: ");
         try report.headline.addInlineCode(literal_text);
+        try report.headline.addReflowingText(".");
 
         try report.document.addReflowingText("This number exceeds the precision range of Roc's ");
         try report.document.addInlineCode("Dec");
@@ -1823,7 +1826,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Deprecated Number Suffix", "This number literal uses a deprecated suffix syntax:", .runtime_error);
+        var report = try Report.init(allocator, "Deprecated Number Suffix", "This number literal uses a deprecated suffix syntax.", .runtime_error);
 
         const owned_suffix = try report.addOwnedString(suffix);
         const owned_suggested = try report.addOwnedString(suggested);
