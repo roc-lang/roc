@@ -5432,6 +5432,7 @@ fn lowerLirWithCoordinator(
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.setWatchInputTracking(true);
 
     try coord.start();
 
@@ -7991,6 +7992,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     if (args.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
@@ -8329,6 +8331,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     if (args.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
@@ -8677,6 +8680,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     if (args.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
@@ -10659,6 +10663,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs, arg0: []const u8) RocTestError
     var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io) catch |err| {
         return err;
     };
+    build_env.setWatchInputTracking(args.watch_inputs_file != null);
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -11358,6 +11363,7 @@ fn checkFileWithBuildEnvPreserved(
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
+    track_watch_inputs: bool,
 ) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -11370,6 +11376,7 @@ fn checkFileWithBuildEnvPreserved(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.setWatchInputTracking(track_watch_inputs);
     build_env.resolution_config = resolution_config;
     if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
@@ -11554,6 +11561,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
+        args.watch_inputs_file != null,
     ) catch |err| {
         reporter.fail();
         if (args.watch_inputs_file) |file_path| {
@@ -11862,6 +11870,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
         cache_config,
         null, // max_threads: use default (single-threaded for now)
         resolutionConfigFromLimits(args.resolve_limits),
+        false,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };

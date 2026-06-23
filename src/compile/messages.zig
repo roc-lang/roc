@@ -162,8 +162,8 @@ pub const ParsedResult = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
-    /// Raw source file state consumed before line-ending normalization.
-    source_file_state: watch_inputs.State,
+    /// Raw source file state consumed before line-ending normalization, when requested.
+    source_file_state: ?watch_inputs.State,
     /// The parsed module environment (ownership returned to coordinator)
     module_env: *ModuleEnv,
     /// Cached AST for reuse in canonicalization (ownership returned)
@@ -242,8 +242,8 @@ pub const ParseFailure = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
-    /// Raw source file state observed before parsing failed.
-    source_file_state: watch_inputs.State,
+    /// Raw source file state observed before parsing failed, when requested.
+    source_file_state: ?watch_inputs.State,
     /// Error reports explaining the failure
     reports: std.ArrayList(Report),
     /// Partial module env if available (for error recovery)

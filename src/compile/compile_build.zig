@@ -179,6 +179,8 @@ pub const BuildEnv = struct {
     filesystem: CoreCtx,
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
+    /// Whether to retain exact source byte states for watch-mode refreshes.
+    track_watch_inputs: bool = false,
 
     /// Controls which checked-artifact publication work runs after ordinary
     /// checking has completed.
@@ -462,6 +464,15 @@ pub const BuildEnv = struct {
         self.root_source_dir_override = source_dir;
     }
 
+    pub fn setWatchInputTracking(self: *BuildEnv, enabled: bool) void {
+        self.track_watch_inputs = enabled;
+        if (self.coordinator) |coord| coord.setWatchInputTracking(enabled);
+        var sched_it = self.schedulers.iterator();
+        while (sched_it.next()) |entry| {
+            entry.value_ptr.*.setWatchInputTracking(enabled);
+        }
+    }
+
     /// Build an app file specifically (validates it's an app)
     pub fn buildApp(self: *BuildEnv, app_file: []const u8) BuildAppError!void {
         // Build and let the main function handle everything
@@ -554,6 +565,7 @@ pub const BuildEnv = struct {
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
+        coord.setWatchInputTracking(self.track_watch_inputs);
         self.coordinator = coord;
     }
 
@@ -1111,7 +1123,7 @@ pub const BuildEnv = struct {
         name: []u8,
         kind: PackageKind,
         root_file: []u8,
-        root_file_state: watch_inputs.State,
+        root_file_state: ?watch_inputs.State,
         root_dir: []u8,
         url: ?package_source.UrlSource = null,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
@@ -1148,7 +1160,7 @@ pub const BuildEnv = struct {
 
     const HeaderInfo = struct {
         kind: PackageKind,
-        source_file_state: watch_inputs.State,
+        source_file_state: ?watch_inputs.State,
         platform_alias: ?[]u8 = null,
         platform_path: ?[]u8 = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -1501,7 +1513,7 @@ pub const BuildEnv = struct {
 
     const SourceRead = struct {
         source: []u8,
-        file_state: watch_inputs.State,
+        file_state: ?watch_inputs.State,
     };
 
     fn readSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
@@ -1512,7 +1524,10 @@ pub const BuildEnv = struct {
             error.IoError => return error.IoError,
             error.OutOfMemory => return error.OutOfMemory,
         };
-        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+        const file_state: ?watch_inputs.State = if (self.track_watch_inputs)
+            .{ .hash = watch_inputs.hashBytes(data) }
+        else
+            null;
 
         const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
             self.gpa.free(data);
@@ -1725,6 +1740,7 @@ pub const BuildEnv = struct {
                 self.builtin_modules,
                 self.filesystem,
             );
+            sched.setWatchInputTracking(self.track_watch_inputs);
 
             const key = try self.gpa.dupe(u8, name);
             try self.schedulers.put(self.gpa, key, sched);
@@ -2301,6 +2317,13 @@ pub const BuildEnv = struct {
     /// the state consumed by compilation. Returned paths are owned by the
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
+        if (!self.track_watch_inputs) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
+            }
+            unreachable;
+        }
+
         var inputs = std.ArrayList(watch_inputs.Input).empty;
         errdefer {
             for (inputs.items) |input| self.gpa.free(input.path);
@@ -2316,7 +2339,13 @@ pub const BuildEnv = struct {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
 
-            try self.appendWatchInputState(&inputs, &seen, pkg.root_file, pkg.root_file_state);
+            const root_file_state = pkg.root_file_state orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("build package {s} has root_file without root_file_state; call setWatchInputTracking(true) before building when collecting watch input states", .{pkg_name});
+                }
+                unreachable;
+            };
+            try self.appendWatchInputState(&inputs, &seen, pkg.root_file, root_file_state);
 
             if (self.schedulers.get(pkg_name)) |sched| {
                 for (sched.modules.items) |*sched_mod| {
@@ -2327,9 +2356,13 @@ pub const BuildEnv = struct {
                             semantic.module_env
                     else
                         null;
-                    if (sched_mod.source_file_state) |state| {
-                        try self.appendWatchInputState(&inputs, &seen, sched_mod.path, state);
-                    }
+                    const state = sched_mod.source_file_state orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic("scheduled module {s} has source path without source_file_state", .{sched_mod.name});
+                        }
+                        unreachable;
+                    };
+                    try self.appendWatchInputState(&inputs, &seen, sched_mod.path, state);
                     const module_env = env orelse continue;
                     try self.appendFileDependencyWatchInputStates(&inputs, &seen, sched_mod.canonicalSourceDir("."), module_env);
                 }
@@ -2825,6 +2858,8 @@ test "BuildEnv collectWatchInputStates includes package root state" {
         testing.io,
     );
     defer env.deinit();
+    env.setWatchInputTracking(true);
+    env.setWatchInputTracking(true);
 
     const root_hash = [_]u8{7} ** 32;
     const key = try allocator.dupe(u8, "pkg");
@@ -2880,6 +2915,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         testing.io,
     );
     defer env.deinit();
+    env.setWatchInputTracking(true);
 
     const package_key = try allocator.dupe(u8, "pkg");
     try env.packages.put(allocator, package_key, .{
@@ -2908,6 +2944,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         env.builtin_modules,
         env.filesystem,
     );
+    sched.setWatchInputTracking(true);
     const scheduler_key = try allocator.dupe(u8, "pkg");
     try env.schedulers.put(allocator, scheduler_key, sched);
 
@@ -2925,6 +2962,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         null,
         env.filesystem,
     );
+    coord.setWatchInputTracking(true);
     env.coordinator = coord;
 
     const coord_pkg = try coord.ensurePackage("pkg", generated_dir);
@@ -2983,12 +3021,13 @@ test "BuildEnv header watch state hashes raw CRLF source bytes" {
         testing.io,
     );
     defer env.deinit();
+    env.setWatchInputTracking(true);
 
     var header_info = try env.parseHeaderDeps(main_path);
     defer header_info.deinit(allocator);
 
     const expected_hash = watch_inputs.hashBytes(source);
-    switch (header_info.source_file_state) {
+    switch (header_info.source_file_state orelse return error.ExpectedWatchInputState) {
         .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
         .missing, .unreadable => try testing.expect(false),
     }

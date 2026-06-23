@@ -622,7 +622,7 @@ pub const PackageState = struct {
         }
     }
 
-    pub fn setRootInput(self: *PackageState, gpa: Allocator, root_file: []const u8, state: watch_inputs.State) Allocator.Error!void {
+    pub fn setRootInput(self: *PackageState, gpa: Allocator, root_file: []const u8, state: ?watch_inputs.State) Allocator.Error!void {
         const owned_root_file = try gpa.dupe(u8, root_file);
         if (self.root_file) |old_root_file| gpa.free(old_root_file);
         self.root_file = owned_root_file;
@@ -844,6 +844,8 @@ pub const Coordinator = struct {
     /// Whether to run hosted compiler transformation after canonicalization.
     /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
+    /// Whether to retain exact source byte states for watch-mode refreshes.
+    track_watch_inputs: bool,
 
     /// Package name -> note for packages compiled against a dependency
     /// version they did not declare. Rendered alongside errors from those
@@ -923,6 +925,7 @@ pub const Coordinator = struct {
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
+            .track_watch_inputs = false,
             .version_notes = std.StringHashMap([]const u8).init(gpa),
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
@@ -1004,6 +1007,10 @@ pub const Coordinator = struct {
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
+    }
+
+    pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
+        self.track_watch_inputs = enabled;
     }
 
     /// Set the I/O / core context implementation. Callers must supply a fully
@@ -1395,6 +1402,13 @@ pub const Coordinator = struct {
     /// with the state consumed by compilation. Returned paths are owned by the
     /// coordinator allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *Coordinator) Allocator.Error![]const watch_inputs.Input {
+        if (!self.track_watch_inputs) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
+            }
+            unreachable;
+        }
+
         var inputs = std.ArrayList(watch_inputs.Input).empty;
         errdefer {
             for (inputs.items) |input| self.gpa.free(input.path);
@@ -1420,9 +1434,13 @@ pub const Coordinator = struct {
             }
 
             for (pkg.modules.items) |*mod| {
-                if (mod.source_file_state) |state| {
-                    try self.appendWatchInputState(&inputs, &seen, mod.path, state);
-                }
+                const state = mod.source_file_state orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("coordinator module {s} has source path without source_file_state", .{mod.name});
+                    }
+                    unreachable;
+                };
+                try self.appendWatchInputState(&inputs, &seen, mod.path, state);
 
                 const env = mod.moduleEnv() orelse continue;
                 try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), env);
@@ -4189,7 +4207,10 @@ pub const Coordinator = struct {
                     error.FileNotFound => "FILE NOT FOUND",
                     else => "PARSING FAILED",
                 };
-                const source_file_state = sourceFileStateForParseReadError(e);
+                const source_file_state = if (self.track_watch_inputs)
+                    sourceFileStateForParseReadError(e)
+                else
+                    null;
                 break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
@@ -4491,12 +4512,15 @@ pub const Coordinator = struct {
     /// Read module source using the Io abstraction.
     const SourceRead = struct {
         source: []u8,
-        file_state: watch_inputs.State,
+        file_state: ?watch_inputs.State,
     };
 
     fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
         const data = try self.roc_ctx.readFile(path, module_alloc);
-        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+        const file_state: ?watch_inputs.State = if (self.track_watch_inputs)
+            .{ .hash = watch_inputs.hashBytes(data) }
+        else
+            null;
 
         // Normalize line endings
         const source = base.source_utils.normalizeLineEndingsRealloc(module_alloc, data) catch |err| {
@@ -4993,6 +5017,7 @@ test "Coordinator collectWatchInputStates includes package root state" {
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
+    coord.setWatchInputTracking(true);
 
     const root_hash = [_]u8{11} ** 32;
     const pkg = try coord.ensurePackage("pkg", "/test/pkg");
@@ -5036,13 +5061,14 @@ test "Coordinator readModuleSource hashes raw CRLF source bytes" {
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
+    coord.setWatchInputTracking(true);
 
     const read = try coord.readModuleSource(main_path, allocator);
     defer allocator.free(read.source);
 
     try testing.expectEqualStrings("module [main]\n\nmain = 1\n", read.source);
     const expected_hash = watch_inputs.hashBytes(source);
-    switch (read.file_state) {
+    switch (read.file_state orelse return error.ExpectedWatchInputState) {
         .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
         .missing, .unreadable => try testing.expect(false),
     }
@@ -5062,6 +5088,7 @@ test "Coordinator collectWatchInputStates includes module source file state" {
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
     );
     defer coord.deinit();
+    coord.setWatchInputTracking(true);
 
     const root_hash = [_]u8{11} ** 32;
     const module_hash = [_]u8{22} ** 32;

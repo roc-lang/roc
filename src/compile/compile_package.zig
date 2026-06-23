@@ -537,6 +537,8 @@ pub const PackageEnv = struct {
     builtin_modules: *const BuiltinModules,
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
     roc_ctx: CoreCtx,
+    /// Whether to retain exact source byte states for watch-mode refreshes.
+    track_watch_inputs: bool = false,
 
     lock: Mutex = Mutex.init,
     cond: Condition = Condition.init,
@@ -604,6 +606,10 @@ pub const PackageEnv = struct {
             .discovered = std.ArrayList(ModuleId).empty,
             .additional_known_modules = std.ArrayList(KnownModule).empty,
         };
+    }
+
+    pub fn setWatchInputTracking(self: *PackageEnv, enabled: bool) void {
+        self.track_watch_inputs = enabled;
     }
 
     pub fn initWithResolver(
@@ -1040,7 +1046,7 @@ pub const PackageEnv = struct {
         const source_read = self.readModuleSource(st.path) catch |read_err| {
             // Note: Let the FileNotFound error propagate naturally
             // The existing error handling will report it appropriately
-            st.source_file_state = .missing;
+            st.source_file_state = if (self.track_watch_inputs) .missing else null;
             return read_err;
         };
         const src = source_read.source;
@@ -1198,7 +1204,7 @@ pub const PackageEnv = struct {
 
     const SourceRead = struct {
         source: []u8,
-        file_state: watch_inputs.State,
+        file_state: ?watch_inputs.State,
     };
 
     fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
@@ -1207,7 +1213,10 @@ pub const PackageEnv = struct {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.FileNotFound,
         };
-        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+        const file_state: ?watch_inputs.State = if (self.track_watch_inputs)
+            .{ .hash = watch_inputs.hashBytes(data) }
+        else
+            null;
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring
