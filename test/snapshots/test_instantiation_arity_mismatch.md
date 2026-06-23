@@ -15,13 +15,13 @@ type=expr
 # EXPECTED
 TOO MANY ARGS - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ The identity function expects 1 argument, but it got 2 ─────┤ TOO MANY ARGS │
-│  instead:                                                    └──────────────┬┘
-│                                                                             │
-│      identity(1, 2)                                                         │
-│      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────── test_instantiation_arity_mismatch.md:5:5 ┘
+┌───────────────┐
+│ TOO MANY ARGS ├─ The identity function expects 1 argument, but it got 2 ────┐
+└┬──────────────┘  instead.                                                   │
+ │                                                                            │
+ │  identity(1, 2)                                                            │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
+ └────────────────────────────────── test_instantiation_arity_mismatch.md:5:5 ┘
 
     The identity function has the type:
 

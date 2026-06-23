@@ -11,13 +11,13 @@ get_sum = |{ x, y }| x + y
 # EXPECTED
 TYPE MISMATCH - destructure_closed_fn_arg.md:2:12:2:20
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  get_sum = |{ x, y }| x + y                                                 │
-│             ‾‾‾‾‾‾‾‾                                                        │
-└────────────────────────────────────────── destructure_closed_fn_arg.md:2:12 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  get_sum = |{ x, y }| x + y                                                │
+ │             ‾‾‾‾‾‾‾‾                                                       │
+ └───────────────────────────────────────── destructure_closed_fn_arg.md:2:12 ┘
 
     It has the type:
 

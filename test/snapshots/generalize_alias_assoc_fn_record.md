@@ -17,13 +17,13 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 # EXPECTED
 MISSING METHOD - generalize_alias_assoc_fn_record.md:8:13:8:16
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This run method is being called on a value whose type ─────┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│  main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))                           │
-│              ‾‾‾                                                            │
-└─────────────────────────────────── generalize_alias_assoc_fn_record.md:8:13 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This run method is being called on a value whose type ────┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))                          │
+ │              ‾‾‾                                                           │
+ └────────────────────────────────── generalize_alias_assoc_fn_record.md:8:13 ┘
 
     The value's type, which does not have a method named run, is:
 

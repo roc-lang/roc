@@ -17,31 +17,31 @@ ASCII CONTROL CHARACTER
 
 ASCII control characters are not allowed in Roc source code.
 
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  ||1                                                                       │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_008.md:1:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ||1                                                                      │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_008.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  ||1                                                                       │
-│    ‾                                                                        │
-└────────────────────────────────────────────────────── fuzz_crash_008.md:1:3 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ||1                                                                      │
+ │    ‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_008.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  ||1                                                                       │
-│     ‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_008.md:1:4 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ||1                                                                      │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_008.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

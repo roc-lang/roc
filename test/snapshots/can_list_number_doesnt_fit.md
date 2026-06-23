@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  [1.U8, 2.U8, 300]                                                          │
-│               ‾‾‾                                                           │
-└───────────────────────────────────────── can_list_number_doesnt_fit.md:1:14 ┘
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  [1.U8, 2.U8, 300]                                                         │
+ │               ‾‾‾                                                          │
+ └──────────────────────────────────────── can_list_number_doesnt_fit.md:1:14 ┘
 
     The inferred type is:
 

@@ -54,13 +54,13 @@ OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
-                                                        ┌──────────────────────┐
-┌─ The name Try is being redeclared in this scope. ─────┤ DUPLICATE DEFINITION │
-│                                                       └─────────────────────┬┘
-│                                                                             │
-│  Try(ok, err) : [Ok(ok), Err(err)]                                          │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└───────────────────────────────────────────────────── type_alias_decl.md:7:1 ┘
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name Try is being redeclared in this scope. ────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  Try(ok, err) : [Ok(ok), Err(err)]                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └──────────────────────────────────────────────────── type_alias_decl.md:7:1 ┘
 
     The redeclaration is here:
 
@@ -70,32 +70,32 @@ UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
       │
     1 │ app [main!] { pf: platform "../basic-cli/main.roc" }
       │ ^
-                                    ┌──────────────────────────────────────────┐
-┌─ You cannot use a .. inside a ────┤ OPEN EXT NOT ALLOWED IN TYPE DECLARATION │
-│  type declaration:                └─────────────────────────────────────────┬┘
-│                                                                             │
-│  Letters : [A, B, ..]                                                       │
-│                   ‾‾                                                        │
-└─────────────────────────────────────────────────── type_alias_decl.md:22:18 ┘
+┌──────────────────────────────────────────┐
+│ OPEN EXT NOT ALLOWED IN TYPE DECLARATION ├─ You cannot use a .. inside a ───┐
+└┬─────────────────────────────────────────┘  type declaration.               │
+ │                                                                            │
+ │  Letters : [A, B, ..]                                                      │
+ │                   ‾‾                                                       │
+ └────────────────────────────────────────────────── type_alias_decl.md:22:18 ┘
 
     Hint: You need a named variable, like ..others, to use this here.
-                                                             ┌─────────────────┐
-┌─ Variable person is defined here and then never used: ─────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      person = { name: "Alice", age: 30 }                                    │
-│      ‾‾‾‾‾‾                                                                 │
-└──────────────────────────────────────────────────── type_alias_decl.md:36:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable person is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  person = { name: "Alice", age: 30 }                                       │
+ │  ‾‾‾‾‾‾                                                                    │
+ └─────────────────────────────────────────────────── type_alias_decl.md:36:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _person
     to suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable color is defined here and then never used: ──────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      color = Red                                                            │
-│      ‾‾‾‾‾                                                                  │
-└──────────────────────────────────────────────────── type_alias_decl.md:39:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable color is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  color = Red                                                               │
+ │  ‾‾‾‾‾                                                                     │
+ └─────────────────────────────────────────────────── type_alias_decl.md:39:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _color
     to suppress this warning.

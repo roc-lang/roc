@@ -15,13 +15,13 @@ canonicalize_diagnostics=true
 # EXPECTED
 USED BEFORE DEFINITION - local_let_forward_reference.md:2:13:2:14
 # PROBLEMS
-                                                      ┌────────────────────────┐
-┌─ The name f is used before it is defined. ──────────┤ USED BEFORE DEFINITION │
-│                                                     └───────────────────────┬┘
-│                                                                             │
-│      g = |x| f(x)                                                           │
-│              ‾                                                              │
-└──────────────────────────────────────── local_let_forward_reference.md:2:13 ┘
+┌────────────────────────┐
+│ USED BEFORE DEFINITION ├─ The name f is used before it is defined. ─────────┐
+└┬───────────────────────┘                                                    │
+ │                                                                            │
+ │  g = |x| f(x)                                                              │
+ │          ‾                                                                 │
+ └─────────────────────────────────────── local_let_forward_reference.md:2:13 ┘
 
     Local definitions are evaluated in order: a definition can refer to itself
     or to definitions written before it, but not to definitions written later

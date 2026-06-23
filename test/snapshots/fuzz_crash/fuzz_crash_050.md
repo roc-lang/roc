@@ -11,13 +11,13 @@ type=snippet
 # EXPECTED
 PARSE ERROR - fuzz_crash_050.md:1:1:1:2
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  )                                                                          │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_050.md:1:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  )                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_050.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

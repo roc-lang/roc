@@ -14,39 +14,39 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_061.md:2:14:2:15
 PARSE ERROR - fuzz_crash_061.md:1:1:1:9
 PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  platform"                                                                  │
-│          ‾                                                                  │
-└────────────────────────────────────────────────────── fuzz_crash_061.md:1:9 ┘
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  platform"                                                                 │
+ │          ‾                                                                 │
+ └───────────────────────────────────────────────────── fuzz_crash_061.md:1:9 ┘
 
-                                         ┌─────────────────────────────────────┐
-┌─ The token 0 is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
-│  type annotation.                      └────────────────────────────────────┬┘
-│                                                                             │
-│  requires{}{n:0[import S exposing[                                          │
-│               ‾                                                             │
-└───────────────────────────────────────────────────── fuzz_crash_061.md:2:14 ┘
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  requires{}{n:0[import S exposing[                                         │
+ │               ‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_061.md:2:14 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: ────────────────────────────────────┤ PARSE ERROR │
-│  expected_requires_signatures_close_curly                      └────────────┬┘
-│                                                                             │
-│  platform"                                                                  │
-│  ‾‾‾‾‾‾‾‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_061.md:1:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_requires_signatures_close_curly                     │
+ │                                                                            │
+ │  platform"                                                                 │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_061.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: import_exposing_no_close ───────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  requires{}{n:0[import S exposing[                                          │
-│                 ‾‾‾‾‾‾                                                      │
-└───────────────────────────────────────────────────── fuzz_crash_061.md:2:16 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: import_exposing_no_close ──────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  requires{}{n:0[import S exposing[                                         │
+ │                 ‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_061.md:2:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

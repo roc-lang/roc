@@ -11,22 +11,22 @@ type=expr
 PARSE ERROR - error_malformed_syntax.md:1:18:1:19
 PARSE ERROR - error_malformed_syntax.md:1:20:1:22
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: expected_expr_record_field_name ────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  …Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number …│
-│           ‾                                                                 │
-└───────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_expr_record_field_name ───┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  …Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number…│
+ │           ‾                                                                │
+ └──────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: expected_expr_close_curly_or_comma ─┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  …ice", : 30, , email: , active Bool.true, "invalid": value, 42: "number ke…│
-│           ‾‾                                                                │
-└───────────────────────────────────────────── error_malformed_syntax.md:1:20 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_expr_close_curly_or_comma                           │
+ │                                                                            │
+ │  …ice", : 30, , email: , active Bool.true, "invalid": value, 42: "number k…│
+ │           ‾‾                                                               │
+ └──────────────────────────────────────────── error_malformed_syntax.md:1:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

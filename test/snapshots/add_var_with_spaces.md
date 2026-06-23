@@ -10,13 +10,13 @@ add2 = x +      2
 # EXPECTED
 UNDEFINED VARIABLE - add_var_with_spaces.md:1:8:1:9
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named x in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  add2 = x +      2                                                          │
-│         ‾                                                                   │
-└───────────────────────────────────────────────── add_var_with_spaces.md:1:8 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named x in this scope. ────────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  add2 = x +      2                                                         │
+ │         ‾                                                                  │
+ └──────────────────────────────────────────────── add_var_with_spaces.md:1:8 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

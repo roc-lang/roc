@@ -13,30 +13,30 @@ UNCLOSED SINGLE QUOTE - fuzz_crash_039.md:1:10:1:11
 PARSE ERROR - fuzz_crash_039.md:1:8:1:9
 PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 # PROBLEMS
-                                                       ┌───────────────────────┐
-┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
-│  quote.                                              └──────────────────────┬┘
-│                                                                             │
-│  module[}('                                                                 │
-│           ‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_039.md:1:10 ┘
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  module[}('                                                                │
+ │           ‾                                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_039.md:1:10 ┘
 
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: exposed_item_unexpected_token ──────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  module[}('                                                                 │
-│         ‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_039.md:1:8 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: exposed_item_unexpected_token ─────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  module[}('                                                                │
+ │         ‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_039.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: header_expected_close_square ───────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  module[}('                                                                 │
-│          ‾                                                                  │
-└────────────────────────────────────────────────────── fuzz_crash_039.md:1:9 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: header_expected_close_square ──────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  module[}('                                                                │
+ │          ‾                                                                 │
+ └───────────────────────────────────────────────────── fuzz_crash_039.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

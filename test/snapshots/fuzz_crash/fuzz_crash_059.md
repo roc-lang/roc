@@ -19,85 +19,86 @@ PARSE ERROR - fuzz_crash_059.md:2:14:2:15
 PARSE ERROR - fuzz_crash_059.md:2:15:2:16
 MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│    ‾‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_059.md:2:3 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │    ‾‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_059.md:2:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│       ‾                                                                     │
-└────────────────────────────────────────────────────── fuzz_crash_059.md:2:6 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │       ‾                                                                    │
+ └───────────────────────────────────────────────────── fuzz_crash_059.md:2:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│        ‾                                                                    │
-└────────────────────────────────────────────────────── fuzz_crash_059.md:2:7 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │        ‾                                                                   │
+ └───────────────────────────────────────────────────── fuzz_crash_059.md:2:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│         ‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_059.md:2:8 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │         ‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_059.md:2:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│          ‾‾‾‾                                                               │
-└────────────────────────────────────────────────────── fuzz_crash_059.md:2:9 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │          ‾‾‾‾                                                              │
+ └───────────────────────────────────────────────────── fuzz_crash_059.md:2:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│              ‾                                                              │
-└───────────────────────────────────────────────────── fuzz_crash_059.md:2:13 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │              ‾                                                             │
+ └──────────────────────────────────────────────────── fuzz_crash_059.md:2:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│               ‾                                                             │
-└───────────────────────────────────────────────────── fuzz_crash_059.md:2:14 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │               ‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_059.md:2:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  G if 0{}else||0                                                            │
-│                ‾                                                            │
-└───────────────────────────────────────────────────── fuzz_crash_059.md:2:15 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  G if 0{}else||0                                                           │
+ │                ‾                                                           │
+ └──────────────────────────────────────────────────── fuzz_crash_059.md:2:15 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                            ┌──────────────────┐
-┌─ The module B was not found in this Roc project. ─────────┤ MODULE NOT FOUND │
-│                                                           └─────────────────┬┘
-│                                                                             │
-│  app[]{f:platform""}import B as                                             │
-│  G if 0{}else||0                                                            │
-└───────────────────────────────────────────────────── fuzz_crash_059.md:1:20 ┘
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module B was not found in this Roc project. ────────┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  app[]{f:platform""}import B as                                            │
+ │  G if 0{}else||0                                                           │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_059.md:1:20 ┘
 
     You're attempting to use this module here:
 # TOKENS

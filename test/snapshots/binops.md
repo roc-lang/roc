@@ -26,13 +26,13 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - binops.md:16:5:16:5
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ The first pattern in this match is incompatible: ───────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│      None ?? 0,                                                             │
-│      ‾‾‾‾‾‾‾‾‾                                                              │
-└───────────────────────────────────────────────────────────── binops.md:16:5 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first pattern in this match is incompatible. ──────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  None ?? 0,                                                                │
+ │  ‾‾‾‾‾‾‾‾‾                                                                 │
+ └──────────────────────────────────────────────────────────── binops.md:16:5 ┘
 
     The first pattern is trying to match:
 

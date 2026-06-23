@@ -15,13 +15,13 @@ main! = |_| getName({namee: "luke", age:21})
 # EXPECTED
 TYPE MISMATCH - type_record_basic.md:6:13:6:13
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ The first argument being passed to this function has the ───┤ TYPE MISMATCH │
-│  wrong type:                                                 └──────────────┬┘
-│                                                                             │
-│  main! = |_| getName({namee: "luke", age:21})                               │
-│                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
-└────────────────────────────────────────────────── type_record_basic.md:6:21 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
+└┬──────────────┘  wrong type.                                                │
+ │                                                                            │
+ │  main! = |_| getName({namee: "luke", age:21})                              │
+ │                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
+ └───────────────────────────────────────────────── type_record_basic.md:6:21 ┘
 
     This argument has the type:
 

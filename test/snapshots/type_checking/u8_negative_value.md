@@ -11,13 +11,13 @@ x = -1
 # EXPECTED
 INVALID NUMBER - u8_negative_value.md:2:5:2:7
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  x = -1                                                                     │
-│      ‾‾                                                                     │
-└─────────────────────────────────────────────────── u8_negative_value.md:2:5 ┘
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  x = -1                                                                    │
+ │      ‾‾                                                                    │
+ └────────────────────────────────────────────────── u8_negative_value.md:2:5 ┘
 
     The inferred type is:
 

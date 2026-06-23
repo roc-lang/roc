@@ -14,22 +14,22 @@ foo = Json.parse(data)
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ The file users.json was not found. ────────────────────────┤ FILE NOT FOUND │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  import "users.json" as data : Str                                          │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└──────────────────────────────────────────────── inline_ingested_file.md:1:1 ┘
+┌────────────────┐
+│ FILE NOT FOUND ├─ The file users.json was not found. ───────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  import "users.json" as data : Str                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └─────────────────────────────────────────────── inline_ingested_file.md:1:1 ┘
 
     Make sure the file exists relative to your source file:
-                                                          ┌────────────────────┐
-┌─ Nothing is named parse in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  foo = Json.parse(data)                                                     │
-│        ‾‾‾‾‾‾‾‾‾‾                                                           │
-└──────────────────────────────────────────────── inline_ingested_file.md:4:7 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named parse in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  foo = Json.parse(data)                                                    │
+ │        ‾‾‾‾‾‾‾‾‾‾                                                          │
+ └─────────────────────────────────────────────── inline_ingested_file.md:4:7 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

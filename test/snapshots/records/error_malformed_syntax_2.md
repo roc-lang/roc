@@ -12,31 +12,31 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
 DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
-                                         ┌─────────────────────────────────────┐
-┌─ The token 42 is not expected in a ────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
-│  type annotation.                      └────────────────────────────────────┬┘
-│                                                                             │
-│  { age: 42, name = "Alice" }                                                │
-│         ‾‾                                                                  │
-└──────────────────────────────────────────── error_malformed_syntax_2.md:1:8 ┘
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 42 is not expected in a ───┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  { age: 42, name = "Alice" }                                               │
+ │         ‾‾                                                                 │
+ └─────────────────────────────────────────── error_malformed_syntax_2.md:1:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│  { age: 42, name = "Alice" }                                                │
-│           ‾                                                                 │
-└─────────────────────────────────────────── error_malformed_syntax_2.md:1:10 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  { age: 42, name = "Alice" }                                               │
+ │           ‾                                                                │
+ └────────────────────────────────────────── error_malformed_syntax_2.md:1:10 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  { age: 42, name = "Alice" }                                                │
-│    ‾‾‾‾‾‾‾                                                                  │
-└──────────────────────────────────────────── error_malformed_syntax_2.md:1:3 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  { age: 42, name = "Alice" }                                               │
+ │    ‾‾‾‾‾‾‾                                                                 │
+ └─────────────────────────────────────────── error_malformed_syntax_2.md:1:3 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

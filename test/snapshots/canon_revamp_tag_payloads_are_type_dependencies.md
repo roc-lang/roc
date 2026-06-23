@@ -12,13 +12,13 @@ B : A
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencies.md:1:1:1:13
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencies.md:2:1:2:6
 # PROBLEMS
-                                             ┌─────────────────────────────────┐
-┌─ The type alias A and B form a recursive ──┤ MUTUALLY RECURSIVE TYPE ALIASES │
-│  cycle.                                    └────────────────────────────────┬┘
-│                                                                             │
-│  A : [Tag(B)]                                                               │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└───────────────────── canon_revamp_tag_payloads_are_type_dependencies.md:1:1 ┘
+┌─────────────────────────────────┐
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias A and B form a ───────────┐
+└┬────────────────────────────────┘  recursive cycle.                         │
+ │                                                                            │
+ │  A : [Tag(B)]                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └──────────────────── canon_revamp_tag_payloads_are_type_dependencies.md:1:1 ┘
 
     Type aliases are transparent synonyms and cannot be mutually recursive. If
     you need recursive types, use nominal types (:=) instead.
@@ -31,13 +31,13 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencie
       │
     2 │ B : A
       │ ^^^^^
-                                             ┌─────────────────────────────────┐
-┌─ The type alias B and A form a recursive ──┤ MUTUALLY RECURSIVE TYPE ALIASES │
-│  cycle.                                    └────────────────────────────────┬┘
-│                                                                             │
-│  B : A                                                                      │
-│  ‾‾‾‾‾                                                                      │
-└───────────────────── canon_revamp_tag_payloads_are_type_dependencies.md:2:1 ┘
+┌─────────────────────────────────┐
+│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias B and A form a ───────────┐
+└┬────────────────────────────────┘  recursive cycle.                         │
+ │                                                                            │
+ │  B : A                                                                     │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────── canon_revamp_tag_payloads_are_type_dependencies.md:2:1 ┘
 
     Type aliases are transparent synonyms and cannot be mutually recursive. If
     you need recursive types, use nominal types (:=) instead.

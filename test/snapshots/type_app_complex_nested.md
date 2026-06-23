@@ -34,59 +34,59 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
 UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ The type Maybe is not declared in this scope. ────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)      │
-│                            ‾‾‾‾‾                                            │
-└──────────────────────────────────────────── type_app_complex_nested.md:4:27 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)     │
+ │                            ‾‾‾‾‾                                           │
+ └─────────────────────────────────────────── type_app_complex_nested.md:4:27 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Error is not declared in this scope. ────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)      │
-│                                                 ‾‾‾‾‾                       │
-└──────────────────────────────────────────── type_app_complex_nested.md:4:48 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)     │
+ │                                                 ‾‾‾‾‾                      │
+ └─────────────────────────────────────────── type_app_complex_nested.md:4:48 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ Variable maybeList is defined here and then never used: ──┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│          Ok(maybeList) => []                                                │
-│             ‾‾‾‾‾‾‾‾‾                                                       │
-└──────────────────────────────────────────── type_app_complex_nested.md:7:12 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable maybeList is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Ok(maybeList) => []                                                       │
+ │     ‾‾‾‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────── type_app_complex_nested.md:7:12 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _maybeList to suppress this warning.
-                                                             ┌─────────────────┐
-┌─ The type Maybe is not declared in this scope. ────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a                       │
-│               ‾‾‾‾‾                                                         │
-└─────────────────────────────────────────── type_app_complex_nested.md:12:14 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a                      │
+ │               ‾‾‾‾‾                                                        │
+ └────────────────────────────────────────── type_app_complex_nested.md:12:14 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Maybe is not declared in this scope. ────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))               │
-│                               ‾‾‾‾‾                                         │
-└─────────────────────────────────────────── type_app_complex_nested.md:18:30 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))              │
+ │                               ‾‾‾‾‾                                        │
+ └────────────────────────────────────────── type_app_complex_nested.md:18:30 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Error is not declared in this scope. ────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))               │
-│                                                    ‾‾‾‾‾                    │
-└─────────────────────────────────────────── type_app_complex_nested.md:18:51 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Error is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))              │
+ │                                                    ‾‾‾‾‾                   │
+ └────────────────────────────────────────── type_app_complex_nested.md:18:51 ┘
 
     This type is referenced here:
 # TOKENS

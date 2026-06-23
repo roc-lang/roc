@@ -20,13 +20,13 @@ main = {
 # EXPECTED
 RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ This from_interpolation dispatch would have to call ───┤ RECURSIVE DISPATCH │
-│  itself to satisfy its own type:                        └───────────────────┬┘
-│                                                                             │
-│      url = "https://${domain}.com"                                          │
-│            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└──────────────────────── nested_try_interpolation_recursive_dispatch.md:9:11 ┘
+┌────────────────────┐
+│ RECURSIVE DISPATCH ├─ This from_interpolation dispatch would have to call ──┐
+└┬───────────────────┘  itself to satisfy its own type.                       │
+ │                                                                            │
+ │  url = "https://${domain}.com"                                             │
+ │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
+ └─────────────────────── nested_try_interpolation_recursive_dispatch.md:9:11 ┘
 
     The dispatcher type is:
 

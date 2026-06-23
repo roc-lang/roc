@@ -10,13 +10,13 @@ platform""requires{}{}exposes[]packages{}provides[
 # EXPECTED
 PARSE ERROR - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: expected_provides_open_curly ───────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  platform""requires{}{}exposes[]packages{}provides[                         │
-│                                                   ‾                         │
-└───────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_provides_open_curly ──────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  platform""requires{}{}exposes[]packages{}provides[                        │
+ │                                                   ‾                        │
+ └──────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

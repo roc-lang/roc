@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 INVALID UNICODE ESCAPE SEQUENCE - unicode_not_hex.md:1:5:1:13
 # PROBLEMS
-                                             ┌─────────────────────────────────┐
-┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
-│  valid.                                    └────────────────────────────────┬┘
-│                                                                             │
-│  "abc\u(zzzz)def"                                                           │
-│      ‾‾‾‾‾‾‾‾                                                               │
-└───────────────────────────────────────────────────── unicode_not_hex.md:1:5 ┘
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  "abc\u(zzzz)def"                                                          │
+ │      ‾‾‾‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────────────── unicode_not_hex.md:1:5 ┘
 
 # TOKENS
 ~~~zig

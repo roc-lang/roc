@@ -22,13 +22,13 @@ result = do_something()
 # EXPECTED
 TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ The ? operator expects a Try type (a tag union containing ──┤ TYPE MISMATCH │
-│  ONLY Ok and Err tags), but I found:                         └──────────────┬┘
-│                                                                             │
-│   _x = ok_or(Err(""), Exit(5))?                                             │
-│        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────── issue8738_question_on_non_try.md:9:7 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The ? operator expects a Try type (a tag union ────────────┐
+└┬──────────────┘  containing ONLY Ok and Err tags), but I found.             │
+ │                                                                            │
+ │  _x = ok_or(Err(""), Exit(5))?                                             │
+ │       ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
+ └────────────────────────────────────── issue8738_question_on_non_try.md:9:7 ┘
 
     This expression has type:
 

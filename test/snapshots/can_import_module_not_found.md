@@ -12,13 +12,13 @@ main = Module.something
 # EXPECTED
 UNDEFINED VARIABLE - can_import_module_not_found.md:3:8:3:24
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named something in this scope. ─────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  main = Module.something                                                    │
-│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────── can_import_module_not_found.md:3:8 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named something in this scope. ────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  main = Module.something                                                   │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+ └──────────────────────────────────────── can_import_module_not_found.md:3:8 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

@@ -12,14 +12,14 @@ result = poly().to_i128()
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_method.md:3:10:3:16
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This is trying to dispatch a method named to_i128 on an ───┤ MISSING METHOD │
-│  unresolved type variable, but unresolved type variables    └───────────────┬┘
-│  have no methods.                                                           │
-│                                                                             │
-│  result = poly().to_i128()                                                  │
-│           ‾‾‾‾‾‾                                                            │
-└────────────────────────────────── static_dispatch_unresolved_method.md:3:10 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named to_i128 on an ──┐
+└┬───────────────┘  unresolved type variable, but unresolved type variables   │
+ │                  have no methods.                                          │
+ │                                                                            │
+ │  result = poly().to_i128()                                                 │
+ │           ‾‾‾‾‾‾                                                           │
+ └───────────────────────────────── static_dispatch_unresolved_method.md:3:10 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by

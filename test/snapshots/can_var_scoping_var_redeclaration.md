@@ -18,13 +18,13 @@ result = redeclareTest({})
 # EXPECTED
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 # PROBLEMS
-                                                        ┌──────────────────────┐
-┌─ The name x_ is being redeclared in this scope. ──────┤ DUPLICATE DEFINITION │
-│                                                       └─────────────────────┬┘
-│                                                                             │
-│   var x_ = 10 # Redeclare var - should warn but proceed                     │
-│   ‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└─────────────────────────────────── can_var_scoping_var_redeclaration.md:4:2 ┘
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name x_ is being redeclared in this scope. ─────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  var x_ = 10 # Redeclare var - should warn but proceed                     │
+ │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
+ └────────────────────────────────── can_var_scoping_var_redeclaration.md:4:2 ┘
 
     The redeclaration is here:
 

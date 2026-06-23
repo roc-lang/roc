@@ -26,49 +26,49 @@ UNDECLARED TYPE - type_declarations.md:5:19:5:21
 UNDECLARED TYPE - type_declarations.md:5:32:5:41
 MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ The type Bar is not declared in this scope. ──────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Foo : (Bar, Baz)                                                           │
-│         ‾‾‾                                                                 │
-└─────────────────────────────────────────────────── type_declarations.md:3:8 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │         ‾‾‾                                                                │
+ └────────────────────────────────────────────────── type_declarations.md:3:8 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Baz is not declared in this scope. ──────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Foo : (Bar, Baz)                                                           │
-│              ‾‾‾                                                            │
-└────────────────────────────────────────────────── type_declarations.md:3:13 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │              ‾‾‾                                                           │
+ └───────────────────────────────────────────────── type_declarations.md:3:13 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Ok is not declared in this scope. ───────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Some(a) : { foo : Ok(a), bar : Something }                                 │
-│                    ‾‾                                                       │
-└────────────────────────────────────────────────── type_declarations.md:5:19 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : Something }                                │
+ │                    ‾‾                                                      │
+ └───────────────────────────────────────────────── type_declarations.md:5:19 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Something is not declared in this scope. ────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Some(a) : { foo : Ok(a), bar : Something }                                 │
-│                                 ‾‾‾‾‾‾‾‾‾                                   │
-└────────────────────────────────────────────────── type_declarations.md:5:32 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Something is not declared in this scope. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : Something }                                │
+ │                                 ‾‾‾‾‾‾‾‾‾                                  │
+ └───────────────────────────────────────────────── type_declarations.md:5:32 ┘
 
     This type is referenced here:
-                                                         ┌─────────────────────┐
-┌─ There is no module with the name Module imported ─────┤ MODULE NOT IMPORTED │
-│  into this Roc file.                                   └────────────────────┬┘
-│                                                                             │
-│  MyType2 : Module.Thingy                                                    │
-│            ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────────────── type_declarations.md:13:11 ┘
+┌─────────────────────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name Module imported ────┐
+└┬────────────────────┘  into this Roc file.                                  │
+ │                                                                            │
+ │  MyType2 : Module.Thingy                                                   │
+ │            ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+ └──────────────────────────────────────────────── type_declarations.md:13:11 ┘
 
     You're attempting to use this module here:
 # TOKENS

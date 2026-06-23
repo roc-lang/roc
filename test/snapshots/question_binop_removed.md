@@ -20,31 +20,31 @@ UNEXPECTED TOKEN IN EXPRESSION - question_binop_removed.md:7:15:7:16
 UNRECOGNIZED SYNTAX - question_binop_removed.md:7:15:7:16
 TYPE MISMATCH - question_binop_removed.md:7:17:7:25
 # PROBLEMS
-                                              ┌────────────────────────────────┐
-┌─ The token ? is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│   value = f(x) ? BadInput                                                   │
-│                ‾                                                            │
-└───────────────────────────────────────────── question_binop_removed.md:7:15 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ? is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  value = f(x) ? BadInput                                                   │
+ │               ‾                                                            │
+ └──────────────────────────────────────────── question_binop_removed.md:7:15 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                                         ┌─────────────────────┐
-┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
-│                                                        └────────────────────┬┘
-│                                                                             │
-│   value = f(x) ? BadInput                                                   │
-│                ‾                                                            │
-└───────────────────────────────────────────── question_binop_removed.md:7:15 ┘
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  value = f(x) ? BadInput                                                   │
+ │               ‾                                                            │
+ └──────────────────────────────────────────── question_binop_removed.md:7:15 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
-                                                               ┌───────────────┐
-┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│   value = f(x) ? BadInput                                                   │
-│                  ‾‾‾‾‾‾‾‾                                                   │
-└───────────────────────────────────────────── question_binop_removed.md:7:17 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
+└┬──────────────┘  used.                                                      │
+ │                                                                            │
+ │  value = f(x) ? BadInput                                                   │
+ │                 ‾‾‾‾‾‾‾‾                                                   │
+ └──────────────────────────────────────────── question_binop_removed.md:7:17 ┘
 
     It has the type:
 

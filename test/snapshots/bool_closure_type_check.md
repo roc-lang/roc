@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 MISSING METHOD - bool_closure_type_check.md:1:6:1:8
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│  (|x| !x)(True)                                                             │
-│       ‾‾                                                                    │
-└───────────────────────────────────────────── bool_closure_type_check.md:1:6 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This not method is being called on a value whose type ────┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  (|x| !x)(True)                                                            │
+ │       ‾‾                                                                   │
+ └──────────────────────────────────────────── bool_closure_type_check.md:1:6 ┘
 
     The value's type, which does not have a method named not, is:
 

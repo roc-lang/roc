@@ -20,41 +20,41 @@ UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ The type UnknownType is not declared in this scope. ──────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  MyType : UnknownType                                                       │
-│           ‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└────────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type UnknownType is not declared in this scope. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  MyType : UnknownType                                                      │
+ │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type UndeclaredResult is not declared in this scope. ─┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  processValue : UndeclaredResult -> Str                                     │
-│                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
-└────────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type UndeclaredResult is not declared in this ───────┐
+└┬────────────────┘  scope.                                                   │
+ │                                                                            │
+ │  processValue : UndeclaredResult -> Str                                    │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+ └───────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ Variable value is defined here and then never used: ──────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  processValue = |value| {                                                   │
-│                  ‾‾‾‾‾                                                      │
-└────────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable value is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processValue = |value| {                                                  │
+ │                  ‾‾‾‾‾                                                     │
+ └───────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
 
     If you don't need this variable, prefix it with an underscore like _value
     to suppress this warning.
-                                                         ┌─────────────────────┐
-┌─ There is no module with the name SomeModule imported ─┤ MODULE NOT IMPORTED │
-│  into this Roc file.                                   └────────────────────┬┘
-│                                                                             │
-│  AnotherType : SomeModule.MissingType                                       │
-│                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
-└────────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
+┌─────────────────────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name SomeModule ─────────┐
+└┬────────────────────┘  imported into this Roc file.                         │
+ │                                                                            │
+ │  AnotherType : SomeModule.MissingType                                      │
+ │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
+ └───────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
 
     You're attempting to use this module here:
 # TOKENS

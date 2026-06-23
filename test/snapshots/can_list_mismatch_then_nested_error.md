@@ -12,13 +12,13 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:2:1:3
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:5:1:12
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This number is being used where a non-number type is ───────┤ TYPE MISMATCH │
-│  needed:                                                     └──────────────┬┘
-│                                                                             │
-│  [1, "hello", [3, "world"]]                                                 │
-│   ‾                                                                         │
-└───────────────────────────────── can_list_mismatch_then_nested_error.md:1:2 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  [1, "hello", [3, "world"]]                                                │
+ │   ‾                                                                        │
+ └──────────────────────────────── can_list_mismatch_then_nested_error.md:1:2 ┘
 
     The type was determined to be non-numeric here:
       ┌─────────────────────────────────
@@ -34,13 +34,13 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
             a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
             a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
           ]
-                                                               ┌───────────────┐
-┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
-│  is needed:                                                  └──────────────┬┘
-│                                                                             │
-│  [1, "hello", [3, "world"]]                                                 │
-│      ‾‾‾‾‾‾‾                                                                │
-└───────────────────────────────── can_list_mismatch_then_nested_error.md:1:5 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [1, "hello", [3, "world"]]                                                │
+ │      ‾‾‾‾‾‾‾                                                               │
+ └──────────────────────────────── can_list_mismatch_then_nested_error.md:1:5 ┘
 
     The type was determined to be:
 
@@ -49,13 +49,13 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
             a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
             a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
           ]
-                                                               ┌───────────────┐
-┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
-│  is needed:                                                  └──────────────┬┘
-│                                                                             │
-│  [1, "hello", [3, "world"]]                                                 │
-│                   ‾‾‾‾‾‾‾                                                   │
-└──────────────────────────────── can_list_mismatch_then_nested_error.md:1:18 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [1, "hello", [3, "world"]]                                                │
+ │                   ‾‾‾‾‾‾‾                                                  │
+ └─────────────────────────────── can_list_mismatch_then_nested_error.md:1:18 ┘
 
     The type was determined to be:
 

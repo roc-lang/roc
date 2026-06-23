@@ -63,199 +63,200 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 # PROBLEMS
-                                             ┌─────────────────────────────────┐
-┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
-│  valid.                                    └────────────────────────────────┬┘
-│                                                                             │
-│      '\u',                                                                  │
-│       ‾‾                                                                    │
-└─────────────────────────────────────────────── unicode_single_quotes.md:5:6 ┘
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u',                                                                     │
+ │   ‾‾                                                                       │
+ └────────────────────────────────────────────── unicode_single_quotes.md:5:6 ┘
 
-                                             ┌─────────────────────────────────┐
-┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
-│  valid.                                    └────────────────────────────────┬┘
-│                                                                             │
-│      '\u)',                                                                 │
-│       ‾‾                                                                    │
-└─────────────────────────────────────────────── unicode_single_quotes.md:6:6 ┘
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u)',                                                                    │
+ │   ‾‾                                                                       │
+ └────────────────────────────────────────────── unicode_single_quotes.md:6:6 ┘
 
-                                             ┌─────────────────────────────────┐
-┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
-│  valid.                                    └────────────────────────────────┬┘
-│                                                                             │
-│      '\u(',                                                                 │
-│       ‾‾‾                                                                   │
-└─────────────────────────────────────────────── unicode_single_quotes.md:7:6 ┘
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u(',                                                                    │
+ │   ‾‾‾                                                                      │
+ └────────────────────────────────────────────── unicode_single_quotes.md:7:6 ┘
 
-                                             ┌─────────────────────────────────┐
-┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
-│  valid.                                    └────────────────────────────────┬┘
-│                                                                             │
-│      '\u()',                                                                │
-│       ‾‾‾‾                                                                  │
-└─────────────────────────────────────────────── unicode_single_quotes.md:8:6 ┘
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u()',                                                                   │
+ │   ‾‾‾‾                                                                     │
+ └────────────────────────────────────────────── unicode_single_quotes.md:8:6 ┘
 
-                                             ┌─────────────────────────────────┐
-┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
-│  valid.                                    └────────────────────────────────┬┘
-│                                                                             │
-│      '\u(EDA0B5)'                                                           │
-│       ‾‾‾‾‾‾‾‾‾‾                                                            │
-└────────────────────────────────────────────── unicode_single_quotes.md:10:6 ┘
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u(EDA0B5)'                                                              │
+ │   ‾‾‾‾‾‾‾‾‾‾                                                               │
+ └───────────────────────────────────────────── unicode_single_quotes.md:10:6 ┘
 
-                                             ┌─────────────────────────────────┐
-┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
-│  valid.                                    └────────────────────────────────┬┘
-│                                                                             │
-│      '\u(K)',                                                               │
-│       ‾‾‾‾‾                                                                 │
-└────────────────────────────────────────────── unicode_single_quotes.md:11:6 ┘
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u(K)',                                                                  │
+ │   ‾‾‾‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:11:6 ┘
 
-                                                          ┌────────────────────┐
-┌─ Single-quoted literals must contain exactly one valid ─┤ SINGLE QUOTE EMPTY │
-│  UTF-8 codepoint.                                       └───────────────────┬┘
-│                                                                             │
-│      '',                                                                    │
-│      ‾‾                                                                     │
-└────────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
+┌────────────────────┐
+│ SINGLE QUOTE EMPTY ├─ Single-quoted literals must contain exactly one ──────┐
+└┬───────────────────┘  valid UTF-8 codepoint.                                │
+ │                                                                            │
+ │  '',                                                                       │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
 
-                                                       ┌───────────────────────┐
-┌─ Single-quoted literals must contain exactly one ────┤ SINGLE QUOTE TOO LONG │
-│  valid UTF-8 codepoint.                              └──────────────────────┬┘
-│                                                                             │
-│      'long',                                                                │
-│      ‾‾‾‾‾‾                                                                 │
-└────────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
+┌───────────────────────┐
+│ SINGLE QUOTE TOO LONG ├─ Single-quoted literals must contain exactly one ───┐
+└┬──────────────────────┘  valid UTF-8 codepoint.                             │
+ │                                                                            │
+ │  'long',                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
 
-                                                       ┌───────────────────────┐
-┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
-│  quote.                                              └──────────────────────┬┘
-│                                                                             │
-│      '\',                                                                   │
-│      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  '\',                                                                      │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
 
-                                                       ┌───────────────────────┐
-┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
-│  quote.                                              └──────────────────────┬┘
-│                                                                             │
-│  y = 'u                                                                     │
-│      ‾‾                                                                     │
-└────────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  y = 'u                                                                    │
+ │      ‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
 
-                                                     ┌─────────────────────────┐
-┌─ This escape sequence is not recognized. ──────────┤ INVALID ESCAPE SEQUENCE │
-│                                                    └────────────────────────┬┘
-│                                                                             │
-│  '\                                                                         │
-│                                                                             │
-└────────────────────────────────────────────── unicode_single_quotes.md:22:2 ┘
+┌─────────────────────────┐
+│ INVALID ESCAPE SEQUENCE ├─ This escape sequence is not recognized. ─────────┐
+└┬────────────────────────┘                                                   │
+ │                                                                            │
+ │  '\                                                                        │
+ │                                                                            │
+ │                                                                            │
+ └───────────────────────────────────────────── unicode_single_quotes.md:22:2 ┘
 
-                                                       ┌───────────────────────┐
-┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
-│  quote.                                              └──────────────────────┬┘
-│                                                                             │
-│  '\                                                                         │
-│  ‾‾                                                                         │
-└────────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  '\                                                                        │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
 
-                                              ┌────────────────────────────────┐
-┌─ The token '\u' is not expected in an ──────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      '\u',                                                                  │
-│      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────── unicode_single_quotes.md:5:5 ┘
-
-    Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token '\u)' is not expected in an ─────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      '\u)',                                                                 │
-│      ‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────── unicode_single_quotes.md:6:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u' is not expected in an ─────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  '\u',                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └────────────────────────────────────────────── unicode_single_quotes.md:5:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token '\u(' is not expected in an ─────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      '\u(',                                                                 │
-│      ‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────── unicode_single_quotes.md:7:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u)' is not expected in an ────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  '\u)',                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └────────────────────────────────────────────── unicode_single_quotes.md:6:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token '\u()' is not expected in an ────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      '\u()',                                                                │
-│      ‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────── unicode_single_quotes.md:8:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u(' is not expected in an ────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  '\u(',                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └────────────────────────────────────────────── unicode_single_quotes.md:7:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token '\u(EDA0B5)' is not expected in ─┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  an expression.                             └───────────────────────────────┬┘
-│                                                                             │
-│      '\u(EDA0B5)'                                                           │
-│      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└────────────────────────────────────────────── unicode_single_quotes.md:10:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u()' is not expected in an ───┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  '\u()',                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └────────────────────────────────────────────── unicode_single_quotes.md:8:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token '\u(K)' is not expected in an ───┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      '\u(K)',                                                               │
-│      ‾‾‾‾‾‾‾                                                                │
-└────────────────────────────────────────────── unicode_single_quotes.md:11:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u(EDA0B5)' is not expected ───┐
+└┬───────────────────────────────┘  in an expression.                         │
+ │                                                                            │
+ │  '\u(EDA0B5)'                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └───────────────────────────────────────────── unicode_single_quotes.md:10:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token '' is not expected in an ────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      '',                                                                    │
-│      ‾‾                                                                     │
-└────────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\u(K)' is not expected in an ──┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  '\u(K)',                                                                  │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └───────────────────────────────────────────── unicode_single_quotes.md:11:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token 'long' is not expected in an ────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      'long',                                                                │
-│      ‾‾‾‾‾‾                                                                 │
-└────────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '' is not expected in an ───────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  '',                                                                       │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token '\', is not expected in an ──────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      '\',                                                                   │
-│      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 'long' is not expected in an ───┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  'long',                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token 'u is not expected in an ────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│  y = 'u                                                                     │
-│      ‾‾                                                                     │
-└────────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token '\', is not expected in an ─────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  '\',                                                                      │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  '\                                                                         │
-│  ‾‾                                                                         │
-└────────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 'u is not expected in an ───────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  y = 'u                                                                    │
+ │      ‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  '\                                                                        │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 INVALID TUPLE ELEMENT
@@ -294,13 +295,13 @@ INVALID TUPLE ELEMENT
 
 This tuple element is malformed or contains invalid syntax.
 
-                                                         ┌─────────────────────┐
-┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
-│                                                        └────────────────────┬┘
-│                                                                             │
-│  y = 'u                                                                     │
-│      ‾‾                                                                     │
-└────────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  y = 'u                                                                    │
+ │      ‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

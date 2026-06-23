@@ -19,21 +19,21 @@ PARSE ERROR - fuzz_crash_021.md:1:14:1:16
 PARSE ERROR - fuzz_crash_021.md:1:16:1:16
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Fli/main.roc" }                                                            │
-│              ‾‾‾                                                            │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Fli/main.roc" }                                                           │
+ │              ‾‾‾                                                           │
+ └──────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
 
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  Fli/main.roc" }                                                            │
-│     ‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:1:4 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  Fli/main.roc" }                                                           │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_021.md:1:4 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -48,58 +48,58 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Fli/main.roc" }                                                            │
-│      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:1:5 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Fli/main.roc" }                                                           │
+ │      ‾‾‾‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_021.md:1:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Fli/main.roc" }                                                            │
-│          ‾‾‾‾                                                               │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:1:9 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Fli/main.roc" }                                                           │
+ │          ‾‾‾‾                                                              │
+ └───────────────────────────────────────────────────── fuzz_crash_021.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Fli/main.roc" }                                                            │
-│              ‾                                                              │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Fli/main.roc" }                                                           │
+ │              ‾                                                             │
+ └──────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Fli/main.roc" }                                                            │
-│               ‾‾                                                            │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:14 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Fli/main.roc" }                                                           │
+ │               ‾‾                                                           │
+ └──────────────────────────────────────────────────── fuzz_crash_021.md:1:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Fli/main.roc" }                                                            │
-│                 ‾                                                           │
-└───────────────────────────────────────────────────── fuzz_crash_021.md:1:16 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Fli/main.roc" }                                                           │
+ │                 ‾                                                          │
+ └──────────────────────────────────────────────────── fuzz_crash_021.md:1:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: ────────────────────────────────────┤ PARSE ERROR │
-│  expected_ty_anno_close_round_or_comma                         └────────────┬┘
-│                                                                             │
-│  Pair(a, b+ : (                                                             │
-│  ‾‾‾‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_021.md:3:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_ty_anno_close_round_or_comma                        │
+ │                                                                            │
+ │  Pair(a, b+ : (                                                            │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_021.md:3:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

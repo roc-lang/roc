@@ -62,13 +62,13 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ I'm having trouble with this bool operation: ───────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│   1 + update_data                                                           │
-│       ‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────── let_polymorphism_records.md:48:6 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ I'm having trouble with this bool operation. ──────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  1 + update_data                                                           │
+ │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
+ └────────────────────────────────────────── let_polymorphism_records.md:48:6 ┘
 
     Both sides of and must be Bool values, but the right side is:
 
@@ -76,13 +76,13 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 
     Note: Roc does not have "truthiness". You must convert values to bools
     yourself.
-                                                               ┌───────────────┐
-┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
-│  is needed:                                                  └──────────────┬┘
-│                                                                             │
-│  str = "hello"                                                              │
-│        ‾‾‾‾‾‾‾                                                              │
-└──────────────────────────────────────────── let_polymorphism_records.md:8:7 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  str = "hello"                                                             │
+ │        ‾‾‾‾‾‾‾                                                             │
+ └─────────────────────────────────────────── let_polymorphism_records.md:8:7 ┘
 
     The type was determined to be:
 

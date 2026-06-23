@@ -16,13 +16,13 @@ Foo := [Whatever].{
 # EXPECTED
 UNDEFINED VARIABLE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named ghostName in this scope. ─────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│      callsGhost = ghostName                                                 │
-│                   ‾‾‾‾‾‾‾‾‾                                                 │
-└────────────────────────────── canon_revamp_undefined_in_assoc_error.md:3:18 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named ghostName in this scope. ────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  callsGhost = ghostName                                                    │
+ │               ‾‾‾‾‾‾‾‾‾                                                    │
+ └───────────────────────────── canon_revamp_undefined_in_assoc_error.md:3:18 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

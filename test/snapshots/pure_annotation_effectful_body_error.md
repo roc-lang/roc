@@ -18,13 +18,13 @@ main! = bad_function("This should fail")
 # EXPECTED
 UNDEFINED VARIABLE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  bad_function = |msg| Stdout.line!(msg)                                     │
-│                       ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└─────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  bad_function = |msg| Stdout.line!(msg)                                    │
+ │                       ‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

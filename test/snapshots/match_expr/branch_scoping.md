@@ -15,17 +15,18 @@ match result {
 # EXPECTED
 POLYMORPHIC VALUE - branch_scoping.md:1:1:6:2
 # PROBLEMS
-                                                           ┌───────────────────┐
-┌─ This top-level value still has an unresolved ───────────┤ POLYMORPHIC VALUE │
-│  polymorphic type:                                       └──────────────────┬┘
-│                                                                             │
-│  match result {                                                             │
-│      Ok(value) => value + 1                                                 │
-│      Err(value) => value - 1                                                │
-│      Ok(different) => different * 2                                         │
-│      Err(different) => different / 2                                        │
-│  }                                                                          │
-└────────────────────────────────────────────────────── branch_scoping.md:1:1 ┘
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match result {                                                            │
+ │      Ok(value) => value + 1                                                │
+ │      Err(value) => value - 1                                               │
+ │      Ok(different) => different * 2                                        │
+ │      Err(different) => different / 2                                       │
+ │  }                                                                         │
+ │                                                                            │
+ └───────────────────────────────────────────────────── branch_scoping.md:1:1 ┘
 
     Its type is:
     a

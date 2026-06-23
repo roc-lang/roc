@@ -12,13 +12,13 @@ Maybe(a) : [Ok(a), Err]
 # EXPECTED
 TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ The type Maybe is being redeclared. ──────────────────────┤ TYPE REDECLARED │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Maybe(a) : [Ok(a), Err]                                                    │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────── type_redeclaration_same_scope.md:3:1 ┘
+┌─────────────────┐
+│ TYPE REDECLARED ├─ The type Maybe is being redeclared. ─────────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Maybe(a) : [Ok(a), Err]                                                   │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────────── type_redeclaration_same_scope.md:3:1 ┘
 
     The redeclaration is here:
 

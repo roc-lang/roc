@@ -11,23 +11,23 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 MODULE NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 # PROBLEMS
-                                                            ┌──────────────────┐
-┌─ The module SomeType was not found in this Roc project. ──┤ MODULE NOT FOUND │
-│                                                           └─────────────────┬┘
-│                                                                             │
-│  …ething, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc"…│
-│           ‾‾‾‾‾‾‾‾                                                          │
-└─────────────────────────────── package_header_nonempty_singleline_1.md:1:21 ┘
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module SomeType was not found in this Roc project. ─┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  …ething, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc…│
+ │           ‾‾‾‾‾‾‾‾                                                         │
+ └────────────────────────────── package_header_nonempty_singleline_1.md:1:21 ┘
 
     You're attempting to use this module here:
-                                                     ┌─────────────────────────┐
-┌─ The module header says that something is ─────────┤ EXPOSED BUT NOT DEFINED │
-│  exposed, but it is not defined anywhere in this   └────────────────────────┬┘
-│  module.                                                                    │
-│                                                                             │
-│  …ackage [something, SomeType] { somePkg: "../main.roc", other: "../../othe…│
-│           ‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────── package_header_nonempty_singleline_1.md:1:10 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that something is ────────┐
+└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
+ │                           this module.                                     │
+ │                                                                            │
+ │  …ackage [something, SomeType] { somePkg: "../main.roc", other: "../../oth…│
+ │           ‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────── package_header_nonempty_singleline_1.md:1:10 ┘
 
     You can fix this by either defining something in this module, or by
     removing it from the list of exposed values.

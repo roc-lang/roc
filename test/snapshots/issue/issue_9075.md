@@ -15,13 +15,13 @@ main = "${y}"
 # EXPECTED
 TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  main = "${y}"                                                              │
-│            ‾                                                                │
-└───────────────────────────────────────────────────────── issue_9075.md:6:11 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  main = "${y}"                                                             │
+ │            ‾                                                               │
+ └──────────────────────────────────────────────────────── issue_9075.md:6:11 ┘
 
     It has the type:
 

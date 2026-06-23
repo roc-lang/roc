@@ -57,13 +57,13 @@ x = {
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│   e: !\\                                                                    │
-│      ‾‾‾                                                                    │
-└─────────────────────────────────────────── multiline_string_complex.md:40:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This not method is being called on a value whose type ────┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  e: !\\                                                                    │
+ │     ‾‾‾                                                                    │
+ └────────────────────────────────────────── multiline_string_complex.md:40:5 ┘
 
     The value's type, which does not have a method named not, is:
 
@@ -71,13 +71,13 @@ TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 
     Hint: For this to work, the type would need to have a method named not
     associated with it in the type's declaration.
-                                                               ┌───────────────┐
-┌─ The minus method on Dec has an incompatible type: ──────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│    0 - \\                                                                   │
-│    ‾                                                                        │
-└─────────────────────────────────────────── multiline_string_complex.md:37:3 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The minus method on Dec has an incompatible type. ─────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  0 - \\                                                                    │
+ │  ‾                                                                         │
+ └────────────────────────────────────────── multiline_string_complex.md:37:3 ┘
 
     The method minus has the type:
 

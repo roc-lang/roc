@@ -23,13 +23,13 @@ main! = process!(42)
 # EXPECTED
 UNDEFINED VARIABLE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  print_number! = |n| Stdout.line!(n)                                        │
-│                      ‾‾‾‾‾‾‾‾‾‾‾‾                                           │
-└───────────────────────────────────────────── function_no_annotation.md:9:21 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  print_number! = |n| Stdout.line!(n)                                       │
+ │                      ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+ └──────────────────────────────────────────── function_no_annotation.md:9:21 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

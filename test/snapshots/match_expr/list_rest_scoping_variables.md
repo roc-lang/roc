@@ -18,40 +18,40 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:4:6:4:13
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
 # PROBLEMS
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [..items] => 1                                                         │
-│       ‾‾‾‾‾‾‾                                                               │
-└───────────────────────────────────────── list_rest_scoping_variables.md:2:6 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [..items] => 1                                                            │
+ │   ‾‾‾‾‾‾‾                                                                  │
+ └──────────────────────────────────────── list_rest_scoping_variables.md:2:6 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [first, ..items] => first                                              │
-│              ‾‾‾‾‾‾‾                                                        │
-└──────────────────────────────────────── list_rest_scoping_variables.md:3:13 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [first, ..items] => first                                                 │
+ │          ‾‾‾‾‾‾‾                                                           │
+ └─────────────────────────────────────── list_rest_scoping_variables.md:3:13 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [..items, last] => last                                                │
-│       ‾‾‾‾‾‾‾                                                               │
-└───────────────────────────────────────── list_rest_scoping_variables.md:4:6 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [..items, last] => last                                                   │
+ │   ‾‾‾‾‾‾‾                                                                  │
+ └──────────────────────────────────────── list_rest_scoping_variables.md:4:6 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [first, ..items, last] => first + last                                 │
-│              ‾‾‾‾‾‾‾                                                        │
-└──────────────────────────────────────── list_rest_scoping_variables.md:5:13 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [first, ..items, last] => first + last                                    │
+ │          ‾‾‾‾‾‾‾                                                           │
+ └─────────────────────────────────────── list_rest_scoping_variables.md:5:13 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 # TOKENS

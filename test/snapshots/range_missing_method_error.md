@@ -13,13 +13,13 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This add_checked method is being called on a value whose ──┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│  r = "a"..<"z"                                                              │
-│      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This add_checked method is being called on a value ───────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
     The value's type, which does not have a method named add_checked, is:
 
@@ -27,13 +27,13 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 
     Hint: For this to work, the type would need to have a method named
     add_checked associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This from_numeral method is being called on a value whose ─┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│  r = "a"..<"z"                                                              │
-│      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This from_numeral method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
     The value's type, which does not have a method named from_numeral, is:
 
@@ -41,13 +41,13 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 
     Hint: For this to work, the type would need to have a method named
     from_numeral associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This is_lt method is being called on a value whose type ───┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│  r = "a"..<"z"                                                              │
-│      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This is_lt method is being called on a value whose type ──┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
     The value's type, which does not have a method named is_lt, is:
 
@@ -55,13 +55,13 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 
     Hint: For this to work, the type would need to have a method named is_lt
     associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This steps_between method is being called on a value ──────┤ MISSING METHOD │
-│  whose type doesn't have that method:                       └───────────────┬┘
-│                                                                             │
-│  r = "a"..<"z"                                                              │
-│      ‾‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This steps_between method is being called on a value ─────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
     The value's type, which does not have a method named steps_between, is:
 

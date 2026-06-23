@@ -18,50 +18,50 @@ UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [first, ..rest] => 0 # invalid rest pattern should error               │
-│              ‾‾‾‾‾‾                                                         │
-└────────────────────────────────────────────────────── list_patterns.md:3:13 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │          ‾‾‾‾‾‾                                                            │
+ └───────────────────────────────────────────────────── list_patterns.md:3:13 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-                                                          ┌────────────────────┐
-┌─ Nothing is named numbers in this scope. ───────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  match numbers {                                                            │
-│        ‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────── list_patterns.md:1:7 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named numbers in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  match numbers {                                                           │
+ │        ‾‾‾‾‾‾‾                                                             │
+ └────────────────────────────────────────────────────── list_patterns.md:1:7 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named acc in this scope. ───────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│      [] => acc                                                              │
-│            ‾‾‾                                                              │
-└────────────────────────────────────────────────────── list_patterns.md:2:11 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named acc in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  [] => acc                                                                 │
+ │        ‾‾‾                                                                 │
+ └───────────────────────────────────────────────────── list_patterns.md:2:11 ┘
 
     Is there an import or exposing missing up-top?
-                                                             ┌─────────────────┐
-┌─ Variable first is defined here and then never used: ──────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      [first, ..rest] => 0 # invalid rest pattern should error               │
-│       ‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────── list_patterns.md:3:6 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable first is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │   ‾‾‾‾‾                                                                    │
+ └────────────────────────────────────────────────────── list_patterns.md:3:6 ┘
 
     If you don't need this variable, prefix it with an underscore like _first
     to suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      [first, ..rest] => 0 # invalid rest pattern should error               │
-│                ‾                                                            │
-└────────────────────────────────────────────────────── list_patterns.md:3:15 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │            ‾                                                               │
+ └───────────────────────────────────────────────────── list_patterns.md:3:15 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.

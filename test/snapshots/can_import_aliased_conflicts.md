@@ -17,13 +17,13 @@ main = {
 DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:31
 UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
 # PROBLEMS
-                                                        ┌──────────────────────┐
-┌─ The name MyModule is being redeclared in this scope. ┤ DUPLICATE DEFINITION │
-│                                                       └─────────────────────┬┘
-│                                                                             │
-│  import http.Client as MyModule                                             │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
-└──────────────────────────────────────── can_import_aliased_conflicts.md:2:1 ┘
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name MyModule is being redeclared in this ──────┐
+└┬─────────────────────┘  scope.                                              │
+ │                                                                            │
+ │  import http.Client as MyModule                                            │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ └─────────────────────────────────────── can_import_aliased_conflicts.md:2:1 ┘
 
     The redeclaration is here:
 
@@ -33,13 +33,13 @@ UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
       │
     1 │ import json.Json as MyModule
       │ ^
-                                                          ┌────────────────────┐
-┌─ Nothing is named parse in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│      x = MyModule.parse                                                     │
-│          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└──────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named parse in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  x = MyModule.parse                                                        │
+ │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+ └─────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

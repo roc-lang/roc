@@ -17,13 +17,13 @@ wrong_type_function = |x| x * 3.14
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ The value before this + operator has a type that doesn't ──┤ MISSING METHOD │
-│  have a plus method:                                        └───────────────┬┘
-│                                                                             │
-│  string_function = |x| x + 42                                               │
-│                        ‾‾‾‾‾‾                                               │
-└─────────────────────────────────── lambda_annotation_mismatch_error.md:3:23 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ The value before this + operator has a type that ─────────┐
+└┬───────────────┘  doesn't have a plus method.                               │
+ │                                                                            │
+ │  string_function = |x| x + 42                                              │
+ │                        ‾‾‾‾‾‾                                              │
+ └────────────────────────────────── lambda_annotation_mismatch_error.md:3:23 ┘
 
     The value's type, which does not have a method named plus, is:
 
@@ -31,13 +31,13 @@ INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 
     Hint: The + operator calls a method named plus on the value preceding it,
     passing the value after the operator as the one argument.
-                                                              ┌────────────────┐
-┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  wrong_type_function = |x| x * 3.14                                         │
-│                                ‾‾‾‾                                         │
-└─────────────────────────────────── lambda_annotation_mismatch_error.md:7:31 ┘
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  wrong_type_function = |x| x * 3.14                                        │
+ │                                ‾‾‾‾                                        │
+ └────────────────────────────────── lambda_annotation_mismatch_error.md:7:31 ┘
 
     The inferred type is:
 

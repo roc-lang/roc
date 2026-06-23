@@ -20,13 +20,13 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  strs = bare                                                                │
-│         ‾‾‾‾                                                                │
-└────────────── generalize_annotated_value_unannotated_not_generalized.md:9:8 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  strs = bare                                                               │
+ │         ‾‾‾‾                                                               │
+ └───────────── generalize_annotated_value_unannotated_not_generalized.md:9:8 ┘
 
     It has the type:
 

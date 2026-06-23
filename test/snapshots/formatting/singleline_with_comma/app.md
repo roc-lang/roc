@@ -11,23 +11,23 @@ app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }
 EXPOSED BUT NOT DEFINED - app.md:1:11:1:14
 EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 # PROBLEMS
-                                                     ┌─────────────────────────┐
-┌─ The module header says that a2! is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│  app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }          │
-│            ‾‾‾                                                              │
-└──────────────────────────────────────────────────────────────── app.md:1:11 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that a2! is exposed, ─────┐
+└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+ │                                                                            │
+ │  app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }         │
+ │            ‾‾‾                                                             │
+ └─────────────────────────────────────────────────────────────── app.md:1:11 ┘
 
     You can fix this by either defining a2! in this module, or by removing it
     from the list of exposed values.
-                                                     ┌─────────────────────────┐
-┌─ The module header says that a1! is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│  app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }          │
-│       ‾‾‾                                                                   │
-└───────────────────────────────────────────────────────────────── app.md:1:6 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that a1! is exposed, ─────┐
+└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+ │                                                                            │
+ │  app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }         │
+ │       ‾‾‾                                                                  │
+ └──────────────────────────────────────────────────────────────── app.md:1:6 ┘
 
     You can fix this by either defining a1! in this module, or by removing it
     from the list of exposed values.

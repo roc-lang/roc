@@ -34,13 +34,13 @@ main! = |_| {}
 # EXPECTED
 DUPLICATE DEFINITION - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
-                                                        ┌──────────────────────┐
-┌─ The name Try is being redeclared in this scope. ─────┤ DUPLICATE DEFINITION │
-│                                                       └─────────────────────┬┘
-│                                                                             │
-│  Try : [Success(Str), Error(Str), Warning(Str, I32)]                        │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                        │
-└────────────────────────────────────────────── type_tag_union_complex.md:7:1 ┘
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name Try is being redeclared in this scope. ────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  Try : [Success(Str), Error(Str), Warning(Str, I32)]                       │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                       │
+ └───────────────────────────────────────────── type_tag_union_complex.md:7:1 ┘
 
     The redeclaration is here:
 

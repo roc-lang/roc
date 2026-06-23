@@ -12,13 +12,13 @@ hey : MyType
 # EXPECTED
 DECLARATION HAS NO VALUE - type_alias_anno_only.md:3:1:3:13
 # PROBLEMS
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  hey : MyType                                                               │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└──────────────────────────────────────────────── type_alias_anno_only.md:3:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  hey : MyType                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────── type_alias_anno_only.md:3:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

@@ -15,13 +15,13 @@ main! = |_| {}
 # EXPECTED
 POLYMORPHIC VALUE - generalize_annotated_value_constrained.md:4:1:4:6
 # PROBLEMS
-                                                           ┌───────────────────┐
-┌─ This top-level value still has an unresolved ───────────┤ POLYMORPHIC VALUE │
-│  polymorphic type:                                       └──────────────────┬┘
-│                                                                             │
-│  items = []                                                                 │
-│  ‾‾‾‾‾                                                                      │
-└────────────────────────────── generalize_annotated_value_constrained.md:4:1 ┘
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  items = []                                                                │
+ │  ‾‾‾‾‾                                                                     │
+ └───────────────────────────── generalize_annotated_value_constrained.md:4:1 ┘
 
     Its type is:
     List(a) where [a.to_str : a -> Str]

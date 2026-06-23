@@ -18,22 +18,22 @@ main =
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ The type Person is not declared in this scope. ───────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  expectsPerson : Person -> Str                                              │
-│                  ‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────── nominal_type_origin_mismatch.md:3:17 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Person is not declared in this scope. ──────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  expectsPerson : Person -> Str                                             │
+ │                  ‾‾‾‾‾‾                                                    │
+ └────────────────────────────────────── nominal_type_origin_mismatch.md:3:17 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ Variable p is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  expectsPerson = |p| "Got a person"                                         │
-│                   ‾                                                         │
-└─────────────────────────────────────── nominal_type_origin_mismatch.md:4:18 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable p is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  expectsPerson = |p| "Got a person"                                        │
+ │                   ‾                                                        │
+ └────────────────────────────────────── nominal_type_origin_mismatch.md:4:18 ┘
 
     If you don't need this variable, prefix it with an underscore like _p to
     suppress this warning.

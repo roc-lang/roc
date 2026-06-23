@@ -19,13 +19,13 @@ main! = |_| {}
 # EXPECTED
 UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│      Stdout.line!(person.name)                                              │
-│      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  Stdout.line!(person.name)                                                 │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

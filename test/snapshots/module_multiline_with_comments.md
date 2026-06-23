@@ -17,40 +17,40 @@ PARSE ERROR - module_multiline_with_comments.md:2:12:2:13
 PARSE ERROR - module_multiline_with_comments.md:3:11:3:12
 PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   [ # Comment After exposes open                                            │
-│   ‾                                                                         │
-└────────────────────────────────────── module_multiline_with_comments.md:1:2 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [ # Comment After exposes open                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────── module_multiline_with_comments.md:1:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    something, # Comment after exposed item                                  │
-│    ‾‾‾‾‾‾‾‾‾                                                                │
-└────────────────────────────────────── module_multiline_with_comments.md:2:3 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  something, # Comment after exposed item                                   │
+ │  ‾‾‾‾‾‾‾‾‾                                                                 │
+ └───────────────────────────────────── module_multiline_with_comments.md:2:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    something, # Comment after exposed item                                  │
-│             ‾                                                               │
-└───────────────────────────────────── module_multiline_with_comments.md:2:12 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  something, # Comment after exposed item                                   │
+ │           ‾                                                                │
+ └──────────────────────────────────── module_multiline_with_comments.md:2:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│    SomeType, # Comment after final exposed item                             │
-│            ‾                                                                │
-└───────────────────────────────────── module_multiline_with_comments.md:3:11 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  SomeType, # Comment after final exposed item                              │
+ │          ‾                                                                 │
+ └──────────────────────────────────── module_multiline_with_comments.md:3:11 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -65,13 +65,13 @@ PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   ]                                                                         │
-│   ‾                                                                         │
-└────────────────────────────────────── module_multiline_with_comments.md:4:2 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ]                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────── module_multiline_with_comments.md:4:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

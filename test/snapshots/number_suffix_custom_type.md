@@ -15,13 +15,13 @@ main = 123.Foo
 # EXPECTED
 TYPE MISMATCH - number_suffix_custom_type.md:6:8:6:15
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ The from_numeral method on Foo has an incompatible type: ───┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  main = 123.Foo                                                             │
-│         ‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────── number_suffix_custom_type.md:6:8 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The from_numeral method on Foo has an incompatible type. ──┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  main = 123.Foo                                                            │
+ │         ‾‾‾‾‾‾‾                                                            │
+ └────────────────────────────────────────── number_suffix_custom_type.md:6:8 ┘
 
     The method from_numeral has the type:
 

@@ -10,13 +10,13 @@ module
 # EXPECTED
 PARSE ERROR - header_expected_open_bracket.md:2:1:2:1
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: header_expected_open_square ────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│                                                                             │
-│  ‾                                                                          │
-└──────────────────────────────────────── header_expected_open_bracket.md:2:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └─────────────────────────────────────── header_expected_open_bracket.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

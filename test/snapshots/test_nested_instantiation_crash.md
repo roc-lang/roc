@@ -23,13 +23,13 @@ answer = composed([42])
 # EXPECTED
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  composed = |n| get_value(make_record(n))                                   │
-│                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
-└─────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  composed = |n| get_value(make_record(n))                                  │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
+ └────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
 
     It has the type:
 

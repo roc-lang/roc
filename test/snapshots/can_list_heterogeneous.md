@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_heterogeneous.md:1:5:1:12
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
-│  is needed:                                                  └──────────────┬┘
-│                                                                             │
-│  [1, "hello", 3.14]                                                         │
-│      ‾‾‾‾‾‾‾                                                                │
-└────────────────────────────────────────────── can_list_heterogeneous.md:1:5 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [1, "hello", 3.14]                                                        │
+ │      ‾‾‾‾‾‾‾                                                               │
+ └───────────────────────────────────────────── can_list_heterogeneous.md:1:5 ┘
 
     The type was determined to be:
 

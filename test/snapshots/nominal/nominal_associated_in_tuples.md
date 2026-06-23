@@ -23,37 +23,37 @@ UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
 TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
-                                                    ┌──────────────────────────┐
-┌─ The type variable a is not declared in this ─────┤ UNDECLARED TYPE VARIABLE │
-│  scope.                                           └─────────────────────────┬┘
-│                                                                             │
-│  Container : a -> [Container(a)]                                            │
-│              ‾                                                              │
-└─────────────────────────────────────── nominal_associated_in_tuples.md:9:13 ┘
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable a is not declared in this ────┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  Container : a -> [Container(a)]                                           │
+ │              ‾                                                             │
+ └────────────────────────────────────── nominal_associated_in_tuples.md:9:13 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
 
     This type variable is referenced here:
-                                                    ┌──────────────────────────┐
-┌─ The type variable a is not declared in this ─────┤ UNDECLARED TYPE VARIABLE │
-│  scope.                                           └─────────────────────────┬┘
-│                                                                             │
-│  Container : a -> [Container(a)]                                            │
-│                              ‾                                              │
-└─────────────────────────────────────── nominal_associated_in_tuples.md:9:29 ┘
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable a is not declared in this ────┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  Container : a -> [Container(a)]                                           │
+ │                              ‾                                             │
+ └────────────────────────────────────── nominal_associated_in_tuples.md:9:29 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
 
     This type variable is referenced here:
-                                                               ┌───────────────┐
-┌─ The type Container expects 0 arguments, but got 1 instead. ─┤ TOO MANY ARGS │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  boxed : Container(Foo.Bar)                                                 │
-│          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────── nominal_associated_in_tuples.md:11:9 ┘
+┌───────────────┐
+│ TOO MANY ARGS ├─ The type Container expects 0 arguments, but got 1 ─────────┐
+└┬──────────────┘  instead.                                                   │
+ │                                                                            │
+ │  boxed : Container(Foo.Bar)                                                │
+ │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────── nominal_associated_in_tuples.md:11:9 ┘
 
 # TOKENS
 ~~~zig

@@ -15,13 +15,13 @@ ASCII CONTROL CHARACTER
 
 ASCII control characters are not allowed in Roc source code.
 
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: incomplete_import ──────────────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  app[]{f:platform""}import fS                                              │
-│                     ‾‾‾‾‾‾                                                  │
-└───────────────────────────────────────────────────── fuzz_crash_046.md:1:20 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: incomplete_import ─────────────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}import fS                                             │
+ │                     ‾‾‾‾‾‾                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_046.md:1:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

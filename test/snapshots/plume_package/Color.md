@@ -93,98 +93,99 @@ MISSING METHOD - Color.md:62:12:62:26
 MISSING METHOD - Color.md:56:26:56:32
 MISSING METHOD - Color.md:57:32:57:38
 # PROBLEMS
-                                                    ┌──────────────────────────┐
-┌─ The module header is deprecated. ────────────────┤ MODULE HEADER DEPRECATED │
-│                                                   └─────────────────────────┬┘
-│                                                                             │
-│  module [                                                                   │
-│      Color,                                                                 │
-│      to_str,                                                                │
-│      rgb,                                                                   │
-│      rgba,                                                                  │
-│      hex,                                                                   │
-│      named,                                                                 │
-│  ]                                                                          │
-└─────────────────────────────────────────────────────────────── Color.md:1:1 ┘
+┌──────────────────────────┐
+│ MODULE HEADER DEPRECATED ├─ The module header is deprecated. ───────────────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  module [                                                                  │
+ │      Color,                                                                │
+ │      to_str,                                                               │
+ │      rgb,                                                                  │
+ │      rgba,                                                                 │
+ │      hex,                                                                  │
+ │      named,                                                                │
+ │  ]                                                                         │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────── Color.md:1:1 ┘
 
     Type modules (headerless files with a top-level type matching the filename)
     are now the preferred way to define modules.
 
     Remove the module header and ensure your file defines a type that matches
     the filename.
-                                                             ┌─────────────────┐
-┌─ Variable is_char_in_hex_range is defined here and then ───┤ UNUSED VARIABLE │
-│  never used:                                               └────────────────┬┘
-│                                                                             │
-│      is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b… │
-│      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└────────────────────────────────────────────────────────────── Color.md:30:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable is_char_in_hex_range is defined here and then ──┐
+└┬────────────────┘  never used.                                              │
+ │                                                                            │
+ │  is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <=… │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────────────────────────── Color.md:30:5 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _is_char_in_hex_range to suppress this warning.
-                                                              ┌────────────────┐
-┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  … "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"              │
-│           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────────────── Color.md:50:34 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Num.to_str does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  … "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"             │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:50:34 ┘
 
-                                                              ┌────────────────┐
-┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"                                │
-│           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────────────── Color.md:50:52 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Num.to_str does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"                               │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:50:52 ┘
 
-                                                              ┌────────────────┐
-┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …(g)}, ${Num.to_str(b)})"                                                  │
-│           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────────────── Color.md:50:70 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Num.to_str does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(g)}, ${Num.to_str(b)})"                                                 │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:50:70 ┘
 
-                                                              ┌────────────────┐
-┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(…│
-│           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────────────── Color.md:51:39 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Num.to_str does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str…│
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:39 ┘
 
-                                                              ┌────────────────┐
-┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"              │
-│           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────────────── Color.md:51:57 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Num.to_str does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"             │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:57 ┘
 
-                                                              ┌────────────────┐
-┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"                                │
-│           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────────────── Color.md:51:75 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Num.to_str does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"                               │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:75 ┘
 
-                                                              ┌────────────────┐
-┌─ Num.to_str does not exist. ────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …(b)}, ${Num.to_str(a)})"                                                  │
-│           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└───────────────────────────────────────────────────────────── Color.md:51:93 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Num.to_str does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …(b)}, ${Num.to_str(a)})"                                                 │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:51:93 ┘
 
-                                                              ┌────────────────┐
-┌─ This to_frac method is being called on a value whose type ─┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│      rounded = a.to_frac() / 255.0                                          │
-│                  ‾‾‾‾‾‾‾                                                    │
-└───────────────────────────────────────────────────────────── Color.md:22:17 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This to_frac method is being called on a value whose ─────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  rounded = a.to_frac() / 255.0                                             │
+ │              ‾‾‾‾‾‾‾                                                       │
+ └──────────────────────────────────────────────────────────── Color.md:22:17 ┘
 
     The value's type, which does not have a method named to_frac, is:
 
@@ -192,13 +193,13 @@ MISSING METHOD - Color.md:57:32:57:38
 
     Hint: For this to work, the type would need to have a method named to_frac
     associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This is_char_in_hex_range method is being called on a ─────┤ MISSING METHOD │
-│  value whose type doesn't have that method:                 └───────────────┬┘
-│                                                                             │
-│                  a.is_char_in_hex_range()                                   │
-│                    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
-└───────────────────────────────────────────────────────────── Color.md:35:19 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This is_char_in_hex_range method is being called on a ────┐
+└┬───────────────┘  value whose type doesn't have that method.                │
+ │                                                                            │
+ │  a.is_char_in_hex_range()                                                  │
+ │    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
+ └──────────────────────────────────────────────────────────── Color.md:35:19 ┘
 
     The value's type, which does not have a method named is_char_in_hex_range,
     is:
@@ -207,13 +208,13 @@ MISSING METHOD - Color.md:57:32:57:38
 
     Hint: For this to work, the type would need to have a method named
     is_char_in_hex_range associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This is_named_color method is being called on a value ─────┤ MISSING METHOD │
-│  whose type doesn't have that method:                       └───────────────┬┘
-│                                                                             │
-│      if str.is_named_color()                                                │
-│             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└───────────────────────────────────────────────────────────── Color.md:62:12 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This is_named_color method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  if str.is_named_color()                                                   │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────────────── Color.md:62:12 ┘
 
     The value's type, which does not have a method named is_named_color, is:
 
@@ -221,13 +222,13 @@ MISSING METHOD - Color.md:57:32:57:38
 
     Hint: For this to work, the type would need to have a method named
     is_named_color associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This to_str method is being called on a value whose type ──┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│  expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"                   │
-│                           ‾‾‾‾‾‾                                            │
-└───────────────────────────────────────────────────────────── Color.md:56:26 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This to_str method is being called on a value whose ──────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"                  │
+ │                           ‾‾‾‾‾‾                                           │
+ └──────────────────────────────────────────────────────────── Color.md:56:26 ┘
 
     The value's type, which does not have a method named to_str, is:
 
@@ -235,13 +236,13 @@ MISSING METHOD - Color.md:57:32:57:38
 
     Hint: For this to work, the type would need to have a method named to_str
     associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This to_str method is being called on a value whose type ──┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│  expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"       │
-│                                 ‾‾‾‾‾‾                                      │
-└───────────────────────────────────────────────────────────── Color.md:57:32 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This to_str method is being called on a value whose ──────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"      │
+ │                                 ‾‾‾‾‾‾                                     │
+ └──────────────────────────────────────────────────────────── Color.md:57:32 ┘
 
     The value's type, which does not have a method named to_str, is:
 

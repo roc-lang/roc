@@ -12,13 +12,14 @@ result = poly() == poly()
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This is trying to compare values with ==, but their type ──┤ MISSING METHOD │
-│  is an unresolved type variable, which has no methods.      └───────────────┬┘
-│                                                                             │
-│  result = poly() == poly()                                                  │
-│           ‾‾‾‾‾‾                                                            │
-└──────────────────────────────── static_dispatch_unresolved_equality.md:3:10 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to compare values with ==, but their ──────┐
+└┬───────────────┘  type is an unresolved type variable, which has no         │
+ │                  methods.                                                  │
+ │                                                                            │
+ │  result = poly() == poly()                                                 │
+ │           ‾‾‾‾‾‾                                                           │
+ └─────────────────────────────── static_dispatch_unresolved_equality.md:3:10 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by

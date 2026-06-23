@@ -16,13 +16,13 @@ yellow = Color.Yellow
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 # PROBLEMS
-                                                         ┌─────────────────────┐
-┌─ I'm having trouble with this nominal tag: ────────────┤ INVALID NOMINAL TAG │
-│                                                        └────────────────────┬┘
-│                                                                             │
-│  yellow = Color.Yellow                                                      │
-│           ‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└───────────────────────────────────────────────── nominal_tag_simple.md:7:10 ┘
+┌─────────────────────┐
+│ INVALID NOMINAL TAG ├─ I'm having trouble with this nominal tag. ───────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  yellow = Color.Yellow                                                     │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────── nominal_tag_simple.md:7:10 ┘
 
     The tag is:
 

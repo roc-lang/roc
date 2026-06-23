@@ -10,13 +10,13 @@ import#\
 # EXPECTED
 PARSE ERROR - fuzz_crash_078.md:2:1:2:1
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: incomplete_import ──────────────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│                                                                             │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_078.md:2:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: incomplete_import ─────────────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_078.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

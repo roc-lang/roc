@@ -13,13 +13,13 @@ red = ... # not implemented
 # EXPECTED
 UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ The type CE is not declared in this scope. ───────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  red : CE                                                                   │
-│        ‾‾                                                                   │
-└───────────────────────────────────────── nominal_import_long_package.md:3:7 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type CE is not declared in this scope. ──────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  red : CE                                                                  │
+ │        ‾‾                                                                  │
+ └──────────────────────────────────────── nominal_import_long_package.md:3:7 ┘
 
     This type is referenced here:
 # TOKENS

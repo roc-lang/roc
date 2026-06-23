@@ -13,40 +13,40 @@ PARSE ERROR - stmt_import.md:1:19:1:22
 PARSE ERROR - stmt_import.md:1:22:1:23
 PARSE ERROR - stmt_import.md:1:27:1:28
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  import json.Json [foo, BAR]                                                │
-│                   ‾                                                         │
-└──────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                   ‾                                                        │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  import json.Json [foo, BAR]                                                │
-│                    ‾‾‾                                                      │
-└──────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                    ‾‾‾                                                     │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  import json.Json [foo, BAR]                                                │
-│                       ‾                                                     │
-└──────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                       ‾                                                    │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  import json.Json [foo, BAR]                                                │
-│                            ‾                                                │
-└──────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                            ‾                                               │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.

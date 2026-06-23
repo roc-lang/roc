@@ -11,22 +11,22 @@ type=expr
 PARSE ERROR - fuzz_crash_033.md:1:6:1:14
 PARSE ERROR - fuzz_crash_033.md:1:14:1:15
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: expected_expr_record_field_name ────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  { i, Complete]                                                             │
-│       ‾‾‾‾‾‾‾‾                                                              │
-└────────────────────────────────────────────────────── fuzz_crash_033.md:1:6 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_expr_record_field_name ───┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  { i, Complete]                                                            │
+ │       ‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────────────────── fuzz_crash_033.md:1:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: expected_expr_close_curly_or_comma ─┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  { i, Complete]                                                             │
-│               ‾                                                             │
-└───────────────────────────────────────────────────── fuzz_crash_033.md:1:14 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_expr_close_curly_or_comma                           │
+ │                                                                            │
+ │  { i, Complete]                                                            │
+ │               ‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_033.md:1:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

@@ -14,13 +14,13 @@ z = 0.5
 # EXPECTED
 INVALID NUMBER - can_frac_literal.md:3:5:3:12
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This number literal does not fit in the inferred type: ────┤ INVALID NUMBER │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  y = 1.23e45                                                                │
-│      ‾‾‾‾‾‾‾                                                                │
-└──────────────────────────────────────────────────── can_frac_literal.md:3:5 ┘
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  y = 1.23e45                                                               │
+ │      ‾‾‾‾‾‾‾                                                               │
+ └─────────────────────────────────────────────────── can_frac_literal.md:3:5 ┘
 
     The inferred type is:
 

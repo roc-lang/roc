@@ -36,44 +36,44 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ Bool.true does not exist. ─────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│      result2 = swap((Bool.true, [1, 2, 3]))                                 │
-│                      ‾‾‾‾‾‾‾‾‾                                              │
-└────────────────────────────────── rigid_var_no_instantiation_error.md:17:21 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Bool.true does not exist. ────────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  result2 = swap((Bool.true, [1, 2, 3]))                                    │
+ │                  ‾‾‾‾‾‾‾‾‾                                                 │
+ └───────────────────────────────── rigid_var_no_instantiation_error.md:17:21 ┘
 
     Bool is in scope, but it has no associated true.
 
     It's referenced here:
-                                                             ┌─────────────────┐
-┌─ Variable result1 is defined here and then never used: ────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      result1 = swap((42, "hello"))                                          │
-│      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────── rigid_var_no_instantiation_error.md:13:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable result1 is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  result1 = swap((42, "hello"))                                             │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────── rigid_var_no_instantiation_error.md:13:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _result1
     to suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable result2 is defined here and then never used: ────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      result2 = swap((Bool.true, [1, 2, 3]))                                 │
-│      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────── rigid_var_no_instantiation_error.md:17:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable result2 is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  result2 = swap((Bool.true, [1, 2, 3]))                                    │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────── rigid_var_no_instantiation_error.md:17:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _result2
     to suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable result3 is defined here and then never used: ────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      result3 = swap(("foo", "bar"))                                         │
-│      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────── rigid_var_no_instantiation_error.md:21:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable result3 is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  result3 = swap(("foo", "bar"))                                            │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────── rigid_var_no_instantiation_error.md:21:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _result3
     to suppress this warning.

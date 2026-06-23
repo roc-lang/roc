@@ -10,13 +10,13 @@ a = 0->b().c()
 # EXPECTED
 UNDEFINED VARIABLE - formatter_idempotence_issue_8851.md:1:8:1:9
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named b in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  a = 0->b().c()                                                             │
-│         ‾                                                                   │
-└──────────────────────────────────── formatter_idempotence_issue_8851.md:1:8 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named b in this scope. ────────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  a = 0->b().c()                                                            │
+ │         ‾                                                                  │
+ └─────────────────────────────────── formatter_idempotence_issue_8851.md:1:8 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

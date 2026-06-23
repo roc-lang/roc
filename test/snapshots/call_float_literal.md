@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 MISSING METHOD - call_float_literal.md:1:1:1:4
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This from_numeral method is being called on a value whose ─┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│  0.0()                                                                      │
-│  ‾‾‾                                                                        │
-└────────────────────────────────────────────────── call_float_literal.md:1:1 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This from_numeral method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  0.0()                                                                     │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────────────────────────── call_float_literal.md:1:1 ┘
 
     The value's type, which does not have a method named from_numeral, is:
 

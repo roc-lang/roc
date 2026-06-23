@@ -21,43 +21,43 @@ MODULE NOT FOUND - nominal_external_fully_qualified.md:6:20:6:30
 MODULE NOT FOUND - nominal_external_fully_qualified.md:7:20:7:30
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
-                                                            ┌──────────────────┐
-┌─ The type MyTryType is qualified by the module ───────────┤ MODULE NOT FOUND │
-│  MyTryModule, but that module was not found in this Roc   └─────────────────┬┘
-│  project.                                                                   │
-│                                                                             │
-│  handleTry : MyTryModule.MyTryType(Str, I32) -> Str                         │
-│                         ‾‾‾‾‾‾‾‾‾‾                                          │
-└─────────────────────────────────── nominal_external_fully_qualified.md:3:24 ┘
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The type MyTryType is qualified by the module ──────────┐
+└┬─────────────────┘  MyTryModule, but that module was not found in this      │
+ │                    Roc project.                                            │
+ │                                                                            │
+ │  handleTry : MyTryModule.MyTryType(Str, I32) -> Str                        │
+ │                         ‾‾‾‾‾‾‾‾‾‾                                         │
+ └────────────────────────────────── nominal_external_fully_qualified.md:3:24 ┘
 
     You're attempting to use this type here:
-                                                            ┌──────────────────┐
-┌─ The type MyTryType is qualified by the module ───────────┤ MODULE NOT FOUND │
-│  MyTryModule, but that module was not found in this Roc   └─────────────────┬┘
-│  project.                                                                   │
-│                                                                             │
-│          MyTryModule.MyTryType.Ok(value) => value                           │
-│                     ‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────── nominal_external_fully_qualified.md:6:20 ┘
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The type MyTryType is qualified by the module ──────────┐
+└┬─────────────────┘  MyTryModule, but that module was not found in this      │
+ │                    Roc project.                                            │
+ │                                                                            │
+ │  MyTryModule.MyTryType.Ok(value) => value                                  │
+ │             ‾‾‾‾‾‾‾‾‾‾                                                     │
+ └────────────────────────────────── nominal_external_fully_qualified.md:6:20 ┘
 
     You're attempting to use this type here:
-                                                            ┌──────────────────┐
-┌─ The type MyTryType is qualified by the module ───────────┤ MODULE NOT FOUND │
-│  MyTryModule, but that module was not found in this Roc   └─────────────────┬┘
-│  project.                                                                   │
-│                                                                             │
-│          MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"        │
-│                     ‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────── nominal_external_fully_qualified.md:7:20 ┘
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The type MyTryType is qualified by the module ──────────┐
+└┬─────────────────┘  MyTryModule, but that module was not found in this      │
+ │                    Roc project.                                            │
+ │                                                                            │
+ │  MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"               │
+ │             ‾‾‾‾‾‾‾‾‾‾                                                     │
+ └────────────────────────────────── nominal_external_fully_qualified.md:7:20 ┘
 
     You're attempting to use this type here:
-                                                             ┌─────────────────┐
-┌─ Variable code is defined here and then never used: ───────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│          MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"        │
-│                                    ‾‾‾‾                                     │
-└─────────────────────────────────── nominal_external_fully_qualified.md:7:35 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable code is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"               │
+ │                            ‾‾‾‾                                            │
+ └────────────────────────────────── nominal_external_fully_qualified.md:7:35 ┘
 
     If you don't need this variable, prefix it with an underscore like _code to
     suppress this warning.

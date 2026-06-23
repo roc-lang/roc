@@ -12,14 +12,15 @@ f = || {
 # EXPECTED
 CRASH EXPECTS STRING - fuzz_crash_067.md:1:8:3:2
 # PROBLEMS
-                                                        ┌──────────────────────┐
-┌─ The crash keyword expects a string literal as its ───┤ CRASH EXPECTS STRING │
-│  argument.                                            └─────────────────────┬┘
-│                                                                             │
-│  f = || {                                                                   │
-│      crash 1                                                                │
-│  }                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_067.md:1:8 ┘
+┌──────────────────────┐
+│ CRASH EXPECTS STRING ├─ The crash keyword expects a string literal as its ──┐
+└┬─────────────────────┘  argument.                                           │
+ │                                                                            │
+ │  f = || {                                                                  │
+ │      crash 1                                                               │
+ │  }                                                                         │
+ │                                                                            │
+ └───────────────────────────────────────────────────── fuzz_crash_067.md:1:8 ┘
 
     For example: crash "Something went wrong"
 # TOKENS

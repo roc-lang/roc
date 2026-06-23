@@ -17,25 +17,25 @@ result = func(10, 20)
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:8:4:9
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 # PROBLEMS
-                                                           ┌───────────────────┐
-┌─ Nothing in this definition's type determines the type ──┤ LITERAL DEFAULTED │
-│  of this number literal, so it was given the default     └──────────────────┬┘
-│  type Dec instead:                                                          │
-│                                                                             │
-│   add_x(5).plus(add_y(5))                                                   │
-│         ‾                                                                   │
-└──────────────────────────────── method_call_literal_boundary_default.md:4:8 ┘
+┌───────────────────┐
+│ LITERAL DEFAULTED ├─ Nothing in this definition's type determines the ──────┐
+└┬──────────────────┘  type of this number literal, so it was given the       │
+ │                     default type Dec instead.                              │
+ │                                                                            │
+ │  add_x(5).plus(add_y(5))                                                   │
+ │        ‾                                                                   │
+ └─────────────────────────────── method_call_literal_boundary_default.md:4:8 ┘
 
     Hint: To use a different numeric type here, add a suffix or a type
     annotation.
-                                                           ┌───────────────────┐
-┌─ Nothing in this definition's type determines the type ──┤ LITERAL DEFAULTED │
-│  of this number literal, so it was given the default     └──────────────────┬┘
-│  type Dec instead:                                                          │
-│                                                                             │
-│   add_x(5).plus(add_y(5))                                                   │
-│                       ‾                                                     │
-└─────────────────────────────── method_call_literal_boundary_default.md:4:22 ┘
+┌───────────────────┐
+│ LITERAL DEFAULTED ├─ Nothing in this definition's type determines the ──────┐
+└┬──────────────────┘  type of this number literal, so it was given the       │
+ │                     default type Dec instead.                              │
+ │                                                                            │
+ │  add_x(5).plus(add_y(5))                                                   │
+ │                      ‾                                                     │
+ └────────────────────────────── method_call_literal_boundary_default.md:4:22 ┘
 
     Hint: To use a different numeric type here, add a suffix or a type
     annotation.

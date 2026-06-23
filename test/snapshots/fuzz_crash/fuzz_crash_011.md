@@ -12,31 +12,31 @@ PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:9:1:10
 PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: header_expected_open_square ────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  module P]F                                                                 │
-│         ‾                                                                   │
-└────────────────────────────────────────────────────── fuzz_crash_011.md:1:8 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  module P]F                                                                │
+ │         ‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_011.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  module P]F                                                                 │
-│          ‾                                                                  │
-└────────────────────────────────────────────────────── fuzz_crash_011.md:1:9 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  module P]F                                                                │
+ │          ‾                                                                 │
+ └───────────────────────────────────────────────────── fuzz_crash_011.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│                                                                             │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_011.md:2:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_011.md:2:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.

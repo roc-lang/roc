@@ -10,13 +10,13 @@ I.5
 # EXPECTED
 TYPE MISMATCH - module_dot_tuple.md:1:1:1:4
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  I.5                                                                        │
-│  ‾‾‾                                                                        │
-└──────────────────────────────────────────────────── module_dot_tuple.md:1:1 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  I.5                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── module_dot_tuple.md:1:1 ┘
 
     It has the type:
 

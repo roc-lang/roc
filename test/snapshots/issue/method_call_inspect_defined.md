@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
-                                              ┌────────────────────────────────┐
-┌─ The token ; is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│  { x = "hello"; x.inspect() }                                               │
-│               ‾                                                             │
-└──────────────────────────────────────── method_call_inspect_defined.md:1:14 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ; is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  { x = "hello"; x.inspect() }                                              │
+ │               ‾                                                            │
+ └─────────────────────────────────────── method_call_inspect_defined.md:1:14 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

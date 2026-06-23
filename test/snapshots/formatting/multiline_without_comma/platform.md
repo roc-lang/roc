@@ -29,43 +29,43 @@ EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
-                                                     ┌─────────────────────────┐
-┌─ The module header says that pr1 is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│    "roc_not implemented": pr1,                                              │
-│    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└─────────────────────────────────────────────────────────── platform.md:14:3 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that pr1 is exposed, ─────┐
+└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+ │                                                                            │
+ │  "roc_not implemented": pr1,                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────────────────────────── platform.md:14:3 ┘
 
     You can fix this by either defining pr1 in this module, or by removing it
     from the list of exposed values.
-                                                     ┌─────────────────────────┐
-┌─ The module header says that pr2 is exposed, but ──┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│    "roc_not implemented": pr2,                                              │
-│    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└─────────────────────────────────────────────────────────── platform.md:15:3 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that pr2 is exposed, ─────┐
+└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+ │                                                                            │
+ │  "roc_not implemented": pr2,                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────────────────────────── platform.md:15:3 ┘
 
     You can fix this by either defining pr2 in this module, or by removing it
     from the list of exposed values.
-                                                     ┌─────────────────────────┐
-┌─ The module header says that E1 is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│    E1,                                                                      │
-│    ‾‾                                                                       │
-└──────────────────────────────────────────────────────────── platform.md:6:3 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that E1 is exposed, but ──┐
+└┬────────────────────────┘  it is not defined anywhere in this module.       │
+ │                                                                            │
+ │  E1,                                                                       │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────────────── platform.md:6:3 ┘
 
     You can fix this by either defining E1 in this module, or by removing it
     from the list of exposed values.
-                                                     ┌─────────────────────────┐
-┌─ The module header says that E2 is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│    E2                                                                       │
-│    ‾‾                                                                       │
-└──────────────────────────────────────────────────────────── platform.md:7:3 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that E2 is exposed, but ──┐
+└┬────────────────────────┘  it is not defined anywhere in this module.       │
+ │                                                                            │
+ │  E2                                                                        │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────────────── platform.md:7:3 ┘
 
     You can fix this by either defining E2 in this module, or by removing it
     from the list of exposed values.

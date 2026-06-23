@@ -43,101 +43,101 @@ TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
 TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
-                                                    ┌──────────────────────────┐
-┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
-│  declarations.                                    └─────────────────────────┬┘
-│                                                                             │
-│  BadType := _                                                               │
-│  ‾                                                                          │
-└─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
-                                                    ┌──────────────────────────┐
-┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
-│  declarations.                                    └─────────────────────────┬┘
-│                                                                             │
-│  BadList := List(_)                                                         │
-│                  ‾                                                          │
-└────────────────────────────────────────────── underscore_error_type.md:6:17 ┘
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadList := List(_)                                                        │
+ │                  ‾                                                         │
+ └───────────────────────────────────────────── underscore_error_type.md:6:17 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
-                                                    ┌──────────────────────────┐
-┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
-│  declarations.                                    └─────────────────────────┬┘
-│                                                                             │
-│  BadList := List(_)                                                         │
-│             ‾‾‾‾                                                            │
-└────────────────────────────────────────────── underscore_error_type.md:6:12 ┘
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadList := List(_)                                                        │
+ │             ‾‾‾‾                                                           │
+ └───────────────────────────────────────────── underscore_error_type.md:6:12 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
-                                                    ┌──────────────────────────┐
-┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
-│  declarations.                                    └─────────────────────────┬┘
-│                                                                             │
-│  BadType := _                                                               │
-│  ‾                                                                          │
-└─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
-                                                    ┌──────────────────────────┐
-┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
-│  declarations.                                    └─────────────────────────┬┘
-│                                                                             │
-│  BadType := _                                                               │
-│  ‾                                                                          │
-└─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
-                                                    ┌──────────────────────────┐
-┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
-│  declarations.                                    └─────────────────────────┬┘
-│                                                                             │
-│  BadType := _                                                               │
-│  ‾                                                                          │
-└─────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
-                                                    ┌──────────────────────────┐
-┌─ Underscores are not allowed in type alias ───────┤ UNDERSCORE IN TYPE ALIAS │
-│  declarations.                                    └─────────────────────────┬┘
-│                                                                             │
-│  BadTuple := (_, U32)                                                       │
-│               ‾                                                             │
-└───────────────────────────────────────────── underscore_error_type.md:21:14 ┘
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadTuple := (_, U32)                                                      │
+ │               ‾                                                            │
+ └──────────────────────────────────────────── underscore_error_type.md:21:14 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
     variable, use a named type variable like `a` instead.
-                                                               ┌───────────────┐
-┌─ This number is being used where a non-number type is ───────┤ TYPE MISMATCH │
-│  needed:                                                     └──────────────┬┘
-│                                                                             │
-│  foo = 42                                                                   │
-│        ‾‾                                                                   │
-└─────────────────────────────────────────────── underscore_error_type.md:4:7 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  foo = 42                                                                  │
+ │        ‾‾                                                                  │
+ └────────────────────────────────────────────── underscore_error_type.md:4:7 ┘
 
     Other code expects this to have the type:
 
         BadType
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  bar = [1, 2, 3]                                                            │
-│        ‾‾‾‾‾‾‾‾‾                                                            │
-└─────────────────────────────────────────────── underscore_error_type.md:9:7 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  bar = [1, 2, 3]                                                           │
+ │        ‾‾‾‾‾‾‾‾‾                                                           │
+ └────────────────────────────────────────────── underscore_error_type.md:9:7 ┘
 
     It has the type:
 
@@ -147,13 +147,13 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
     But the annotation says it should be:
 
         BadList
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  qux = |x| x                                                                │
-│        ‾‾‾‾‾                                                                │
-└────────────────────────────────────────────── underscore_error_type.md:19:7 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  qux = |x| x                                                               │
+ │        ‾‾‾‾‾                                                               │
+ └───────────────────────────────────────────── underscore_error_type.md:19:7 ┘
 
     It has the type:
 
@@ -162,13 +162,13 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
     But the annotation says it should be:
 
         BadFunction
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  quux = ("hello", 42)                                                       │
-│         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└────────────────────────────────────────────── underscore_error_type.md:24:8 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  quux = ("hello", 42)                                                      │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────────── underscore_error_type.md:24:8 ┘
 
     It has the type:
 

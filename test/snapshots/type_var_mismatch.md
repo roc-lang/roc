@@ -25,13 +25,13 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This number is being used where a non-number type is ───────┤ TYPE MISMATCH │
-│  needed:                                                     └──────────────┬┘
-│                                                                             │
-│   item = 42                                                                 │
-│          ‾‾                                                                 │
-└─────────────────────────────────────────────────── type_var_mismatch.md:7:9 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  item = 42                                                                 │
+ │         ‾‾                                                                 │
+ └────────────────────────────────────────────────── type_var_mismatch.md:7:9 ┘
 
     The type was determined to be non-numeric here:
        ┌─────────────────────────────────────────────────

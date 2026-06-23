@@ -25,13 +25,13 @@ main! = |_| {}
 # EXPECTED
 UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ Variable item is defined here and then never used: ───────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      item = 42                                                              │
-│      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────────── type_var_namespace.md:7:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable item is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  item = 42                                                                 │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────── type_var_namespace.md:7:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _item to
     suppress this warning.

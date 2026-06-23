@@ -18,13 +18,13 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ The first argument being passed to this function has the ───┤ TYPE MISMATCH │
-│  wrong type:                                                 └──────────────┬┘
-│                                                                             │
-│      needs_string = |f| f(["hello"])                                        │
-│                           ‾‾‾‾‾‾‾‾‾                                         │
-└───────────────────────────────────── test_instantiated_return_crash.md:6:26 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
+└┬──────────────┘  wrong type.                                                │
+ │                                                                            │
+ │  needs_string = |f| f(["hello"])                                           │
+ │                       ‾‾‾‾‾‾‾‾‾                                            │
+ └──────────────────────────────────── test_instantiated_return_crash.md:6:26 ┘
 
     This argument has the type:
 

@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│  !3                                                                         │
-│  ‾‾                                                                         │
-└───────────────────────────────────────────── bang_on_numeric_literal.md:1:1 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This not method is being called on a value whose type ────┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  !3                                                                        │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────── bang_on_numeric_literal.md:1:1 ┘
 
     The value's type, which does not have a method named not, is:
 

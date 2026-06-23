@@ -48,24 +48,24 @@ TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This number is being used where a non-number type is ───────┤ TYPE MISMATCH │
-│  needed:                                                     └──────────────┬┘
-│                                                                             │
-│   next_val = val.update_str(100)                                            │
-│                             ‾‾‾                                             │
-└─────────────────────────────────────────────────────────────── Adv.md:17:28 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  next_val = val.update_str(100)                                            │
+ │                            ‾‾‾                                             │
+ └────────────────────────────────────────────────────────────── Adv.md:17:28 ┘
 
     Other code expects this to have the type:
 
         Str
-                                                              ┌────────────────┐
-┌─ This update_strr method is being called on a value whose ──┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│   next_val = val.update_strr(100)                                           │
-│                  ‾‾‾‾‾‾‾‾‾‾‾                                                │
-└─────────────────────────────────────────────────────────────── Adv.md:23:17 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This update_strr method is being called on a value ───────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  next_val = val.update_strr(100)                                           │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────────────────────────────── Adv.md:23:17 ┘
 
     The value's type, which does not have a method named update_strr, is:
 
@@ -73,13 +73,13 @@ MISSING METHOD - Adv.md:28:21:28:27
 
     Hint: For this to work, the type would need to have a method named
     update_strr associated with it in the type's declaration.
-                                                              ┌────────────────┐
-┌─ This update method is being called on a value whose type ──┤ MISSING METHOD │
-│  doesn't have that method:                                  └───────────────┬┘
-│                                                                             │
-│   next_val = "Hello".update(100)                                            │
-│                      ‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────── Adv.md:28:21 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This update method is being called on a value whose ──────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  next_val = "Hello".update(100)                                            │
+ │                     ‾‾‾‾‾‾                                                 │
+ └────────────────────────────────────────────────────────────── Adv.md:28:21 ┘
 
     The value's type, which does not have a method named update, is:
 

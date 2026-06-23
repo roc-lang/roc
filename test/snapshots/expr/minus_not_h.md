@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
 # PROBLEMS
-                                              ┌────────────────────────────────┐
-┌─ The token - is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│  -!h                                                                        │
-│  ‾                                                                          │
-└───────────────────────────────────────────────────────── minus_not_h.md:1:1 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token - is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  -!h                                                                       │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────────── minus_not_h.md:1:1 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
 # TOKENS

@@ -13,14 +13,15 @@ describe = |rec| match rec {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ The first pattern in this match is incompatible: ───────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  describe = |rec| match rec {                                               │
-│      { x, y } => x + y                                                      │
-│  }                                                                          │
-└──────────────────────────────────────────── destructure_closed_match.md:2:5 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first pattern in this match is incompatible. ──────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  describe = |rec| match rec {                                              │
+ │      { x, y } => x + y                                                     │
+ │  }                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────── destructure_closed_match.md:2:5 ┘
 
     The first pattern is trying to match:
 

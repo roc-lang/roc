@@ -16,43 +16,43 @@ EXPOSED BUT NOT DEFINED - hosted.md:1:13:1:15
 DECLARATION HAS NO VALUE - hosted.md:3:1:3:16
 DECLARATION HAS NO VALUE - hosted.md:4:1:4:16
 # PROBLEMS
-                                                     ┌─────────────────────────┐
-┌─ The module header says that a! is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│  hosted [a!, b!,]                                                           │
-│          ‾‾                                                                 │
-└────────────────────────────────────────────────────────────── hosted.md:1:9 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that a! is exposed, but ──┐
+└┬────────────────────────┘  it is not defined anywhere in this module.       │
+ │                                                                            │
+ │  hosted [a!, b!,]                                                          │
+ │          ‾‾                                                                │
+ └───────────────────────────────────────────────────────────── hosted.md:1:9 ┘
 
     You can fix this by either defining a! in this module, or by removing it
     from the list of exposed values.
-                                                     ┌─────────────────────────┐
-┌─ The module header says that b! is exposed, but ───┤ EXPOSED BUT NOT DEFINED │
-│  it is not defined anywhere in this module.        └────────────────────────┬┘
-│                                                                             │
-│  hosted [a!, b!,]                                                           │
-│              ‾‾                                                             │
-└───────────────────────────────────────────────────────────── hosted.md:1:13 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that b! is exposed, but ──┐
+└┬────────────────────────┘  it is not defined anywhere in this module.       │
+ │                                                                            │
+ │  hosted [a!, b!,]                                                          │
+ │              ‾‾                                                            │
+ └──────────────────────────────────────────────────────────── hosted.md:1:13 ┘
 
     You can fix this by either defining b! in this module, or by removing it
     from the list of exposed values.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  a! : Str => Str                                                            │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└────────────────────────────────────────────────────────────── hosted.md:3:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  a! : Str => Str                                                           │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
+ └───────────────────────────────────────────────────────────── hosted.md:3:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  b! : Str => Str                                                            │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└────────────────────────────────────────────────────────────── hosted.md:4:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  b! : Str => Str                                                           │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
+ └───────────────────────────────────────────────────────────── hosted.md:4:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

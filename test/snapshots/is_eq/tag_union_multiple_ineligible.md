@@ -15,14 +15,14 @@ expect result == result
 # EXPECTED
 TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
 # PROBLEMS
-                                              ┌────────────────────────────────┐
-┌─ This expression is doing an equality ──────┤ TYPE DOES NOT SUPPORT EQUALITY │
-│  check on a type that doesn't support       └───────────────────────────────┬┘
-│  equality:                                                                  │
-│                                                                             │
-│  expect result == result                                                    │
-│         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────── tag_union_multiple_ineligible.md:6:8 ┘
+┌────────────────────────────────┐
+│ TYPE DOES NOT SUPPORT EQUALITY ├─ This expression is doing an equality ─────┐
+└┬───────────────────────────────┘  check on a type that doesn't support      │
+ │                                  equality.                                 │
+ │                                                                            │
+ │  expect result == result                                                   │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────────── tag_union_multiple_ineligible.md:6:8 ┘
 
     The type is:
 

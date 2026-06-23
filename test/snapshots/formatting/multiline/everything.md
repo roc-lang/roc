@@ -141,196 +141,200 @@ UNSUPPORTED WHERE CLAUSE - everything.md:65:3:65:6
 DECLARATION HAS NO VALUE - everything.md:62:1:66:3
 NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 # PROBLEMS
-                                ┌──────────────────────────────────────────────┐
-┌─ You cannot define a where ───┤ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION │
-│  clause inside a type         └─────────────────────────────────────────────┬┘
-│  declaration.                                                               │
-│                                                                             │
-│  A(a) : a                                                                   │
-│   where [                                                                   │
-│    a.a1 : (                                                                 │
-│     a,                                                                      │
-│     a,                                                                      │
-│    ) -> Str,                                                                │
-│    a.a2 : (                                                                 │
-│     a,                                                                      │
-│     a,                                                                      │
-│    ) -> Str,                                                                │
-│   ]                                                                         │
-└───────────────────────────────────────────────────────── everything.md:12:1 ┘
+┌──────────────────────────────────────────────┐
+│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a where ──┐
+└┬─────────────────────────────────────────────┘  clause inside a type        │
+ │                                                declaration.                │
+ │                                                                            │
+ │  A(a) : a                                                                  │
+ │      where [                                                               │
+ │          a.a1 : (                                                          │
+ │              a,                                                            │
+ │              a,                                                            │
+ │          ) -> Str,                                                         │
+ │          a.a2 : (                                                          │
+ │              a,                                                            │
+ │              a,                                                            │
+ │          ) -> Str,                                                         │
+ │      ]                                                                     │
+ │                                                                            │
+ └──────────────────────────────────────────────────────── everything.md:12:1 ┘
 
     You're attempting do this here:
-                                ┌──────────────────────────────────────────────┐
-┌─ You cannot define a where ───┤ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION │
-│  clause inside a type         └─────────────────────────────────────────────┬┘
-│  declaration.                                                               │
-│                                                                             │
-│  B(b) : b                                                                   │
-│   where [                                                                   │
-│    b.b1 : (                                                                 │
-│     b,                                                                      │
-│     b,                                                                      │
-│    ) -> Str,                                                                │
-│    b.b2 : (                                                                 │
-│     b,                                                                      │
-│     b,                                                                      │
-│    ) -> Str,                                                                │
-│   ]                                                                         │
-└───────────────────────────────────────────────────────── everything.md:24:1 ┘
+┌──────────────────────────────────────────────┐
+│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a where ──┐
+└┬─────────────────────────────────────────────┘  clause inside a type        │
+ │                                                declaration.                │
+ │                                                                            │
+ │  B(b) : b                                                                  │
+ │      where [                                                               │
+ │          b.b1 : (                                                          │
+ │              b,                                                            │
+ │              b,                                                            │
+ │          ) -> Str,                                                         │
+ │          b.b2 : (                                                          │
+ │              b,                                                            │
+ │              b,                                                            │
+ │          ) -> Str,                                                         │
+ │      ]                                                                     │
+ │                                                                            │
+ └──────────────────────────────────────────────────────── everything.md:24:1 ┘
 
     You're attempting do this here:
-                                                             ┌─────────────────┐
-┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      b,                                                                     │
-│      ‾                                                                      │
-└───────────────────────────────────────────────────────── everything.md:98:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  b,                                                                        │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────────── everything.md:98:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│     b,                                                                      │
-│     ‾                                                                       │
-└──────────────────────────────────────────────────────── everything.md:103:4 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  b,                                                                        │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────────── everything.md:103:4 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      b,                                                                     │
-│      ‾                                                                      │
-└──────────────────────────────────────────────────────── everything.md:108:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  b,                                                                        │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────────── everything.md:108:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│      b,                                                                     │
-│      ‾                                                                      │
-└──────────────────────────────────────────────────────── everything.md:114:5 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  b,                                                                        │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────────── everything.md:114:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable h1 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   h1 = {                                                                    │
-│   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:69:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable h1 is defined here and then never used. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  h1 = {                                                                    │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────────── everything.md:69:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h1 to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable h2 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   h2 = h(                                                                   │
-│   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:77:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable h2 is defined here and then never used. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  h2 = h(                                                                   │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────────── everything.md:77:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h2 to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable h3 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   h3 = A(                                                                   │
-│   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:81:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable h3 is defined here and then never used. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  h3 = A(                                                                   │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────────── everything.md:81:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h3 to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable h4 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   h4 = [                                                                    │
-│   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:85:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable h4 is defined here and then never used. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  h4 = [                                                                    │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────────── everything.md:85:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h4 to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable h5 is defined here and then never used: ─────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   h5 = (                                                                    │
-│   ‾‾                                                                        │
-└───────────────────────────────────────────────────────── everything.md:89:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable h5 is defined here and then never used. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  h5 = (                                                                    │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────────── everything.md:89:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h5 to
     suppress this warning.
-                                                    ┌──────────────────────────┐
-┌─ The where clause syntax A is not supported: ─────┤ UNSUPPORTED WHERE CLAUSE │
-│                                                   └─────────────────────────┬┘
-│                                                                             │
-│    e.A,                                                                     │
-│    ‾‾‾                                                                      │
-└───────────────────────────────────────────────────────── everything.md:64:3 ┘
+┌──────────────────────────┐
+│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax A is not supported. ────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  e.A,                                                                      │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────────── everything.md:64:3 ┘
 
     This syntax was used for abilities, which have been removed from Roc. Use
     method constraints like where [a.methodName(args) -> ret] instead.
-                                                    ┌──────────────────────────┐
-┌─ The where clause syntax B is not supported: ─────┤ UNSUPPORTED WHERE CLAUSE │
-│                                                   └─────────────────────────┬┘
-│                                                                             │
-│    e.B,                                                                     │
-│    ‾‾‾                                                                      │
-└───────────────────────────────────────────────────────── everything.md:65:3 ┘
+┌──────────────────────────┐
+│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax B is not supported. ────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  e.B,                                                                      │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────────── everything.md:65:3 ┘
 
     This syntax was used for abilities, which have been removed from Roc. Use
     method constraints like where [a.methodName(args) -> ret] instead.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  g : e -> e                                                                 │
-│   where [                                                                   │
-│    e.A,                                                                     │
-│    e.B,                                                                     │
-│   ]                                                                         │
-└───────────────────────────────────────────────────────── everything.md:62:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  g : e -> e                                                                │
+ │      where [                                                               │
+ │          e.A,                                                              │
+ │          e.B,                                                              │
+ │      ]                                                                     │
+ │                                                                            │
+ └──────────────────────────────────────────────────────── everything.md:62:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                        ┌──────────────────────┐
-┌─ This match expression doesn't cover all possible ────┤ NON-EXHAUSTIVE MATCH │
-│  cases:                                               └─────────────────────┬┘
-│                                                                             │
-│   match x {                                                                 │
-│    Z1(                                                                      │
-│     (                                                                       │
-│      a,                                                                     │
-│      b,                                                                     │
-│     ),                                                                      │
-│    ) => a                                                                   │
-│    Z2(                                                                      │
-│     a,                                                                      │
-│     b,                                                                      │
-│    ) => a                                                                   │
-│    Z3(                                                                      │
-│     {                                                                       │
-│      a,                                                                     │
-│      b,                                                                     │
-│     },                                                                      │
-│    ) => a                                                                   │
-│    Z4(                                                                      │
-│     [                                                                       │
-│      a,                                                                     │
-│      b,                                                                     │
-│     ],                                                                      │
-│    ) => a                                                                   │
-│   }                                                                         │
-└───────────────────────────────────────────────────────── everything.md:94:2 ┘
+┌──────────────────────┐
+│ NON-EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
+└┬─────────────────────┘  cases.                                              │
+ │                                                                            │
+ │  match x {                                                                 │
+ │      Z1(                                                                   │
+ │          (                                                                 │
+ │              a,                                                            │
+ │              b,                                                            │
+ │          ),                                                                │
+ │      ) => a                                                                │
+ │      Z2(                                                                   │
+ │          a,                                                                │
+ │          b,                                                                │
+ │      ) => a                                                                │
+ │      Z3(                                                                   │
+ │          {                                                                 │
+ │              a,                                                            │
+ │              b,                                                            │
+ │          },                                                                │
+ │      ) => a                                                                │
+ │      Z4(                                                                   │
+ │          [                                                                 │
+ │              a,                                                            │
+ │              b,                                                            │
+ │          ],                                                                │
+ │      ) => a                                                                │
+ │  }                                                                         │
+ │                                                                            │
+ └──────────────────────────────────────────────────────── everything.md:94:2 ┘
 
     The value being matched on has type:
             [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]

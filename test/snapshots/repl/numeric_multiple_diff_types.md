@@ -16,7 +16,7 @@ assigned `x`
 assigned `a`
 ---
 **Type Mismatch**
-The first argument being passed to this function has the wrong type:
+The first argument being passed to this function has the wrong type.
 **repl:3:16:3:17:**
 ```roc
 b = Dec.to_str(x)

@@ -14,13 +14,13 @@ match nestedList {
 # EXPECTED
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ The value before this * operator has a type that doesn't ──┤ MISSING METHOD │
-│  have a times method:                                       └───────────────┬┘
-│                                                                             │
-│      [x, [y]] => x * y                                                      │
-│                  ‾‾‾‾‾                                                      │
-└──────────────────────────────────────────────── nested_list_scoping.md:4:17 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ The value before this * operator has a type that ─────────┐
+└┬───────────────┘  doesn't have a times method.                              │
+ │                                                                            │
+ │  [x, [y]] => x * y                                                         │
+ │              ‾‾‾‾‾                                                         │
+ └─────────────────────────────────────────────── nested_list_scoping.md:4:17 ┘
 
     The value's type, which does not have a method named times, is:
 

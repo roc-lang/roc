@@ -19,68 +19,68 @@ UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
 DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
-                                              ┌────────────────────────────────┐
-┌─ The token <- is not expected in an ────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│  { Foo.Bar.baz <-                                                           │
-│                ‾‾                                                           │
-└───────────────────────────────────────────────────── record_builder.md:1:15 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token <- is not expected in an ───────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  { Foo.Bar.baz <-                                                          │
+ │                ‾‾                                                          │
+ └──────────────────────────────────────────────────── record_builder.md:1:15 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                         ┌─────────────────────────────────────┐
-┌─ The token 5 is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
-│  type annotation.                      └────────────────────────────────────┬┘
-│                                                                             │
-│      x: 5,                                                                  │
-│         ‾                                                                   │
-└────────────────────────────────────────────────────── record_builder.md:2:8 ┘
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 5 is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:2:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      x: 5,                                                                  │
-│          ‾                                                                  │
-└────────────────────────────────────────────────────── record_builder.md:2:9 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │      ‾                                                                     │
+ └───────────────────────────────────────────────────── record_builder.md:2:9 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                         ┌─────────────────────────────────────┐
-┌─ The token 0 is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
-│  type annotation.                      └────────────────────────────────────┬┘
-│                                                                             │
-│      y: 0,                                                                  │
-│         ‾                                                                   │
-└────────────────────────────────────────────────────── record_builder.md:3:8 ┘
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:3:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      y: 0,                                                                  │
-│          ‾                                                                  │
-└────────────────────────────────────────────────────── record_builder.md:3:9 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │      ‾                                                                     │
+ └───────────────────────────────────────────────────── record_builder.md:3:9 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│      x: 5,                                                                  │
-│      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────────────── record_builder.md:2:5 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:2:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│      y: 0,                                                                  │
-│      ‾‾‾‾                                                                   │
-└────────────────────────────────────────────────────── record_builder.md:3:5 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:3:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

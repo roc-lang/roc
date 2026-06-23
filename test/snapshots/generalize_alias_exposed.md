@@ -17,13 +17,13 @@ shorthand = FooBar.myfunc
 # EXPECTED
 MODULE HEADER DEPRECATED - generalize_alias_exposed.md:1:1:1:19
 # PROBLEMS
-                                                    ┌──────────────────────────┐
-┌─ The module header is deprecated. ────────────────┤ MODULE HEADER DEPRECATED │
-│                                                   └─────────────────────────┬┘
-│                                                                             │
-│  module [shorthand]                                                         │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└──────────────────────────────────────────── generalize_alias_exposed.md:1:1 ┘
+┌──────────────────────────┐
+│ MODULE HEADER DEPRECATED ├─ The module header is deprecated. ───────────────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  module [shorthand]                                                        │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+ └─────────────────────────────────────────── generalize_alias_exposed.md:1:1 ┘
 
     Type modules (headerless files with a top-level type matching the filename)
     are now the preferred way to define modules.

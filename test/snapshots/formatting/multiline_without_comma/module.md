@@ -18,40 +18,40 @@ PARSE ERROR - module.md:1:3:1:4
 PARSE ERROR - module.md:2:2:2:3
 PARSE ERROR - module.md:3:1:3:2
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   a,                                                                        │
-│   ‾                                                                         │
-└────────────────────────────────────────────────────────────── module.md:1:2 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  a,                                                                        │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────────── module.md:1:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   a,                                                                        │
-│    ‾                                                                        │
-└────────────────────────────────────────────────────────────── module.md:1:3 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  a,                                                                        │
+ │   ‾                                                                        │
+ └───────────────────────────────────────────────────────────── module.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   b                                                                         │
-│   ‾                                                                         │
-└────────────────────────────────────────────────────────────── module.md:2:2 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  b                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────────── module.md:2:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  ]                                                                          │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────────────── module.md:3:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ]                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────────── module.md:3:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

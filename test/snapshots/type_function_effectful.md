@@ -16,26 +16,26 @@ main! = |_| {}
 PARSE ERROR - type_function_effectful.md:3:31:3:33
 PARSE ERROR - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  runEffect! : (_a => _b) -> _a => _b                                        │
-│                                ‾‾                                           │
-└──────────────────────────────────────────── type_function_effectful.md:3:31 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  runEffect! : (_a => _b) -> _a => _b                                       │
+ │                                ‾‾                                          │
+ └─────────────────────────────────────────── type_function_effectful.md:3:31 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  runEffect! : (_a => _b) -> _a => _b                                        │
-│                                   ‾‾                                        │
-└──────────────────────────────────────────── type_function_effectful.md:3:34 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  runEffect! : (_a => _b) -> _a => _b                                       │
+ │                                   ‾‾                                       │
+ └─────────────────────────────────────────── type_function_effectful.md:3:34 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

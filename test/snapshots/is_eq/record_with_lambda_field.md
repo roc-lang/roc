@@ -10,14 +10,14 @@ type=expr
 # EXPECTED
 TYPE DOES NOT SUPPORT EQUALITY - record_with_lambda_field.md:1:1:1:91
 # PROBLEMS
-                                              ┌────────────────────────────────┐
-┌─ This expression is doing an equality ──────┤ TYPE DOES NOT SUPPORT EQUALITY │
-│  check on a type that doesn't support       └───────────────────────────────┬┘
-│  equality:                                                                  │
-│                                                                             │
-│  { name: "Alice", age: "30", process: |x| x } == { name: "Bob", age: "25",… │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  │
-└──────────────────────────────────────────── record_with_lambda_field.md:1:1 ┘
+┌────────────────────────────────┐
+│ TYPE DOES NOT SUPPORT EQUALITY ├─ This expression is doing an equality ─────┐
+└┬───────────────────────────────┘  check on a type that doesn't support      │
+ │                                  equality.                                 │
+ │                                                                            │
+ │  { name: "Alice", age: "30", process: |x| x } == { name: "Bob", age: "25"… │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  │
+ └─────────────────────────────────────────── record_with_lambda_field.md:1:1 ┘
 
     The type is:
 

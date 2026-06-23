@@ -10,16 +10,17 @@ Bad : { x : U8, _ : U8 }
 # EXPECTED
 UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD - unnamed_field_in_structural_record_error.md:1:17:1:23
 # PROBLEMS
-                              ┌────────────────────────────────────────────────┐
-┌─ Unnamed fields (written _ ─┤ UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD │
-│  or _name) are only         └───────────────────────────────────────────────┬┘
-│  allowed in nominal record                                                  │
-│  type declarations, not in                                                  │
-│  structural record types:                                                   │
-│                                                                             │
-│  Bad : { x : U8, _ : U8 }                                                   │
-│                  ‾‾‾‾‾‾                                                     │
-└─────────────────────────── unnamed_field_in_structural_record_error.md:1:17 ┘
+┌────────────────────────────────────────────────┐
+│ UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD ├─ Unnamed fields (written ──┐
+└┬───────────────────────────────────────────────┘  _ or _name) are only      │
+ │                                                  allowed in nominal        │
+ │                                                  record type               │
+ │                                                  declarations, not in      │
+ │                                                  structural record types.  │
+ │                                                                            │
+ │  Bad : { x : U8, _ : U8 }                                                  │
+ │                  ‾‾‾‾‾‾                                                    │
+ └────────────────────────── unnamed_field_in_structural_record_error.md:1:17 ┘
 
     Hint: Unnamed fields reserve layout padding for a nominal type (declared
     with :=). Give the field a name, or move it into a nominal type declaration.

@@ -10,13 +10,13 @@ modu
 # EXPECTED
 PARSE ERROR - fuzz_crash_005.md:1:1:1:5
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  modu                                                                       │
-│  ‾‾‾‾                                                                       │
-└────────────────────────────────────────────────────── fuzz_crash_005.md:1:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  modu                                                                      │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_005.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

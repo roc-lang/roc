@@ -280,30 +280,30 @@ LEADING ZERO
 
 Numbers cannot have leading zeros.
 
-                                                             ┌─────────────────┐
-┌─ This string is missing a closing quote. ──────────────────┤ UNCLOSED STRING │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   crash "Unrnt                                                              │
-│         ‾‾‾‾‾‾                                                              │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:111:8 ┘
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  crash "Unrnt                                                              │
+ │        ‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:111:8 ┘
 
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: incomplete_import ──────────────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  import p                                                                  │
-│  ‾‾‾‾‾‾                                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:10:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: incomplete_import ─────────────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import p                                                                 │
+ │  ‾‾‾‾‾‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:10:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  import Bae as Gooe                                                         │
-│             ‾‾                                                              │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:12:12 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  import Bae as Gooe                                                        │
+ │             ‾‾                                                             │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:12:12 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -318,13 +318,13 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  import                                                                     │
-│  ‾‾‾‾‾‾                                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:13:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  import                                                                    │
+ │  ‾‾‾‾‾‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:13:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -339,13 +339,13 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│  ‾‾‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:15:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:15:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -360,67 +360,67 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│     ‾                                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:15:4 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │     ‾                                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:15:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│      ‾                                                                      │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:15:5 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │      ‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:15:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│       ‾                                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:15:6 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │       ‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:15:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│         ‾                                                                   │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:15:8 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │         ‾                                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:15:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│          ‾                                                                  │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:15:9 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │          ‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:15:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│            ‾                                                                │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:11 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │            ‾                                                               │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│                     ‾                                                       │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:20 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │                     ‾                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:20 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -435,75 +435,75 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│                       ‾                                                     │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:22 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │                       ‾                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│                        ‾                                                    │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:23 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │                        ‾                                                   │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│                          ‾‾                                                 │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:25 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │                          ‾‾                                                │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:25 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│                             ‾                                               │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:28 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │                             ‾                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│                              ‾                                              │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:29 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │                              ‾                                             │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Map(a, b) : List(a), (a -> b) -> List(b)                                   │
-│                                ‾‾                                           │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:15:31 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
+ │                                ‾‾                                          │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:15:31 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  MapML( # Cere                                                              │
-│  ‾‾‾‾‾                                                                      │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:16:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  MapML( # Cere                                                             │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:16:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -518,76 +518,76 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  MapML( # Cere                                                              │
-│       ‾                                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:16:6 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  MapML( # Cere                                                             │
+ │       ‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:16:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   a, # Anre                                                                 │
-│   ‾                                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:17:2 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  a, # Anre                                                                 │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:17:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   a, # Anre                                                                 │
-│    ‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:17:3 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  a, # Anre                                                                 │
+ │   ‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:17:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   b,                                                                        │
-│   ‾                                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:18:2 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  b,                                                                        │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:18:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   b,                                                                        │
-│    ‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:18:3 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  b,                                                                        │
+ │   ‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:18:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  ) # Ag                                                                     │
-│  ‾                                                                          │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:19:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ) # Ag                                                                    │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:19:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│   : # Aon                                                                   │
-│   ‾                                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:20:2 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  : # Aon                                                                   │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:20:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│    ),                                                                       │
-│     ‾                                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:22:4 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  ),                                                                        │
+ │   ‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:22:4 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -602,75 +602,75 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    (a -> b) -> # row                                                        │
-│    ‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:23:3 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  (a -> b) -> # row                                                         │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:23:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    (a -> b) -> # row                                                        │
-│     ‾                                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:23:4 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  (a -> b) -> # row                                                         │
+ │   ‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:23:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    (a -> b) -> # row                                                        │
-│       ‾‾                                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:23:6 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  (a -> b) -> # row                                                         │
+ │     ‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:23:6 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    (a -> b) -> # row                                                        │
-│          ‾                                                                  │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:23:9 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  (a -> b) -> # row                                                         │
+ │        ‾                                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:23:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    (a -> b) -> # row                                                        │
-│           ‾                                                                 │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:23:10 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  (a -> b) -> # row                                                         │
+ │         ‾                                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:23:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Function types with multiple arrows need parentheses. ────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│    (a -> b) -> # row                                                        │
-│             ‾‾                                                              │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:23:12 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  (a -> b) -> # row                                                         │
+ │           ‾‾                                                               │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:23:12 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
             another function)
             (a -> b) -> c for a higher-order function (a function that takes
             another function)
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  Foo : (Bar, Baz)                                                           │
-│  ‾‾‾                                                                        │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:26:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:26:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -685,31 +685,31 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Foo : (Bar, Baz)                                                           │
-│      ‾                                                                      │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:26:5 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │      ‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:26:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Foo : (Bar, Baz)                                                           │
-│        ‾                                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:26:7 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │        ‾                                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:26:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  Foo : (Bar, Baz)                                                           │
-│            ‾                                                                │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:26:11 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │            ‾                                                               │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:26:11 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -724,13 +724,13 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  Foo : (Bar, Baz)                                                           │
-│                 ‾                                                           │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:26:16 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │                 ‾                                                          │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:26:16 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -745,13 +745,13 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  Maya) : [ #                                                                │
-│      ‾                                                                      │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:40:5 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  Maya) : [ #                                                               │
+ │      ‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:40:5 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -766,570 +766,573 @@ Numbers cannot have leading zeros.
         Dict(Str, Num)
         Try(a, Str)
         Maybe(List(U64))
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Maya) : [ #                                                                │
-│        ‾                                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:40:7 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Maya) : [ #                                                               │
+ │        ‾                                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:40:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  Maya) : [ #                                                                │
-│          ‾                                                                  │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:40:9 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Maya) : [ #                                                               │
+ │          ‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:40:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  ] #se                                                                      │
-│  ‾                                                                          │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:41:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ] #se                                                                     │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:41:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                                 ┌─────────────┐
-┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  add_ne = |num| {                                                          │
-│  ‾‾‾‾                                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:48:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  add_ne = |num| {                                                         │
+ │  ‾‾‾‾                                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:48:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
-                                                            ┌──────────────────┐
-┌─ The module Stdot was not found in this Roc project. ─────┤ MODULE NOT FOUND │
-│                                                           └─────────────────┬┘
-│                                                                             │
-│  import Stdot                                                               │
-│    exposing [ #tem                                                          │
-│    ] # Cose                                                                 │
-└────────────────────────────────────────────────────── fuzz_crash_028.md:6:1 ┘
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module Stdot was not found in this Roc project. ────┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import Stdot                                                              │
+ │          exposing [ #tem                                                   │
+ │          ] # Cose                                                          │
+ │                                                                            │
+ └───────────────────────────────────────────────────── fuzz_crash_028.md:6:1 ┘
 
     You're attempting to use this module here:
-                                                             ┌─────────────────┐
-┌─ The type Bar is not declared in this scope. ──────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   Bar, #                                                                    │
-│   ‾‾‾                                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:29:2 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Bar is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Bar, #                                                                    │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:29:2 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Baz is not declared in this scope. ──────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   Baz, #m                                                                   │
-│   ‾‾‾                                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:30:2 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Baz is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Baz, #m                                                                   │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:30:2 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Ok is not declared in this scope. ───────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Some(a) : { foo : Ok(a), bar : g }                                         │
-│                    ‾‾                                                       │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:32:19 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Ok is not declared in this scope. ──────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : g }                                        │
+ │                    ‾‾                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:32:19 ┘
 
     This type is referenced here:
-                                                    ┌──────────────────────────┐
-┌─ The type variable g is not declared in this ─────┤ UNDECLARED TYPE VARIABLE │
-│  scope.                                           └─────────────────────────┬┘
-│                                                                             │
-│  Some(a) : { foo : Ok(a), bar : g }                                         │
-│                                 ‾                                           │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:32:32 ┘
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable g is not declared in this ────┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : g }                                        │
+ │                                 ‾                                          │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:32:32 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
 
     This type variable is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Som is not declared in this scope. ──────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   bar : Som# Afld                                                           │
-│         ‾‾‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:34:8 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Som is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  bar : Som# Afld                                                           │
+ │        ‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:34:8 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Som is not declared in this scope. ──────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   bar : Som                                                                 │
-│         ‾‾‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:38:8 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Som is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  bar : Som                                                                 │
+ │        ‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:38:8 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Maybe is not declared in this scope. ────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Func(a) : Maybe(a), a -> Maybe(a)                                          │
-│            ‾‾‾‾‾                                                            │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:43:11 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
+ │            ‾‾‾‾‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:43:11 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Maybe is not declared in this scope. ────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  Func(a) : Maybe(a), a -> Maybe(a)                                          │
-│                           ‾‾‾‾‾                                             │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:43:26 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Maybe is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
+ │                           ‾‾‾‾‾                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:43:26 ┘
 
     This type is referenced here:
-                                                     ┌─────────────────────────┐
-┌─ I am part way through parsing this tuple, but it ─┤ EMPTY TUPLE NOT ALLOWED │
-│  is empty:                                         └────────────────────────┬┘
-│                                                                             │
-│  () #r                                                                      │
-│  ‾‾                                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:52:1 ┘
+┌─────────────────────────┐
+│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
+└┬────────────────────────┘  it is empty.                                     │
+ │                                                                            │
+ │  () #r                                                                     │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:52:1 ┘
 
     If you want to represent nothing, try using an empty record: {}.
-                                                          ┌────────────────────┐
-┌─ Nothing is named x in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│     x x                                                                     │
-│     ‾                                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:65:4 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named x in this scope. ────────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  x x                                                                       │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:65:4 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named x in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│     x x                                                                     │
-│       ‾                                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:65:6 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named x in this scope. ────────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  x x                                                                       │
+ │    ‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:65:6 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named ment in this scope. ──────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│     => ment                                                                 │
-│        ‾‾‾‾                                                                 │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:71:7 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named ment in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  => ment                                                                   │
+ │     ‾‾‾‾                                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:71:7 ┘
 
     Is there an import or exposing missing up-top?
-                                                             ┌─────────────────┐
-┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  # Thnt!                                                                    │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  # Thnt!                                                                   │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
-│  pattern outside match expression                          └────────────────┬┘
-│                                                                             │
-│    [1, 2 | 5, 3, .. as rest] => 123                                         │
-│        ‾‾‾‾‾                                                                │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:72:7 ┘
+┌─────────────────┐
+│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
+└┬────────────────┘  pattern outside match expression.                        │
+ │                                                                            │
+ │  [1, 2 | 5, 3, .. as rest] => 123                                          │
+ │      ‾‾‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:72:7 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
-                                                             ┌─────────────────┐
-┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  # Thnt!                                                                    │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  # Thnt!                                                                   │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
-│  pattern outside match expression                          └────────────────┬┘
-│                                                                             │
-│    (1, 2 | 5, 3) => 123                                                     │
-│        ‾‾‾‾‾                                                                │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:77:7 ┘
+┌─────────────────┐
+│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
+└┬────────────────┘  pattern outside match expression.                        │
+ │                                                                            │
+ │  (1, 2 | 5, 3) => 123                                                      │
+ │      ‾‾‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:77:7 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
-                                                          ┌────────────────────┐
-┌─ Nothing is named add in this scope. ───────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
-│                                      ‾‾‾                                    │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:78:37 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named add in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
+ │                                    ‾‾‾                                     │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:78:37 ┘
 
     Is there an import or exposing missing up-top?
-                                                             ┌─────────────────┐
-┌─ Variable rest is defined here and then never used: ───────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
-│                      ‾‾‾‾‾‾                                                 │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:78:21 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable rest is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
+ │                    ‾‾‾‾‾‾                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:78:21 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ This feature is not yet implemented: alternatives ────────┤ NOT IMPLEMENTED │
-│  pattern outside match expression                          └────────────────┬┘
-│                                                                             │
-│    { foo: 1, bar: 2 | 7 } => 12                                             │
-│                   ‾‾‾‾‾                                                     │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:85:18 ┘
+┌─────────────────┐
+│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
+└┬────────────────┘  pattern outside match expression.                        │
+ │                                                                            │
+ │  { foo: 1, bar: 2 | 7 } => 12                                              │
+ │                 ‾‾‾‾‾                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:85:18 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
-                                                             ┌─────────────────┐
-┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   b,                                                                        │
-│   ‾                                                                         │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:62:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  b,                                                                        │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:62:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
-                                                          ┌────────────────────┐
-┌─ Nothing is named blah in this scope. ──────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   blah == 1 # nt                                                            │
-│   ‾‾‾‾                                                                      │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:93:2 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named blah in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  blah == 1 # nt                                                            │
+ │  ‾‾‾‾                                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:93:2 ┘
 
     Is there an import or exposing missing up-top?
-                                                             ┌─────────────────┐
-┌─ The type String is not declared in this scope. ───────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  main! : (String) -> Result({}, _)                                          │
-│           ‾‾‾‾‾‾                                                            │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:95:10 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type String is not declared in this scope. ──────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  main! : (String) -> Result({}, _)                                         │
+ │           ‾‾‾‾‾‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:95:10 ┘
 
     This type is referenced here:
-                                                             ┌─────────────────┐
-┌─ The type Result is not declared in this scope. ───────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  main! : (String) -> Result({}, _)                                          │
-│                      ‾‾‾‾‾‾                                                 │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:95:21 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type Result is not declared in this scope. ──────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  main! : (String) -> Result({}, _)                                         │
+ │                      ‾‾‾‾‾‾                                                │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:95:21 ┘
 
     This type is referenced here:
-                                                          ┌────────────────────┐
-┌─ Nothing is named blah in this scope. ──────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   expect blah == 1                                                          │
-│          ‾‾‾‾                                                               │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:99:9 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named blah in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  expect blah == 1                                                          │
+ │         ‾‾‾‾                                                               │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:99:9 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named nc in this scope. ────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  nc(                                                                        │
-│  ‾‾                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:107:1 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named nc in this scope. ───────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  nc(                                                                       │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:107:1 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named er in this scope. ────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  er, # afarg                                                                │
-│  ‾‾                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:116:1 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named er in this scope. ───────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  er, # afarg                                                               │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:116:1 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named list in this scope. ──────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   for n in list {                                                           │
-│            ‾‾‾‾                                                             │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:119:11 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named list in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  for n in list {                                                           │
+ │           ‾‾‾‾                                                             │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:119:11 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   line!("Ag ${n} to ${er}")                                                 │
-│   ‾‾‾‾‾                                                                     │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:120:2 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  line!("Ag ${n} to ${er}")                                                 │
+ │  ‾‾‾‾‾                                                                     │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:120:2 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named er in this scope. ────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   line!("Ag ${n} to ${er}")                                                 │
-│                       ‾‾                                                    │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:120:22 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named er in this scope. ───────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  line!("Ag ${n} to ${er}")                                                 │
+ │                      ‾‾                                                    │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:120:22 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named ned in this scope. ───────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
-│                                                       ‾‾‾                   │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:123:54 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named ned in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
+ │                                                      ‾‾‾                   │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:123:54 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named nd in this scope. ────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])            │
-│                                           ‾‾                                │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:124:42 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named nd in this scope. ───────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])            │
+ │                                          ‾‾                                │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:124:42 ┘
 
     Is there an import or exposing missing up-top?
-                                                ┌──────────────────────────────┐
-┌─ The value tuple is assigned to itself, ──────┤ INVALID ASSIGNMENT TO ITSELF │
-│  which would cause an infinite loop at        └─────────────────────────────┬┘
-│  runtime.                                                                   │
-│                                                                             │
-│   tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])            │
-│                                               ‾‾‾‾‾                         │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:124:46 ┘
+┌──────────────────────────────┐
+│ INVALID ASSIGNMENT TO ITSELF ├─ The value tuple is assigned to itself, ─────┐
+└┬─────────────────────────────┘  which would cause an infinite loop at       │
+ │                                runtime.                                    │
+ │                                                                            │
+ │  tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])            │
+ │                                              ‾‾‾‾‾                         │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:124:46 ┘
 
     Only functions can reference themselves (for recursion). For non-function
     values, the right-hand side must be fully computable without referring to
     the value being assigned.
-                                                          ┌────────────────────┐
-┌─ Nothing is named ag1 in this scope. ───────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│    "World",ag1,                                                             │
-│            ‾‾‾                                                              │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:127:11 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named ag1 in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  "World",ag1,                                                              │
+ │          ‾‾‾                                                               │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:127:11 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named foo in this scope. ───────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
-│           ‾‾‾                                                               │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:132:10 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named foo in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
+ │          ‾‾‾                                                               │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:132:10 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named arg1 in this scope. ──────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  le =(arg1)?.od()?.ned()?.recd?                                             │
-│       ‾‾‾‾                                                                  │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:133:6 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named arg1 in this scope. ─────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  le =(arg1)?.od()?.ned()?.recd?                                            │
+ │       ‾‾‾‾                                                                 │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:133:6 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named line! in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│   line!(                                                                    │
-│   ‾‾‾‾‾                                                                     │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:134:2 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named line! in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  line!(                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:134:2 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named r in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│     r(number) # xpr                                                         │
-│     ‾                                                                       │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:136:4 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named r in this scope. ────────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  r(number) # xpr                                                           │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:136:4 ┘
 
     Is there an import or exposing missing up-top?
-                                                             ┌─────────────────┐
-┌─ Variable tag_ is defined here and then never used: ───────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   tag_ = Ok(number)                                                         │
-│   ‾‾‾‾                                                                      │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:112:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable tag_ is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  tag_ = Ok(number)                                                         │
+ │  ‾‾‾‾                                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:112:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _tag_ to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable i is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   i= "H, ${world}"                                                          │
-│   ‾                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:113:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable i is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  i= "H, ${world}"                                                          │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:113:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _i to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable t is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  t = [                                                                      │
-│  ‾                                                                          │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:114:1 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable t is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  t = [                                                                     │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:114:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _t to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable rd is defined here and then never used: ─────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
-│   ‾‾                                                                        │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:123:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable rd is defined here and then never used. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:123:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _rd to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable mle is defined here and then never used: ────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   mle = (                                                                   │
-│   ‾‾‾                                                                       │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:125:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable mle is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  mle = (                                                                   │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:125:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _mle to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable b is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
-│   ‾                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:132:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable b is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:132:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ Variable le is defined here and then never used: ─────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  le =(arg1)?.od()?.ned()?.recd?                                             │
-│  ‾‾                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:133:1 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable le is defined here and then never used. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  le =(arg1)?.od()?.ned()?.recd?                                            │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:133:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _le to
     suppress this warning.
-                                                             ┌─────────────────┐
-┌─ The type V is not declared in this scope. ────────────────┤ UNDECLARED TYPE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  t : V((a,c))                                                               │
-│      ‾                                                                      │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:144:5 ┘
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type V is not declared in this scope. ───────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  t : V((a,c))                                                              │
+ │      ‾                                                                     │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:144:5 ┘
 
     This type is referenced here:
-                                                          ┌────────────────────┐
-┌─ Nothing is named h in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  h == foo                                                                   │
-│  ‾                                                                          │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:148:1 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named h in this scope. ────────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  h == foo                                                                  │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:148:1 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named foo in this scope. ───────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  h == foo                                                                   │
-│       ‾‾‾                                                                   │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:148:6 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named foo in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  h == foo                                                                  │
+ │       ‾‾‾                                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:148:6 ┘
 
     Is there an import or exposing missing up-top?
-                                                             ┌─────────────────┐
-┌─ Variable f is defined here and then never used: ──────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│   f= 1                                                                      │
-│   ‾                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:147:2 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable f is defined here and then never used. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  f= 1                                                                      │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:147:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _f to
     suppress this warning.
-                                                     ┌─────────────────────────┐
-┌─ The module header says that main! is exposed, ────┤ EXPOSED BUT NOT DEFINED │
-│  but it is not defined anywhere in this module.    └────────────────────────┬┘
-│                                                                             │
-│  app [main!] { pf: platform "c" }                                           │
-│       ‾‾‾‾‾                                                                 │
-└────────────────────────────────────────────────────── fuzz_crash_028.md:2:6 ┘
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that main! is exposed, ───┐
+└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+ │                                                                            │
+ │  app [main!] { pf: platform "c" }                                          │
+ │       ‾‾‾‾‾                                                                │
+ └───────────────────────────────────────────────────── fuzz_crash_028.md:2:6 ┘
 
     You can fix this by either defining main! in this module, or by removing it
     from the list of exposed values.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  line : ( # Cpen                                                            │
-│   Bar, #                                                                    │
-│   Baz, #m                                                                   │
-│  ) # Co                                                                     │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:28:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  line : ( # Cpen                                                           │
+ │      Bar, #                                                                │
+ │      Baz, #m                                                               │
+ │  ) # Co                                                                    │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:28:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  add_one : U64 -> U64                                                       │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:47:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  add_one : U64 -> U64                                                      │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:47:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                               ┌───────────────┐
-┌─ The lue binding in the second pattern of the first branch ──┤ TYPE MISMATCH │
-│  of this match does not match the same binding in the first  └──────────────┬┘
-│  pattern:                                                                   │
-│                                                                             │
-│   match a {lue | Red => {                                                   │
-│     x x                                                                     │
-│    }                                                                        │
-│    Blue  => 1                                                               │
-│    "foo" => # ent                                                           │
-│  00                                                                         │
-│    "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                             │
-│     => ment                                                                 │
-│    [1, 2 | 5, 3, .. as rest] => 123                                         │
-│    [                                                                        │
-│    ] => 1 3.14 => 314                                                       │
-│    3.14 | 6.28 => 314                                                       │
-│    (1, 2, 3) => 123                                                         │
-│    (1, 2 | 5, 3) => 123                                                     │
-│    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
-│    { # Afpen                                                                │
-│  oo #                                                                       │
-│      : #ue                                                                  │
-│   1, #eld                                                                   │
-│  ar: 2,                                                                     │
-│     ..} => 12                                                               │
-│    { foo: 1, bar: 2 | 7 } => 12                                             │
-│    {                                                                        │
-│   o: 1,                                                                     │
-│     } =>212                                                                 │
-│    Ok(123) => 12                                                            │
-│   }                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:64:17 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The lue binding in the second pattern of the first ────────┐
+└┬──────────────┘  branch of this match does not match the same binding in    │
+ │                 the first pattern.                                         │
+ │                                                                            │
+ │      match a {lue | Red => {                                               │
+ │              x x                                                           │
+ │          }                                                                 │
+ │          Blue  => 1                                                        │
+ │          "foo" => # ent                                                    │
+ │  00                                                                        │
+ │          "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                      │
+ │              => ment                                                       │
+ │          [1, 2 | 5, 3, .. as rest] => 123                                  │
+ │          [                                                                 │
+ │          ] => 1 3.14 => 314                                                │
+ │          3.14 | 6.28 => 314                                                │
+ │          (1, 2, 3) => 123                                                  │
+ │          (1, 2 | 5, 3) => 123                                              │
+ │          { foo: 1, bar: 2, ..rest } => 12->add(34)                         │
+ │          { # Afpen                                                         │
+ │  oo #                                                                      │
+ │                  : #ue                                                     │
+ │      1, #eld                                                               │
+ │  ar: 2,                                                                    │
+ │              ..} => 12                                                     │
+ │          { foo: 1, bar: 2 | 7 } => 12                                      │
+ │          {                                                                 │
+ │      o: 1,                                                                 │
+ │              } =>212                                                       │
+ │          Ok(123) => 12                                                     │
+ │      }                                                                     │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:64:17 ┘
 
     In the second pattern, lue is:
 
@@ -1341,60 +1344,61 @@ Numbers cannot have leading zeros.
 
     A name shared across | patterns in the same match branch must have one
     compatible type.
-                                                              ┌────────────────┐
-┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│    "foo" => # ent                                                           │
-│    ‾‾‾‾‾                                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:68:3 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  "foo" => # ent                                                            │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:68:3 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
         [Blue, Red, ..]
-                                                              ┌────────────────┐
-┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│    "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                             │
-│    ‾‾‾‾‾                                                                    │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:70:3 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                              │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:70:3 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
         [Blue, Red, ..]
-                                                               ┌───────────────┐
-┌─ The fifth branch of this match does not match the previous ─┤ TYPE MISMATCH │
-│  ones:                                                       └──────────────┬┘
-│                                                                             │
-│   match a {lue | Red => {                                                   │
-│     x x                                                                     │
-│    }                                                                        │
-│    Blue  => 1                                                               │
-│    "foo" => # ent                                                           │
-│  00                                                                         │
-│    "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                             │
-│     => ment                                                                 │
-│    [1, 2 | 5, 3, .. as rest] => 123                                         │
-│    [                                                                        │
-│    ] => 1 3.14 => 314                                                       │
-│    3.14 | 6.28 => 314                                                       │
-│    (1, 2, 3) => 123                                                         │
-│    (1, 2 | 5, 3) => 123                                                     │
-│    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
-│    { # Afpen                                                                │
-│  oo #                                                                       │
-│      : #ue                                                                  │
-│   1, #eld                                                                   │
-│  ar: 2,                                                                     │
-│     ..} => 12                                                               │
-│    { foo: 1, bar: 2 | 7 } => 12                                             │
-│    {                                                                        │
-│   o: 1,                                                                     │
-│     } =>212                                                                 │
-│    Ok(123) => 12                                                            │
-│   }                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:64:22 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The fifth branch of this match does not match the ─────────┐
+└┬──────────────┘  previous ones.                                             │
+ │                                                                            │
+ │      match a {lue | Red => {                                               │
+ │              x x                                                           │
+ │          }                                                                 │
+ │          Blue  => 1                                                        │
+ │          "foo" => # ent                                                    │
+ │  00                                                                        │
+ │          "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                      │
+ │              => ment                                                       │
+ │          [1, 2 | 5, 3, .. as rest] => 123                                  │
+ │          [                                                                 │
+ │          ] => 1 3.14 => 314                                                │
+ │          3.14 | 6.28 => 314                                                │
+ │          (1, 2, 3) => 123                                                  │
+ │          (1, 2 | 5, 3) => 123                                              │
+ │          { foo: 1, bar: 2, ..rest } => 12->add(34)                         │
+ │          { # Afpen                                                         │
+ │  oo #                                                                      │
+ │                  : #ue                                                     │
+ │      1, #eld                                                               │
+ │  ar: 2,                                                                    │
+ │              ..} => 12                                                     │
+ │          { foo: 1, bar: 2 | 7 } => 12                                      │
+ │          {                                                                 │
+ │      o: 1,                                                                 │
+ │              } =>212                                                       │
+ │          Ok(123) => 12                                                     │
+ │      }                                                                     │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:64:22 ┘
 
     This fifth branch is trying to match:
 
@@ -1409,23 +1413,23 @@ Numbers cannot have leading zeros.
         [Blue, Red, ..]
 
     These can never match! Either the pattern or expression has a problem.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  main! : (String) -> Result({}, _)                                          │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└───────────────────────────────────────────────────── fuzz_crash_028.md:95:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  main! : (String) -> Result({}, _)                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_028.md:95:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                               ┌───────────────┐
-┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│    tag  Jus                                                                 │
-│         ‾‾‾                                                                 │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:102:8 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
+└┬──────────────┘  used.                                                      │
+ │                                                                            │
+ │  tag  Jus                                                                  │
+ │       ‾‾‾                                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:102:8 ┘
 
     It has the type:
 
@@ -1433,28 +1437,30 @@ Numbers cannot have leading zeros.
 
     Since this expression is used as a statement, it must evaluate to {}.
     If you don't need the value, you can ignore it with _ =.
-                                                                ┌──────────────┐
-┌─ The match_time function expects 2 arguments, but it got 1 ───┤ TOO FEW ARGS │
-│  instead:                                                     └─────────────┬┘
-│                                                                             │
-│   match_time(                                                               │
-│    ...                                                                      │
-│   )                                                                         │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:104:2 ┘
+┌──────────────┐
+│ TOO FEW ARGS ├─ The match_time function expects 2 arguments, but it got 1 ──┐
+└┬─────────────┘  instead.                                                    │
+ │                                                                            │
+ │  match_time(                                                               │
+ │      ...                                                                   │
+ │  )                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:104:2 ┘
 
     The match_time function has the type:
 
         [Blue, Red, ..], _arg -> Error
 
     Are there any missing commas?
-                                                               ┌───────────────┐
-┌─ The first argument being passed to this function has the ───┤ TYPE MISMATCH │
-│  wrong type:                                                 └──────────────┬┘
-│                                                                             │
-│    add_one(dbg # Afist                                                      │
-│  er, # afarg                                                                │
-│    ), 456, # ee                                                             │
-└─────────────────────────────────────────────────── fuzz_crash_028.md:115:11 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
+└┬──────────────┘  wrong type.                                                │
+ │                                                                            │
+ │          add_one(dbg # Afist                                               │
+ │  er, # afarg                                                               │
+ │          ), 456, # ee                                                      │
+ │                                                                            │
+ └────────────────────────────────────────────────── fuzz_crash_028.md:115:11 ┘
 
     This argument has the type:
 
@@ -1463,13 +1469,13 @@ Numbers cannot have leading zeros.
     But add_one needs the first argument to be:
 
         U64
-                                                               ┌───────────────┐
-┌─ This ? may return early with a type that doesn't match the ─┤ TYPE MISMATCH │
-│  function body:                                              └──────────────┬┘
-│                                                                             │
-│  le =(arg1)?.od()?.ned()?.recd?                                             │
-│      ‾‾‾‾‾‾‾                                                                │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This ? may return early with a type that doesn't match ────┐
+└┬──────────────┘  the function body.                                         │
+ │                                                                            │
+ │  le =(arg1)?.od()?.ned()?.recd?                                            │
+ │      ‾‾‾‾‾‾‾                                                               │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
 
     On error, this would return:
 
@@ -1481,47 +1487,47 @@ Numbers cannot have leading zeros.
 
     Hint: The error types from all ? operators and the function body must be
     compatible since any of them could be the actual return value.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  y : {}                                                                     │
-│  ‾‾‾‾‾‾                                                                     │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:141:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y : {}                                                                    │
+ │  ‾‾‾‾‾‾                                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:141:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  t : V((a,c))                                                               │
-│  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:144:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  t : V((a,c))                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:144:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                              ┌────────────────┐
-┌─ This is trying to dispatch a method named od on an ────────┤ MISSING METHOD │
-│  unresolved type variable, but unresolved type variables    └───────────────┬┘
-│  have no methods.                                                           │
-│                                                                             │
-│  le =(arg1)?.od()?.ned()?.recd?                                             │
-│      ‾‾‾‾‾‾‾                                                                │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named od on an ───────┐
+└┬───────────────┘  unresolved type variable, but unresolved type variables   │
+ │                  have no methods.                                          │
+ │                                                                            │
+ │  le =(arg1)?.od()?.ned()?.recd?                                            │
+ │      ‾‾‾‾‾‾‾                                                               │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by
     adding a type annotation that narrows its type to something that actually
     has methods.
-                                                              ┌────────────────┐
-┌─ This is trying to dispatch a method named ned on an ───────┤ MISSING METHOD │
-│  unresolved type variable, but unresolved type variables    └───────────────┬┘
-│  have no methods.                                                           │
-│                                                                             │
-│  le =(arg1)?.od()?.ned()?.recd?                                             │
-│      ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
-└──────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named ned on an ──────┐
+└┬───────────────┘  unresolved type variable, but unresolved type variables   │
+ │                  have no methods.                                          │
+ │                                                                            │
+ │  le =(arg1)?.od()?.ned()?.recd?                                            │
+ │      ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by

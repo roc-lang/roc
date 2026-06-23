@@ -13,15 +13,16 @@ match list {
 # EXPECTED
 POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
-                                                           ┌───────────────────┐
-┌─ This top-level value still has an unresolved ───────────┤ POLYMORPHIC VALUE │
-│  polymorphic type:                                       └──────────────────┬┘
-│                                                                             │
-│  match list {                                                               │
-│      [first] => first                                                       │
-│      [first, second] => first + second                                      │
-│  }                                                                          │
-└──────────────────────────────────────────── list_destructure_scoping.md:1:1 ┘
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match list {                                                              │
+ │      [first] => first                                                      │
+ │      [first, second] => first + second                                     │
+ │  }                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────── list_destructure_scoping.md:1:1 ┘
 
     Its type is:
     a where [a.plus : a, a -> a]

@@ -15,33 +15,33 @@ UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named person in this scope. ────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  match person {                                                             │
-│        ‾‾‾‾‾‾                                                               │
-└─────────────────────────────────────── pattern_destructure_with_rest.md:1:7 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named person in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  match person {                                                            │
+ │        ‾‾‾‾‾‾                                                              │
+ └────────────────────────────────────── pattern_destructure_with_rest.md:1:7 ┘
 
     Is there an import or exposing missing up-top?
-                                                              ┌────────────────┐
-┌─ Str.len does not exist. ───────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …rs } => Str.len(first_name) > Str.len(others.last_name)                   │
-│           ‾‾‾‾‾‾‾                                                           │
-└────────────────────────────────────── pattern_destructure_with_rest.md:2:33 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Str.len does not exist. ──────────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …rs } => Str.len(first_name) > Str.len(others.last_name)                  │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └───────────────────────────────────── pattern_destructure_with_rest.md:2:33 ┘
 
     Str is in scope, but it has no associated len.
 
     It's referenced here:
-                                                              ┌────────────────┐
-┌─ Str.len does not exist. ───────────────────────────────────┤ DOES NOT EXIST │
-│                                                             └───────────────┬┘
-│                                                                             │
-│  …name) > Str.len(others.last_name)                                         │
-│           ‾‾‾‾‾‾‾                                                           │
-└────────────────────────────────────── pattern_destructure_with_rest.md:2:55 ┘
+┌────────────────┐
+│ DOES NOT EXIST ├─ Str.len does not exist. ──────────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …name) > Str.len(others.last_name)                                        │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └───────────────────────────────────── pattern_destructure_with_rest.md:2:55 ┘
 
     Str is in scope, but it has no associated len.
 

@@ -17,26 +17,27 @@ decode_things # After member name
 UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
-                                                    ┌──────────────────────────┐
-┌─ The where clause syntax Decode is not supported: ┤ UNSUPPORTED WHERE CLAUSE │
-│                                                   └─────────────────────────┬┘
-│                                                                             │
-│      [a.Decode]                                                             │
-│       ‾‾‾‾‾‾‾‾                                                              │
-└──────────────────────────────────────────────────── where_clauses_10.md:7:6 ┘
+┌──────────────────────────┐
+│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax Decode is not ──────────┐
+└┬─────────────────────────┘  supported.                                      │
+ │                                                                            │
+ │  [a.Decode]                                                                │
+ │   ‾‾‾‾‾‾‾‾                                                                 │
+ └─────────────────────────────────────────────────── where_clauses_10.md:7:6 ┘
 
     This syntax was used for abilities, which have been removed from Roc. Use
     method constraints like where [a.methodName(args) -> ret] instead.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│  decode_things # After member name                                          │
-│   : # After colon                                                           │
-│    List(List(U8)) -> List(a) # After anno                                   │
-│     where # after where                                                     │
-│      [a.Decode]                                                             │
-└──────────────────────────────────────────────────── where_clauses_10.md:3:1 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  decode_things # After member name                                         │
+ │      : # After colon                                                       │
+ │          List(List(U8)) -> List(a) # After anno                            │
+ │              where # after where                                           │
+ │                  [a.Decode]                                                │
+ │                                                                            │
+ └─────────────────────────────────────────────────── where_clauses_10.md:3:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

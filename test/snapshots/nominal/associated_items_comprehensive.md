@@ -449,94 +449,94 @@ UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
 UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
 UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named value in this scope. ─────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  errModuleUnqualified = value  # ERROR: 'value' not in scope at module level│
-│                         ‾‾‾‾‾                                               │
-└─────────────────────────────────── associated_items_comprehensive.md:350:24 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named value in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  …ified = value  # ERROR: 'value' not in scope at module level             │
+ │           ‾‾‾‾‾                                                            │
+ └────────────────────────────────── associated_items_comprehensive.md:350:24 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named innerItem in this scope. ─────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│      badAccess = innerItem  # ERROR: 'innerItem' not in scope here          │
-│                  ‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────── associated_items_comprehensive.md:361:17 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named innerItem in this scope. ────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  badAccess = innerItem  # ERROR: 'innerItem' not in scope here             │
+ │              ‾‾‾‾‾‾‾‾‾                                                     │
+ └────────────────────────────────── associated_items_comprehensive.md:361:17 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named sibAVal in this scope. ───────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│          badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope        │
-│                             ‾‾‾‾‾‾‾                                         │
-└─────────────────────────────────── associated_items_comprehensive.md:372:28 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named sibAVal in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope               │
+ │                     ‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────── associated_items_comprehensive.md:372:28 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named leaf1Val in this scope. ──────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│              badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope   │
-│                                ‾‾‾‾‾‾‾‾                                     │
-└─────────────────────────────────── associated_items_comprehensive.md:387:31 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named leaf1Val in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope              │
+ │                    ‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────── associated_items_comprehensive.md:387:31 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named grandchildVal in this scope. ─────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  …ccess = grandchildVal  # ERROR: 'grandchildVal' not in scope              │
-│           ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────── associated_items_comprehensive.md:401:27 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named grandchildVal in this scope. ────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope│
+ │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
+ └────────────────────────────────── associated_items_comprehensive.md:401:27 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named otherVal in this scope. ──────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│          badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope         │
-│                          ‾‾‾‾‾‾‾‾                                           │
-└─────────────────────────────────── associated_items_comprehensive.md:423:25 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named otherVal in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope                │
+ │                  ‾‾‾‾‾‾‾‾                                                  │
+ └────────────────────────────────── associated_items_comprehensive.md:423:25 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named outerItem in this scope. ─────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  errTryOuter = outerItem      # ERROR: not in scope                         │
-│                ‾‾‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────── associated_items_comprehensive.md:428:15 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named outerItem in this scope. ────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  errTryOuter = outerItem      # ERROR: not in scope                        │
+ │                ‾‾‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────── associated_items_comprehensive.md:428:15 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named sibAVal in this scope. ───────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  errTrySibA = sibAVal         # ERROR: not in scope                         │
-│               ‾‾‾‾‾‾‾                                                       │
-└─────────────────────────────────── associated_items_comprehensive.md:429:14 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named sibAVal in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  errTrySibA = sibAVal         # ERROR: not in scope                        │
+ │               ‾‾‾‾‾‾‾                                                      │
+ └────────────────────────────────── associated_items_comprehensive.md:429:14 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named leaf1Val in this scope. ──────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  errTryLeaf = leaf1Val        # ERROR: not in scope                         │
-│               ‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────── associated_items_comprehensive.md:430:14 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named leaf1Val in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  errTryLeaf = leaf1Val        # ERROR: not in scope                        │
+ │               ‾‾‾‾‾‾‾‾                                                     │
+ └────────────────────────────────── associated_items_comprehensive.md:430:14 ┘
 
     Is there an import or exposing missing up-top?
-                                                          ┌────────────────────┐
-┌─ Nothing is named grandchildVal in this scope. ─────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  errTryGrand = grandchildVal  # ERROR: not in scope                         │
-│                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
-└─────────────────────────────────── associated_items_comprehensive.md:431:15 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named grandchildVal in this scope. ────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  errTryGrand = grandchildVal  # ERROR: not in scope                        │
+ │                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+ └────────────────────────────────── associated_items_comprehensive.md:431:15 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

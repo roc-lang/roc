@@ -16,24 +16,24 @@ match Answer {
 MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
-                                                              ┌────────────────┐
-┌─ This from_numeral method is being called on a value whose ─┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│      10 => 4                                                                │
-│      ‾‾                                                                     │
-└──────────────────────────────────────────────────── literal_patterns.md:5:5 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This from_numeral method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  10 => 4                                                                   │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────── literal_patterns.md:5:5 ┘
 
     The value's type, which does not have a method named from_numeral, is:
 
         [Answer, Greeting, Zero, ..]
-                                                               ┌───────────────┐
-┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
-│  is needed:                                                  └──────────────┬┘
-│                                                                             │
-│      Zero => "hello"                                                        │
-│              ‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────── literal_patterns.md:3:13 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  Zero => "hello"                                                           │
+ │          ‾‾‾‾‾‾‾                                                           │
+ └────────────────────────────────────────────────── literal_patterns.md:3:13 ┘
 
     The type was determined to be:
 

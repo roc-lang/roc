@@ -14,13 +14,13 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│      { x, y } = { x: 1, y: 2, z: 3 }                                        │
-│                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
-└────────────────────────────────────── destructure_closed_assignment.md:3:16 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  { x, y } = { x: 1, y: 2, z: 3 }                                           │
+ │             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+ └───────────────────────────────────── destructure_closed_assignment.md:3:16 ┘
 
     It has the type:
 

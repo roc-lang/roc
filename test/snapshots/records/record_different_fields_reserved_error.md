@@ -34,170 +34,170 @@ DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
 MISSING METHOD - record_different_fields_reserved_error.md:4:13:4:29
 MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
-                                              ┌────────────────────────────────┐
-┌─ The token : is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      if: "conditional",                                                     │
-│        ‾                                                                    │
-└────────────────────────────── record_different_fields_reserved_error.md:2:7 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  if: "conditional",                                                        │
+ │    ‾                                                                       │
+ └───────────────────────────── record_different_fields_reserved_error.md:2:7 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      if: "conditional",                                                     │
-│                       ‾                                                     │
-└───────────────────────────── record_different_fields_reserved_error.md:2:22 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  if: "conditional",                                                        │
+ │                   ‾                                                        │
+ └──────────────────────────── record_different_fields_reserved_error.md:2:22 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                         ┌─────────────────────────────────────┐
-┌─ The token " is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
-│  type annotation.                      └────────────────────────────────────┬┘
-│                                                                             │
-│      when: "pattern match",                                                 │
-│            ‾                                                                │
-└───────────────────────────── record_different_fields_reserved_error.md:3:11 ┘
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token " is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │        ‾                                                                   │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:11 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
-                                              ┌────────────────────────────────┐
-┌─ The token pattern match is not expected ───┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  in an expression.                          └───────────────────────────────┬┘
-│                                                                             │
-│      when: "pattern match",                                                 │
-│             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└───────────────────────────── record_different_fields_reserved_error.md:3:12 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token pattern match is not expected ──┐
+└┬───────────────────────────────┘  in an expression.                         │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:12 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token " is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      when: "pattern match",                                                 │
-│                          ‾                                                  │
-└───────────────────────────── record_different_fields_reserved_error.md:3:25 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token " is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │                      ‾                                                     │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:25 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      when: "pattern match",                                                 │
-│                           ‾                                                 │
-└───────────────────────────── record_different_fields_reserved_error.md:3:26 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │                       ‾                                                    │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:26 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token : is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      expect: "test assertion",                                              │
-│            ‾                                                                │
-└───────────────────────────── record_different_fields_reserved_error.md:4:11 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  expect: "test assertion",                                                 │
+ │        ‾                                                                   │
+ └──────────────────────────── record_different_fields_reserved_error.md:4:11 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      expect: "test assertion",                                              │
-│                              ‾                                              │
-└───────────────────────────── record_different_fields_reserved_error.md:4:29 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  expect: "test assertion",                                                 │
+ │                          ‾                                                 │
+ └──────────────────────────── record_different_fields_reserved_error.md:4:29 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                                    ┌──────────────────────────┐
-┌─ Import statements must appear at the top level ──┤ IMPORT MUST BE TOP LEVEL │
-│  of a module.                                     └─────────────────────────┬┘
-│                                                                             │
-│      import: "module load",                                                 │
-│      ‾‾‾‾‾‾                                                                 │
-└────────────────────────────── record_different_fields_reserved_error.md:5:5 ┘
+┌──────────────────────────┐
+│ IMPORT MUST BE TOP LEVEL ├─ Import statements must appear at the top ───────┐
+└┬─────────────────────────┘  level of a module.                              │
+ │                                                                            │
+ │  import: "module load",                                                    │
+ │  ‾‾‾‾‾‾                                                                    │
+ └───────────────────────────── record_different_fields_reserved_error.md:5:5 ┘
 
     Move this import to the top of the file, after the module header but before
     any definitions.
-                                              ┌────────────────────────────────┐
-┌─ The token : is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      import: "module load",                                                 │
-│            ‾                                                                │
-└───────────────────────────── record_different_fields_reserved_error.md:5:11 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  import: "module load",                                                    │
+ │        ‾                                                                   │
+ └──────────────────────────── record_different_fields_reserved_error.md:5:11 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      import: "module load",                                                 │
-│                           ‾                                                 │
-└───────────────────────────── record_different_fields_reserved_error.md:5:26 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  import: "module load",                                                    │
+ │                       ‾                                                    │
+ └──────────────────────────── record_different_fields_reserved_error.md:5:26 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token and is not expected in an ───────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      and: Bool.true,                                                        │
-│      ‾‾‾                                                                    │
-└────────────────────────────── record_different_fields_reserved_error.md:6:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token and is not expected in an ──────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  and: Bool.true,                                                           │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────── record_different_fields_reserved_error.md:6:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      and: Bool.true,                                                        │
-│                    ‾                                                        │
-└───────────────────────────── record_different_fields_reserved_error.md:6:19 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  and: Bool.true,                                                           │
+ │                ‾                                                           │
+ └──────────────────────────── record_different_fields_reserved_error.md:6:19 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token or is not expected in an ────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      or: Bool.false,                                                        │
-│      ‾‾                                                                     │
-└────────────────────────────── record_different_fields_reserved_error.md:7:5 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token or is not expected in an ───────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  or: Bool.false,                                                           │
+ │  ‾‾                                                                        │
+ └───────────────────────────── record_different_fields_reserved_error.md:7:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                              ┌────────────────────────────────┐
-┌─ The token , is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
-│  expression.                                └───────────────────────────────┬┘
-│                                                                             │
-│      or: Bool.false,                                                        │
-│                    ‾                                                        │
-└───────────────────────────── record_different_fields_reserved_error.md:7:19 ┘
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  or: Bool.false,                                                           │
+ │                ‾                                                           │
+ └──────────────────────────── record_different_fields_reserved_error.md:7:19 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
-                                                    ┌──────────────────────────┐
-┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
-│  implementation.                                  └─────────────────────────┬┘
-│                                                                             │
-│      when: "pattern match",                                                 │
-│      ‾‾‾‾‾‾‾                                                                │
-└────────────────────────────── record_different_fields_reserved_error.md:3:5 ┘
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └───────────────────────────── record_different_fields_reserved_error.md:3:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
-                                                              ┌────────────────┐
-┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│      expect: "test assertion",                                              │
-│              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└───────────────────────────── record_different_fields_reserved_error.md:4:13 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  expect: "test assertion",                                                 │
+ │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+ └──────────────────────────── record_different_fields_reserved_error.md:4:13 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
         {}
-                                                              ┌────────────────┐
-┌─ This from_quote method is being called on a value whose ───┤ MISSING METHOD │
-│  type doesn't have that method:                             └───────────────┬┘
-│                                                                             │
-│      import: "module load",                                                 │
-│              ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└───────────────────────────── record_different_fields_reserved_error.md:5:13 ┘
+┌────────────────┐
+│ MISSING METHOD ├─ This from_quote method is being called on a value whose ──┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  import: "module load",                                                    │
+ │          ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────── record_different_fields_reserved_error.md:5:13 ┘
 
     The value's type, which does not have a method named from_quote, is:
 

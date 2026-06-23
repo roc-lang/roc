@@ -14,13 +14,13 @@ match color {
 # EXPECTED
 TYPE MISMATCH - basic_tag_union.md:4:11:4:14
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
-│  is needed:                                                  └──────────────┬┘
-│                                                                             │
-│   Green => "3"                                                              │
-│            ‾‾‾                                                              │
-└──────────────────────────────────────────────────── basic_tag_union.md:4:11 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  Green => "3"                                                              │
+ │           ‾‾‾                                                              │
+ └─────────────────────────────────────────────────── basic_tag_union.md:4:11 ┘
 
     The type was determined to be:
 

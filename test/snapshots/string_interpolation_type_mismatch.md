@@ -13,13 +13,13 @@ y = "value: ${x}"
 # EXPECTED
 TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This expression is used in an unexpected way: ──────────────┤ TYPE MISMATCH │
-│                                                              └──────────────┬┘
-│                                                                             │
-│  y = "value: ${x}"                                                          │
-│                ‾                                                            │
-└───────────────────────────────── string_interpolation_type_mismatch.md:4:15 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  y = "value: ${x}"                                                         │
+ │                ‾                                                           │
+ └──────────────────────────────── string_interpolation_type_mismatch.md:4:15 ┘
 
     It has the type:
 

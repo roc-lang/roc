@@ -10,13 +10,13 @@ foo = asd.0
 # EXPECTED
 UNDEFINED VARIABLE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
-                                                          ┌────────────────────┐
-┌─ Nothing is named asd in this scope. ───────────────────┤ UNDEFINED VARIABLE │
-│                                                         └───────────────────┬┘
-│                                                                             │
-│  foo = asd.0                                                                │
-│        ‾‾‾                                                                  │
-└─────────────────────────────────────────────── expr_no_space_dot_int.md:1:7 ┘
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named asd in this scope. ──────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  foo = asd.0                                                               │
+ │        ‾‾‾                                                                 │
+ └────────────────────────────────────────────── expr_no_space_dot_int.md:1:7 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

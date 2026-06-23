@@ -10,13 +10,13 @@ type=expr
 # EXPECTED
 POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 # PROBLEMS
-                                                           ┌───────────────────┐
-┌─ This top-level value still has an unresolved ───────────┤ POLYMORPHIC VALUE │
-│  polymorphic type:                                       └──────────────────┬┘
-│                                                                             │
-│  -rec1.field                                                                │
-│  ‾‾‾‾‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────── unary_negation_access.md:1:1 ┘
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  -rec1.field                                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
+ └────────────────────────────────────────────── unary_negation_access.md:1:1 ┘
 
     Its type is:
     a where [a.negate : a -> a]

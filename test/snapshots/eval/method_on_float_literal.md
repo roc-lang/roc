@@ -9,7 +9,7 @@ type=repl
 ~~~
 # OUTPUT
 **Missing Method**
-This **foo** method is being called on a value whose type doesn't have that method:
+This **foo** method is being called on a value whose type doesn't have that method.
 **repl:1:7:1:10:**
 ```roc
 12.34.foo()

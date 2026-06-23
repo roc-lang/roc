@@ -11,13 +11,13 @@ S
 # EXPECTED
 PARSE ERROR - fuzz_crash_052.md:2:1:2:2
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
-│  arguments.                                                    └────────────┬┘
-│                                                                             │
-│  0                                                                          │
-│  ‾                                                                          │
-└────────────────────────────────────────────────────── fuzz_crash_052.md:2:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  0                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_052.md:2:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.

@@ -10,13 +10,13 @@ match 42 {}
 # EXPECTED
 PARSE ERROR - empty_match.md:1:1:1:6
 # PROBLEMS
-                                                                 ┌─────────────┐
-┌─ A match expression must have at least one branch. ────────────┤ PARSE ERROR │
-│                                                                └────────────┬┘
-│                                                                             │
-│  match 42 {}                                                                │
-│  ‾‾‾‾‾                                                                      │
-└───────────────────────────────────────────────────────── empty_match.md:1:1 ┘
+┌─────────────┐
+│ PARSE ERROR ├─ A match expression must have at least one branch. ───────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  match 42 {}                                                               │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────────── empty_match.md:1:1 ┘
 
 # TOKENS
 ~~~zig

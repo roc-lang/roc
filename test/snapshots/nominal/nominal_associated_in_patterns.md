@@ -15,13 +15,13 @@ handleSuccess = |res| "success"
 # EXPECTED
 UNUSED VARIABLE - nominal_associated_in_patterns.md:6:18:6:21
 # PROBLEMS
-                                                             ┌─────────────────┐
-┌─ Variable res is defined here and then never used: ────────┤ UNUSED VARIABLE │
-│                                                            └────────────────┬┘
-│                                                                             │
-│  handleSuccess = |res| "success"                                            │
-│                   ‾‾‾                                                       │
-└───────────────────────────────────── nominal_associated_in_patterns.md:6:18 ┘
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable res is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  handleSuccess = |res| "success"                                           │
+ │                   ‾‾‾                                                      │
+ └──────────────────────────────────── nominal_associated_in_patterns.md:6:18 ┘
 
     If you don't need this variable, prefix it with an underscore like _res to
     suppress this warning.

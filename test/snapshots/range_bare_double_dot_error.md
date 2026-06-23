@@ -11,21 +11,21 @@ r = 1..5
 NOT A RANGE OPERATOR - range_bare_double_dot_error.md:1:8:1:9
 UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 # PROBLEMS
-                                                        ┌──────────────────────┐
-┌─ .. is not an operator. For an exclusive range use ───┤ NOT A RANGE OPERATOR │
-│  ..<; for an inclusive range use ..=.                 └─────────────────────┬┘
-│                                                                             │
-│  r = 1..5                                                                   │
-│         ‾                                                                   │
-└───────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
+┌──────────────────────┐
+│ NOT A RANGE OPERATOR ├─ .. is not an operator. For an exclusive range use ──┐
+└┬─────────────────────┘  ..<; for an inclusive range use ..=.                │
+ │                                                                            │
+ │  r = 1..5                                                                  │
+ │         ‾                                                                  │
+ └──────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
 
-                                                         ┌─────────────────────┐
-┌─ I don't recognize this syntax. ───────────────────────┤ UNRECOGNIZED SYNTAX │
-│                                                        └────────────────────┬┘
-│                                                                             │
-│  r = 1..5                                                                   │
-│         ‾                                                                   │
-└───────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  r = 1..5                                                                  │
+ │         ‾                                                                  │
+ └──────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

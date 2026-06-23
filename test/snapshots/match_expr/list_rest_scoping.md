@@ -17,43 +17,44 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
 POLYMORPHIC VALUE - list_rest_scoping.md:1:1:5:2
 # PROBLEMS
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [first, ..rest] => first + 1                                           │
-│              ‾‾‾‾‾‾                                                         │
-└────────────────────────────────────────────────── list_rest_scoping.md:2:13 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [first, ..rest] => first + 1                                              │
+ │          ‾‾‾‾‾‾                                                            │
+ └───────────────────────────────────────────────── list_rest_scoping.md:2:13 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [..rest, last] => last + 2                                             │
-│       ‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────── list_rest_scoping.md:3:6 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [..rest, last] => last + 2                                                │
+ │   ‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────────────────────── list_rest_scoping.md:3:6 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-                                                ┌──────────────────────────────┐
-┌─ List rest patterns should use the `.. as ────┤ BAD LIST REST PATTERN SYNTAX │
-│  name` syntax, not `..name`.                  └─────────────────────────────┬┘
-│                                                                             │
-│      [x, ..rest, y] => x + y                                                │
-│          ‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────── list_rest_scoping.md:4:9 ┘
+┌──────────────────────────────┐
+│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
+└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+ │                                                                            │
+ │  [x, ..rest, y] => x + y                                                   │
+ │      ‾‾‾‾‾‾                                                                │
+ └────────────────────────────────────────────────── list_rest_scoping.md:4:9 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-                                                           ┌───────────────────┐
-┌─ This top-level value still has an unresolved ───────────┤ POLYMORPHIC VALUE │
-│  polymorphic type:                                       └──────────────────┬┘
-│                                                                             │
-│  match items {                                                              │
-│      [first, ..rest] => first + 1                                           │
-│      [..rest, last] => last + 2                                             │
-│      [x, ..rest, y] => x + y                                                │
-│  }                                                                          │
-└─────────────────────────────────────────────────── list_rest_scoping.md:1:1 ┘
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match items {                                                             │
+ │      [first, ..rest] => first + 1                                          │
+ │      [..rest, last] => last + 2                                            │
+ │      [x, ..rest, y] => x + y                                               │
+ │  }                                                                         │
+ │                                                                            │
+ └────────────────────────────────────────────────── list_rest_scoping.md:1:1 ┘
 
     Its type is:
     a where [a.plus : a, a -> a]

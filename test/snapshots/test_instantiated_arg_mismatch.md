@@ -15,13 +15,13 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
-                                                               ┌───────────────┐
-┌─ This string literal is being used where a non-string type ──┤ TYPE MISMATCH │
-│  is needed:                                                  └──────────────┬┘
-│                                                                             │
-│      pair(42, "hello")                                                      │
-│               ‾‾‾‾‾‾‾                                                       │
-└───────────────────────────────────── test_instantiated_arg_mismatch.md:5:14 ┘
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  pair(42, "hello")                                                         │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────── test_instantiated_arg_mismatch.md:5:14 ┘
 
     The type was determined to be:
 
