@@ -52,6 +52,7 @@ comptime {
     exportDecFn(dec.negateC, "negate");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.sinC, "sin");
+    exportDecFn(dec.sqrtC, "sqrt");
     exportDecFn(dec.subC, "sub_with_overflow");
     exportDecFn(dec.subOrPanicC, "sub_or_panic");
     exportDecFn(dec.subSaturatedC, "sub_saturated");

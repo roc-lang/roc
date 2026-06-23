@@ -15,19 +15,19 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
 
 ┌────────────────┐
-│ MISSING METHOD ├─ This `add_checked` method is being called on a value ─────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
+│ MISSING METHOD ├─ This `add_try` method is being called on a value whose ───┐
+└┬───────────────┘  type doesn't have that method.                            │
  │                                                                            │
  │  r = "a"..<"z"                                                             │
  │      ‾‾‾‾‾‾‾‾‾                                                             │
  └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
-    The value's type, which does not have a method named `add_checked`, is:
+    The value's type, which does not have a method named `add_try`, is:
 
         Str
 
     Hint: For this to work, the type would need to have a method named
-    `add_checked` associated with it in the type's declaration.
+    `add_try` associated with it in the type's declaration.
 
 
 ┌────────────────┐
@@ -104,7 +104,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-call (constraint-fn-var 164)
+		(e-call (constraint-fn-var 170)
 			(e-lookup-external
 				(builtin))
 			(e-string

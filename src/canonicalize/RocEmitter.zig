@@ -502,6 +502,12 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.lhs, .outer_op = op, .side = .left } });
         },
+        .e_structural_hash => |h| {
+            try frames.append(allocator, .{ .write = ")" });
+            try frames.append(allocator, .{ .expr = h.hasher });
+            try frames.append(allocator, .{ .write = ".to_hash(" });
+            try frames.append(allocator, .{ .expr = h.value });
+        },
         .e_method_eq => |eq| {
             const op: Expr.Binop.Op = if (eq.negated) .ne else .eq;
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.rhs, .outer_op = op, .side = .right } });

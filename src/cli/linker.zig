@@ -426,6 +426,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 else => try args.append("arm64"), // default to arm64
             }
 
+            // Roc rewrites the ad-hoc code signature after patching Mach-O
+            // load commands. Suppress lld's content-derived LC_UUID so the
+            // final executable bytes do not depend on lld's pre-patch view of
+            // the output, which includes the output basename in the signature.
+            try args.append("-no_uuid");
+
             // Add platform version metadata required by Mach-O links.
             try args.append("-platform_version");
             try args.append("macos");
@@ -834,6 +840,8 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
 
 const macho = std.macho;
 
+const deterministic_macho_code_signature_identifier = "roc";
+
 /// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
 /// callsite in `link` for why this is needed.
 fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!void {
@@ -914,21 +922,31 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
     const linkedit = linkedit_seg orelse return error.MissingLinkeditSegment;
 
     const page_size: u16 = if (header.cputype == macho.CPU_TYPE_ARM64) 0x4000 else 0x1000;
-    const ident = std.fs.path.basename(path);
+    const ident = deterministic_macho_code_signature_identifier;
 
     // The signature hashes every page before LC_CODE_SIGNATURE's dataoff,
     // including page 0 with the load commands. Its exact size is known up
     // front (one CodeDirectory blob, no special slots), so any load command
-    // growth must be written back before hashing.
+    // size changes must be written back before hashing.
     const hash_size = std.crypto.hash.sha2.Sha256.digest_length;
     const total_pages = std.mem.alignForward(usize, cs.dataoff, page_size) / page_size;
     const exact_size = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) +
         @sizeOf(macho.CodeDirectory) + ident.len + 1 + total_pages * hash_size;
 
-    if (exact_size > cs.datasize) {
-        const grow = exact_size - cs.datasize;
+    const old_datasize = cs.datasize;
+    const old_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, old_datasize);
+    if (try file.length(io) != old_sig_end) return error.CodeSignatureNotAtEnd;
+
+    if (exact_size != old_datasize) {
         cs.datasize = @intCast(exact_size);
-        linkedit.filesize += grow;
+        if (exact_size > old_datasize) {
+            const grow: u64 = @intCast(exact_size - old_datasize);
+            linkedit.filesize += grow;
+        } else {
+            const shrink: u64 = @intCast(old_datasize - exact_size);
+            if (linkedit.filesize < shrink) return error.InvalidCodeSignatureSize;
+            linkedit.filesize -= shrink;
+        }
         linkedit.vmsize = std.mem.alignForward(u64, linkedit.filesize, page_size);
         try file.writePositionalAll(io, cmds_buf, @sizeOf(macho.mach_header_64));
     }
@@ -950,13 +968,8 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
     const sig = sig_bytes.written();
     std.debug.assert(sig.len == exact_size);
     try file.writePositionalAll(io, sig, cs.dataoff);
-    if (sig.len < cs.datasize) {
-        // Zero the slack so stale signature bytes cannot survive within the
-        // load command's extent.
-        const slack = try ctx.arena.alloc(u8, cs.datasize - sig.len);
-        @memset(slack, 0);
-        try file.writePositionalAll(io, slack, cs.dataoff + sig.len);
-    }
+    const new_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, @intCast(sig.len));
+    try file.setLength(io, new_sig_end);
 }
 
 fn findArg(args: []const []const u8, needle: []const u8) ?usize {

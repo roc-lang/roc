@@ -5,6 +5,313 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "low_level - F32.from_bits to_bits roundtrip finite",
+        .source =
+        \\{
+        \\bits = 1069547520
+        \\F32.to_bits(F32.from_bits(bits))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1069547520" },
+    },
+    .{
+        .name = "low_level - F32.from_bits to_bits preserves quiet NaN payload",
+        .source =
+        \\{
+        \\bits = 2143289345
+        \\F32.to_bits(F32.from_bits(bits)) == bits
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64.from_bits to_bits roundtrip finite",
+        .source =
+        \\{
+        \\bits = 4609434218613702656
+        \\F64.to_bits(F64.from_bits(bits))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4609434218613702656" },
+    },
+    .{
+        .name = "low_level - F64.from_bits to_bits preserves quiet NaN payload",
+        .source =
+        \\{
+        \\bits = 9221120237041090561
+        \\F64.to_bits(F64.from_bits(bits)) == bits
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 constants expose expected bits",
+        .source =
+        \\{
+        \\F32.to_bits(F32.e) == 1076754516
+        \\    and F32.to_bits(F32.pi) == 1078530011
+        \\    and F32.to_bits(F32.tau) == 1086918619
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 classification handles NaN infinity and finite values",
+        .source =
+        \\{
+        \\F32.is_nan(F32.nan)
+        \\    and !F32.is_float_eq(F32.nan, F32.nan)
+        \\    and !F32.is_float_eq(1.0, F32.nan)
+        \\    and F32.is_float_eq(-0.0, 0.0)
+        \\    and F32.is_float_eq(F32.infinity, F32.infinity)
+        \\    and F32.is_float_eq(F32.negate(F32.infinity), F32.negate(F32.infinity))
+        \\    and !F32.is_float_eq(F32.infinity, F32.negate(F32.infinity))
+        \\    and F32.is_infinite(F32.infinity)
+        \\    and F32.is_infinite(F32.negate(F32.infinity))
+        \\    and F32.is_finite(1.0)
+        \\    and !F32.is_finite(F32.nan)
+        \\    and !F32.is_finite(F32.infinity)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 constants expose expected bits",
+        .source =
+        \\{
+        \\F64.to_bits(F64.e) == 4613303445314885481
+        \\    and F64.to_bits(F64.pi) == 4614256656552045848
+        \\    and F64.to_bits(F64.tau) == 4618760256179416344
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 classification handles NaN infinity and finite values",
+        .source =
+        \\{
+        \\F64.is_nan(F64.nan)
+        \\    and !F64.is_float_eq(F64.nan, F64.nan)
+        \\    and !F64.is_float_eq(1.0, F64.nan)
+        \\    and F64.is_float_eq(-0.0, 0.0)
+        \\    and F64.is_float_eq(F64.infinity, F64.infinity)
+        \\    and F64.is_float_eq(F64.negate(F64.infinity), F64.negate(F64.infinity))
+        \\    and !F64.is_float_eq(F64.infinity, F64.negate(F64.infinity))
+        \\    and F64.is_infinite(F64.infinity)
+        \\    and F64.is_infinite(F64.negate(F64.infinity))
+        \\    and F64.is_finite(1.0)
+        \\    and !F64.is_finite(F64.nan)
+        \\    and !F64.is_finite(F64.infinity)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 sqrt and sqrt_try",
+        .source =
+        \\{
+        \\match F32.sqrt_try(9.0) {
+        \\    Ok(value) => F32.is_float_eq(value, 3.0)
+        \\    Err(_) => False
+        \\}
+        \\    and match F32.sqrt_try(-1.0) {
+        \\        Ok(_) => False
+        \\        Err(SqrtOfNegative) => True
+        \\    }
+        \\    and F32.to_str(F32.sqrt(2.25)) == "1.5"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 sqrt and sqrt_try",
+        .source =
+        \\{
+        \\match F64.sqrt_try(9.0) {
+        \\    Ok(value) => F64.is_float_eq(value, 3.0)
+        \\    Err(_) => False
+        \\}
+        \\    and match F64.sqrt_try(-1.0) {
+        \\        Ok(_) => False
+        \\        Err(SqrtOfNegative) => True
+        \\    }
+        \\    and F64.to_str(F64.sqrt(2.25)) == "1.5"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 pow",
+        .source =
+        \\{
+        \\F32.pow(2.0, 3.0).to_str() == "8"
+        \\    and F32.pow(9.0, 0.5).to_str() == "3"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 pow",
+        .source =
+        \\{
+        \\F64.pow(2.0, 3.0).to_str() == "8"
+        \\    and F64.pow(9.0, 0.5).to_str() == "3"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 trig",
+        .source =
+        \\{
+        \\F32.sin(0.0).to_str() == "0"
+        \\    and F32.cos(0.0).to_str() == "1"
+        \\    and F32.tan(0.0).to_str() == "0"
+        \\    and F32.asin(0.0).to_str() == "0"
+        \\    and F32.acos(1.0).to_str() == "0"
+        \\    and F32.atan(0.0).to_str() == "0"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 tan matrix",
+        .source =
+        \\{
+        \\within = |actual, expected, tolerance| F32.abs_diff(actual, expected) <= tolerance
+        \\within(F32.tan(0.2), 0.20271003, 0.000001)
+        \\    and within(F32.tan(F32.negate(0.2)), F32.negate(0.20271003), 0.000001)
+        \\    and within(F32.tan(0.8923), 1.2404218, 0.000001)
+        \\    and within(F32.tan(1.5), 14.10142, 0.00001)
+        \\    and within(F32.tan(37.45), F32.negate(0.25439608), 0.000001)
+        \\    and within(F32.tan(89.123), 2.2858377, 0.00001)
+        \\    and F32.is_nan(F32.tan(F32.infinity))
+        \\    and F32.is_nan(F32.tan(F32.negate(F32.infinity)))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 trig",
+        .source =
+        \\{
+        \\F64.sin(0.0).to_str() == "0"
+        \\    and F64.cos(0.0).to_str() == "1"
+        \\    and F64.tan(0.0).to_str() == "0"
+        \\    and F64.asin(0.0).to_str() == "0"
+        \\    and F64.acos(1.0).to_str() == "0"
+        \\    and F64.atan(0.0).to_str() == "0"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 tan matrix",
+        .source =
+        \\{
+        \\within = |actual, expected, tolerance| F64.abs_diff(actual, expected) <= tolerance
+        \\within(F64.tan(0.2), 0.2027100355086725, 0.000000000000001)
+        \\    and within(F64.tan(F64.negate(0.2)), F64.negate(0.2027100355086725), 0.000000000000001)
+        \\    and within(F64.tan(0.8923), 1.2404217445497098, 0.000000000000001)
+        \\    and within(F64.tan(1.5), 14.101419947171719, 0.00000000000001)
+        \\    and within(F64.tan(37.45), F64.negate(0.25439607116885656), 0.000000000001)
+        \\    and within(F64.tan(89.123), 2.285837625135532, 0.000000000001)
+        \\    and F64.is_nan(F64.tan(F64.infinity))
+        \\    and F64.is_nan(F64.tan(F64.negate(F64.infinity)))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 rounding to integers",
+        .source =
+        \\{
+        \\F32.round_to_i32(3.4) == 3
+        \\    and F32.round_to_i32(-3.6) == -4
+        \\    and F32.round_to_i32(2.5) == 3
+        \\    and F32.round_to_i32(-2.5) == -3
+        \\    and F32.floor_to_i32(-3.2) == -4
+        \\    and F32.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 rounding to integers",
+        .source =
+        \\{
+        \\F64.round_to_i32(3.4) == 3
+        \\    and F64.round_to_i32(-3.6) == -4
+        \\    and F64.round_to_i32(2.5) == 3
+        \\    and F64.round_to_i32(-2.5) == -3
+        \\    and F64.floor_to_i32(-3.2) == -4
+        \\    and F64.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    // Single float->int conversions, kept separate from the compound tests
+    // above so a regression in one conversion isn't masked by `and`
+    // short-circuiting. These pin the float-to-int wrapper ABI (the dev
+    // backend must pass the float `val` through its CallBuilder so the
+    // following integer args land in the right registers on Windows x64).
+    .{
+        .name = "low_level - F32 floor_to_i32 returns signed value",
+        .source =
+        \\F32.floor_to_i32(-3.2)
+        ,
+        .expected = .{ .inspect_str = "-4" },
+    },
+    .{
+        .name = "low_level - F32 ceiling_to_u32 returns unsigned value",
+        .source =
+        \\F32.ceiling_to_u32(3.2)
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "low_level - F32 round_to_i32 returns signed value",
+        .source =
+        \\F32.round_to_i32(2.5)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "low_level - F64 floor_to_i32 returns signed value",
+        .source =
+        \\F64.floor_to_i32(-3.2)
+        ,
+        .expected = .{ .inspect_str = "-4" },
+    },
+    .{
+        .name = "low_level - F64 ceiling_to_u32 returns unsigned value",
+        .source =
+        \\F64.ceiling_to_u32(3.2)
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "low_level - F64 round_to_i32 returns signed value",
+        .source =
+        \\F64.round_to_i32(2.5)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "low_level - Dec rounding to integers",
+        .source =
+        \\{
+        \\Dec.round_to_i32(3.4) == 3
+        \\    and Dec.round_to_i32(-3.6) == -4
+        \\    and Dec.round_to_i32(2.5) == 3
+        \\    and Dec.round_to_i32(-2.5) == -3
+        \\    and Dec.floor_to_i32(-3.2) == -4
+        \\    and Dec.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{

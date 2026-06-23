@@ -77,6 +77,10 @@ fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
     return std.mem.eql(u8, platform_dir, "fx");
 }
 
+fn testPlatformRequiresSectionDceHost(platform_dir: []const u8) bool {
+    return std.mem.eql(u8, platform_dir, "dylib") or std.mem.eql(u8, platform_dir, "archive");
+}
+
 fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
     if (!options.uses_stack_handler) return false;
 
@@ -1775,18 +1779,33 @@ fn buildAndCopyTestPlatformHostLib(
     const options = TestHostOptions{
         .uses_stack_handler = testPlatformUsesStackHandler(platform_dir),
     };
+    // The dylib/archive tests assert that unused hosted symbols and their
+    // canary data are removed by the final link. Zig Debug emits host objects
+    // with one monolithic .text and default-visible exports, so those tests
+    // need optimized host objects with hidden symbols and per-section output.
+    const host_optimize: OptimizeMode = if (testPlatformRequiresSectionDceHost(platform_dir)) .ReleaseSmall else optimize;
 
     const lib = createTestPlatformHostLib(
         b,
         b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, target_name }),
         b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
         target,
-        optimize,
+        host_optimize,
         roc_modules,
         strip,
         omit_frame_pointer,
         options,
     );
+
+    // The dylib platform produces a Windows DLL, and a DLL only exposes symbols
+    // that carry dllexport storage. Unlike ELF/Mach-O shared objects (which
+    // export all global symbols by default), a static host .lib linked into a
+    // DLL exports nothing unless its `export fn` API (e.g. roc_run_app) is
+    // marked dllexport. `-fdll-export-fns` emits the needed `.drectve /EXPORT:`
+    // directives that lld-link honors, without exporting bundled compiler_rt.
+    if (target.result.os.tag == .windows and std.mem.eql(u8, platform_dir, "dylib")) {
+        lib.dll_export_fns = true;
+    }
 
     // Use correct filename for target platform
     const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
@@ -2597,8 +2616,29 @@ pub fn build(b: *std.Build) void {
     wasm32_builtins_obj.bundle_compiler_rt = false;
     configureBackend(wasm32_builtins_obj, wasm32_resolved_target);
 
+    const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+    const wasm32_compiler_rt_obj = b.addObject(.{
+        .name = "compiler_rt_wasm32_eval",
+        .root_module = b.createModule(.{
+            .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
+            .target = wasm32_resolved_target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    wasm32_compiler_rt_obj.bundle_compiler_rt = false;
+    configureBackend(wasm32_compiler_rt_obj, wasm32_resolved_target);
+
+    const link_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
+    link_wasm32_builtins.addArg("-o");
+    const merged_wasm32_builtins = link_wasm32_builtins.addOutputFileArg("roc_builtins.o");
+    link_wasm32_builtins.addFileArg(wasm32_builtins_obj.getEmittedBin());
+    link_wasm32_builtins.addFileArg(wasm32_compiler_rt_obj.getEmittedBin());
+
     const wasm32_builtins_files = b.addWriteFiles();
-    _ = wasm32_builtins_files.addCopyFile(wasm32_builtins_obj.getEmittedBin(), "roc_builtins.o");
+    _ = wasm32_builtins_files.addCopyFile(merged_wasm32_builtins, "roc_builtins.o");
     const wasm32_builtins_module = b.createModule(.{
         .root_source_file = wasm32_builtins_files.add("wasm32_builtins.zig",
             \\pub const bytes = @embedFile("roc_builtins.o");
@@ -2996,6 +3036,28 @@ pub fn build(b: *std.Build) void {
     _ = builtins32_core_extern_bc_obj.getEmittedBin();
     const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
 
+    // Native object exporting the compiler-rt 128-bit libcalls (`__divti3`,
+    // `__fixdfti`, ...) that the eval LLVM backend's host re-codegen emits but
+    // does not define. The eval shared library links this in on Windows, whose
+    // LoadLibrary cannot bind undefined symbols the way the Unix loaders do (see
+    // src/builtins/eval_compiler_rt_libcalls.zig). Built for the host target
+    // since the eval backend only ever runs natively.
+    const eval_compiler_rt_obj = b.addObject(.{
+        .name = "eval_compiler_rt_libcalls",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/eval_compiler_rt_libcalls.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .single_threaded = true,
+        }),
+    });
+    eval_compiler_rt_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    eval_compiler_rt_obj.root_module.stack_check = false;
+    eval_compiler_rt_obj.bundle_compiler_rt = false;
+    configureBackend(eval_compiler_rt_obj, target);
+    const eval_compiler_rt_obj_file = eval_compiler_rt_obj.getEmittedBin();
+
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
@@ -3005,6 +3067,7 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(eval_compiler_rt_obj_file, "eval_compiler_rt_libcalls.obj");
 
     const llvm_embedded_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
@@ -3016,6 +3079,7 @@ pub fn build(b: *std.Build) void {
         \\pub const builtins32_core_extern_bc = @embedFile("builtins32_core_extern.bc");
         \\pub const builtins64_core_extern_bc = @embedFile("builtins64_core_extern.bc");
         \\pub const builtins_bc = builtins64_bc;
+        \\pub const eval_compiler_rt_libcalls_obj = @embedFile("eval_compiler_rt_libcalls.obj");
         \\
     ;
 
@@ -5205,6 +5269,9 @@ fn addMainExe(
     builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
+    // This RocOps-ABI object is not linked into built executables (the dev
+    // backend links the extern-ABI object below, the LLVM backend merges
+    // builtins into the app object), so it does not need compiler-rt.
     builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
@@ -5229,7 +5296,15 @@ fn addMainExe(
     builtins_extern_obj.root_module.addImport("shim_io", b.addModule("shim_io_extern", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    builtins_extern_obj.bundle_compiler_rt = false;
+    // Bundle compiler-rt so the float math builtins are self-contained. Zig
+    // lowers @sqrt/@sin/@cos/@floor/@trunc/@log/@exp (used by acos, asin, sin,
+    // cos, pow, ...) to libm libcalls (sqrt, sin, floor, ...) that are not
+    // otherwise present when the dev backend links this object into a -nostdlib
+    // executable. compiler-rt provides them as weak symbols, and the final
+    // link's --gc-sections drops the unused ones. macOS is excluded: it always
+    // links -lSystem (which provides libm) and `-fcompiler-rt` for a macOS
+    // target crashes the Zig compiler under the build server (--listen).
+    builtins_extern_obj.bundle_compiler_rt = target.result.os.tag != .macos;
     configureBackend(builtins_extern_obj, target);
 
     const shim_host_abi_module = b.createModule(.{
@@ -5345,6 +5420,15 @@ fn addMainExe(
 
     for (cross_compile_builtins_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+        // The extern-ABI builtins object (linked by `roc build --opt=dev`)
+        // must carry compiler-rt so its float math libcalls (sqrt, sin,
+        // floor, ...) resolve into the -nostdlib executable. Excluded: wasm32
+        // (gets compiler-rt via the dedicated merged object below) and macOS
+        // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
+        // crashes the Zig compiler for macOS targets under --listen).
+        const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
+        const cross_is_macos = cross_target.query.os_tag == .macos;
+        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos;
 
         // Build builtins object file for this target.
         const cross_builtins_obj = b.addObject(.{
@@ -5369,15 +5453,41 @@ fn addMainExe(
             b.fmt("shim_io_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
+        // Non-extern (RocOps-ABI) object is not linked into executables; only
+        // wasm32 merges compiler-rt below for the eval/REPL pipeline.
         cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
+
+        const cross_builtins_bin = if (cross_is_wasm) blk: {
+            const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+            const cross_wasm32_compiler_rt_obj = b.addObject(.{
+                .name = "compiler_rt_wasm32",
+                .root_module = b.createModule(.{
+                    .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
+                    .target = cross_resolved_target,
+                    .optimize = optimize,
+                    .strip = strip,
+                    .omit_frame_pointer = omit_frame_pointer,
+                    .pic = true,
+                }),
+            });
+            cross_wasm32_compiler_rt_obj.bundle_compiler_rt = false;
+            configureBackend(cross_wasm32_compiler_rt_obj, cross_resolved_target);
+
+            const link_cross_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
+            link_cross_wasm32_builtins.addArg("-o");
+            const merged_cross_wasm32_builtins = link_cross_wasm32_builtins.addOutputFileArg("roc_builtins.o");
+            link_cross_wasm32_builtins.addFileArg(cross_builtins_obj.getEmittedBin());
+            link_cross_wasm32_builtins.addFileArg(cross_wasm32_compiler_rt_obj.getEmittedBin());
+            break :blk merged_cross_wasm32_builtins;
+        } else cross_builtins_obj.getEmittedBin();
 
         // Copy builtins object for this target for embedding into CLI
         // Used by `roc build --opt=dev --target=X` to link the app object with builtins
         const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
         const copy_cross_builtins = b.addUpdateSourceFiles();
         copy_cross_builtins.addCopyFileToSource(
-            cross_builtins_obj.getEmittedBin(),
+            cross_builtins_bin,
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins.step);
@@ -5404,7 +5514,7 @@ fn addMainExe(
             b.fmt("shim_io_extern_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
-        cross_builtins_extern_obj.bundle_compiler_rt = false;
+        cross_builtins_extern_obj.bundle_compiler_rt = cross_bundle_compiler_rt;
         configureBackend(cross_builtins_extern_obj, cross_resolved_target);
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
@@ -5415,7 +5525,7 @@ fn addMainExe(
         );
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
-        if (!std.mem.eql(u8, cross_target.name, "wasm32")) {
+        if (!cross_is_wasm) {
             const default_platform_runtime_obj = b.addObject(.{
                 .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
