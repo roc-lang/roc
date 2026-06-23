@@ -989,6 +989,53 @@ const Formatter = struct {
         try fmt.push(braces.end());
     }
 
+    fn formatApplyArgs(fmt: *Formatter, region: AST.TokenizedRegion, args: []AST.Expr.Idx) anyerror!void {
+        if (try fmt.formatSingleMultilineCollectionArg(region, args)) {
+            return;
+        }
+
+        try fmt.formatCollection(region, .round, AST.Expr.Idx, args, Formatter.formatExpr);
+    }
+
+    fn formatSingleMultilineCollectionArg(fmt: *Formatter, region: AST.TokenizedRegion, args: []AST.Expr.Idx) anyerror!bool {
+        if (!fmt.hasSingleMultilineCollectionArg(region, args)) {
+            return false;
+        }
+
+        try fmt.push('(');
+        try fmt.formatExprDiscard(args[0]);
+        try fmt.push(')');
+        return true;
+    }
+
+    fn hasSingleMultilineCollectionArg(fmt: *Formatter, region: AST.TokenizedRegion, args: []AST.Expr.Idx) bool {
+        if (args.len != 1) {
+            return false;
+        }
+
+        const arg_idx = args[0];
+        const arg = fmt.ast.store.getExpr(arg_idx);
+        switch (arg) {
+            .record, .list, .tuple => {},
+            else => return false,
+        }
+
+        if (!fmt.nodeWillBeMultiline(AST.Expr.Idx, arg_idx)) {
+            return false;
+        }
+
+        const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
+        if (fmt.hasCommentBefore(arg_region.start)) {
+            return false;
+        }
+
+        if (region.end > 0 and fmt.hasCommentBefore(region.end - 1)) {
+            return false;
+        }
+
+        return true;
+    }
+
     /// Format a record type annotation with an extension (e.g., { name: Str, ..ext } or { name: Str, .. })
     fn formatRecordWithExtension(fmt: *Formatter, fields_span: AST.AnnoRecordField.Span, ext: AST.TypeAnno.RecordExt, record_region: AST.TokenizedRegion) anyerror!void {
         const fields = fmt.ast.store.annoRecordFieldSlice(fields_span);
@@ -1178,7 +1225,7 @@ const Formatter = struct {
                 try fmt.formatExprDiscard(a.@"fn");
                 const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
-                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
+                try fmt.formatApplyArgs(args_region, fmt.ast.store.exprSlice(a.args));
             },
             .string_part => |s| {
                 try fmt.pushTokenText(s.token);
@@ -1340,7 +1387,7 @@ const Formatter = struct {
                 // `mc.region` would include newlines from the receiver chain and
                 // wrongly expand short, inline arguments. (See issue #9646)
                 const args_region = AST.TokenizedRegion{ .start = mc.method_token + 1, .end = mc.region.end };
-                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
+                try fmt.formatApplyArgs(args_region, fmt.ast.store.exprSlice(mc.args));
             },
             .arrow_call => |ld| {
                 try fmt.formatExprDiscard(ld.left);
@@ -1386,7 +1433,7 @@ const Formatter = struct {
                         const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
                         const fn_region = fmt.nodeRegion(@intFromEnum(apply_fn_idx));
                         const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
-                        try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(apply.args), Formatter.formatExpr);
+                        try fmt.formatApplyArgs(args_region, fmt.ast.store.exprSlice(apply.args));
                     } else {
                         try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
                     }
@@ -3490,6 +3537,68 @@ test "issue 9646: multiline method chain keeps short args inline without trailin
             "\t.rotation(90)\n",
         result,
     );
+}
+
+test "single multiline collection literal apply args keep call paren tight" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\record_arg = f(
+        \\    {
+        \\        x: 1,
+        \\        y: 2,
+        \\    },
+        \\)
+        \\list_arg = f(
+        \\    [
+        \\        1,
+        \\        2,
+        \\    ],
+        \\)
+        \\tuple_arg = f(
+        \\    (
+        \\        1,
+        \\        2,
+        \\    ),
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        "record_arg = f({\n" ++
+        "\tx: 1,\n" ++
+        "\ty: 2,\n" ++
+        "})\n" ++
+        "\n" ++
+        "list_arg = f([\n" ++
+        "\t1,\n" ++
+        "\t2,\n" ++
+        "])\n" ++
+        "\n" ++
+        "tuple_arg = f((\n" ++
+        "\t1,\n" ++
+        "\t2,\n" ++
+        "))\n";
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "single multiline collection literal method args keep call paren tight" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\sprite = base
+        \\    .pos(
+        \\        {
+        \\            x: 1,
+        \\            y: 2,
+        \\        },
+        \\    )
+    , false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        "sprite = base\n" ++
+        "\t.pos({\n" ++
+        "\t\tx: 1,\n" ++
+        "\t\ty: 2,\n" ++
+        "\t})\n";
+    try std.testing.expectEqualStrings(expected, result);
 }
 
 test "issue 8989: platform header targets section is preserved" {
