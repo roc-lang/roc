@@ -14270,7 +14270,141 @@ fn collectPlatformRequiredSignatureSubstitutions(
                 );
             }
         },
+        .empty_record,
+        .record,
+        .record_unbound,
+        => try collectPlatformRequiredRecordSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected_payload,
+            actual_payload,
+            formals,
+            actuals,
+            active,
+        ),
+        .empty_tag_union,
+        .tag_union,
+        => try collectPlatformRequiredTagSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected_payload,
+            actual_payload,
+            formals,
+            actuals,
+            active,
+        ),
         else => {},
+    }
+}
+
+fn collectPlatformRequiredRecordSignatureSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    expected_payload: CheckedTypePayload,
+    actual_payload: CheckedTypePayload,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    const expected_parts = recordParts(expected_payload) orelse return;
+    const actual_parts = recordParts(actual_payload) orelse return;
+    const expected_row = try flattenPlatformRequirementRecordRow(allocator, store, expected_parts.fields, expected_parts.ext);
+    defer expected_row.deinit(allocator);
+    const actual_row = try flattenPlatformRequirementRecordRow(allocator, store, actual_parts.fields, actual_parts.ext);
+    defer actual_row.deinit(allocator);
+
+    for (expected_row.fields) |expected_field| {
+        const actual_field = findRecordField(names, actual_row.fields, expected_field.name) orelse {
+            if (actual_row.tail) |tail| {
+                if (checkedTypePayloadIsIdentity(platformRequirementPayload(store, tail))) continue;
+            }
+            continue;
+        };
+        try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected_field.ty,
+            actual_field.ty,
+            formals,
+            actuals,
+            active,
+        );
+    }
+
+    if (expected_row.tail) |expected_tail| {
+        if (actual_row.tail) |actual_tail| {
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_tail,
+                actual_tail,
+                formals,
+                actuals,
+                active,
+            );
+        }
+    }
+}
+
+fn collectPlatformRequiredTagSignatureSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    expected_payload: CheckedTypePayload,
+    actual_payload: CheckedTypePayload,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    const expected_union = tagUnionParts(expected_payload) orelse return;
+    const actual_union = tagUnionParts(actual_payload) orelse return;
+    const expected_row = try flattenPlatformRequirementTagRow(allocator, store, expected_union.tags, expected_union.ext);
+    defer expected_row.deinit(allocator);
+    const actual_row = try flattenPlatformRequirementTagRow(allocator, store, actual_union.tags, actual_union.ext);
+    defer actual_row.deinit(allocator);
+
+    for (expected_row.tags) |expected_tag| {
+        const actual_tag = findTag(names, actual_row.tags, expected_tag.name) orelse {
+            if (actual_row.tail) |tail| {
+                if (checkedTypePayloadIsIdentity(platformRequirementPayload(store, tail))) continue;
+            }
+            continue;
+        };
+        const expected_args = expected_tag.argsSlice(store);
+        const actual_args = actual_tag.argsSlice(store);
+        if (expected_args.len != actual_args.len) continue;
+        for (expected_args, actual_args) |expected_arg, actual_arg| {
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_arg,
+                actual_arg,
+                formals,
+                actuals,
+                active,
+            );
+        }
+    }
+
+    if (expected_row.tail) |expected_tail| {
+        if (actual_row.tail) |actual_tail| {
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_tail,
+                actual_tail,
+                formals,
+                actuals,
+                active,
+            );
+        }
     }
 }
 
@@ -15231,9 +15365,9 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
     ) Allocator.Error!bool {
         const expected_parts = recordParts(expected_payload) orelse return false;
         const actual_parts = recordParts(actual_payload) orelse return false;
-        const expected_row = try self.flattenRecordRow(expected_parts.fields, expected_parts.ext);
+        const expected_row = try flattenPlatformRequirementRecordRow(self.allocator, self.store, expected_parts.fields, expected_parts.ext);
         defer expected_row.deinit(self.allocator);
-        const actual_row = try self.flattenRecordRow(actual_parts.fields, actual_parts.ext);
+        const actual_row = try flattenPlatformRequirementRecordRow(self.allocator, self.store, actual_parts.fields, actual_parts.ext);
         defer actual_row.deinit(self.allocator);
 
         for (expected_row.fields) |expected_field| {
@@ -15263,9 +15397,9 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
     ) Allocator.Error!bool {
         const expected_union = tagUnionParts(expected_payload) orelse return false;
         const actual_union = tagUnionParts(actual_payload) orelse return false;
-        const expected_row = try self.flattenTagRow(expected_union.tags, expected_union.ext);
+        const expected_row = try flattenPlatformRequirementTagRow(self.allocator, self.store, expected_union.tags, expected_union.ext);
         defer expected_row.deinit(self.allocator);
-        const actual_row = try self.flattenTagRow(actual_union.tags, actual_union.ext);
+        const actual_row = try flattenPlatformRequirementTagRow(self.allocator, self.store, actual_union.tags, actual_union.ext);
         defer actual_row.deinit(self.allocator);
 
         for (expected_row.tags) |expected_tag| {
@@ -15298,103 +15432,109 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         return checkedTypePayloadIsIdentity(self.payload(tail_id));
     }
 
-    const FlattenedRecordRow = struct {
-        fields: []const CheckedRecordField,
-        tail: ?CheckedTypeId,
-
-        fn deinit(self: @This(), allocator: Allocator) void {
-            if (self.fields.len > 0) allocator.free(self.fields);
-        }
-    };
-
-    fn flattenRecordRow(
-        self: *PlatformRequirementTypeCompatibilityChecker,
-        head: []const CheckedRecordField,
-        ext: ?CheckedTypeId,
-    ) Allocator.Error!FlattenedRecordRow {
-        var fields = std.ArrayList(CheckedRecordField).empty;
-        errdefer fields.deinit(self.allocator);
-        try fields.appendSlice(self.allocator, head);
-        var tail = ext;
-        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-        while (tail) |tail_id| {
-            if (seen.contains(tail_id)) {
-                tail = null;
-                break;
-            }
-            try seen.put(tail_id, {});
-            switch (self.payload(tail_id)) {
-                .empty_record => {
-                    tail = null;
-                    break;
-                },
-                .record => |record| {
-                    try fields.appendSlice(self.allocator, record.fields);
-                    tail = record.ext;
-                },
-                .record_unbound => |tail_fields| {
-                    try fields.appendSlice(self.allocator, tail_fields);
-                    tail = null;
-                    break;
-                },
-                .alias => |alias| tail = alias.backing,
-                else => break,
-            }
-        }
-        return .{ .fields = try fields.toOwnedSlice(self.allocator), .tail = tail };
-    }
-
-    const FlattenedTagRow = struct {
-        tags: []const CheckedTag,
-        tail: ?CheckedTypeId,
-
-        fn deinit(self: @This(), allocator: Allocator) void {
-            if (self.tags.len > 0) allocator.free(self.tags);
-        }
-    };
-
-    fn flattenTagRow(
-        self: *PlatformRequirementTypeCompatibilityChecker,
-        head: []const CheckedTag,
-        ext: ?CheckedTypeId,
-    ) Allocator.Error!FlattenedTagRow {
-        var tags = std.ArrayList(CheckedTag).empty;
-        errdefer tags.deinit(self.allocator);
-        try tags.appendSlice(self.allocator, head);
-        var tail = ext;
-        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-        while (tail) |tail_id| {
-            if (seen.contains(tail_id)) {
-                tail = null;
-                break;
-            }
-            try seen.put(tail_id, {});
-            switch (self.payload(tail_id)) {
-                .empty_tag_union => {
-                    tail = null;
-                    break;
-                },
-                .tag_union => |tag_union| {
-                    try tags.appendSlice(self.allocator, tag_union.tags);
-                    tail = tag_union.ext;
-                },
-                .alias => |alias| tail = alias.backing,
-                else => break,
-            }
-        }
-        return .{ .tags = try tags.toOwnedSlice(self.allocator), .tail = tail };
-    }
-
     fn payload(self: *const PlatformRequirementTypeCompatibilityChecker, root: CheckedTypeId) CheckedTypePayload {
-        const index: usize = @intFromEnum(root);
-        if (index >= self.store.payloads.items.len) {
-            checkedArtifactInvariant("platform requirement type compatibility referenced missing checked type payload", .{});
-        }
-        return self.store.payload(@enumFromInt(index));
+        return platformRequirementPayload(self.store, root);
     }
 };
+
+const FlattenedPlatformRequirementRecordRow = struct {
+    fields: []const CheckedRecordField,
+    tail: ?CheckedTypeId,
+
+    fn deinit(self: @This(), allocator: Allocator) void {
+        if (self.fields.len > 0) allocator.free(self.fields);
+    }
+};
+
+fn flattenPlatformRequirementRecordRow(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    head: []const CheckedRecordField,
+    ext: ?CheckedTypeId,
+) Allocator.Error!FlattenedPlatformRequirementRecordRow {
+    var fields = std.ArrayList(CheckedRecordField).empty;
+    errdefer fields.deinit(allocator);
+    try fields.appendSlice(allocator, head);
+    var tail = ext;
+    var seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer seen.deinit();
+    while (tail) |tail_id| {
+        if (seen.contains(tail_id)) {
+            tail = null;
+            break;
+        }
+        try seen.put(tail_id, {});
+        switch (platformRequirementPayload(store, tail_id)) {
+            .empty_record => {
+                tail = null;
+                break;
+            },
+            .record => |record| {
+                try fields.appendSlice(allocator, record.fields);
+                tail = record.ext;
+            },
+            .record_unbound => |tail_fields| {
+                try fields.appendSlice(allocator, tail_fields);
+                tail = null;
+                break;
+            },
+            .alias => |alias| tail = alias.backing,
+            else => break,
+        }
+    }
+    return .{ .fields = try fields.toOwnedSlice(allocator), .tail = tail };
+}
+
+const FlattenedPlatformRequirementTagRow = struct {
+    tags: []const CheckedTag,
+    tail: ?CheckedTypeId,
+
+    fn deinit(self: @This(), allocator: Allocator) void {
+        if (self.tags.len > 0) allocator.free(self.tags);
+    }
+};
+
+fn flattenPlatformRequirementTagRow(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    head: []const CheckedTag,
+    ext: ?CheckedTypeId,
+) Allocator.Error!FlattenedPlatformRequirementTagRow {
+    var tags = std.ArrayList(CheckedTag).empty;
+    errdefer tags.deinit(allocator);
+    try tags.appendSlice(allocator, head);
+    var tail = ext;
+    var seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer seen.deinit();
+    while (tail) |tail_id| {
+        if (seen.contains(tail_id)) {
+            tail = null;
+            break;
+        }
+        try seen.put(tail_id, {});
+        switch (platformRequirementPayload(store, tail_id)) {
+            .empty_tag_union => {
+                tail = null;
+                break;
+            },
+            .tag_union => |tag_union| {
+                try tags.appendSlice(allocator, tag_union.tags);
+                tail = tag_union.ext;
+            },
+            .alias => |alias| tail = alias.backing,
+            else => break,
+        }
+    }
+    return .{ .tags = try tags.toOwnedSlice(allocator), .tail = tail };
+}
+
+fn platformRequirementPayload(store: *const CheckedTypeStore, root: CheckedTypeId) CheckedTypePayload {
+    const index: usize = @intFromEnum(root);
+    if (index >= store.payloads.items.len) {
+        checkedArtifactInvariant("platform requirement referenced missing checked type payload", .{});
+    }
+    return store.payload(@enumFromInt(index));
+}
 
 fn findRecordFieldById(
     fields: []const CheckedRecordField,
