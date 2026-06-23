@@ -99,7 +99,7 @@ Here are Roc's builtin integer types, along with their ranges and sizes in memor
 | `-170_141_183_460_469_231_731_687_303_715_884_105_728` | [I128]| 16 Bytes |
 | ` 170_141_183_460_469_231_731_687_303_715_884_105_727` |       |          |
 |--------------------------------------------------------|-------|----------|
-| ` (over 340 undecillion)                            0` | [U128]| 16 Bytes |
+| ` (number below is over 340 undecillion)            0` | [U128]| 16 Bytes |
 | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 
 Integers come in two flavors: *signed* and *unsigned*.
