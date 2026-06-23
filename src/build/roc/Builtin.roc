@@ -617,6 +617,16 @@ Builtin :: [].{
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
+		## Returns an iterator that yields exactly one item.
+		## ```roc
+		## expect Iter.fold(Iter.single(42.I64), [], |acc, item| acc.append(item)) == [42]
+		## ```
+		single : item -> Iter(item)
+		single = |item| {
+			len_if_known: Known(1),
+			step: || One({ item, rest: range_done() }),
+		}
+
 		## Returns an iterator that yields the given item first, followed by
 		## everything the given iterator yields.
 		##
@@ -632,6 +642,55 @@ Builtin :: [].{
 				Unknown => Unknown
 			},
 			step: || One({ item, rest }),
+		}
+
+		## Returns an iterator that yields all items from the first iterator,
+		## then all items from the second iterator.
+		## ```roc
+		## expect Iter.fold([1.I64, 2].iter().concat([3, 4].iter()), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
+		## ```
+		concat : Iter(item), Iter(item) -> Iter(item)
+		concat = |first, second| {
+			len_if_known: match first.len_if_known {
+				Known(first_len) => match second.len_if_known {
+					Known(second_len) => if second_len > 18446744073709551615 - first_len {
+						Unknown
+					} else {
+						Known(first_len + second_len)
+					}
+					Unknown => Unknown
+				}
+				Unknown => Unknown
+			},
+			step: ||
+				match Iter.next(first) {
+					Done => Iter.next(second)
+					Skip({ rest }) => Skip({ rest: Iter.concat(rest, second) })
+					One({ item, rest }) => One({ item, rest: Iter.concat(rest, second) })
+				},
+		}
+
+		## Returns an iterator that yields everything from the given iterator,
+		## followed by the given item.
+		## ```roc
+		## expect Iter.fold([1.I64, 2].iter().append(3), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		append : Iter(item), item -> Iter(item)
+		append = |iterator, last| {
+			len_if_known: match iterator.len_if_known {
+				Known(len) => if len == 18446744073709551615 {
+					Unknown
+				} else {
+					Known(len + 1)
+				}
+				Unknown => Unknown
+			},
+			step: ||
+				match Iter.next(iterator) {
+					Done => One({ item: last, rest: range_done() })
+					Skip({ rest }) => Skip({ rest: Iter.append(rest, last) })
+					One({ item, rest }) => One({ item, rest: Iter.append(rest, last) })
+				},
 		}
 
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]

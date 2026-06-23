@@ -697,6 +697,10 @@ const HoistSelectionTransaction = struct {
                 try self.stageExprDependenciesInternal(eq.lhs, context);
                 try self.stageExprDependenciesInternal(eq.rhs, context);
             },
+            .e_structural_hash => |h| {
+                try self.stageExprDependenciesInternal(h.value, context);
+                try self.stageExprDependenciesInternal(h.hasher, context);
+            },
             .e_method_eq => |eq| {
                 try self.stageExprDependenciesInternal(eq.lhs, context);
                 try self.stageExprDependenciesInternal(eq.rhs, context);
@@ -904,6 +908,14 @@ const Constraint = union(enum) {
         /// error message — kept here rather than in `ctx` (which is purely
         /// diagnostic) so it doesn't have to ride inside the problem context.
         is_cross_reference: bool = false,
+        /// For a `recursive_def` edge, the referenced def's body var — the one
+        /// that carries the referenced def's annotated function type. It exists
+        /// only to let `defaultLiteralsAtGeneralizationBoundary` read which of a
+        /// recursive call's parameters are concretely annotated (and therefore
+        /// pin a literal argument) at a point where `expected` (a self-reference's
+        /// pattern var) is not yet unified with the annotation. Null for non-
+        /// recursive edges.
+        recursive_annotated_fn_var: ?Var = null,
     },
 
     pub const SafeList = MkSafeList(@This());
@@ -1995,6 +2007,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             .e_field_access,
             .e_interpolation,
             .e_structural_eq,
+            .e_structural_hash,
             .e_method_eq,
             .e_type_method_call,
             .e_type_dispatch_call,
@@ -2305,6 +2318,7 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_field_access,
         .e_interpolation,
         .e_structural_eq,
+        .e_structural_hash,
         .e_method_eq,
         .e_type_method_call,
         .e_type_dispatch_call,
@@ -2378,6 +2392,7 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_field_access,
         .e_interpolation,
         .e_structural_eq,
+        .e_structural_hash,
         .e_method_eq,
         .e_type_method_call,
         .e_type_dispatch_call,
@@ -2439,6 +2454,7 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_field_access,
         .e_interpolation,
         .e_structural_eq,
+        .e_structural_hash,
         .e_method_eq,
         .e_tuple_access,
         => true,
@@ -3748,100 +3764,63 @@ fn recordedNumeralLiteralForExpr(self: *const Self, expr_idx: CIR.Expr.Idx) Modu
 
 fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
     const literal = self.recordedNumeralLiteralForExpr(expr_idx);
-    const text = try numeralLiteralDecimalText(self.gpa, self.cir, literal);
-    defer self.gpa.free(text);
-    const fits_dec = builtins.dec.RocDec.fromNonemptySlice(text) != null;
+    const fits_dec = numeralLiteralFitsDec(self.cir, literal);
     const is_fractional = literal.after_decimal_digit_count != 0 or literal.hadDecimalPoint();
     return types_mod.NumeralInfo.fromExact(literal.isNegative(), is_fractional, fits_dec, region);
 }
 
-fn numeralLiteralDecimalText(
-    allocator: Allocator,
+fn numeralLiteralFitsDec(
     module_env: *const ModuleEnv,
     literal: ModuleEnv.NumeralLiteral,
-) Allocator.Error![]const u8 {
-    const before = try base256DecimalText(allocator, module_env.numeralDigitsBefore(literal), 1);
-    defer allocator.free(before);
+) bool {
+    const decimal_places = builtins.dec.RocDec.decimal_places;
+    const after_count = literal.after_decimal_digit_count;
+    if (after_count > decimal_places) return false;
 
-    const after_min_digits: usize = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
-        @panic("recorded numeral literal decimal digit count exceeded host usize");
-    };
-    const after = if (after_min_digits == 0)
-        try allocator.alloc(u8, 0)
-    else
-        try base256DecimalText(allocator, module_env.numeralDigitsAfter(literal), after_min_digits);
-    defer allocator.free(after);
+    const before = base256BytesToU128(module_env.numeralDigitsBefore(literal)) orelse return false;
+    const after = base256BytesToU128(module_env.numeralDigitsAfter(literal)) orelse return false;
 
-    const sign_len: usize = @intFromBool(literal.isNegative());
-    const dot_len: usize = @intFromBool(after_min_digits > 0);
-    const total_len = sign_len + before.len + dot_len + after.len;
-    const text = try allocator.alloc(u8, total_len);
-    var offset: usize = 0;
-    if (literal.isNegative()) {
-        text[offset] = '-';
-        offset += 1;
-    }
-    @memcpy(text[offset..][0..before.len], before);
-    offset += before.len;
-    if (after_min_digits > 0) {
-        text[offset] = '.';
-        offset += 1;
-        @memcpy(text[offset..][0..after.len], after);
-    }
-    return text;
+    const before_scaled = checkedMulU128(before, @intCast(builtins.dec.RocDec.one_point_zero_i128)) orelse return false;
+    const after_scale = pow10U128(decimal_places - after_count);
+    const after_scaled = checkedMulU128(after, after_scale) orelse return false;
+    const magnitude = checkedAddU128(before_scaled, after_scaled) orelse return false;
+
+    const max_positive: u128 = @intCast(std.math.maxInt(i128));
+    const limit = if (literal.isNegative()) max_positive + 1 else max_positive;
+    return magnitude <= limit;
 }
 
-fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: usize) Allocator.Error![]const u8 {
-    var first_nonzero: usize = 0;
-    while (first_nonzero < bytes_be.len and bytes_be[first_nonzero] == 0) : (first_nonzero += 1) {}
-
-    if (first_nonzero == bytes_be.len) {
-        const len = @max(min_digits, 1);
-        const out = try allocator.alloc(u8, len);
-        @memset(out, '0');
-        return out;
+fn base256BytesToU128(bytes_be: []const u8) ?u128 {
+    var value: u128 = 0;
+    for (bytes_be) |byte| {
+        const shifted = @mulWithOverflow(value, 256);
+        if (shifted[1] != 0) return null;
+        const added = @addWithOverflow(shifted[0], byte);
+        if (added[1] != 0) return null;
+        value = added[0];
     }
+    return value;
+}
 
-    var current_buf = try allocator.dupe(u8, bytes_be[first_nonzero..]);
-    defer allocator.free(current_buf);
-    var current_len = current_buf.len;
-    var digits_rev = std.ArrayList(u8).empty;
-    defer digits_rev.deinit(allocator);
+fn checkedMulU128(lhs: u128, rhs: u128) ?u128 {
+    const multiplied = @mulWithOverflow(lhs, rhs);
+    if (multiplied[1] != 0) return null;
+    return multiplied[0];
+}
 
-    while (current_len > 0) {
-        const current = current_buf[0..current_len];
-        var quotient = try allocator.alloc(u8, current.len);
-        var quotient_len: usize = 0;
-        var remainder: u16 = 0;
-        for (current) |byte| {
-            const value = remainder * 256 + byte;
-            const digit: u8 = @intCast(value / 10);
-            remainder = value % 10;
-            if (digit != 0 or quotient_len != 0) {
-                quotient[quotient_len] = digit;
-                quotient_len += 1;
-            }
-        }
-        // Free the freshly-allocated quotient if recording the digit fails,
-        // since it has not yet been adopted into current_buf.
-        digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder))) catch |err| {
-            allocator.free(quotient);
-            return err;
-        };
-        allocator.free(current_buf);
-        current_buf = quotient;
-        current_len = quotient_len;
+fn checkedAddU128(lhs: u128, rhs: u128) ?u128 {
+    const added = @addWithOverflow(lhs, rhs);
+    if (added[1] != 0) return null;
+    return added[0];
+}
+
+fn pow10U128(exponent: u32) u128 {
+    var value: u128 = 1;
+    var remaining = exponent;
+    while (remaining > 0) : (remaining -= 1) {
+        value *= 10;
     }
-
-    const digit_count = digits_rev.items.len;
-    const total_len = @max(digit_count, min_digits);
-    const out = try allocator.alloc(u8, total_len);
-    const pad = total_len - digit_count;
-    @memset(out[0..pad], '0');
-    for (digits_rev.items, 0..) |digit, i| {
-        out[pad + digit_count - 1 - i] = digit;
-    }
-    return out;
+    return value;
 }
 
 /// Create a nominal Box type with the given element type
@@ -4768,6 +4747,8 @@ fn hoistedRootDependenciesAreKeptInternal(
         },
         .e_structural_eq => |eq| (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
             try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
+        .e_structural_hash => |h| (try self.hoistedRootDependenciesAreKeptInternal(h.value, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(h.hasher, context, keep_oracle),
         .e_method_eq => |eq| !self.varIsEffectfulFunction(eq.constraint_fn_var) and
             (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
             try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
@@ -4874,6 +4855,8 @@ fn hoistedExprAllowsStoredConst(
             try self.hoistedExprSpanAllowsStoredConst(module, interpolation.parts, context),
         .e_structural_eq => |eq| (try self.hoistedExprAllowsStoredConst(module, eq.lhs, context)) and
             try self.hoistedExprAllowsStoredConst(module, eq.rhs, context),
+        .e_structural_hash => |h| (try self.hoistedExprAllowsStoredConst(module, h.value, context)) and
+            try self.hoistedExprAllowsStoredConst(module, h.hasher, context),
         .e_method_eq => |eq| (try self.hoistedExprAllowsStoredConst(module, eq.lhs, context)) and
             try self.hoistedExprAllowsStoredConst(module, eq.rhs, context),
         .e_type_method_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
@@ -4949,6 +4932,7 @@ fn hoistedCallableDefForExpr(
         .e_dispatch_call,
         .e_interpolation,
         .e_structural_eq,
+        .e_structural_hash,
         .e_method_eq,
         .e_type_method_call,
         .e_type_dispatch_call,
@@ -5846,6 +5830,15 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         //    is not a dead end. A genuinely ambiguous equality on a bare flex value
         //    (`poly() == poly()`) is still caught by the def-site sweep, which keys
         //    on an expression whose OWN type is the bare-flex receiver.
+        //
+        // `to_hash` is deliberately NOT skipped here. A structural hash on a
+        // concrete key (e.g. `Dict.insert({a: 1}, ...)`) resolves its receiver to
+        // a concrete structure, so the receiver never reaches this flex/rigid
+        // sweep at all (it is filtered above). What does reach here is a `to_hash`
+        // contract on a genuinely undetermined key — e.g. the result of
+        // `Dict.join_map(src, |_, _| Dict.empty())`, whose key never grounds
+        // (issue 9644). That is a real dead end and must be reported via the
+        // body-forced path below, exactly like any other unsatisfiable contract.
         //
         // What remains — and is reported — is a real method dispatch
         // (`method_call`/`desugared_unaryop`, a non-equality `desugared_binop`,
@@ -9722,6 +9715,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .actual = expr_var,
                                     .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
                                     .is_cross_reference = true,
+                                    .recursive_annotated_fn_var = def_expr_var,
                                 } });
                             } else {
                                 // Unannotated member: the group is inferred together
@@ -9779,12 +9773,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         else
                             pat_var;
 
-                        // Write down this constraint for later validation
+                        // Write down this constraint for later validation. The
+                        // annotated body var is recorded only when the referenced
+                        // def is actually annotated: a literal argument is pinned to
+                        // an annotated parameter, never to one whose type was merely
+                        // inferred from the body.
                         _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
                             .expected = constraint_expected,
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
                             .is_cross_reference = is_cross_reference,
+                            .recursive_annotated_fn_var = if (referenced_def.annotation != null)
+                                ModuleEnv.varFrom(referenced_def.expr)
+                            else
+                                null,
                         } });
 
                         // Detect mutual recursion through local lookups. If the
@@ -10560,6 +10562,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const rhs_var = ModuleEnv.varFrom(eq.rhs);
             _ = try self.unify(lhs_var, rhs_var, env);
             _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
+        },
+        .e_structural_hash => |h| {
+            does_fx = try self.checkExpr(h.value, env, Expected.none()) or does_fx;
+            does_fx = try self.checkExpr(h.hasher, env, Expected.none()) or does_fx;
+
+            // `to_hash : self, Hasher -> Hasher` threads the Hasher through, so the
+            // result has the same type as the incoming Hasher argument.
+            const hasher_var = ModuleEnv.varFrom(h.hasher);
+            _ = try self.unify(hasher_var, expr_var, env);
         },
         .e_method_eq => |eq| {
             var arg_vars_sfa = std.heap.stackFallback(@sizeOf(Var), self.gpa);
@@ -12928,7 +12939,7 @@ fn reportMissingNominalMethodForBinop(
     }
 
     const nominal_type = resolved_lhs.desc.content.structure.nominal_type;
-    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsDerivedIsEq(nominal_type)) {
+    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsStructuralDerive(nominal_type)) {
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
@@ -13398,6 +13409,38 @@ fn rewriteDerivedIsEqMethodCallAsStructuralEq(
     return true;
 }
 
+/// Rewrite a derived `to_hash` method call into an explicit structural-hash node.
+/// The call is `value.to_hash(hasher)`, so the receiver is the value being hashed
+/// and the single argument is the Hasher being threaded through.
+fn rewriteDerivedMethodCallAsStructuralHash(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+) bool {
+    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return true;
+
+    switch (self.cir.store.getExpr(expr_idx)) {
+        .e_method_call => |method_call| {
+            const args = self.cir.store.sliceExpr(method_call.args);
+            if (args.len != 1) return false;
+
+            self.cir.store.replaceExprWithStructuralHash(expr_idx, method_call.receiver, args[0]);
+        },
+        .e_dispatch_call => |method_call| {
+            if (method_call.constraint_fn_var != constraint.fn_var) return true;
+            const args = self.cir.store.sliceExpr(method_call.args);
+            if (args.len != 1) return false;
+
+            self.cir.store.replaceExprWithStructuralHash(expr_idx, method_call.receiver, args[0]);
+        },
+        .e_structural_hash => |h| {
+            self.cir.store.replaceExprWithStructuralHash(expr_idx, h.value, h.hasher);
+        },
+        else => {},
+    }
+
+    return true;
+}
+
 fn rewriteEqBinopAsMethodEq(self: *Self, constraint: StaticDispatchConstraint) void {
     if (constraint.origin != .desugared_binop) return;
     const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return;
@@ -13714,12 +13757,20 @@ fn freshRecursiveMethodPlaceholder(
     else
         ModuleEnv.varFrom(def.pattern);
 
-    _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
-        .expected = constraint_expected,
-        .actual = method_var,
-        .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
-        .is_cross_reference = is_cross_reference,
-    } });
+    _ = try self.constraints.append(self.gpa, Constraint{
+        .eql = .{
+            .expected = constraint_expected,
+            .actual = method_var,
+            .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+            .is_cross_reference = is_cross_reference,
+            // A literal argument is pinned to an annotated parameter only; record the
+            // annotated body var solely when the referenced def carries an annotation.
+            .recursive_annotated_fn_var = if (def.annotation != null)
+                ModuleEnv.varFrom(def.expr)
+            else
+                null,
+        },
+    });
 
     return method_var;
 }
@@ -14579,11 +14630,23 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     // RETURN: a literal whose dispatch hangs off an unresolved recursive result
     // (e.g. `fc(.., fc(..) + 1)` where `fc : I64, I64 -> I64` — `1`'s `plus`
     // receiver is `fc(..)`'s return) stays protected until the recursion resolves
-    // and `plus` pins it to I64, instead of defaulting to Dec first. Seed only the
-    // RETURN, not the call's arguments: a literal passed directly as a recursive
-    // argument (e.g. `fib("bad arg")`) must stay a defaulting/error candidate so a
-    // genuine arg-type mismatch is still reported at the argument. Purely
-    // conservative for the return path — keeps more literals open, defaults none.
+    // and `plus` pins it to I64, instead of defaulting to Dec first.
+    //
+    // Also seed an ARGUMENT whose corresponding annotated parameter is concrete: a
+    // literal passed directly to a recursive call (e.g. `slice(rest, 0, end - 1)`
+    // where param 1 is annotated `U64`) must unify with that parameter's type when
+    // the deferred edge resolves, not default to Dec first. The annotated signature
+    // is read from `recursive_annotated_fn_var` (the referenced def's body var,
+    // carrying its annotated function like `List(a), U64, U64 -> List(a)`) — set
+    // only when the referenced def is actually annotated, since `eql.expected` (a
+    // self-reference's pattern var) is not yet unified with the annotation here.
+    // Resolving each parameter shows whether it pins the argument: a parameter that
+    // is still flex/rigid pins nothing, so its argument is left unseeded — and an
+    // unannotated recursive function records no fn var at all, so its arguments keep
+    // today's behavior. A genuinely mismatched argument (e.g. `fib("bad arg")`)
+    // carries a `Str`, not an open numeral, so seeding its var changes no defaulting
+    // and the real clash still surfaces. Purely conservative throughout: only ever
+    // keeps more literals open, defaults none.
     {
         var rec_iter = self.constraints.iterIndices();
         while (rec_iter.next()) |constraint_idx| {
@@ -14591,14 +14654,24 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
                 .eql => |eql| switch (eql.ctx) {
                     .recursive_def => {
                         const ref_resolved = self.types.resolveVar(eql.actual);
-                        switch (ref_resolved.desc.content) {
-                            .structure => |flat| switch (flat) {
-                                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                                    try self.collectReachableVars(func.ret, &self.boundary_reachable_vars);
-                                },
-                                else => {},
-                            },
-                            else => {},
+                        const ref_func = ref_resolved.desc.content.unwrapFunc() orelse continue;
+                        try self.collectReachableVars(ref_func.ret, &self.boundary_reachable_vars);
+
+                        // The referenced def's annotated body var supplies the
+                        // parameter types: `expected` (a self-reference's pattern
+                        // var) is not yet unified with the annotation here, but the
+                        // body var has carried it since the body was checked.
+                        const annotated_fn_var = eql.recursive_annotated_fn_var orelse continue;
+                        const annotated_func = self.types.resolveVar(annotated_fn_var).desc.content.unwrapFunc() orelse continue;
+                        const call_args = self.types.sliceVars(ref_func.args);
+                        const param_vars = self.types.sliceVars(annotated_func.args);
+                        const arg_count = @min(call_args.len, param_vars.len);
+                        for (call_args[0..arg_count], param_vars[0..arg_count]) |call_arg, param_var| {
+                            const param_content = self.types.resolveVar(param_var).desc.content;
+                            switch (param_content) {
+                                .flex, .rigid => {},
+                                .structure, .alias, .err => try self.collectReachableVars(call_arg, &self.boundary_reachable_vars),
+                            }
                         }
                     },
                     else => {},
@@ -15414,14 +15487,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                        try self.nominalSupportsDerivedIsEq(nominal_type))
+                        try self.nominalSupportsStructuralDerive(nominal_type))
                     blk: {
                         const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
                             nominal_type.sourceDeclOptional(),
                             constraint.fn_name,
                         );
-                        if (exact_method_binding == null and try self.nominalSupportsDerivedIsEq(nominal_type)) {
+                        if (exact_method_binding == null and try self.nominalSupportsStructuralDerive(nominal_type)) {
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -15441,6 +15514,25 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         };
+                    } else if (constraint.fn_name.eql(self.cir.idents.to_hash) and
+                        try self.nominalSupportsStructuralDerive(nominal_type))
+                    blk: {
+                        const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+                            self.cir,
+                            nominal_type.sourceDeclOptional(),
+                            constraint.fn_name,
+                        );
+                        if (exact_method_binding == null) {
+                            try self.satisfyDerivedToHashConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                            continue;
+                        }
+                        break :blk exact_method_binding.?;
                     } else original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
@@ -15652,6 +15744,34 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             continue;
                         }
                     }
+                    if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
+                        const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                            alias.source_decl.toOptional(),
+                            self.cir,
+                            constraint.fn_name,
+                        );
+                        if (method_binding == null) {
+                            const backing_var = self.types.getAliasBackingVar(alias);
+                            if (try self.varSupportsToHash(backing_var)) {
+                                try self.satisfyDerivedToHashConstraint(
+                                    deferred_constraint.var_,
+                                    constraint,
+                                    constraint.fn_var,
+                                    env,
+                                    region,
+                                );
+                            } else {
+                                try self.reportConstraintError(
+                                    deferred_constraint.var_,
+                                    constraint,
+                                    .{ .missing_method = .nominal },
+                                    env,
+                                    is_numeric_default_pass,
+                                );
+                            }
+                            continue;
+                        }
+                    }
                     if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
@@ -15840,6 +15960,27 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 env,
                             );
                         }
+                    } else if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
+                        // Anonymous structural types have derived to_hash if all their
+                        // components also support to_hash.
+                        if (try self.typeSupportsToHash(dispatcher_content.structure)) {
+                            try self.satisfyDerivedToHashConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                self.getRegionAt(deferred_constraint.var_),
+                            );
+                        } else {
+                            // Some component doesn't support to_hash (e.g., contains a function)
+                            try self.reportConstraintError(
+                                deferred_constraint.var_,
+                                constraint,
+                                .{ .missing_method = .nominal },
+                                env,
+                                is_numeric_default_pass,
+                            );
+                        }
                     } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                         const region = self.getRegionAt(deferred_constraint.var_);
                         const supports_parse = try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region);
@@ -15880,9 +16021,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                         }
                     } else {
-                        // Structural types (other than is_eq, parser_for, and encode_to)
-                        // cannot have methods called on them. The user must explicitly wrap
-                        // the value in a nominal type.
+                        // Structural types (other than is_eq, to_hash, parser_for, and
+                        // encode_to) cannot have methods called on them. The user must
+                        // explicitly wrap the value in a nominal type.
                         try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
@@ -16057,75 +16198,79 @@ fn ensureCustomInterpolationPartsChecked(
     }
 }
 
-/// Check if a structural type supports is_eq.
-/// A type supports is_eq if:
-/// - It's not a function type
-/// - All of its components (record fields, tuple elements, tag payloads) also support is_eq
-/// - For nominal types, check if their backing type supports is_eq
-fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.typeSupportsIsEqInternal(flat_type, &self.var_set);
-}
-
-fn typeSupportsIsEqInternal(
+/// Whether a structural type supports the structural derivations `is_eq` and
+/// `to_hash`. Both share the same structural admissibility: a type qualifies if
+/// it is not a function, not a `Box`, and all of its components (record fields,
+/// tuple elements, tag payloads, nominal backing) likewise qualify. The two
+/// derivations have identical structural requirements because their per-type
+/// recursion bottoms out at the same builtin leaves (numbers/Str/Bool/List
+/// declare both; functions and Box declare neither).
+fn typeSupportsStructuralDeriveInternal(
     self: *Self,
     flat_type: types_mod.FlatType,
     visited: *std.AutoHashMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
-        // Function types do not support is_eq
+        // Function types support neither is_eq nor to_hash.
         .fn_pure, .fn_effectful, .fn_unbound => false,
 
-        // Empty types trivially support is_eq
+        // Empty types trivially qualify.
         .empty_record, .empty_tag_union => true,
 
-        // Records support is_eq if all field types support is_eq
+        // Records qualify if all field types qualify.
         .record => |record| {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsIsEqInternal(field_var, visited)) return false;
+                if (!try self.varSupportsStructuralDeriveInternal(field_var, visited)) return false;
             }
             return true;
         },
 
-        // Tuples support is_eq if all element types support is_eq
+        // Tuples qualify if all element types qualify.
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem_var| {
-                if (!try self.varSupportsIsEqInternal(elem_var, visited)) return false;
+                if (!try self.varSupportsStructuralDeriveInternal(elem_var, visited)) return false;
             }
             return true;
         },
 
-        // Tag unions support is_eq if all payload types support is_eq
+        // Tag unions qualify if all payload types qualify.
         .tag_union => |tag_union| {
             const tags_slice = self.types.getTagsSlice(tag_union.tags);
             for (tags_slice.items(.args)) |tag_args| {
                 const args = self.types.sliceVars(tag_args);
                 for (args) |arg_var| {
-                    if (!try self.varSupportsIsEqInternal(arg_var, visited)) return false;
+                    if (!try self.varSupportsStructuralDeriveInternal(arg_var, visited)) return false;
                 }
             }
             return true;
         },
 
-        // Nominal types support is_eq if their backing type supports is_eq
+        // Nominal types qualify if their backing type qualifies (builtin
+        // numbers/Str/Bool/List declare both derivations; Box declares neither).
         .nominal_type => |nominal| {
             if (self.nominalIsBoxType(nominal)) return false;
             const backing_var = self.types.getNominalBackingVar(nominal);
-            return try self.varSupportsIsEqInternal(backing_var, visited);
+            return try self.varSupportsStructuralDeriveInternal(backing_var, visited);
         },
 
-        // Unbound records: resolve and check the resolved type
+        // Unbound records: check each field.
         .record_unbound => |fields| {
-            // Check each field in the unbound record
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsIsEqInternal(field_var, visited)) return false;
+                if (!try self.varSupportsStructuralDeriveInternal(field_var, visited)) return false;
             }
             return true;
         },
     };
+}
+
+/// Check if a structural type supports is_eq. See
+/// `typeSupportsStructuralDeriveInternal`.
+fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.typeSupportsStructuralDeriveInternal(flat_type, &self.var_set);
 }
 
 fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
@@ -16235,11 +16380,56 @@ fn flatTypeContainsUnboxedFunction(
     };
 }
 
-fn nominalSupportsDerivedIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
+/// Check if a structural type supports to_hash. See
+/// `typeSupportsStructuralDeriveInternal`.
+fn typeSupportsToHash(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.typeSupportsStructuralDeriveInternal(flat_type, &self.var_set);
+}
+
+/// Resolve a type variable and report whether its content supports the
+/// structural derivations is_eq and to_hash. Flex/rigid vars are optimistically
+/// admitted: if later unified with a non-deriving type (a function),
+/// unification fails. Already-visited vars (recursive types) return true.
+fn varSupportsStructuralDeriveInternal(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return true;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .structure => |s| try self.typeSupportsStructuralDeriveInternal(s, visited),
+        .flex, .rigid => true,
+        .alias => |alias| try self.varSupportsStructuralDeriveInternal(self.types.getAliasBackingVar(alias), visited),
+        .err => true,
+    };
+}
+
+/// Whether a nominal type admits a derived is_eq/to_hash. Builtin numbers
+/// declare both directly; Box declares neither; all other nominals defer to
+/// whether their backing type qualifies structurally.
+fn nominalSupportsStructuralDerive(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
     if (self.nominalIsBoxType(nominal_type)) return false;
     self.var_set.clearRetainingCapacity();
-    return try self.varSupportsIsEqInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set);
+    return try self.varSupportsStructuralDeriveInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set);
+}
+
+/// Check if a type variable supports is_eq. See
+/// `varSupportsStructuralDeriveInternal`.
+fn varSupportsIsEq(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varSupportsStructuralDeriveInternal(var_, &self.var_set);
+}
+
+/// Check if a type variable supports to_hash. See
+/// `varSupportsStructuralDeriveInternal`.
+fn varSupportsToHash(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varSupportsStructuralDeriveInternal(var_, &self.var_set);
 }
 
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
@@ -16679,6 +16869,53 @@ fn satisfyDerivedIsEqConstraint(
     _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
+        try self.markConstraintFunctionAsError(constraint, env);
+    }
+}
+
+/// Satisfy a derived `to_hash` constraint for an anonymous structural type.
+/// `to_hash : self, Hasher -> Hasher` — the receiver is the dispatcher, and the
+/// Hasher argument is threaded straight through to the return type. The method
+/// call is rewritten to an explicit structural-hash node so later stages
+/// decompose the hash structurally instead of dispatching to a method.
+fn satisfyDerivedToHashConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    constraint_fn_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.unifyWith(constraint_fn_var, .err, env);
+        return;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 2) {
+        const hasher_var = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+        const expected_content = try self.types.mkFuncUnbound(&.{ dispatcher_var, hasher_var }, hasher_var);
+        const expected_fn_var = try self.freshFromContent(expected_content, env, region);
+
+        _ = try self.unifyInContext(expected_fn_var, constraint_fn_var, env, .{ .fn_call_arity = .{
+            .fn_name = self.cir.idents.to_hash,
+            .expected_args = 2,
+            .actual_args = @intCast(args.len),
+        } });
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
+    // Read both arg vars and the return before unifying: the first unify can
+    // append fresh vars and reallocate the backing array, dangling the slice.
+    const self_arg = args[0];
+    const hasher_arg = args[1];
+    const ret = resolved_func.ret;
+    _ = try self.unify(dispatcher_var, self_arg, env);
+    // The Hasher argument is threaded through unchanged to the return type.
+    _ = try self.unify(hasher_arg, ret, env);
+    if (!self.rewriteDerivedMethodCallAsStructuralHash(constraint)) {
         try self.markConstraintFunctionAsError(constraint, env);
     }
 }
@@ -17626,34 +17863,6 @@ fn validateDerivedEncodeNominal(
         },
     });
     return if (result.isOk()) .ok else .reported_error;
-}
-
-/// Check if a type variable supports is_eq by resolving it and checking its content
-fn varSupportsIsEq(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varSupportsIsEqInternal(var_, &self.var_set);
-}
-
-fn varSupportsIsEqInternal(
-    self: *Self,
-    var_: Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return true;
-    try visited.put(resolved.var_, {});
-
-    return switch (resolved.desc.content) {
-        .structure => |s| try self.typeSupportsIsEqInternal(s, visited),
-        // Flex/rigid vars: we optimistically assume they support is_eq.
-        // This is sound because if the variable is later unified with a type
-        // that doesn't support is_eq (like a function), unification will fail.
-        .flex, .rigid => true,
-        // Aliases: check the underlying type
-        .alias => |alias| try self.varSupportsIsEqInternal(self.types.getAliasBackingVar(alias), visited),
-        // Error types: allow them to proceed
-        .err => true,
-    };
 }
 
 /// Check if a flex var has incompatible constraints and report errors.

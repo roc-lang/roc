@@ -1611,6 +1611,8 @@ fn exprDependsOnUnboundPlatformRequirement(
         .field_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.receiver, relation_blocked_exprs),
         .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
+        .structural_hash => |h| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.value, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.hasher, relation_blocked_exprs),
         .tuple_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.tuple, relation_blocked_exprs),
         .break_ => false,
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
@@ -6560,6 +6562,10 @@ pub const CheckedExprData = union(enum) {
         rhs: CheckedExprId,
         negated: bool,
     },
+    structural_hash: struct {
+        value: CheckedExprId,
+        hasher: CheckedExprId,
+    },
     method_eq: ?StaticDispatchPlanId,
     type_dispatch_call: ?StaticDispatchPlanId,
     tuple_access: struct {
@@ -6748,6 +6754,10 @@ pub const StoredCheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+    },
+    structural_hash: struct {
+        value: CheckedExprId,
+        hasher: CheckedExprId,
     },
     method_eq: ?StaticDispatchPlanId,
     type_dispatch_call: ?StaticDispatchPlanId,
@@ -6983,6 +6993,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
             .step_fn_ty = i.step_fn_ty,
         } },
         .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+        .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
         .method_eq => |p| .{ .method_eq = p },
         .type_dispatch_call => |p| .{ .type_dispatch_call = p },
         .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
@@ -7551,6 +7562,10 @@ const CheckedSourceNodes = struct {
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
                 try self.markExpr(eq.rhs, work);
+            },
+            .e_structural_hash => |h| {
+                try self.markExpr(h.value, work);
+                try self.markExpr(h.hasher, work);
             },
             .e_method_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -8181,6 +8196,7 @@ pub const CheckedBodyStore = struct {
                 .step_fn_ty = i.step_fn_ty,
             } },
             .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+            .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
             .method_eq => |p| .{ .method_eq = p },
             .type_dispatch_call => |p| .{ .type_dispatch_call = p },
             .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
@@ -8924,6 +8940,8 @@ fn checkedExprDataDiverges(
         .field_access => |field| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states),
         .structural_eq => |eq| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states) or
             checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states),
+        .structural_hash => |h| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, h.value, expr_states, statement_states) or
+            checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, h.hasher, expr_states, statement_states),
         .tuple_access => |access| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states),
         .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .hosted_lambda => false,
@@ -9327,6 +9345,10 @@ const CheckedBodyPayloadCopier = struct {
                 .rhs = self.checkedExpr(eq.rhs),
                 .negated = eq.negated,
             } },
+            .e_structural_hash => |h| .{ .structural_hash = .{
+                .value = self.checkedExpr(h.value),
+                .hasher = self.checkedExpr(h.hasher),
+            } },
             .e_method_eq => .{ .method_eq = null },
             .e_type_method_call => checkedArtifactInvariant(
                 "type method call reached artifact publication after checking; expected explicit static-dispatch plan",
@@ -9489,75 +9511,161 @@ const CheckedBodyPayloadCopier = struct {
         has_suffix: bool,
     ) Allocator.Error!CheckedExprData {
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .num_from_numeral = null };
-        const text = try self.exactNumeralDecimalText(expr_idx);
-        defer self.allocator.free(text);
-        return exactNumeralForBuiltin(text, builtin_nominal, has_suffix) orelse .{ .num_from_numeral = null };
+        const literal = self.exactNumeralLiteral(expr_idx);
+        return (try exactNumeralForBuiltin(self.allocator, self.module.moduleEnvConst(), literal, builtin_nominal, has_suffix)) orelse .{ .num_from_numeral = null };
     }
 
     fn copyTypedNumFromNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_num_from_numeral = null };
-        const text = try self.exactNumeralDecimalText(expr_idx);
-        defer self.allocator.free(text);
-        return exactNumeralForBuiltin(text, builtin_nominal, true) orelse .{ .typed_num_from_numeral = null };
+        const literal = self.exactNumeralLiteral(expr_idx);
+        return (try exactNumeralForBuiltin(self.allocator, self.module.moduleEnvConst(), literal, builtin_nominal, true)) orelse .{ .typed_num_from_numeral = null };
     }
 
-    fn exactNumeralDecimalText(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const u8 {
-        const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+    fn exactNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) ModuleEnv.NumeralLiteral {
+        return self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
             checkedArtifactInvariant("checked exact numeral literal had no parser-owned numeral facts", .{});
         };
-        return numeralLiteralDecimalText(self.allocator, self.module.moduleEnvConst(), literal);
     }
 
     fn exactNumeralForBuiltin(
-        text: []const u8,
+        allocator: Allocator,
+        module_env: *const ModuleEnv,
+        literal: ModuleEnv.NumeralLiteral,
         builtin_nominal: CheckedBuiltinNominal,
         has_suffix: bool,
-    ) ?CheckedExprData {
+    ) Allocator.Error!?CheckedExprData {
         return switch (builtin_nominal) {
-            .u8 => exactUnsignedIntLiteral(u8, text, .u8),
-            .u16 => exactUnsignedIntLiteral(u16, text, .u16),
-            .u32 => exactUnsignedIntLiteral(u32, text, .u32),
-            .u64 => exactUnsignedIntLiteral(u64, text, .u64),
-            .u128 => exactUnsignedIntLiteral(u128, text, .u128),
-            .i8 => exactSignedIntLiteral(i8, text, .i8),
-            .i16 => exactSignedIntLiteral(i16, text, .i16),
-            .i32 => exactSignedIntLiteral(i32, text, .i32),
-            .i64 => exactSignedIntLiteral(i64, text, .i64),
-            .i128 => exactSignedIntLiteral(i128, text, .i128),
-            .f32 => if (std.fmt.parseFloat(f32, text)) |value|
-                .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_|
-                null,
-            .f64 => if (std.fmt.parseFloat(f64, text)) |value|
-                .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_|
-                null,
-            .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |value|
+            .u8 => exactUnsignedIntLiteral(u8, module_env, literal, .u8),
+            .u16 => exactUnsignedIntLiteral(u16, module_env, literal, .u16),
+            .u32 => exactUnsignedIntLiteral(u32, module_env, literal, .u32),
+            .u64 => exactUnsignedIntLiteral(u64, module_env, literal, .u64),
+            .u128 => exactUnsignedIntLiteral(u128, module_env, literal, .u128),
+            .i8 => exactSignedIntLiteral(i8, module_env, literal, .i8),
+            .i16 => exactSignedIntLiteral(i16, module_env, literal, .i16),
+            .i32 => exactSignedIntLiteral(i32, module_env, literal, .i32),
+            .i64 => exactSignedIntLiteral(i64, module_env, literal, .i64),
+            .i128 => exactSignedIntLiteral(i128, module_env, literal, .i128),
+            .f32 => blk: {
+                const text = try numeralLiteralDecimalText(allocator, module_env, literal);
+                defer allocator.free(text);
+                break :blk if (std.fmt.parseFloat(f32, text)) |value|
+                    .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
+                else |_|
+                    null;
+            },
+            .f64 => blk: {
+                const text = try numeralLiteralDecimalText(allocator, module_env, literal);
+                defer allocator.free(text);
+                break :blk if (std.fmt.parseFloat(f64, text)) |value|
+                    .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
+                else |_|
+                    null;
+            },
+            .dec => if (exactDecLiteral(module_env, literal)) |value|
                 .{ .dec = .{ .value = value, .has_suffix = has_suffix } }
             else if (!has_suffix)
-                .{ .dec = .{ .value = if (text.len > 0 and text[0] == '-') builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
+                .{ .dec = .{ .value = if (literal.isNegative()) builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
             else
                 null,
             else => null,
         };
     }
 
-    fn exactUnsignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
-        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+    fn exactUnsignedIntLiteral(comptime T: type, module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral, kind: CIR.NumKind) ?CheckedExprData {
+        const magnitude = exactIntegerMagnitude(module_env, literal) orelse return null;
+        if (literal.isNegative() and magnitude != 0) return null;
+        if (magnitude > @as(u128, @intCast(std.math.maxInt(T)))) return null;
         const value = CIR.IntValue{
-            .bytes = @bitCast(@as(u128, @intCast(parsed))),
+            .bytes = @bitCast(magnitude),
             .kind = .u128,
         };
         return .{ .num = .{ .value = value, .kind = kind } };
     }
 
-    fn exactSignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
-        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+    fn exactSignedIntLiteral(comptime T: type, module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral, kind: CIR.NumKind) ?CheckedExprData {
+        const magnitude = exactIntegerMagnitude(module_env, literal) orelse return null;
+        const max_positive: u128 = @intCast(std.math.maxInt(T));
+        const max_negative = max_positive + 1;
+        const parsed: i128 = if (literal.isNegative()) blk: {
+            if (magnitude > max_negative) return null;
+            break :blk if (magnitude == max_negative)
+                @as(i128, std.math.minInt(T))
+            else
+                -@as(i128, @intCast(magnitude));
+        } else blk: {
+            if (magnitude > max_positive) return null;
+            break :blk @intCast(magnitude);
+        };
         const value = CIR.IntValue{
-            .bytes = @bitCast(@as(i128, @intCast(parsed))),
+            .bytes = @bitCast(parsed),
             .kind = .i128,
         };
         return .{ .num = .{ .value = value, .kind = kind } };
+    }
+
+    fn exactIntegerMagnitude(module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral) ?u128 {
+        if (literal.after_decimal_digit_count != 0) return null;
+        return base256BytesToU128(module_env.numeralDigitsBefore(literal));
+    }
+
+    fn exactDecLiteral(module_env: *const ModuleEnv, literal: ModuleEnv.NumeralLiteral) ?builtins.dec.RocDec {
+        const decimal_places = builtins.dec.RocDec.decimal_places;
+        const after_count = literal.after_decimal_digit_count;
+        if (after_count > decimal_places) return null;
+
+        const before = base256BytesToU128(module_env.numeralDigitsBefore(literal)) orelse return null;
+        const after = base256BytesToU128(module_env.numeralDigitsAfter(literal)) orelse return null;
+
+        const before_scaled = checkedMulU128(before, @intCast(builtins.dec.RocDec.one_point_zero_i128)) orelse return null;
+        const after_scale = pow10U128(decimal_places - after_count);
+        const after_scaled = checkedMulU128(after, after_scale) orelse return null;
+        const magnitude = checkedAddU128(before_scaled, after_scaled) orelse return null;
+
+        const max_positive: u128 = @intCast(std.math.maxInt(i128));
+        const max_negative = max_positive + 1;
+        if (literal.isNegative()) {
+            if (magnitude > max_negative) return null;
+            return .{ .num = if (magnitude == max_negative)
+                std.math.minInt(i128)
+            else
+                -@as(i128, @intCast(magnitude)) };
+        }
+
+        if (magnitude > max_positive) return null;
+        return .{ .num = @intCast(magnitude) };
+    }
+
+    fn base256BytesToU128(bytes_be: []const u8) ?u128 {
+        var value: u128 = 0;
+        for (bytes_be) |byte| {
+            const shifted = @mulWithOverflow(value, 256);
+            if (shifted[1] != 0) return null;
+            const added = @addWithOverflow(shifted[0], byte);
+            if (added[1] != 0) return null;
+            value = added[0];
+        }
+        return value;
+    }
+
+    fn checkedMulU128(lhs: u128, rhs: u128) ?u128 {
+        const multiplied = @mulWithOverflow(lhs, rhs);
+        if (multiplied[1] != 0) return null;
+        return multiplied[0];
+    }
+
+    fn checkedAddU128(lhs: u128, rhs: u128) ?u128 {
+        const added = @addWithOverflow(lhs, rhs);
+        if (added[1] != 0) return null;
+        return added[0];
+    }
+
+    fn pow10U128(exponent: u32) u128 {
+        var value: u128 = 1;
+        var remaining = exponent;
+        while (remaining > 0) : (remaining -= 1) {
+            value *= 10;
+        }
+        return value;
     }
 
     fn copyTypedIntLiteral(
@@ -10489,6 +10597,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .zero_argument_tag,
         .dispatch_call,
         .structural_eq,
+        .structural_hash,
         .method_eq,
         .type_dispatch_call,
         .tuple_access,
@@ -11228,6 +11337,7 @@ fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCa
         .dispatch_call,
         .interpolation,
         .structural_eq,
+        .structural_hash,
         .method_eq,
         .type_dispatch_call,
         .tuple_access,
@@ -11397,6 +11507,7 @@ fn categorizeValueRef(
         .e_dispatch_call,
         .e_interpolation,
         .e_structural_eq,
+        .e_structural_hash,
         .e_method_eq,
         .e_type_method_call,
         .e_type_dispatch_call,
@@ -12204,6 +12315,10 @@ const CheckedTemplateRefCollector = struct {
                 try self.collectExpr(eq.lhs);
                 try self.collectExpr(eq.rhs);
             },
+            .structural_hash => |h| {
+                try self.collectExpr(h.value);
+                try self.collectExpr(h.hasher);
+            },
             .tuple_access => |access| try self.collectExpr(access.tuple),
             .dbg => |child| try self.collectExpr(child),
             .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
@@ -12928,6 +13043,10 @@ const NestedProcSiteBuilder = struct {
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
+            },
+            .structural_hash => |h| {
+                try self.scanExpr(h.value, owner, false);
+                try self.scanExpr(h.hasher, owner, false);
             },
             .tuple_access => |access| try self.scanExpr(access.tuple, owner, false),
             .for_ => |for_| {
@@ -18261,15 +18380,15 @@ pub const CompileTimeRootTable = struct {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             const stmt = module_env.store.getStatement(statement_idx);
             if (stmt != .s_expect) continue;
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .expect,
-                .source = .{ .statement = statement_idx },
-                .pattern = null,
-                .expr = checkedExprIdForSource(checked_bodies, stmt.s_expect.body),
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
-                .payload = .expect,
-            });
+            try collectExpectRoot(
+                &roots,
+                allocator,
+                module,
+                checked_types,
+                checked_bodies,
+                statement_idx,
+                stmt.s_expect.body,
+            );
         }
 
         return .{ .roots = try roots.toOwnedSlice(allocator) };
@@ -18343,6 +18462,49 @@ pub const CompileTimeRootTable = struct {
         checked_type: CheckedTypeId,
         payload: CompileTimeRootPayload,
     };
+
+    /// Collect a single `expect` statement as a standalone compile-time root, then
+    /// recurse into its body when that body is a block: nested `expect` statements
+    /// that appear directly in an enclosing `expect`'s block body are themselves
+    /// standalone test roots (issue #9733). Crucially, we never descend into lambda
+    /// bodies or into ordinary value blocks that are not an `expect`'s body, so inline
+    /// assertions that close over enclosing local bindings are not over-collected.
+    fn collectExpectRoot(
+        roots: *std.ArrayList(CompileTimeRoot),
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        checked_types: *const CheckedTypePublication,
+        checked_bodies: *const CheckedBodyStore,
+        statement_idx: CIR.Statement.Idx,
+        body_expr: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        try appendCompileTimeRoot(roots, allocator, .{
+            .module_idx = module.moduleIndex(),
+            .kind = .expect,
+            .source = .{ .statement = statement_idx },
+            .pattern = null,
+            .expr = checkedExprIdForSource(checked_bodies, body_expr),
+            .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(body_expr)),
+            .payload = .expect,
+        });
+
+        const module_env = module.moduleEnvConst();
+        const body = module_env.store.getExpr(body_expr);
+        if (body != .e_block) return;
+        for (module_env.store.sliceStatements(body.e_block.stmts)) |nested_idx| {
+            const nested_stmt = module_env.store.getStatement(nested_idx);
+            if (nested_stmt != .s_expect) continue;
+            try collectExpectRoot(
+                roots,
+                allocator,
+                module,
+                checked_types,
+                checked_bodies,
+                nested_idx,
+                nested_stmt.s_expect.body,
+            );
+        }
+    }
 
     fn appendCompileTimeRoot(
         roots: *std.ArrayList(CompileTimeRoot),
@@ -18894,6 +19056,8 @@ fn checkedExprContainsExpr(
         },
         .structural_eq => |eq| checkedExprContainsExpr(checked_bodies, eq.lhs, needle) or
             checkedExprContainsExpr(checked_bodies, eq.rhs, needle),
+        .structural_hash => |h| checkedExprContainsExpr(checked_bodies, h.value, needle) or
+            checkedExprContainsExpr(checked_bodies, h.hasher, needle),
         .expect_err => |expect_err| checkedExprContainsExpr(checked_bodies, expect_err.expr, needle),
         .return_ => |ret| checkedExprContainsExpr(checked_bodies, ret.expr, needle),
         .for_ => |for_| checkedExprContainsExpr(checked_bodies, for_.expr, needle) or
@@ -19041,6 +19205,8 @@ fn checkedExprContainsPattern(
         },
         .structural_eq => |eq| checkedExprContainsPattern(checked_bodies, eq.lhs, needle) or
             checkedExprContainsPattern(checked_bodies, eq.rhs, needle),
+        .structural_hash => |h| checkedExprContainsPattern(checked_bodies, h.value, needle) or
+            checkedExprContainsPattern(checked_bodies, h.hasher, needle),
         .expect_err => |expect_err| checkedExprContainsPattern(checked_bodies, expect_err.expr, needle),
         .return_ => |ret| checkedExprContainsPattern(checked_bodies, ret.expr, needle),
         .run_low_level => |run| checkedExprSpanContainsPattern(checked_bodies, run.args, needle),
@@ -26464,8 +26630,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xED, 0xBD, 0xE3, 0x9E, 0xCC, 0x7F, 0xEC, 0x25, 0xD2, 0xF5, 0xE6, 0x14, 0x8F, 0x19, 0x08, 0xC1,
-        0xD7, 0xFB, 0x10, 0xAC, 0xB5, 0xEB, 0x70, 0x3A, 0xB3, 0xD6, 0x41, 0x80, 0x31, 0x28, 0x0B, 0xA8,
+        0xDC, 0xEE, 0xC1, 0xAC, 0xB4, 0xCE, 0x7E, 0xFD, 0x41, 0xFC, 0xDC, 0x67, 0x7A, 0x26, 0x0B, 0x8B,
+        0x41, 0xF6, 0x4C, 0x0A, 0x48, 0xEA, 0x2C, 0x23, 0x50, 0x9E, 0x28, 0xE3, 0x12, 0xFA, 0x16, 0xA0,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

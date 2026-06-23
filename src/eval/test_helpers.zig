@@ -252,6 +252,23 @@ const AvailableImport = struct {
     statement_idx: ?CIR.Statement.Idx,
 };
 
+/// Statement index of an imported type module's main type declaration, mirroring
+/// the package driver's `computeSiblingStatementIdx`. Qualified member lookups
+/// (`Mod.member(...)`) into a type module resolve through the type declaration's
+/// exposed node; regular modules store members under plain names and need no
+/// statement index. Without this, the canonicalizer falls back to the unqualified
+/// lookup path and a type module's exposed functions cannot be called by import
+/// qualification.
+fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.Statement.Idx {
+    switch (env.module_kind) {
+        .type_module => {},
+        else => return null,
+    }
+    const type_ident = env.common.findIdent(module_name) orelse return null;
+    const type_node_idx = env.getExposedTypeNodeIndexById(type_ident) orelse return null;
+    return @enumFromInt(type_node_idx);
+}
+
 const ModuleValidation = enum {
     roc_check,
     checked_artifact,
@@ -593,7 +610,7 @@ fn parseAndCheckProgramForProblemsImpl(
             available_imports[i] = .{
                 .name = extra.module_env.module_name,
                 .env = extra.module_env,
-                .statement_idx = null,
+                .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
             };
         }
 
@@ -619,7 +636,7 @@ fn parseAndCheckProgramForProblemsImpl(
         main_imports[i] = .{
             .name = extra.module_env.module_name,
             .env = extra.module_env,
-            .statement_idx = null,
+            .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
         };
     }
 
@@ -1026,7 +1043,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             available_imports[i] = .{
                 .name = extra.module_env.module_name,
                 .env = extra.module_env,
-                .statement_idx = null,
+                .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
             };
         }
 
@@ -1056,7 +1073,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         main_imports[i] = .{
             .name = extra.module_env.module_name,
             .env = extra.module_env,
-            .statement_idx = null,
+            .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
         };
     }
 

@@ -3523,6 +3523,77 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "3" },
     },
     .{
+        .name = "inspect: Iter.single yields one item",
+        .source =
+        \\{
+        \\    iter = Iter.single(42.I64)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[42]" },
+    },
+    .{
+        .name = "inspect: Iter.single reports known length one",
+        .source = "Iter.size_hint(Iter.single(42.I64))",
+        .expected = .{ .inspect_str = "Known(1)" },
+    },
+    .{
+        .name = "inspect: Iter.concat yields first then second",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter().concat([3, 4].iter())
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3, 4]" },
+    },
+    .{
+        .name = "inspect: Iter.concat starts second after empty first",
+        .source =
+        \\{
+        \\    iter = [].iter().concat([1.I64, 2].iter())
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2]" },
+    },
+    .{
+        .name = "inspect: Iter.concat continues after skips",
+        .source =
+        \\{
+        \\    first = [1.I64, 2, 3].iter().keep_if(|item| item > 1)
+        \\    iter = first.concat([4, 5].iter())
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2, 3, 4, 5]" },
+    },
+    .{
+        .name = "inspect: Iter.concat reports summed known length",
+        .source = "Iter.size_hint([1.I64, 2].iter().concat([3, 4, 5].iter()))",
+        .expected = .{ .inspect_str = "Known(5)" },
+    },
+    .{
+        .name = "inspect: Iter.concat reports unknown length when either side is unknown",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().keep_if(|item| item > 1).concat([4].iter()))",
+        .expected = .{ .inspect_str = "Unknown" },
+    },
+    .{
+        .name = "inspect: Iter.append yields item after iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter().append(3)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Iter.append reports incremented known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().append(4))",
+        .expected = .{ .inspect_str = "Known(4)" },
+    },
+    .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =
         \\match Iter.next(Iter.keep_if([1.I64, 2].iter(), |item| item > 1)) {

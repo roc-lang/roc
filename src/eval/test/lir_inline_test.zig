@@ -895,6 +895,10 @@ fn markReachableLiftedExpr(
             markReachableLiftedExpr(program, eq.lhs, reachable);
             markReachableLiftedExpr(program, eq.rhs, reachable);
         },
+        .structural_hash => |h| {
+            markReachableLiftedExpr(program, h.value, reachable);
+            markReachableLiftedExpr(program, h.hasher, reachable);
+        },
         .match_ => |match| {
             markReachableLiftedExpr(program, match.scrutinee, reachable);
             for (program.branchSpan(match.branches)) |branch| {

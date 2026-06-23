@@ -600,6 +600,7 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_field_access,
             .e_interpolation,
             .e_structural_eq,
+            .e_structural_hash,
             .e_method_eq,
             .e_type_method_call,
             .e_type_dispatch_call,

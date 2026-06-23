@@ -119,6 +119,7 @@ pub const CommonIdents = extern struct {
     is_gt: Ident.Idx,
     is_gte: Ident.Idx,
     is_eq: Ident.Idx,
+    to_hash: Ident.Idx,
     parser_for: Ident.Idx,
     encode_to: Ident.Idx,
 
@@ -231,6 +232,7 @@ pub const CommonIdents = extern struct {
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
+            .to_hash = try common.insertIdent(gpa, Ident.for_text("to_hash")),
             .parser_for = try common.insertIdent(gpa, Ident.for_text("parser_for")),
             .encode_to = try common.insertIdent(gpa, Ident.for_text("encode_to")),
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
@@ -339,6 +341,7 @@ pub const CommonIdents = extern struct {
             .is_gt = common.findIdent("is_gt") orelse unreachable,
             .is_gte = common.findIdent("is_gte") orelse unreachable,
             .is_eq = common.findIdent("is_eq") orelse unreachable,
+            .to_hash = common.findIdent("to_hash") orelse unreachable,
             .parser_for = common.findIdent("parser_for") orelse unreachable,
             .encode_to = common.findIdent("encode_to") orelse unreachable,
             .@"try" = common.findIdent("Try") orelse unreachable,
