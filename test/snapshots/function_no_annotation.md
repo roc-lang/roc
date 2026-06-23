@@ -128,10 +128,10 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 78)
+			(e-call (constraint-fn-var 81)
 				(e-lookup-local
 					(p-assign (ident "print_number!")))
-				(e-call (constraint-fn-var 77)
+				(e-call (constraint-fn-var 80)
 					(e-lookup-local
 						(p-assign (ident "multiply")))
 					(e-lookup-local
@@ -139,7 +139,7 @@ NO CHANGE
 					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 117)
+		(e-call (constraint-fn-var 123)
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))

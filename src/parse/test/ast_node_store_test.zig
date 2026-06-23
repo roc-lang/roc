@@ -829,6 +829,13 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .nominal_record = .{
+            .mapper = rand_idx(random, AST.Expr.Idx),
+            .backing = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .ellipsis = .{ .region = rand_region(random) },
     });
     try expressions.append(gpa, AST.Expr{
@@ -843,6 +850,15 @@ test "NodeStore round trip - Expr" {
             .patt = rand_idx(random, AST.Pattern.Idx),
             .expr = rand_idx(random, AST.Expr.Idx),
             .body = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .@"break" = .{ .region = rand_region(random) },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .@"return" = .{
+            .expr = rand_idx(random, AST.Expr.Idx),
             .region = rand_region(random),
         },
     });
@@ -948,7 +964,7 @@ test "NodeStore round trip - Targets" {
 
     // Test TargetsSection round trip
     const section = AST.TargetsSection{
-        .inputs_path = rand_token_idx(random),
+        .inputs_dir = rand_token_idx(random),
         .entries = .{ .span = rand_span(random) },
         .region = rand_region(random),
     };
@@ -961,9 +977,9 @@ test "NodeStore round trip - Targets" {
         return err;
     };
 
-    // Test TargetsSection with no inputs directive
+    // Test TargetsSection with no inputs_dir directive
     const section_nulls = AST.TargetsSection{
-        .inputs_path = null,
+        .inputs_dir = null,
         .entries = .{ .span = rand_span(random) },
         .region = rand_region(random),
     };
@@ -971,8 +987,8 @@ test "NodeStore round trip - Targets" {
     const retrieved_section_nulls = store.getTargetsSection(section_nulls_idx);
 
     testing.expectEqualDeep(section_nulls, retrieved_section_nulls) catch |err| {
-        std.debug.print("\n\nOriginal TargetsSection (no inputs):  {any}\n\n", .{section_nulls});
-        std.debug.print("Retrieved TargetsSection (no inputs): {any}\n\n", .{retrieved_section_nulls});
+        std.debug.print("\n\nOriginal TargetsSection (no inputs_dir):  {any}\n\n", .{section_nulls});
+        std.debug.print("Retrieved TargetsSection (no inputs_dir): {any}\n\n", .{retrieved_section_nulls});
         return err;
     };
 }

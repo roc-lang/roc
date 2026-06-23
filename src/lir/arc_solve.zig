@@ -50,9 +50,19 @@ const LIR = core.LIR;
 const LirStore = core.LirStore;
 const Allocator = std.mem.Allocator;
 
+/// Errors that can occur while constructing the ARC solver's internal tables.
 pub const SolveError = std.mem.Allocator.Error;
 
 const no_local: u32 = std.math.maxInt(u32);
+
+/// Presence-bit condition guarding a payload local whose storage may not be
+/// initialized on every path into a join.
+pub const MaybeUninitializedCondition = struct {
+    /// Local containing the presence bitset word.
+    local: LIR.LocalId,
+    /// Bits that must all be set before the payload local is initialized.
+    mask: u64,
+};
 
 /// Per-local binding-mode solution, liveness groups, and per-proc ownership
 /// signatures. A group is one leader local together with every borrowed
@@ -80,6 +90,15 @@ pub const Solution = struct {
     /// unit into the join body at every jump; their releases belong to the
     /// body, so emission must not end their lifetime from use scans alone.
     join_param: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => the local is a join parameter whose initial value may be
+    /// uninitialized. These locals are released only after an explicit
+    /// initialized-payload refinement.
+    maybe_uninitialized_join_param: std.bit_set.DynamicBitSetUnmanaged,
+    /// Condition local for each maybe-uninitialized join parameter, or
+    /// `no_local` when the local is not maybe-uninitialized.
+    maybe_uninitialized_condition: []u32,
+    /// Presence mask for each maybe-uninitialized join parameter.
+    maybe_uninitialized_condition_mask: []u64,
     /// Bit set => the local may hold an allocation the host can also touch,
     /// so its RC statements need atomic count updates.
     visible: std.bit_set.DynamicBitSetUnmanaged,
@@ -106,6 +125,9 @@ pub const Solution = struct {
         self.allocator.free(self.alias_source);
         self.allocator.free(self.sigs);
         self.join_param.deinit(self.allocator);
+        self.maybe_uninitialized_join_param.deinit(self.allocator);
+        self.allocator.free(self.maybe_uninitialized_condition);
+        self.allocator.free(self.maybe_uninitialized_condition_mask);
         self.visible.deinit(self.allocator);
         self.unique.deinit(self.allocator);
         self.unique_destroyed.deinit(self.allocator);
@@ -116,6 +138,15 @@ pub const Solution = struct {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return false;
         return self.join_param.isSet(index);
+    }
+
+    pub fn maybeUninitializedCondition(self: *const Solution, local: LIR.LocalId) ?MaybeUninitializedCondition {
+        const index = @intFromEnum(local);
+        if (index >= self.maybe_uninitialized_condition.len) return null;
+        if (!self.maybe_uninitialized_join_param.isSet(index)) return null;
+        const condition = self.maybe_uninitialized_condition[index];
+        if (condition == no_local) return null;
+        return .{ .local = @enumFromInt(condition), .mask = self.maybe_uninitialized_condition_mask[index] };
     }
 
     pub fn isBorrowed(self: *const Solution, local: LIR.LocalId) bool {
@@ -231,6 +262,9 @@ const Solver = struct {
     param_proc: []u32,
     /// Join parameters discovered during collection.
     join_param: std.bit_set.DynamicBitSetUnmanaged,
+    maybe_uninitialized_join_param: std.bit_set.DynamicBitSetUnmanaged,
+    maybe_uninitialized_condition: []u32,
+    maybe_uninitialized_condition_mask: []u64,
     visited: std.AutoHashMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
 };
@@ -258,6 +292,9 @@ pub fn solve(
         .param_position = try allocator.alloc(u32, local_count),
         .param_proc = try allocator.alloc(u32, local_count),
         .join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
+        .maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
+        .maybe_uninitialized_condition = try allocator.alloc(u32, local_count),
+        .maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count),
         .visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator),
         .stack = std.ArrayList(LIR.CFStmtId).empty,
     };
@@ -280,6 +317,9 @@ pub fn solve(
         allocator.free(solver.param_position);
         allocator.free(solver.param_proc);
         if (!solver_sigs_kept) solver.join_param.deinit(allocator);
+        if (!solver_sigs_kept) solver.maybe_uninitialized_join_param.deinit(allocator);
+        if (!solver_sigs_kept) allocator.free(solver.maybe_uninitialized_condition);
+        if (!solver_sigs_kept) allocator.free(solver.maybe_uninitialized_condition_mask);
         solver.visited.deinit();
         solver.stack.deinit(allocator);
         if (!solver_sigs_kept) allocator.free(solver.sigs);
@@ -287,6 +327,8 @@ pub fn solve(
 
     @memset(solver.param_position, no_local);
     @memset(solver.param_proc, no_local);
+    @memset(solver.maybe_uninitialized_condition, no_local);
+    @memset(solver.maybe_uninitialized_condition_mask, 0);
 
     try computePins(&solver, roots);
     try computeSccs(&solver);
@@ -411,6 +453,9 @@ pub fn solve(
         .alias_source = solver.alias_source,
         .sigs = solver.sigs,
         .join_param = solver.join_param,
+        .maybe_uninitialized_join_param = solver.maybe_uninitialized_join_param,
+        .maybe_uninitialized_condition = solver.maybe_uninitialized_condition,
+        .maybe_uninitialized_condition_mask = solver.maybe_uninitialized_condition_mask,
         .visible = visible,
         .unique = uniqueness.unique,
         .unique_destroyed = uniqueness.destroyed,
@@ -424,6 +469,9 @@ pub fn solve(
         allocator.free(solution.alias_source);
         allocator.free(solution.sigs);
         solution.join_param.deinit(allocator);
+        solution.maybe_uninitialized_join_param.deinit(allocator);
+        allocator.free(solution.maybe_uninitialized_condition);
+        allocator.free(solution.maybe_uninitialized_condition_mask);
         solution.visible.deinit(allocator);
         solution.unique.deinit(allocator);
         solution.unique_destroyed.deinit(allocator);
@@ -609,6 +657,10 @@ fn retLenders(
                     try solver.stack.append(allocator, continuation);
                 }
             },
+            .switch_initialized_payload => |s| {
+                try solver.stack.append(allocator, s.initialized_branch);
+                try solver.stack.append(allocator, s.uninitialized_branch);
+            },
             .str_match => |s| {
                 try solver.stack.append(allocator, s.on_match);
                 try solver.stack.append(allocator, s.on_miss);
@@ -623,7 +675,7 @@ fn retLenders(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
             .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -670,6 +722,10 @@ fn retAllUnique(
                     try solver.stack.append(allocator, continuation);
                 }
             },
+            .switch_initialized_payload => |s| {
+                try solver.stack.append(allocator, s.initialized_branch);
+                try solver.stack.append(allocator, s.uninitialized_branch);
+            },
             .str_match => |s| {
                 try solver.stack.append(allocator, s.on_match);
                 try solver.stack.append(allocator, s.on_miss);
@@ -684,7 +740,7 @@ fn retAllUnique(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
             .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -905,6 +961,10 @@ fn collectStmt(
         .comptime_branch_taken => |marker| try solver.stack.append(allocator, marker.next),
         .incref => |rc| try solver.stack.append(allocator, rc.next),
         .decref => |rc| try solver.stack.append(allocator, rc.next),
+        .decref_if_initialized => |rc| {
+            noteDemand(solver, rc.value);
+            try solver.stack.append(allocator, rc.next);
+        },
         .free => |rc| try solver.stack.append(allocator, rc.next),
         .switch_stmt => |switch_stmt| {
             for (store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
@@ -914,6 +974,10 @@ fn collectStmt(
             if (switch_stmt.continuation) |continuation| {
                 try solver.stack.append(allocator, continuation);
             }
+        },
+        .switch_initialized_payload => |switch_stmt| {
+            try solver.stack.append(allocator, switch_stmt.initialized_branch);
+            try solver.stack.append(allocator, switch_stmt.uninitialized_branch);
         },
         .str_match => |str_match| {
             for (store.getStrMatchSteps(str_match.steps)) |step| {
@@ -942,6 +1006,18 @@ fn collectStmt(
             for (store.getLocalSpan(join_stmt.params)) |param| {
                 noteDef(solver.defs, param, .multi);
                 solver.join_param.set(@intFromEnum(param));
+            }
+            const maybe_uninitialized_params = store.getLocalSpan(join_stmt.maybe_uninitialized_params);
+            const maybe_uninitialized_conditions = store.getLocalSpan(join_stmt.maybe_uninitialized_conditions);
+            const maybe_uninitialized_condition_masks = store.getU64Span(join_stmt.maybe_uninitialized_condition_masks);
+            if (maybe_uninitialized_params.len != maybe_uninitialized_conditions.len or maybe_uninitialized_params.len != maybe_uninitialized_condition_masks.len) {
+                solveInvariant("maybe-uninitialized join metadata arity mismatch");
+            }
+            for (maybe_uninitialized_params, maybe_uninitialized_conditions, maybe_uninitialized_condition_masks) |param, condition, mask| {
+                const param_index = @intFromEnum(param);
+                solver.maybe_uninitialized_join_param.set(@intFromEnum(param));
+                solver.maybe_uninitialized_condition[param_index] = @intFromEnum(condition);
+                solver.maybe_uninitialized_condition_mask[param_index] = mask;
             }
             try solver.stack.append(allocator, join_stmt.body);
             try solver.stack.append(allocator, join_stmt.remainder);
@@ -1094,6 +1170,10 @@ pub fn computeVisibility(
                         try stack.append(allocator, continuation);
                     }
                 },
+                .switch_initialized_payload => |stmt| {
+                    try stack.append(allocator, stmt.initialized_branch);
+                    try stack.append(allocator, stmt.uninitialized_branch);
+                },
                 .str_match => |stmt| {
                     try stack.append(allocator, stmt.on_match);
                     try stack.append(allocator, stmt.on_miss);
@@ -1108,7 +1188,7 @@ pub fn computeVisibility(
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |stmt| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -1669,6 +1749,8 @@ pub fn computeUniqueness(
             .init_uninitialized => {},
             .comptime_branch_taken => {},
             .switch_stmt => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
+            .switch_initialized_payload => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
+            .decref_if_initialized => |rc| marks.noteUse(&borrow_used, rc.cond),
             .decref, .free, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
         }
     }
@@ -1761,6 +1843,10 @@ fn computeSccs(solver: *Solver) SolveError!void {
                         try solver.stack.append(allocator, continuation);
                     }
                 },
+                .switch_initialized_payload => |s| {
+                    try solver.stack.append(allocator, s.initialized_branch);
+                    try solver.stack.append(allocator, s.uninitialized_branch);
+                },
                 .str_match => |s| {
                     try solver.stack.append(allocator, s.on_match);
                     try solver.stack.append(allocator, s.on_miss);
@@ -1775,7 +1861,7 @@ fn computeSccs(solver: *Solver) SolveError!void {
                     try solver.stack.append(allocator, j.body);
                     try solver.stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try solver.stack.append(allocator, s.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},

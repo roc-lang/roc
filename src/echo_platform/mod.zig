@@ -56,7 +56,7 @@ pub const build_platform_main_source =
     \\    provides { "_start": main_for_host! }
     \\    hosted { "roc_default_echo_line": Echo.line! }
     \\    targets: {
-    \\        inputs: "targets/",
+    \\        inputs_dir: "targets/",
     \\        x64musl: { inputs: [app] },
     \\        arm64musl: { inputs: [app] },
     \\        x64glibc: { inputs: [app] },
@@ -86,7 +86,7 @@ pub const build_c_platform_main_source =
     \\    provides { "main": main_for_host! }
     \\    hosted { "roc_default_echo_line": Echo.line! }
     \\    targets: {
-    \\        inputs: "targets/",
+    \\        inputs_dir: "targets/",
     \\        x64mac: { inputs: [app] },
     \\        arm64mac: { inputs: [app] },
     \\        x64win: { inputs: [app] },
@@ -116,7 +116,7 @@ pub const build_wasm_archive_platform_main_source =
     \\    provides { "main": main_for_host! }
     \\    hosted { "roc_default_echo_line": Echo.line! }
     \\    targets: {
-    \\        inputs: "targets/",
+    \\        inputs_dir: "targets/",
     \\        wasm32: { inputs: [app], output: Archive },
     \\    }
     \\

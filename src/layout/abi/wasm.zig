@@ -53,9 +53,16 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
             return classifyType(store, store.getStructFieldLayout(struct_idx, 0));
         },
         .tag_union => {
-            // A no-payload tag union is an enum — a single integer, passed directly. Any tag
-            // union carrying a payload is a multi-field aggregate and is passed indirectly.
             const info = store.getTagUnionInfo(lay);
+            if (info.variants.len == 1) {
+                // Single-variant tag unions have an implicit discriminant, so their C ABI
+                // is exactly the payload's C ABI.
+                return classifyType(store, info.variants.get(0).payload_layout);
+            }
+
+            // A no-payload tag union is an enum — a single integer, passed directly. Any
+            // multi-variant tag union carrying a payload is a multi-field aggregate and is
+            // passed indirectly.
             var v: usize = 0;
             while (v < info.variants.len) : (v += 1) {
                 if (store.getLayout(info.variants.get(v).payload_layout).tag != .zst) {
@@ -113,6 +120,11 @@ test "wasm classify: aggregates are indirect, single-field structs unwrap" {
     const wrapped = try testStruct(&store, &.{.i64});
     try testing.expectEqual(Class{ .direct = .i64 }, classifyType(&store, wrapped));
 
+    // A single-variant tag union has an implicit discriminant and follows the
+    // payload's ABI.
+    const single_tag_u64 = try store.putTagUnion(&.{.u64});
+    try testing.expectEqual(Class{ .direct = .u64 }, classifyType(&store, single_tag_u64));
+
     // A struct whose only field is unnamed padding is not a real newtype, so it is
     // passed indirectly rather than unwrapped to the padding's borrowed type.
     const padding_only = try store.putNominalStructFields(&.{
@@ -127,4 +139,15 @@ test "wasm classify: enums are direct, Bool included" {
 
     // Bool is a no-payload tag union -> a direct integer.
     try testing.expectEqual(Class{ .direct = .bool }, classifyType(&store, .bool));
+}
+
+test "wasm classify: single-variant tag union with aggregate payload follows payload ABI" {
+    var store = try Store.init(testing.allocator, .u32);
+    defer store.deinit();
+
+    const wrapped_str = try store.putTagUnion(&.{.str});
+    try testing.expectEqual(Class.indirect, classifyType(&store, wrapped_str));
+
+    const wrapped_struct = try store.putTagUnion(&.{try testStruct(&store, &.{ .i32, .u32 })});
+    try testing.expectEqual(Class.indirect, classifyType(&store, wrapped_struct));
 }

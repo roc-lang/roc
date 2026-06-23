@@ -391,20 +391,23 @@ pub const Expr = union(enum) {
         negated: bool,
         constraint_fn_var: types.Var,
     },
-    /// Method call expression rooted in a type-var alias namespace.
+    /// Method call expression rooted in a type-dispatch owner.
     ///
     /// ```roc
     /// Fmt : fmt
     /// Fmt.decode_str(format, source)
+    ///
+    /// Shape : { foo : Str }
+    /// Shape.parser_for(format)
     /// ```
     e_type_method_call: struct {
-        type_var_alias_stmt: CIR.Statement.Idx,
+        type_dispatch_stmt: CIR.Statement.Idx,
         method_name: Ident.Idx,
         method_name_region: base.Region,
         args: Expr.Span,
     },
     e_type_dispatch_call: struct {
-        type_var_alias_stmt: CIR.Statement.Idx,
+        type_dispatch_stmt: CIR.Statement.Idx,
         method_name: Ident.Idx,
         method_name_region: base.Region,
         args: Expr.Span,
@@ -522,6 +525,9 @@ pub const Expr = union(enum) {
             try_suffix,
         };
     },
+
+    /// Break expression that exits the enclosing loop.
+    e_break: struct {},
 
     /// For expression that iterates over a list and executes a body for each element.
     /// The for expression evaluates to the empty record `{}`.
@@ -1377,7 +1383,7 @@ pub const Expr = union(enum) {
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 const attrs = tree.beginNode();
 
-                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(e.type_dispatch_stmt));
 
                 const args_begin = tree.beginNode();
                 try tree.pushStaticAtom("args");
@@ -1395,7 +1401,7 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
-                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(e.type_dispatch_stmt));
                 try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
                 const attrs = tree.beginNode();
 
@@ -1546,6 +1552,14 @@ pub const Expr = union(enum) {
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
 
+                try tree.endNode(begin, attrs);
+            },
+            .e_break => {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-break");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
             .e_for => |for_expr| {

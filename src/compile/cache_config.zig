@@ -28,7 +28,9 @@ pub const Constants = struct {
     /// 4: numeric suffix metadata was renamed to suffix targets.
     /// 5: nominal record declared-field-order and unnamed padding fields added
     ///    node, diagnostic, and type-annotation payloads.
-    pub const CACHE_VERSION = 5;
+    /// 6: merge with typed node/static-dispatch payload layout changes.
+    /// 7: field-order layout metadata moved from nominal-only to general field-order.
+    pub const CACHE_VERSION = 7;
 };
 
 /// Configuration for the Roc cache system.

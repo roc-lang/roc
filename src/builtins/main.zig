@@ -52,6 +52,7 @@ comptime {
     exportDecFn(dec.negateC, "negate");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.sinC, "sin");
+    exportDecFn(dec.sqrtC, "sqrt");
     exportDecFn(dec.subC, "sub_with_overflow");
     exportDecFn(dec.subOrPanicC, "sub_or_panic");
     exportDecFn(dec.subSaturatedC, "sub_saturated");
@@ -231,6 +232,7 @@ comptime {
     exportStrFn(str.strWithAsciiLowercased, "with_ascii_lowercased");
     exportStrFn(str.strWithAsciiUppercased, "with_ascii_uppercased");
     exportStrFn(str.strCaselessAsciiEquals, "caseless_ascii_equals");
+    exportStrFn(str.strDropPrefixCaselessAscii, "drop_prefix_caseless_ascii");
 
     for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

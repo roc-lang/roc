@@ -5376,7 +5376,7 @@ fn writeDevWasmObject(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        wasm_module,
+        &wasm_module,
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
@@ -5555,7 +5555,7 @@ fn rocBuildWasmSurgical(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        wasm_module,
+        &wasm_module,
     );
     defer codegen.deinit();
     loaded_module = false;
@@ -5730,13 +5730,16 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
 }
 
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
-    if (target == RocTarget.detectNative()) return builtin.target;
+    if (target == RocTarget.detectNative() and target.toOsTag() != .macos) return builtin.target;
 
-    const query = std.Target.Query{
+    var query = std.Target.Query{
         .cpu_arch = target.toCpuArch(),
         .os_tag = target.toOsTag(),
         .abi = stdTargetAbiForLlvmBuild(target),
     };
+    if (target.toOsTag() == .macos) {
+        query.os_version_min = roc_target.macos_deployment.query_os_version;
+    }
     return std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
 }
 

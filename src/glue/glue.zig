@@ -1149,6 +1149,10 @@ const TypeTable = struct {
                     if (nominal.args.len >= 1) return .{ .box = try self.getOrInsert(artifact, nominal.args[0]) };
                     return .{ .unknown = try self.gpa.dupe(u8, "Box") };
                 },
+                .parse_tag_union_spec,
+                .fields,
+                .field,
+                => return .unit,
                 .str => return .str_,
                 .bool => return .bool_,
                 .dec => return .dec,

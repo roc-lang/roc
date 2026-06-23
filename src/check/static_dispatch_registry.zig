@@ -26,6 +26,14 @@ const CheckedExprId = checked_ids.CheckedExprId;
 const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 
+fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Var {
+    return switch (module.getStatement(stmt_idx)) {
+        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
+        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
+        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+    };
+}
+
 /// Public `ProcedureTemplateLookup` declaration.
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
@@ -65,6 +73,8 @@ pub const MethodOwner = union(enum) {
 pub const BuiltinOwner = enum {
     list,
     box,
+    fields,
+    field,
     bool,
     str,
     u8,
@@ -80,6 +90,7 @@ pub const BuiltinOwner = enum {
     f32,
     f64,
     dec,
+    parse_tag_union_spec,
 };
 
 /// Public `MethodKey` declaration.
@@ -340,6 +351,9 @@ fn builtinOwnerForRegistryEntry(
 
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
+    if (type_ident.eql(common.builtin_str_field_names)) return .fields;
+    if (type_ident.eql(common.builtin_str_field_name)) return .field;
+    if (type_ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
     return null;
 }
 
@@ -435,6 +449,12 @@ pub const StaticDispatchResultMode = union(enum) {
     equality: struct {
         structural_allowed: bool,
         negated: bool,
+    },
+    parser_for: struct {
+        structural_allowed: bool,
+    },
+    encode_to: struct {
+        structural_allowed: bool,
     },
 };
 
@@ -697,7 +717,6 @@ pub const StaticDispatchPlanTable = struct {
                     try plans.append(allocator, resolveStaticDispatchPlan(names, checked_types, local_method_registry, imported_views, plan));
                 },
                 .e_type_dispatch_call => |dispatch_call| {
-                    const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
                     defer allocator.free(args);
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
@@ -706,7 +725,7 @@ pub const StaticDispatchPlanTable = struct {
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno)),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
@@ -1039,6 +1058,17 @@ fn staticDispatchResultModeForCheckedValueCall(
     constraint_fn_var: Var,
 ) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
+    if (method_name.eql(common.parser_for)) {
+        return .{ .parser_for = .{
+            .structural_allowed = true,
+        } };
+    }
+    if (method_name.eql(common.encode_to)) {
+        return .{ .encode_to = .{
+            .structural_allowed = true,
+        } };
+    }
+
     if (!method_name.eql(common.is_eq)) return .value;
 
     if (constraint_index.lookup(constraint_fn_var)) |constraint| {
@@ -1168,6 +1198,9 @@ fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .dec => .dec,
         .list => .list,
         .box => .box,
+        .fields => .fields,
+        .field => .field,
+        .parse_tag_union_spec => .parse_tag_union_spec,
     };
 }
 

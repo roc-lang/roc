@@ -48,6 +48,12 @@ const InterpolationConstraintId = enum(u32) { _ };
 const InterpolationConstraintMetadata = struct {
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
+    /// The interpolated-part expression vars (the even-indexed entries of the
+    /// `e_interpolation` `parts`). Captured here, and remapped through the
+    /// instantiation var-map in `copyConstraintMetadata`, so that per-instantiation
+    /// re-checking unifies the dispatch item type against the *instantiated* part
+    /// vars rather than the shared original CIR vars. Owned; freed in `deinit`.
+    interpolated_vars: []Var,
     checked_parts: bool = false,
 };
 
@@ -288,6 +294,13 @@ has_can_diagnostics: bool,
 /// non-literal/non-`is_eq` dispatch constraint, and does not resolve into the
 /// pinnable set can never be pinned, so its dispatch is reported as ambiguous.
 instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
+/// The expression currently being checked (`checkExpr` sets this on entry and
+/// restores it on exit). When `instantiateVarHelp` records an
+/// `InstantiationDispatcher`, it stamps this expression onto it, so the
+/// end-of-check ambiguity sweep can point a body-forced where-clause error at
+/// the exact expression whose instantiation created the unsatisfiable
+/// obligation — without scanning the module to rediscover it.
+instantiation_source_expr: ?CIR.Expr.Idx = null,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
 /// `from_quote`, or `from_interpolation`) — open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
@@ -348,6 +361,11 @@ const InstantiationDispatcher = struct {
     dispatcher_var: Var,
     /// The static-dispatch constraints copied from the generalized scheme.
     constraints: StaticDispatchConstraint.SafeList.Range,
+    /// The expression whose checking instantiated this dispatcher (the lookup of
+    /// the constrained scheme). A body-required where-clause whose receiver is
+    /// left unpinnable is reported and marked a runtime error at exactly this
+    /// expression. Null only if the dispatcher was created outside `checkExpr`.
+    instantiation_expr: ?CIR.Expr.Idx,
 };
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
@@ -639,6 +657,7 @@ const HoistSelectionTransaction = struct {
             .e_expect,
             .e_for,
             .e_return,
+            .e_break,
             .e_run_low_level,
             => {},
             .e_str => |str| try self.stageExprSpanDependencies(str.span, context),
@@ -1185,6 +1204,9 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
     self.interpolation_constraint_ids_by_fn_var.deinit();
+    for (self.interpolation_constraint_metadata.items) |meta| {
+        self.gpa.free(meta.interpolated_vars);
+    }
     self.interpolation_constraint_metadata.deinit(self.gpa);
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
@@ -1982,6 +2004,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             .e_expect,
             .e_for,
             .e_return,
+            .e_break,
             .e_run_low_level,
             .e_runtime_error,
             .e_ellipsis,
@@ -2291,6 +2314,7 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_expect,
         .e_for,
         .e_return,
+        .e_break,
         .e_run_low_level,
         => true,
     };
@@ -2332,6 +2356,7 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_expect,
         .e_for,
         .e_return,
+        .e_break,
         .e_run_low_level,
         => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
@@ -2385,6 +2410,7 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_expect_err,
         .e_expect,
         .e_return,
+        .e_break,
         => false,
         .e_lookup_external,
         .e_str_segment,
@@ -2836,6 +2862,7 @@ fn instantiateVarHelp(
                         try self.instantiation_dispatchers.append(self.gpa, .{
                             .dispatcher_var = fresh_var,
                             .constraints = flex.constraints,
+                            .instantiation_expr = self.instantiation_source_expr,
                         });
                     }
                 }
@@ -2946,8 +2973,17 @@ const BuiltinNominalDecl = union(enum) {
     list,
     box,
     try_type,
+    fields,
+    field,
     numeral,
     num: CIR.NumKind,
+};
+
+const BuiltinParseSpecDecl = enum {
+    str,
+    u64,
+    record_field,
+    tag_union,
 };
 
 fn builtinOriginModule(self: *const Self) Ident.Idx {
@@ -3004,6 +3040,8 @@ fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
         .list => self.cir.idents.builtin_list,
         .box => self.cir.idents.builtin_box,
         .try_type => self.cir.idents.builtin_try,
+        .fields => self.cir.idents.builtin_str_field_names,
+        .field => self.cir.idents.builtin_str_field_name,
         .numeral => self.cir.idents.builtin_numeral,
         .num => |num_kind| self.builtinNumTypeIdent(num_kind),
     };
@@ -3014,6 +3052,8 @@ fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
         .list => "List",
         .box => "Box",
         .try_type => "Try",
+        .fields => "Str.FieldName.FieldNames",
+        .field => "Str.FieldName",
         .numeral => "Num.Numeral",
         .num => |num_kind| switch (num_kind) {
             .u8 => "Num.U8",
@@ -3071,6 +3111,8 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
             .list => indices.list_type,
             .box => indices.box_type,
             .try_type => indices.try_type,
+            .fields => indices.fields_type,
+            .field => indices.field_type,
             .numeral => indices.numeral_type,
             .num => |num_kind| builtinNumStmtFromIndices(indices, num_kind),
         };
@@ -3089,6 +3131,49 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
     const stmt_idx = self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
+        }
+        unreachable;
+    };
+    self.debugAssertSourceDeclKind(@intFromEnum(stmt_idx), .nominal);
+    return @intFromEnum(stmt_idx);
+}
+
+fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) u32 {
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
+        const indices = self.builtin_ctx.builtin_indices.?;
+        const stmt_idx = switch (decl) {
+            .tag_union => indices.parse_tag_union_spec_type,
+            .str, .u64, .record_field => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
+                }
+                unreachable;
+            },
+        };
+        const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
+        debugAssertSourceDeclKindInEnv(owner_env, @intFromEnum(stmt_idx), .nominal);
+        return @intFromEnum(stmt_idx);
+    }
+
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+        }
+        unreachable;
+    }
+
+    const ident = switch (decl) {
+        .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
+        .str, .u64, .record_field => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
+            }
+            unreachable;
+        },
+    };
+    const stmt_idx = self.findLocalTypeDeclByName(ident) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin parse spec declaration not found while checking Builtin", .{});
         }
         unreachable;
     };
@@ -3295,6 +3380,8 @@ fn builtinNominalDeclForIdentInEnv(source_env: *const ModuleEnv, type_ident: Ide
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
     if (type_ident.eql(common.@"try") or type_ident.eql(common.builtin_try)) return .try_type;
+    if (type_ident.eql(common.builtin_str_field_names)) return .fields;
+    if (type_ident.eql(common.builtin_str_field_name)) return .field;
     if (type_ident.eql(common.builtin_numeral)) return .numeral;
     if (type_ident.eql(common.u8) or type_ident.eql(common.u8_type)) return .{ .num = .u8 };
     if (type_ident.eql(common.i8) or type_ident.eql(common.i8_type)) return .{ .num = .i8 };
@@ -3323,6 +3410,8 @@ fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) 
     if (raw_decl == @intFromEnum(indices.list_type)) return .list;
     if (raw_decl == @intFromEnum(indices.box_type)) return .box;
     if (raw_decl == @intFromEnum(indices.try_type)) return .try_type;
+    if (raw_decl == @intFromEnum(indices.fields_type)) return .fields;
+    if (raw_decl == @intFromEnum(indices.field_type)) return .field;
     if (raw_decl == @intFromEnum(indices.numeral_type)) return .numeral;
     if (raw_decl == @intFromEnum(indices.u8_type)) return .{ .num = .u8 };
     if (raw_decl == @intFromEnum(indices.i8_type)) return .{ .num = .i8 };
@@ -3506,8 +3595,14 @@ fn mkFlexWithFromNumeralConstraint(
     const numeral_content = try self.mkNumeralContent(env);
     const arg_var = try self.freshFromContent(numeral_content, env, num_literal_info.region);
 
-    // Create the error type: [InvalidNumeral(Str)] (closed tag union)
-    const str_var = self.str_var;
+    // Create the error type: [InvalidNumeral(Str)] (closed tag union).
+    // Use a fresh Str instance, not the shared `self.str_var`: this Str lands in
+    // the literal's deferred from_numeral constraint, and embedding the module's
+    // one canonical Str var here would make every numeric literal's constraint
+    // alias it. A dispatch failure poisons its operands to `.err`, so a shared Str
+    // would carry that `.err` into every other literal's constraint and silently
+    // suppress their own (independent) dispatch errors.
+    const str_var = try self.freshStr(env, num_literal_info.region);
     const invalid_numeral_tag_ident = try @constCast(self.cir).insertIdent(
         base.Ident.for_text("InvalidNumeral"),
     );
@@ -3583,8 +3678,14 @@ fn mkFlexWithFromQuoteConstraint(
     // Create the argument type: Str
     const arg_var = try self.freshStr(env, region);
 
-    // Create the error type: [BadQuotedBytes(Str)] (closed tag union)
-    const str_var = self.str_var;
+    // Create the error type: [BadQuotedBytes(Str)] (closed tag union).
+    // Use a fresh Str instance, not the shared `self.str_var`: this Str lands in
+    // the literal's deferred from_quote constraint, and embedding the module's one
+    // canonical Str var here would make every string literal's constraint alias
+    // it. A dispatch failure poisons its operands to `.err`, so a shared Str would
+    // carry that `.err` into every other literal's constraint and silently
+    // suppress their own (independent) dispatch errors.
+    const str_var = try self.freshStr(env, region);
     const bad_quoted_bytes_tag_ident = try @constCast(self.cir).insertIdent(
         base.Ident.for_text("BadQuotedBytes"),
     );
@@ -3647,100 +3748,63 @@ fn recordedNumeralLiteralForExpr(self: *const Self, expr_idx: CIR.Expr.Idx) Modu
 
 fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
     const literal = self.recordedNumeralLiteralForExpr(expr_idx);
-    const text = try numeralLiteralDecimalText(self.gpa, self.cir, literal);
-    defer self.gpa.free(text);
-    const fits_dec = builtins.dec.RocDec.fromNonemptySlice(text) != null;
+    const fits_dec = numeralLiteralFitsDec(self.cir, literal);
     const is_fractional = literal.after_decimal_digit_count != 0 or literal.hadDecimalPoint();
     return types_mod.NumeralInfo.fromExact(literal.isNegative(), is_fractional, fits_dec, region);
 }
 
-fn numeralLiteralDecimalText(
-    allocator: Allocator,
+fn numeralLiteralFitsDec(
     module_env: *const ModuleEnv,
     literal: ModuleEnv.NumeralLiteral,
-) Allocator.Error![]const u8 {
-    const before = try base256DecimalText(allocator, module_env.numeralDigitsBefore(literal), 1);
-    defer allocator.free(before);
+) bool {
+    const decimal_places = builtins.dec.RocDec.decimal_places;
+    const after_count = literal.after_decimal_digit_count;
+    if (after_count > decimal_places) return false;
 
-    const after_min_digits: usize = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
-        @panic("recorded numeral literal decimal digit count exceeded host usize");
-    };
-    const after = if (after_min_digits == 0)
-        try allocator.alloc(u8, 0)
-    else
-        try base256DecimalText(allocator, module_env.numeralDigitsAfter(literal), after_min_digits);
-    defer allocator.free(after);
+    const before = base256BytesToU128(module_env.numeralDigitsBefore(literal)) orelse return false;
+    const after = base256BytesToU128(module_env.numeralDigitsAfter(literal)) orelse return false;
 
-    const sign_len: usize = @intFromBool(literal.isNegative());
-    const dot_len: usize = @intFromBool(after_min_digits > 0);
-    const total_len = sign_len + before.len + dot_len + after.len;
-    const text = try allocator.alloc(u8, total_len);
-    var offset: usize = 0;
-    if (literal.isNegative()) {
-        text[offset] = '-';
-        offset += 1;
-    }
-    @memcpy(text[offset..][0..before.len], before);
-    offset += before.len;
-    if (after_min_digits > 0) {
-        text[offset] = '.';
-        offset += 1;
-        @memcpy(text[offset..][0..after.len], after);
-    }
-    return text;
+    const before_scaled = checkedMulU128(before, @intCast(builtins.dec.RocDec.one_point_zero_i128)) orelse return false;
+    const after_scale = pow10U128(decimal_places - after_count);
+    const after_scaled = checkedMulU128(after, after_scale) orelse return false;
+    const magnitude = checkedAddU128(before_scaled, after_scaled) orelse return false;
+
+    const max_positive: u128 = @intCast(std.math.maxInt(i128));
+    const limit = if (literal.isNegative()) max_positive + 1 else max_positive;
+    return magnitude <= limit;
 }
 
-fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: usize) Allocator.Error![]const u8 {
-    var first_nonzero: usize = 0;
-    while (first_nonzero < bytes_be.len and bytes_be[first_nonzero] == 0) : (first_nonzero += 1) {}
-
-    if (first_nonzero == bytes_be.len) {
-        const len = @max(min_digits, 1);
-        const out = try allocator.alloc(u8, len);
-        @memset(out, '0');
-        return out;
+fn base256BytesToU128(bytes_be: []const u8) ?u128 {
+    var value: u128 = 0;
+    for (bytes_be) |byte| {
+        const shifted = @mulWithOverflow(value, 256);
+        if (shifted[1] != 0) return null;
+        const added = @addWithOverflow(shifted[0], byte);
+        if (added[1] != 0) return null;
+        value = added[0];
     }
+    return value;
+}
 
-    var current_buf = try allocator.dupe(u8, bytes_be[first_nonzero..]);
-    defer allocator.free(current_buf);
-    var current_len = current_buf.len;
-    var digits_rev = std.ArrayList(u8).empty;
-    defer digits_rev.deinit(allocator);
+fn checkedMulU128(lhs: u128, rhs: u128) ?u128 {
+    const multiplied = @mulWithOverflow(lhs, rhs);
+    if (multiplied[1] != 0) return null;
+    return multiplied[0];
+}
 
-    while (current_len > 0) {
-        const current = current_buf[0..current_len];
-        var quotient = try allocator.alloc(u8, current.len);
-        var quotient_len: usize = 0;
-        var remainder: u16 = 0;
-        for (current) |byte| {
-            const value = remainder * 256 + byte;
-            const digit: u8 = @intCast(value / 10);
-            remainder = value % 10;
-            if (digit != 0 or quotient_len != 0) {
-                quotient[quotient_len] = digit;
-                quotient_len += 1;
-            }
-        }
-        // Free the freshly-allocated quotient if recording the digit fails,
-        // since it has not yet been adopted into current_buf.
-        digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder))) catch |err| {
-            allocator.free(quotient);
-            return err;
-        };
-        allocator.free(current_buf);
-        current_buf = quotient;
-        current_len = quotient_len;
+fn checkedAddU128(lhs: u128, rhs: u128) ?u128 {
+    const added = @addWithOverflow(lhs, rhs);
+    if (added[1] != 0) return null;
+    return added[0];
+}
+
+fn pow10U128(exponent: u32) u128 {
+    var value: u128 = 1;
+    var remaining = exponent;
+    while (remaining > 0) : (remaining -= 1) {
+        value *= 10;
     }
-
-    const digit_count = digits_rev.items.len;
-    const total_len = @max(digit_count, min_digits);
-    const out = try allocator.alloc(u8, total_len);
-    const pad = total_len - digit_count;
-    @memset(out[0..pad], '0');
-    for (digits_rev.items, 0..) |digit, i| {
-        out[pad + digit_count - 1 - i] = digit;
-    }
-    return out;
+    return value;
 }
 
 /// Create a nominal Box type with the given element type
@@ -3799,6 +3863,71 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
         false, // Try is nominal (not opaque)
         true,
     );
+}
+
+fn mkParseSpecVar(
+    self: *Self,
+    decl: BuiltinParseSpecDecl,
+    shape_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const ident_idx = switch (decl) {
+        .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
+        .str, .u64, .record_field => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
+            }
+            unreachable;
+        },
+    };
+    const backing_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    return try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = ident_idx },
+        backing_var,
+        &.{shape_var},
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinParseSpec(decl),
+        true,
+        true,
+    ), env, region);
+}
+
+fn mkFieldsVar(
+    self: *Self,
+    shape_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    return try self.mkBuiltinShapeHandleVar(.fields, shape_var, env, region);
+}
+
+fn mkFieldVar(
+    self: *Self,
+    shape_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    return try self.mkBuiltinShapeHandleVar(.field, shape_var, env, region);
+}
+
+fn mkBuiltinShapeHandleVar(
+    self: *Self,
+    decl: BuiltinNominalDecl,
+    shape_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const backing_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    return try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = self.builtinNominalIdent(decl) },
+        backing_var,
+        &.{shape_var},
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(decl),
+        true,
+        true,
+    ), env, region);
 }
 
 /// Create the transparent builtin Numeral type used by from_numeral.
@@ -4386,6 +4515,8 @@ fn flatTypeIsConcreteHoistedConst(
                 switch (builtin_decl) {
                     .list,
                     .box,
+                    .fields,
+                    .field,
                     .num,
                     => break :blk true,
                     .try_type,
@@ -4565,6 +4696,7 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_expect,
         .e_for,
         .e_return,
+        .e_break,
         .e_run_low_level,
         => false,
         .e_str => |str| self.hoistedRootExprSpanDependenciesAreKept(str.span, context, keep_oracle),
@@ -4713,6 +4845,7 @@ fn hoistedExprAllowsStoredConst(
         .e_dbg,
         .e_expect_err,
         .e_expect,
+        .e_break,
         => false,
         .e_for => |for_expr| (try self.hoistedExprAllowsStoredConst(module, for_expr.expr, context)) and
             try self.hoistedExprAllowsStoredConst(module, for_expr.body, context),
@@ -4794,6 +4927,7 @@ fn hoistedCallableDefForExpr(
         .e_anno_only,
         .e_crash,
         .e_return,
+        .e_break,
         => null,
     };
 }
@@ -5446,12 +5580,25 @@ fn recordInterpolationConstraintMetadata(
     expr_idx: CIR.Expr.Idx,
     item_var: Var,
 ) std.mem.Allocator.Error!void {
+    // Capture the interpolated-part vars now so per-instantiation re-checking can unify the
+    // item type against the instantiated copies of these vars (see `copyConstraintMetadata`).
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    std.debug.assert(parts.len % 2 == 0);
+    const interpolated_vars = try self.gpa.alloc(Var, parts.len / 2);
+    errdefer self.gpa.free(interpolated_vars);
+    var part_i: usize = 0;
+    while (part_i < parts.len) : (part_i += 2) {
+        interpolated_vars[part_i / 2] = ModuleEnv.varFrom(parts[part_i]);
+    }
+
     const id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
+    try self.recordInterpolationConstraintIdForFnVar(fn_var, id);
     try self.interpolation_constraint_metadata.append(self.gpa, .{
         .expr_idx = expr_idx,
         .item_var = item_var,
+        .interpolated_vars = interpolated_vars,
     });
-    try self.recordInterpolationConstraintIdForFnVar(fn_var, id);
 }
 
 fn linkConstraintMetadata(
@@ -5531,15 +5678,25 @@ fn copyConstraintMetadata(
 
     if (maybe_interpolation_id) |old_id| {
         const old_metadata = self.interpolation_constraint_metadata.items[@intFromEnum(old_id)];
+        // Remap each interpolated-part var through the instantiation var-map, exactly as
+        // `item_var` is remapped, so the re-check unifies instantiated item type against
+        // instantiated part vars (the original CIR part vars belong to the generalized copy).
+        const new_interpolated_vars = try self.gpa.alloc(Var, old_metadata.interpolated_vars.len);
+        errdefer self.gpa.free(new_interpolated_vars);
+        for (old_metadata.interpolated_vars, 0..) |old_part_var, i| {
+            new_interpolated_vars[i] = self.instantiatedMetadataVar(old_part_var);
+        }
+        const new_item_var = self.instantiatedMetadataVar(old_metadata.item_var);
         const new_id: InterpolationConstraintId = @enumFromInt(self.interpolation_constraint_metadata.items.len);
-        try self.interpolation_constraint_metadata.append(self.gpa, .{
-            .expr_idx = old_metadata.expr_idx,
-            .item_var = self.instantiatedMetadataVar(old_metadata.item_var),
-        });
         try self.recordInterpolationConstraintIdForFnVar(fresh_var, new_id);
         if (resolved_fresh != fresh_var) {
             try self.recordInterpolationConstraintIdForFnVar(resolved_fresh, new_id);
         }
+        try self.interpolation_constraint_metadata.append(self.gpa, .{
+            .expr_idx = old_metadata.expr_idx,
+            .item_var = new_item_var,
+            .interpolated_vars = new_interpolated_vars,
+        });
     }
 }
 
@@ -5603,6 +5760,35 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         if (constraints_range.len() == 0) continue;
         if (reported.contains(resolved.var_)) continue;
 
+        // A GENERALIZED dispatcher whose constraints are ALL `where`-clause
+        // contracts is a valid polymorphic obligation, not a dead end: it is a
+        // type parameter of an exposed generic function (e.g. `a` in
+        // `wrap : a -> a where [a.go : a -> a]`), and any caller that pins the
+        // receiver to a concrete type is responsible for — and separately
+        // checked for — satisfying the contract when the receiver grounds to a
+        // non-generalized concrete var. Reporting it here wrongly rejects a
+        // helper that is merely dispatched through nested generalized let-defs
+        // (the recorded receiver is a stale scheme var promoted by an enclosing
+        // generalization; its real call-site uses are recorded separately).
+        //
+        // We still report a generalized dispatcher that ALSO carries a
+        // concrete-use dispatch (a non-`where`-clause origin such as `plus` from
+        // `n + 1`): that use forces the receiver toward a grounding the contract
+        // cannot satisfy (issue 9657 — `plus` forces a numeric type that lacks
+        // `decode`). And a NON-generalized dispatcher is a concrete per-call hole
+        // whose instantiation never supplied the owner (issue 9644), so it is not
+        // skipped here either.
+        if (resolved.desc.rank == .generalized) {
+            var all_where_clause = true;
+            for (self.types.sliceStaticDispatchConstraints(constraints_range)) |c| {
+                if (c.origin != .where_clause) {
+                    all_where_clause = false;
+                    break;
+                }
+            }
+            if (all_where_clause) continue;
+        }
+
         // Pick the constraint to report. Instantiated where-clause contracts get
         // priority because they are explicit obligations copied from a signature:
         // once the signature has been instantiated, the current call must either
@@ -5653,13 +5839,18 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         };
         if (has_literal_constraint) continue;
         const is_instantiated_where_clause = constraint.origin == .where_clause;
+        // A body-forced where-clause (the originating scheme's body provably
+        // dispatches this method) is reportable even with no in-module dispatch
+        // use: an unpinnable instantiated receiver can never gain the owner the
+        // contract requires, so its dispatch is a genuine dead end. A phantom
+        // where-clause (the body never dispatches it) still needs an in-module
+        // dispatch use to be a dead end; without one it is not reported.
+        const body_forced = is_instantiated_where_clause and constraint.origin.where_clause.body_required;
         const where_dispatch_use = if (is_instantiated_where_clause)
             try self.findStaticDispatchUseForConstraint(constraint.fn_name, constraint.fn_var)
         else
             null;
-        if (is_instantiated_where_clause) {
-            if (where_dispatch_use == null) continue;
-        }
+        if (is_instantiated_where_clause and where_dispatch_use == null and !body_forced) continue;
 
         // If the receiver resolves INTO the pinnable set, some caller — at this
         // call's level or an enclosing one — can pin it, so it is not a dead end.
@@ -5667,11 +5858,19 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // with a lambda parameter (e.g. `outer`'s `x` in `outer = |x| inner(x)`,
         // pinned at `outer(10)`); the receiver of a genuine hole (`get(none({}))`)
         // is a fresh instantiated var that unifies with nothing concrete, so it is
-        // absent from the set and reported. Instantiated where-clause contracts
-        // are stricter: lambda parameters inside the already-instantiated call do
-        // not count, because that call is exactly what must satisfy the copied
-        // contract. Only external function arguments can still pin it later.
-        const active_pinnable = if (is_instantiated_where_clause) external_pinnable else pinnable;
+        // absent from the pinnable set and reported.
+        //
+        // A where-clause with an IN-MODULE dispatch use is stricter
+        // (`external_pinnable`): the method is dispatched on this receiver here, so
+        // this call must satisfy the copied contract now — lambda parameters inside
+        // the already-instantiated call do not count, only external arguments can
+        // still pin it. This catches a receiver pinned to a type that lacks the
+        // method (issue 9657). A where-clause with NO in-module use (the body-forced
+        // hole, issue 9644) uses the broader `pinnable` set: its dispatch lives in
+        // another body, so a still-generalizable helper whose receiver is an (even
+        // nested) lambda parameter an enclosing caller can pin is not a dead end —
+        // only a receiver in neither set (a genuine hole) is reported.
+        const active_pinnable = if (is_instantiated_where_clause and where_dispatch_use != null) external_pinnable else pinnable;
         if (active_pinnable.contains(resolved.var_)) continue;
 
         // Locate the call site that left this receiver undetermined. Instantiated
@@ -5691,7 +5890,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // corpus case, is caught by the def-site sweep instead.
         var primary: ?Region = null;
         var secondary: ?Region = null;
-        if (is_instantiated_where_clause) {
+        if (is_instantiated_where_clause and where_dispatch_use != null) {
             const dispatch_use = where_dispatch_use.?;
             primary = dispatch_use.region;
 
@@ -5700,6 +5899,28 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                     .region = dispatch_use.region,
                 } });
                 self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
+            }
+        } else if (body_forced) {
+            // A body-forced where-clause with no in-module dispatch use (the
+            // unpinned receiver lives only in the instantiating call's result
+            // type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`). The
+            // dispatcher recorded the exact expression whose instantiation created
+            // the obligation, so report there and mark it a runtime error — codegen
+            // then emits a crash instead of reaching the ownerless dispatch.
+            if (dispatcher.instantiation_expr) |inst_expr| {
+                primary = self.cir.store.getExprRegion(inst_expr);
+                if (self.cir.store.getExpr(inst_expr) != .e_runtime_error) {
+                    const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                        .region = primary.?,
+                    } });
+                    self.cir.store.replaceExprWithRuntimeError(inst_expr, diagnostic_idx);
+                }
+            } else {
+                // A dispatcher created outside `checkExpr` has no recorded source
+                // expression to mark. Reporting still suffices: `unresolved_dispatcher`
+                // is `runtime_error` severity, so `hasUserErrors` blocks all lowering —
+                // the ownerless dispatch is never reached even without a per-expr mark.
+                primary = self.getRegionAt(dispatcher.dispatcher_var);
             }
         } else {
             var raw_node_idx: u32 = 0;
@@ -5737,23 +5958,10 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             }
         }
 
-        // No call passes the receiver in the relevant position. For ordinary
-        // hidden dispatch this means it is a polymorphic function value's own
-        // parameter (or otherwise not a real dispatch dead end). For a copied
-        // where-clause contract, report at the instantiation region because the
-        // unresolved obligation itself is the error.
-        if (primary == null) {
-            if (!is_instantiated_where_clause) continue;
-            const dispatch_use = where_dispatch_use.?;
-            primary = dispatch_use.region;
-
-            if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
-                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-                    .region = dispatch_use.region,
-                } });
-                self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
-            }
-        }
+        // No expression passes the receiver in the relevant position: an ordinary
+        // hidden dispatch whose receiver is a polymorphic function value's own
+        // parameter, which a future call can still pin — not a dead end.
+        if (primary == null) continue;
 
         try reported.put(resolved.var_, {});
 
@@ -7177,7 +7385,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
                 .constraint = StaticDispatchConstraint{
                     .fn_name = method.method_name,
                     .fn_var = func_var,
-                    .origin = .where_clause,
+                    .origin = .{ .where_clause = .{} },
                 },
             });
         },
@@ -8775,6 +8983,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Attribute any dispatcher instantiated while checking this expression to it,
+    // so the ambiguity sweep can pinpoint the source of an unsatisfiable
+    // body-forced where-clause. Restored on exit to track the innermost expr.
+    const prev_instantiation_source = self.instantiation_source_expr;
+    self.instantiation_source_expr = expr_idx;
+    defer self.instantiation_source_expr = prev_instantiation_source;
+
     const expr = self.cir.store.getExpr(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
@@ -9854,7 +10069,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // lambda must NOT be generalized, or its body's static-dispatch chain
             // would be quantified before the caller pins the parameter types,
             // leaving the original (un-instantiated) dispatch nodes unresolved.
+            const saved_checking_call_arg = self.checking_call_arg;
             self.checking_call_arg = is_call_arg;
+            defer self.checking_call_arg = saved_checking_call_arg;
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
@@ -10362,8 +10579,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (did_err) {
                 try self.unifyWith(expr_var, .err, env);
             } else {
-                const type_var_alias_stmt = self.cir.store.getStatement(method_call.type_var_alias_stmt);
-                const dispatcher_var = ModuleEnv.varFrom(type_var_alias_stmt.s_type_var_alias.type_var_anno);
+                const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
                 const constraint_fn_var = try self.mkTypeMethodCallConstraint(
                     dispatcher_var,
                     arg_vars,
@@ -10375,7 +10591,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 );
                 try self.cir.store.replaceExprWithTypeDispatchCall(
                     expr_idx,
-                    method_call.type_var_alias_stmt,
+                    method_call.type_dispatch_stmt,
                     method_call.method_name,
                     method_call.method_name_region,
                     method_call.args,
@@ -10491,6 +10707,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Note that we DO NOT unify the return type with the expr here.
             // This is so this expr can unify with anything (like {} in the an implicit `else` branch)
+        },
+        .e_break => {
+            // Nothing to do. `break` diverges, so this expression can unify with
+            // any surrounding expected type.
         },
         .e_hosted_lambda => |lambda| {
             self.markCurrentHoistObservableEffect();
@@ -11101,6 +11321,7 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
         .e_crash,
         .e_ellipsis,
         .e_expect_err,
+        .e_break,
         => true,
         .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         .e_if => |if_expr| {
@@ -11725,8 +11946,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .err, env);
             },
             .s_break => {
-                // Nothing to do for break
-                // try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
+                diverges = true;
             },
         }
         blocks_later_hoists = statement_blocks_later_hoists or blocks_later_hoists;
@@ -11735,6 +11955,15 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
         .does_fx = does_fx,
         .diverges = diverges,
         .blocks_later_hoists = blocks_later_hoists,
+    };
+}
+
+fn typeDispatchOwnerVar(self: *Self, stmt_idx: CIR.Statement.Idx) Var {
+    const stmt = self.cir.store.getStatement(stmt_idx);
+    return switch (stmt) {
+        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
+        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
+        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
     };
 }
 
@@ -14977,7 +15206,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
-
         dispatch_resolution: while (true) {
             if (dispatcher_content == .err) {
                 // If the root type is an error, then skip constraint checking
@@ -15043,6 +15271,24 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         } else {
                             try self.linkConstraintMetadata(rigid_var, constraint.fn_var);
                             try self.reportEffectfulDispatchInExpect(constraint);
+
+                            // The body provably forces this where-clause method: a
+                            // body dispatch matched it and unified successfully. Mark
+                            // the rigid scheme's matching where-clause `body_required`
+                            // so a later unpinnable instantiation of this scheme is
+                            // reported as ambiguous rather than silently lowering to an
+                            // ownerless dispatch. Re-fetch the backing slice: the unify
+                            // above may have appended to (and reallocated) the
+                            // constraint store, but it only grows it, so the rigid
+                            // range indices stay valid.
+                            const rc_start: usize = @intFromEnum(rigid.constraints.start);
+                            const rc_len: usize = rigid.constraints.len();
+                            const backing = self.types.static_dispatch_constraints.items.items;
+                            for (rc_start..rc_start + rc_len) |i| {
+                                if (backing[i].origin == .where_clause and backing[i].fn_name.eql(constraint.fn_name)) {
+                                    backing[i].origin.where_clause.body_required = true;
+                                }
+                            }
                         }
                     } else {
                         try self.reportConstraintError(
@@ -15105,6 +15351,30 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         } else {
                             try self.ensureCustomInterpolationPartsChecked(constraint, env);
                         }
+                    }
+                    if (constraint.fn_name.eql(self.cir.idents.parser_for) and
+                        self.nominalIsBuiltinStrType(nominal_type))
+                    {
+                        try self.satisfyImplicitParserConstraint(
+                            deferred_constraint.var_,
+                            constraint,
+                            constraint.fn_var,
+                            env,
+                            region,
+                        );
+                        continue;
+                    }
+                    if (constraint.fn_name.eql(self.cir.idents.encode_to) and
+                        (self.nominalIsBuiltinStrType(nominal_type) or self.nominalIsBuiltinU64Type(nominal_type)))
+                    {
+                        try self.satisfyImplicitEncodeToConstraint(
+                            deferred_constraint.var_,
+                            constraint,
+                            constraint.fn_var,
+                            env,
+                            region,
+                        );
+                        continue;
                     }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         try self.nominalSupportsDerivedIsEq(nominal_type))
@@ -15345,6 +15615,32 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             continue;
                         }
                     }
+                    if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
+                        const backing_var = self.types.getAliasBackingVar(alias);
+                        if (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
+                            try self.satisfyImplicitParserConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                            continue;
+                        }
+                    }
+                    if (constraint.fn_name.eql(self.cir.idents.encode_to)) {
+                        const backing_var = self.types.getAliasBackingVar(alias);
+                        if (try self.varSupportsDerivedEncodeShape(backing_var, env, region)) {
+                            try self.satisfyImplicitEncodeToConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                            continue;
+                        }
+                    }
 
                     const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
                         alias.source_decl.toOptional(),
@@ -15476,6 +15772,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 break :dispatch_resolution;
             } else if (dispatcher_content == .structure and
                 (dispatcher_content.structure == .record or
+                    dispatcher_content.structure == .record_unbound or
                     dispatcher_content.structure == .tuple or
                     dispatcher_content.structure == .tag_union or
                     dispatcher_content.structure == .empty_record or
@@ -15506,9 +15803,49 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 env,
                             );
                         }
+                    } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
+                        const region = self.getRegionAt(deferred_constraint.var_);
+                        const supports_parse = try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region);
+                        if (supports_parse) {
+                            try self.satisfyImplicitParserConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                        } else {
+                            try self.reportConstraintError(
+                                deferred_constraint.var_,
+                                constraint,
+                                .not_nominal,
+                                env,
+                                is_numeric_default_pass,
+                            );
+                        }
+                    } else if (constraint.fn_name.eql(self.cir.idents.encode_to)) {
+                        const region = self.getRegionAt(deferred_constraint.var_);
+                        if (try self.typeSupportsDerivedEncode(dispatcher_content.structure, env, region)) {
+                            try self.satisfyImplicitEncodeToConstraint(
+                                deferred_constraint.var_,
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                region,
+                            );
+                        } else {
+                            try self.reportConstraintError(
+                                deferred_constraint.var_,
+                                constraint,
+                                .not_nominal,
+                                env,
+                                is_numeric_default_pass,
+                            );
+                        }
                     } else {
-                        // Structural types (other than is_eq) cannot have methods called on them.
-                        // The user must explicitly wrap the value in a nominal type.
+                        // Structural types (other than is_eq, parser_for, and encode_to)
+                        // cannot have methods called on them. The user must explicitly wrap
+                        // the value in a nominal type.
                         try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
@@ -15667,16 +16004,13 @@ fn ensureCustomInterpolationPartsChecked(
     if (self.interpolation_constraint_metadata.items[metadata_index].checked_parts) return;
     self.interpolation_constraint_metadata.items[metadata_index].checked_parts = true;
 
-    const expr_idx = self.interpolation_constraint_metadata.items[metadata_index].expr_idx;
     const item_var = self.interpolation_constraint_metadata.items[metadata_index].item_var;
-    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
-    const parts = self.cir.store.sliceExpr(interpolation.parts);
-    std.debug.assert(parts.len % 2 == 0);
+    // Use the captured part vars (remapped per instantiation), not the original CIR `parts`,
+    // so an instantiated call site unifies the item type against its instantiated arguments.
+    const interpolated_vars = self.interpolation_constraint_metadata.items[metadata_index].interpolated_vars;
 
     var did_err = false;
-    var part_i: usize = 0;
-    while (part_i < parts.len) : (part_i += 2) {
-        const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
+    for (interpolated_vars) |interpolated_var| {
         const result = try self.unify(item_var, interpolated_var, env);
         did_err = did_err or result.isProblem() or self.types.resolveVar(interpolated_var).desc.content == .err;
     }
@@ -15887,8 +16221,214 @@ fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalTyp
     return ident.eql(self.cir.idents.str) or ident.eql(self.cir.idents.builtin_str);
 }
 
+fn typeSupportsDerivedParse(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (flat_type) {
+        .record => |record| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+            const field_vars = fields_slice.items(.var_);
+            for (field_vars) |field_var| {
+                if (!try self.varSupportsDerivedParseField(field_var, env, region)) break :blk false;
+            }
+            break :blk true;
+        },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            const field_vars = fields_slice.items(.var_);
+            for (field_vars) |field_var| {
+                if (!try self.varSupportsDerivedParseField(field_var, env, region)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tag_union => |tag_union| blk: {
+            if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) break :blk false;
+            const tags_slice = self.types.getTagsSlice(tag_union.tags);
+            for (tags_slice.items(.args)) |tag_args_range| {
+                const tag_args = self.types.sliceVars(tag_args_range);
+                for (tag_args) |tag_arg| {
+                    if (!try self.varSupportsDerivedParseField(tag_arg, env, region)) break :blk false;
+                }
+            }
+            break :blk try self.varSupportsDerivedParseTagExt(tag_union.ext, env, region);
+        },
+        .empty_record => true,
+        .empty_tag_union => false,
+        else => false,
+    };
+}
+
+fn varSupportsDerivedParseShape(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| try self.typeSupportsDerivedParse(structure, env, region),
+        .alias => |alias| try self.varSupportsDerivedParseShape(self.types.getAliasBackingVar(alias), env, region),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn derivedParseTagUnionHasAnyTag(self: *Self, tag_union: types_mod.TagUnion) Allocator.Error!bool {
+    if (self.types.getTagsSlice(tag_union.tags).items(.name).len > 0) return true;
+    return try self.derivedParseExtHasAnyTag(tag_union.ext);
+}
+
+fn derivedParseExtHasAnyTag(self: *Self, ext_var: Var) Allocator.Error!bool {
+    return switch (self.types.resolveVar(ext_var).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => false,
+            .tag_union => |tag_union| try self.derivedParseTagUnionHasAnyTag(tag_union),
+            else => false,
+        },
+        .alias => |alias| try self.derivedParseExtHasAnyTag(self.types.getAliasBackingVar(alias)),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn varSupportsDerivedParseTagExt(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => true,
+            .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
+            else => false,
+        },
+        .alias => |alias| try self.varSupportsDerivedParseTagExt(self.types.getAliasBackingVar(alias), env, region),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn varSupportsDerivedParseField(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.nominalSupportsDerivedParseField(nominal),
+            .record => |record| try self.typeSupportsDerivedParse(.{ .record = record }, env, region),
+            .record_unbound => |fields| try self.typeSupportsDerivedParse(.{ .record_unbound = fields }, env, region),
+            .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
+            .empty_record => true,
+            .empty_tag_union => false,
+            else => false,
+        },
+        .alias => |alias| try self.varSupportsDerivedParseField(self.types.getAliasBackingVar(alias), env, region),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn nominalSupportsDerivedParseField(
+    self: *Self,
+    nominal: types_mod.NominalType,
+) Allocator.Error!bool {
+    if (self.nominalIsBuiltinStrType(nominal)) return true;
+    if (!self.nominalIsBuiltinTryType(nominal)) {
+        return true;
+    }
+
+    const args = self.types.sliceNominalArgs(nominal);
+    if (args.len != 2) return false;
+    return true;
+}
+
+fn typeSupportsDerivedEncode(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (flat_type) {
+        .record => |record| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (!try self.varSupportsDerivedEncodeShape(field_var, env, region)) break :blk false;
+            }
+            break :blk true;
+        },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (!try self.varSupportsDerivedEncodeShape(field_var, env, region)) break :blk false;
+            }
+            break :blk true;
+        },
+        .empty_record => true,
+        else => false,
+    };
+}
+
+fn varSupportsDerivedEncodeShape(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.nominalSupportsDerivedEncodeShape(nominal),
+            .record => |record| try self.typeSupportsDerivedEncode(.{ .record = record }, env, region),
+            .record_unbound => |fields| try self.typeSupportsDerivedEncode(.{ .record_unbound = fields }, env, region),
+            .empty_record => true,
+            else => false,
+        },
+        .alias => |alias| try self.varSupportsDerivedEncodeShape(self.types.getAliasBackingVar(alias), env, region),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn nominalSupportsDerivedEncodeShape(
+    self: *Self,
+    nominal: types_mod.NominalType,
+) Allocator.Error!bool {
+    if (self.nominalIsBuiltinStrType(nominal)) return true;
+    if (self.nominalIsBuiltinU64Type(nominal)) return true;
+    if (nominal.originIsBuiltin()) return false;
+    return true;
+}
+
+fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| self.nominalIsBuiltinStrType(nominal),
+            else => false,
+        },
+        .alias => |alias| try self.varIsBuiltinStr(self.types.getAliasBackingVar(alias)),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn nominalIsBuiltinTryType(self: *const Self, nominal_type: types_mod.NominalType) bool {
+    if (!nominal_type.originIsBuiltin()) return false;
+    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
+        .try_type => true,
+        else => false,
+    };
+}
+
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
     return self.builtinNumKindFromNominalType(nominal_type) != null;
+}
+
+fn nominalIsBuiltinU64Type(self: *const Self, nominal_type: types_mod.NominalType) bool {
+    return self.builtinNumKindFromNominalType(nominal_type) == .u64;
 }
 
 const BuiltinFromNumeralLiteralProblem = enum {
@@ -16104,6 +16644,951 @@ fn satisfyDerivedIsEqConstraint(
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
         try self.markConstraintFunctionAsError(constraint, env);
     }
+}
+
+fn satisfyImplicitParserConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    constraint_fn_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 1) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    }
+
+    // Copy the encoding arg before adding fresh vars; the args slice may dangle.
+    const encoding_var = args[0];
+    const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
+    const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    };
+    const runtime_args = self.types.sliceVars(runtime_func.args);
+    if (runtime_args.len != 1) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    }
+
+    // Copy the state arg before adding fresh vars; the args slice may dangle.
+    const state_var = runtime_args[0];
+    const err_var = try self.fresh(env, region);
+    const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
+    const ret_result = try self.unifyInContext(parse_result_var, runtime_func.ret, env, .none);
+    if (ret_result.isProblem()) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
+    self.var_set.clearRetainingCapacity();
+    switch (try self.validateDerivedParseVar(dispatcher_var, encoding_var, state_var, err_var, constraint, env, region, &self.var_set, .shape)) {
+        .ok => {},
+        .reported_error => {
+            try self.unifyWith(dispatcher_var, .err, env);
+            try self.markConstraintFunctionAsError(constraint, env);
+        },
+        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
+    }
+}
+
+fn satisfyImplicitEncodeToConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    constraint_fn_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 2) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    }
+
+    const value_var = args[0];
+    const encoding_var = args[1];
+    const value_result = try self.unifyInContext(dispatcher_var, value_var, env, .none);
+    if (value_result.isProblem()) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
+    const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
+    const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    };
+    const runtime_args = self.types.sliceVars(runtime_func.args);
+    if (runtime_args.len != 1) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        return;
+    }
+
+    const state_var = runtime_args[0];
+    const err_var = try self.fresh(env, region);
+    const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
+    const ret_result = try self.unifyInContext(encode_result_var, runtime_func.ret, env, .none);
+    if (ret_result.isProblem()) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
+    self.var_set.clearRetainingCapacity();
+    switch (try self.validateDerivedEncodeVar(dispatcher_var, encoding_var, state_var, err_var, constraint, env, region, &self.var_set)) {
+        .ok => {},
+        .reported_error => {
+            try self.unifyWith(dispatcher_var, .err, env);
+            try self.markConstraintFunctionAsError(constraint, env);
+        },
+        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
+    }
+}
+
+fn freshParseResultTryVar(
+    self: *Self,
+    value_var: Var,
+    rest_var: Var,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const ok_var = try self.freshParseResultOkVar(value_var, rest_var, env, region);
+    return try self.freshFromContent(try self.mkTryContent(ok_var, err_var, env), env, region);
+}
+
+fn freshParseResultOkVar(
+    self: *Self,
+    value_var: Var,
+    rest_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
+    const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
+    const fields = [_]types_mod.RecordField{
+        .{ .name = rest_name, .var_ = rest_var },
+        .{ .name = value_name, .var_ = value_var },
+    };
+    const fields_range = try self.types.appendRecordFields(&fields);
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    return try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields_range,
+        .ext = ext_var,
+    } } }, env, region);
+}
+
+fn freshParseRecordFieldEventVar(
+    self: *Self,
+    shape_var: Var,
+    state_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const field_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("field"));
+    const name_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("name"));
+    const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
+
+    const str_var = try self.freshStr(env, region);
+    const field_handle_var = try self.mkFieldVar(shape_var, env, region);
+    const field_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    const field_record_fields = [_]types_mod.RecordField{
+        .{ .name = field_name, .var_ = field_handle_var },
+        .{ .name = rest_name, .var_ = state_var },
+    };
+    const field_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(&field_record_fields),
+        .ext = field_record_ext,
+    } } }, env, region);
+
+    const try_field_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    const try_field_record_fields = [_]types_mod.RecordField{
+        .{ .name = name_name, .var_ = str_var },
+        .{ .name = rest_name, .var_ = state_var },
+    };
+    const try_field_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(&try_field_record_fields),
+        .ext = try_field_record_ext,
+    } } }, env, region);
+
+    const rest_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    const rest_record_fields = [_]types_mod.RecordField{
+        .{ .name = rest_name, .var_ = state_var },
+    };
+    const rest_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(&rest_record_fields),
+        .ext = rest_record_ext,
+    } } }, env, region);
+
+    const continue_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Continue"));
+    const done_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Done"));
+    const field_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Field"));
+    const try_field_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("TryField"));
+    const try_field_caseless_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("TryFieldCaseless"));
+    const tags = [_]types_mod.Tag{
+        try self.types.mkTag(continue_ident, &.{rest_record}),
+        try self.types.mkTag(done_ident, &.{rest_record}),
+        try self.types.mkTag(field_ident, &.{field_record}),
+        try self.types.mkTag(try_field_ident, &.{try_field_record}),
+        try self.types.mkTag(try_field_caseless_ident, &.{try_field_record}),
+    };
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    return try self.freshFromContent(try self.types.mkTagUnion(&tags, ext_var), env, region);
+}
+
+fn freshParseRecordFieldTryVar(
+    self: *Self,
+    shape_var: Var,
+    state_var: Var,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const event_var = try self.freshParseRecordFieldEventVar(shape_var, state_var, env, region);
+    return try self.freshFromContent(try self.mkTryContent(event_var, err_var, env), env, region);
+}
+
+const DerivedParseContext = enum {
+    shape,
+    record_field,
+};
+
+const DerivedParseValidation = enum {
+    ok,
+    unsupported,
+    reported_error,
+};
+
+const ParseFormatMethodVar = struct {
+    var_: Var,
+    dispatcher_name: Ident.Idx,
+};
+
+const BuiltinEncodeSpecDecl = enum {
+    str,
+    u64,
+    begin_record,
+    record_field,
+    end_record,
+};
+
+fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Error!Ident.Idx {
+    const text = switch (decl) {
+        .str => "parse_str",
+        .u64 => "parse_u64",
+        .record_field => "parse_record_field",
+        .tag_union => "parse_tag_union",
+    };
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
+}
+
+fn missingRecordFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text("missing_record_field"));
+}
+
+fn missingOptionalFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text("missing_optional_field"));
+}
+
+fn skipRecordFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text("skip_record_field"));
+}
+
+fn renameFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text("rename_field"));
+}
+
+fn encodeFormatMethodName(self: *Self, decl: BuiltinEncodeSpecDecl) Allocator.Error!Ident.Idx {
+    const text = switch (decl) {
+        .str => "encode_str",
+        .u64 => "encode_u64",
+        .begin_record => "begin_record",
+        .record_field => "encode_record_field",
+        .end_record => "end_record",
+    };
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
+}
+
+fn parseFormatMethodVarForEncoding(
+    self: *Self,
+    encoding_var: Var,
+    method_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+) Allocator.Error!?ParseFormatMethodVar {
+    const resolved = self.types.resolveVar(encoding_var);
+    return switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| blk: {
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                    nominal.origin_module,
+                    nominal.sourceDeclOptional(),
+                    nominal.originIsBuiltin(),
+                    "parser format method",
+                );
+                const binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+                    self.cir,
+                    nominal.sourceDeclOptional(),
+                    method_name,
+                ) orelse break :blk null;
+                break :blk .{
+                    .var_ = (try self.methodVarFromOriginalEnv(
+                        original_env,
+                        is_this_module,
+                        binding.type_node_idx,
+                        nominal.ident.ident_idx,
+                        env,
+                        region,
+                    )).var_,
+                    .dispatcher_name = nominal.ident.ident_idx,
+                };
+            },
+            else => null,
+        },
+        .alias => |alias| blk: {
+            const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                alias.origin_module,
+                alias.source_decl.toOptional(),
+                alias.source_decl.originIsBuiltin(),
+                "parser format method",
+            );
+            const binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                alias.source_decl.toOptional(),
+                self.cir,
+                method_name,
+            ) orelse break :blk null;
+            break :blk .{
+                .var_ = (try self.methodVarFromOriginalEnv(
+                    original_env,
+                    is_this_module,
+                    binding.type_node_idx,
+                    alias.ident.ident_idx,
+                    env,
+                    region,
+                )).var_,
+                .dispatcher_name = alias.ident.ident_idx,
+            };
+        },
+        .err => null,
+        .flex, .rigid => null,
+    };
+}
+
+fn reportDerivedParseMissingMethod(
+    self: *Self,
+    dispatcher_var: Var,
+    method_name: Ident.Idx,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!DerivedParseValidation {
+    const resolved_content = self.types.resolveVar(dispatcher_var).desc.content;
+    const dispatcher_type: problem.DispatcherDoesNotImplMethod.DispatcherType = switch (resolved_content) {
+        .rigid => .rigid,
+        .alias => .nominal,
+        .structure => |structure| switch (structure) {
+            .nominal_type => .nominal,
+            else => return .unsupported,
+        },
+        else => return .unsupported,
+    };
+    var derived_constraint = constraint;
+    derived_constraint.fn_name = method_name;
+    try self.reportConstraintError(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, false);
+    return .reported_error;
+}
+
+fn validateParseFormatMethod(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    shape_var: Var,
+    spec_decl: BuiltinParseSpecDecl,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.parseFormatMethodName(spec_decl);
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
+    const expected_ret = switch (spec_decl) {
+        .str, .u64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, err_var, env, region),
+        .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
+    };
+    const expected_fn = switch (spec_decl) {
+        .str, .u64 => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
+        .record_field => blk: {
+            const fields_var = try self.mkFieldsVar(shape_var, env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, fields_var, state_var }, expected_ret), env, region);
+        },
+        .tag_union => blk: {
+            const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, spec_var, state_var }, expected_ret), env, region);
+        },
+    };
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateEncodeFormatMethod(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    value_var: Var,
+    spec_decl: BuiltinEncodeSpecDecl,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.encodeFormatMethodName(spec_decl);
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
+    const expected_fn = switch (spec_decl) {
+        .str, .u64 => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ value_var, state_var }, expected_ret), env, region),
+        .begin_record, .end_record => try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region),
+        .record_field => blk: {
+            const str_var = try self.freshStr(env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ str_var, state_var }, expected_ret), env, region);
+        },
+    };
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateMissingRecordFieldMethod(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.missingRecordFieldMethodName();
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
+    const str_var = try self.freshStr(env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var, state_var }, err_var), env, region);
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateMissingOptionalFieldMethod(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    optional_err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.missingOptionalFieldMethodName();
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
+    const str_var = try self.freshStr(env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var, state_var }, optional_err_var), env, region);
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateSkipRecordFieldMethod(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.skipRecordFieldMethodName();
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateRenameFieldMethod(
+    self: *Self,
+    encoding_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.renameFieldMethodName();
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
+    };
+    const str_var = try self.freshStr(env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var }, str_var), env, region);
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateDerivedParseVar(
+    self: *Self,
+    var_: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+    context: DerivedParseContext,
+) Allocator.Error!DerivedParseValidation {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, visited, context),
+            .record => |record| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseRecord(var_, record.fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
+            .record_unbound => |fields| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseRecord(var_, fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
+            .tag_union => |tag_union| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseTagUnion(var_, tag_union, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
+            .empty_record => blk: {
+                switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
+                switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_field, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
+                switch (try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
+                break :blk .ok;
+            },
+            .empty_tag_union => .unsupported,
+            else => .unsupported,
+        },
+        .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited, context),
+        .err => .ok,
+        .flex, .rigid => .unsupported,
+    };
+}
+
+fn validateDerivedParseRecord(
+    self: *Self,
+    record_var: Var,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!DerivedParseValidation {
+    switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_field, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    switch (try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    if (try self.recordParseNeedsRequiredFieldError(fields_range)) {
+        switch (try self.validateMissingRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+    }
+
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
+    defer self.gpa.free(field_vars);
+
+    for (field_vars) |field_var| {
+        switch (try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited, .record_field)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+    }
+    return .ok;
+}
+
+fn recordParseNeedsRequiredFieldError(
+    self: *Self,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+) Allocator.Error!bool {
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    for (fields.items(.var_)) |field_var| {
+        if (!try self.varIsOptionalParseField(field_var)) return true;
+    }
+    return false;
+}
+
+fn varIsOptionalParseField(
+    self: *Self,
+    var_: Var,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.nominalIsOptionalParseField(nominal),
+            else => false,
+        },
+        .alias => |alias| try self.varIsOptionalParseField(self.types.getAliasBackingVar(alias)),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn nominalIsOptionalParseField(
+    self: *Self,
+    nominal: types_mod.NominalType,
+) Allocator.Error!bool {
+    if (!self.nominalIsBuiltinTryType(nominal)) return false;
+    const args = self.types.sliceNominalArgs(nominal);
+    if (args.len != 2) return false;
+    return true;
+}
+
+fn validateDerivedParseTagUnion(
+    self: *Self,
+    tag_union_var: Var,
+    tag_union: types_mod.TagUnion,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!DerivedParseValidation {
+    if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) return .unsupported;
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, tag_union_var, .tag_union, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+
+    const tags = self.types.getTagsSlice(tag_union.tags);
+    for (tags.items(.args)) |tag_args_range| {
+        const tag_args = self.types.sliceVars(tag_args_range);
+        for (tag_args) |tag_arg| {
+            switch (try self.validateDerivedParseVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, visited, .shape)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
+        }
+    }
+    return try self.validateDerivedParseTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, visited);
+}
+
+fn validateDerivedParseTagExt(
+    self: *Self,
+    ext_var: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!DerivedParseValidation {
+    return switch (self.types.resolveVar(ext_var).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => .ok,
+            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(ext_var, tag_union, encoding_var, state_var, err_var, constraint, env, region, visited),
+            else => .unsupported,
+        },
+        .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
+        .err => .ok,
+        .flex, .rigid => .unsupported,
+    };
+}
+
+fn validateDerivedParseNominal(
+    self: *Self,
+    nominal_var: Var,
+    nominal: types_mod.NominalType,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+    context: DerivedParseContext,
+) Allocator.Error!DerivedParseValidation {
+    if (self.nominalIsBuiltinStrType(nominal)) {
+        return try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, constraint, env, region);
+    }
+    if (self.nominalIsBuiltinU64Type(nominal)) {
+        return try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .u64, err_var, constraint, env, region);
+    }
+    if (self.nominalIsBuiltinTryType(nominal)) {
+        if (context != .record_field) return .unsupported;
+        const args = self.types.sliceNominalArgs(nominal);
+        if (args.len != 2) return .unsupported;
+        switch (try self.validateMissingOptionalFieldMethod(encoding_var, state_var, args[1], constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+        return try self.validateDerivedParseVar(args[0], encoding_var, state_var, err_var, constraint, env, region, visited, .shape);
+    }
+
+    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "parser nominal field",
+    );
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+        self.cir,
+        nominal.sourceDeclOptional(),
+        self.cir.idents.parser_for,
+    ) orelse {
+        return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.parser_for, constraint, env);
+    };
+
+    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
+    const method_var = if (is_this_module) blk: {
+        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
+        }
+        break :blk method_type_var;
+    } else blk: {
+        const copied_var = try self.copyVar(method_type_var, original_env, region);
+        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+    };
+
+    const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, err_var, env, region);
+    const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
+    const result = try self.unifyInContext(method_var, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = nominal_var,
+            .dispatcher_name = nominal.ident.ident_idx,
+            .method_name = constraint.fn_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
+}
+
+fn validateDerivedEncodeVar(
+    self: *Self,
+    var_: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!DerivedParseValidation {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.validateDerivedEncodeNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region),
+            .record => |record| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeRecord(record.fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
+            .record_unbound => |fields| blk: {
+                if (visited.contains(resolved.var_)) break :blk .ok;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeRecord(fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+            },
+            .empty_record => try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, false),
+            else => .unsupported,
+        },
+        .alias => |alias| try self.validateDerivedEncodeVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
+        .err => .ok,
+        .flex, .rigid => .unsupported,
+    };
+}
+
+fn validateDerivedEncodeRecord(
+    self: *Self,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!DerivedParseValidation {
+    const has_fields = self.types.getRecordFieldsSlice(fields_range).len > 0;
+    switch (try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, has_fields)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
+    defer self.gpa.free(field_vars);
+
+    for (field_vars) |field_var| {
+        switch (try self.validateDerivedEncodeVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+    }
+    return .ok;
+}
+
+fn validateDerivedEncodeRecordMethods(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    has_fields: bool,
+) Allocator.Error!DerivedParseValidation {
+    switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .begin_record, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    if (has_fields) {
+        switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+        switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .record_field, err_var, constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+    }
+    switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .end_record, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    return .ok;
+}
+
+fn validateDerivedEncodeNominal(
+    self: *Self,
+    nominal_var: Var,
+    nominal: types_mod.NominalType,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    if (self.nominalIsBuiltinStrType(nominal)) {
+        return try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, constraint, env, region);
+    }
+    if (self.nominalIsBuiltinU64Type(nominal)) {
+        return try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .u64, err_var, constraint, env, region);
+    }
+
+    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "encode_to nominal field",
+    );
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+        self.cir,
+        nominal.sourceDeclOptional(),
+        self.cir.idents.encode_to,
+    ) orelse {
+        return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.encode_to, constraint, env);
+    };
+
+    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
+    const method_var = if (is_this_module) blk: {
+        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
+        }
+        break :blk method_type_var;
+    } else blk: {
+        const copied_var = try self.copyVar(method_type_var, original_env, region);
+        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+    };
+
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var, env), env, region);
+    const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ nominal_var, encoding_var }, expected_runtime_fn), env, region);
+    const result = try self.unifyInContext(method_var, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = nominal_var,
+            .dispatcher_name = nominal.ident.ident_idx,
+            .method_name = constraint.fn_name,
+        },
+    });
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

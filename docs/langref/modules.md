@@ -434,7 +434,7 @@ The `targets` section specifies the supported build targets, what to link for ea
 
 ```roc
 targets : {
-    inputs: "targets/",
+    inputs_dir: "targets/",
     x64linux: { inputs: ["crt1.o", "host.o", app] },
     arm64mac: { inputs: ["host.o", app] },
     wasm32: { inputs: ["host.wasm", app], output: Shared },
