@@ -1997,7 +1997,7 @@ fn customDefaultPlatformWasm32ArchiveReproducible(
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = default_platform_echo_app }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write default platform app: {}", .{err});
 
-    const opts = [_][]const u8{ "speed", "size" };
+    const opts = [_][]const u8{ "dev", "speed", "size" };
     for (opts) |opt| {
         const output_path = std.fmt.allocPrint(allocator, "{s}/default_platform_wasm32_repro_{s}.a", .{ env.dirs.work_dir, opt }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate default platform output path: {}", .{err});
@@ -2016,9 +2016,14 @@ fn customDefaultPlatformWasm32ArchiveReproducible(
             return customInfraFailure(allocator, timer, "failed to read first archive {s}: {}", .{ output_path, err });
         defer allocator.free(first);
 
-        const bad_forward_member = std.fmt.allocPrint(allocator, "/roc_app_llvm_wasm32_{s}.o/", .{opt}) catch |err|
+        const member_basename = if (std.mem.eql(u8, opt, "dev"))
+            "roc_app_wasm32.o"
+        else
+            std.fmt.allocPrint(allocator, "roc_app_llvm_wasm32_{s}.o", .{opt}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate archive member check: {}", .{err});
+        const bad_forward_member = std.fmt.allocPrint(allocator, "/{s}/", .{member_basename}) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate archive member check: {}", .{err});
-        const bad_backslash_member = std.fmt.allocPrint(allocator, "\\roc_app_llvm_wasm32_{s}.o/", .{opt}) catch |err|
+        const bad_backslash_member = std.fmt.allocPrint(allocator, "\\{s}/", .{member_basename}) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate archive member check: {}", .{err});
         if (std.mem.find(u8, first, bad_forward_member) != null or
             std.mem.find(u8, first, bad_backslash_member) != null)
@@ -2058,47 +2063,69 @@ fn customMacosOutputBasenameReproducible(
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "macOS Mach-O reproducibility test only runs on macOS" };
     }
 
+    const default_app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "default_platform_macos_repro.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate default platform app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = default_app_path, .data = default_platform_echo_app }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write default platform app: {}", .{err});
+
     const opts = [_][]const u8{ "dev", "speed", "size" };
     for (opts) |opt| {
-        const short_output = std.fmt.allocPrint(allocator, "{s}/a_{s}", .{ env.dirs.work_dir, opt }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate short macOS output path: {}", .{err});
-        const long_output = std.fmt.allocPrint(allocator, "{s}/very-long-output-name-for-macos-repro-{s}", .{ env.dirs.work_dir, opt }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate long macOS output path: {}", .{err});
-        const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
-        const short_out_arg = outputArg(allocator, short_output) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate short output arg: {}", .{err});
-        const long_out_arg = outputArg(allocator, long_output) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate long output arg: {}", .{err});
-
-        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-            .args = &.{ "build", "--no-cache", opt_arg, short_out_arg },
-            .roc_file = "test/fx/hello_world.roc",
-            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
-        })) |failure| return failure;
-        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-            .args = &.{ "build", "--no-cache", opt_arg, long_out_arg },
-            .roc_file = "test/fx/hello_world.roc",
-            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
-        })) |failure| return failure;
-
-        const short_bytes = std.Io.Dir.cwd().readFileAlloc(io, short_output, allocator, .limited(256 * 1024 * 1024)) catch |err|
-            return customInfraFailure(allocator, timer, "failed to read short macOS output {s}: {}", .{ short_output, err });
-        defer allocator.free(short_bytes);
-        const long_bytes = std.Io.Dir.cwd().readFileAlloc(io, long_output, allocator, .limited(256 * 1024 * 1024)) catch |err|
-            return customInfraFailure(allocator, timer, "failed to read long macOS output {s}: {}", .{ long_output, err });
-        defer allocator.free(long_bytes);
-
-        if (!std.mem.eql(u8, short_bytes, long_bytes)) {
-            return customFailure(allocator, timer, "macOS {s} output bytes changed when only the output basename changed", .{opt});
-        }
-
-        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{short_output}, env.dirs.work_dir, .{
-            .args = &.{},
-            .stdout_exact = "Hello, world!\n",
-            .stderr_exact = "",
-        })) |failure| return failure;
+        if (checkMacosOutputBasenameReproducible(io, allocator, env, timer, timeout_ms, opt, "real_platform", "test/fx/hello_world.roc", "Hello, world!\n")) |failure| return failure;
+        if (checkMacosOutputBasenameReproducible(io, allocator, env, timer, timeout_ms, opt, "default_platform", default_app_path, "Hello, World!\n")) |failure| return failure;
     }
+
+    return null;
+}
+
+fn checkMacosOutputBasenameReproducible(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt: []const u8,
+    label: []const u8,
+    roc_file: []const u8,
+    expected_stdout: []const u8,
+) ?TestResult {
+    const short_output = std.fmt.allocPrint(allocator, "{s}/{s}_a_{s}", .{ env.dirs.work_dir, label, opt }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate short macOS output path: {}", .{err});
+    const long_output = std.fmt.allocPrint(allocator, "{s}/very-long-{s}-output-name-for-macos-repro-{s}", .{ env.dirs.work_dir, label, opt }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate long macOS output path: {}", .{err});
+    const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    const short_out_arg = outputArg(allocator, short_output) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate short output arg: {}", .{err});
+    const long_out_arg = outputArg(allocator, long_output) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate long output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", opt_arg, short_out_arg },
+        .roc_file = roc_file,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", opt_arg, long_out_arg },
+        .roc_file = roc_file,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+
+    const short_bytes = std.Io.Dir.cwd().readFileAlloc(io, short_output, allocator, .limited(256 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read short macOS output {s}: {}", .{ short_output, err });
+    defer allocator.free(short_bytes);
+    const long_bytes = std.Io.Dir.cwd().readFileAlloc(io, long_output, allocator, .limited(256 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read long macOS output {s}: {}", .{ long_output, err });
+    defer allocator.free(long_bytes);
+
+    if (!std.mem.eql(u8, short_bytes, long_bytes)) {
+        return customFailure(allocator, timer, "macOS {s} {s} output bytes changed when only the output basename changed", .{ label, opt });
+    }
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{short_output}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = expected_stdout,
+        .stderr_exact = "",
+    })) |failure| return failure;
 
     return null;
 }
