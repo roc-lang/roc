@@ -11,11 +11,14 @@ app [
     assembled_strings,
     intermediate_final,
     static_slices,
+    hoisted_cells,
 ] { pf: platform "./platform/main.roc" }
 
 Branch : [BranchLeaf(I64), BranchPair(Box(I64), Box(I64))]
 Tree : [Leaf(I64), Node(Box(Branch), Box(Branch))]
 I64ToI64 : I64 -> I64
+Sprite : { height: I64, src_x: I64, src_y: I64, width: I64 }
+Cell : { frames: I64, sprite: Sprite }
 
 main! = || {}
 
@@ -94,4 +97,15 @@ static_slices = {
     source = "STATIC_SLICE_SOURCE:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     tail = source.drop_prefix("STATIC_SLICE_SOURCE:")
     (source, tail)
+}
+
+hoisted_cells : I64 -> List(Cell)
+hoisted_cells = |last_updated| {
+    cells = [
+        { frames: 17, sprite: { src_x: 0, src_y: 0, width: 16, height: 16 } },
+        { frames: 11, sprite: { src_x: 16, src_y: 0, width: 16, height: 16 } },
+    ]
+
+    animation = { last_updated, cells }
+    animation.cells
 }

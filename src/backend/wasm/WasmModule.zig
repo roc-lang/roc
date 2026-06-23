@@ -729,13 +729,48 @@ pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) Symbol
     return self.linking.symbol_table.items[symbol.raw()].index;
 }
 
-fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
+pub fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
     for (self.linking.symbol_table.items, 0..) |sym, i| {
         if (sym.kind != kind) continue;
         const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
         if (std.mem.eql(u8, sym_name, name)) return @intCast(i);
     }
     return null;
+}
+
+fn isUndefinedDataNamed(self: *const Self, sym: WasmLinking.SymInfo, name: []const u8) bool {
+    if (sym.kind != .data or !sym.isUndefined()) return false;
+    const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return false;
+    return std.mem.eql(u8, sym_name, name);
+}
+
+fn resolveUndefinedDataSymbols(
+    self: *Self,
+    name: []const u8,
+    segment_index: u32,
+    data_offset: u32,
+    data_size: u32,
+    defined_flags: u32,
+    defined_name: ?[]const u8,
+) ?u32 {
+    var first_match: ?u32 = null;
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        if (!self.isUndefinedDataNamed(sym, name)) continue;
+        if (first_match == null) first_match = @intCast(i);
+    }
+
+    if (first_match == null) return null;
+
+    for (self.linking.symbol_table.items) |*sym| {
+        if (!self.isUndefinedDataNamed(sym.*, name)) continue;
+        sym.flags = defined_flags & ~WasmLinking.SymFlag.UNDEFINED;
+        sym.name = defined_name orelse name;
+        sym.index = segment_index;
+        sym.data_offset = data_offset;
+        sym.data_size = data_size;
+    }
+
+    return first_match;
 }
 
 fn isUndefinedFunctionNamed(self: *const Self, sym: WasmLinking.SymInfo, name: []const u8) bool {
@@ -905,6 +940,19 @@ pub fn addDataSymbol(
         .index = segment_index,
         .data_offset = data_offset,
         .data_size = size,
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Add an undefined data symbol that relocations can target before the defining
+/// data-only static module has been merged.
+pub fn addUndefinedDataSymbol(self: *Self, name: []const u8) Allocator.Error!SymbolIndex {
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .data,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
+        .name = name,
+        .index = 0,
     });
     return SymbolIndex.fromRaw(raw_symbol);
 }
@@ -1617,11 +1665,24 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                     // Defined data — keep the symbol's segment-relative offset.
                     // The segment itself was remapped above; final relocation
                     // resolution computes the absolute address from the segment.
-                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                     const new_segment_idx = if (src_sym.index < data_segment_remap.len)
                         data_segment_remap[src_sym.index]
                     else
                         src_sym.index;
+                    if (src_name) |name| {
+                        if (self.resolveUndefinedDataSymbols(
+                            name,
+                            new_segment_idx,
+                            src_sym.data_offset,
+                            src_sym.data_size,
+                            src_sym.flags,
+                            src_sym.name,
+                        )) |existing| {
+                            symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                    }
+                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                     try self.linking.symbol_table.append(gpa, .{
                         .kind = .data,
                         .flags = src_sym.flags,

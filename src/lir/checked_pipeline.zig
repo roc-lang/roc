@@ -208,7 +208,10 @@ pub fn lowerCheckedModulesToLir(
         allocator,
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
-        .{ .proc_debug_names = target.proc_debug_names },
+        .{
+            .proc_debug_names = target.proc_debug_names,
+            .hoisted_static_data_literals = target.checked_module_state == .complete and roots.include_static_data_exports,
+        },
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -380,7 +383,10 @@ fn collectStaticDataRequests(
         switch (provided) {
             .data => |data| {
                 if (try checkedTypeContainsFunction(allocator, root.checked_types.view(), data.checked_type)) {
-                    try requests.append(allocator, .{ .data = data });
+                    try requests.append(allocator, .{
+                        .const_ref = data.const_ref,
+                        .checked_type = data.checked_type,
+                    });
                 }
             },
             .procedure => {},

@@ -328,7 +328,7 @@ test "fx platform boxed erased callable host boundary (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
-test "provided static data exports are host-linkable readonly constants" {
+test "provided and hoisted static data are host-linkable readonly constants" {
     const allocator = testing.allocator;
 
     const run_result = try buildAndRunDevBackendApp(

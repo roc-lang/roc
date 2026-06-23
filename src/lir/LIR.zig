@@ -253,6 +253,9 @@ pub const StrMatchArmSpan = extern struct {
     }
 };
 
+/// Identifier for a materialized readonly static-data value.
+pub const StaticDataId = enum(u32) { _ };
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -269,6 +272,7 @@ pub const LiteralValue = union(enum) {
     str_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
+    static_data: StaticDataId,
 };
 
 /// Reference-producing operation lowered by `assign_ref`.

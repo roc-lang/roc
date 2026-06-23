@@ -54,6 +54,8 @@ pub fn run(
     owned.proc_debug_names = Mono.ProcDebugNameMap.init(allocator);
     var runtime_schema_requests = owned.runtime_schema_requests;
     owned.runtime_schema_requests = .empty;
+    var static_data_values = owned.static_data_values;
+    owned.static_data_values = .empty;
     var comptime_sites = owned.comptime_sites;
     owned.comptime_sites = .empty;
     var source_files = owned.source_files;
@@ -94,6 +96,7 @@ pub fn run(
         stmt_locs,
         stmt_regions,
         local_names,
+        static_data_values,
         comptime_sites,
         owned.next_symbol,
     );
@@ -119,6 +122,7 @@ pub fn run(
     stmt_locs = undefined;
     stmt_regions = undefined;
     local_names = undefined;
+    static_data_values = undefined;
     comptime_sites = undefined;
     program.runtime_schema_requests = runtime_schema_requests;
     runtime_schema_requests = undefined;
@@ -340,6 +344,7 @@ const Lifter = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .static_data,
             .uninitialized,
             .uninitialized_payload,
             .crash,
@@ -737,6 +742,7 @@ const CaptureSet = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .static_data,
             .uninitialized,
             .uninitialized_payload,
             .def_ref,

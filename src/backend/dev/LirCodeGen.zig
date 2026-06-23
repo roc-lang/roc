@@ -776,6 +776,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Readonly data symbols for non-SSO strings in object-file output.
         static_strings: []const StaticStringData.Entry,
 
+        /// Owned readonly data symbol names for hoisted static-data literals.
+        static_data_names: std.ArrayList([]u8),
+
         /// Map from LIR local id to value location (register or stack slot)
         local_locations: std.AutoHashMap(u32, ValueLocation),
 
@@ -1150,6 +1153,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .store = store,
                 .layout_store = layout_store_opt,
                 .static_strings = static_strings,
+                .static_data_names = .empty,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
@@ -1181,6 +1185,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Clean up resources
         pub fn deinit(self: *Self) void {
             self.codegen.deinit();
+            for (self.static_data_names.items) |name| {
+                self.allocator.free(name);
+            }
+            self.static_data_names.deinit(self.allocator);
             self.local_locations.deinit();
             self.join_points.deinit();
             self.stmt_locations.deinit();
@@ -14676,6 +14684,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .f32_literal => |lit| .{ .immediate_f64 = @floatCast(lit) },
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
                                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+                                .static_data => |id| try self.generateStaticDataLiteral(id, self.localLayout(assign.target)),
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .proc_ref => |proc_id| blk: {
                                     const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
@@ -15687,6 +15696,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_str = base_offset };
         }
 
+        fn generateStaticDataLiteral(self: *Self, id: LIR.StaticDataId, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+            const size = self.getLayoutSize(layout_idx);
+            if (size == 0) return .{ .immediate_i64 = 0 };
+
+            switch (self.generation_mode) {
+                .native_execution => std.debug.panic(
+                    "LIR/codegen invariant violated: static data literal reached native execution mode",
+                    .{},
+                ),
+                .shim_execution,
+                .object_file,
+                => {},
+            }
+
+            const slot = self.codegen.allocStackSlot(size);
+            const ptr_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(ptr_reg);
+            try self.codegen.emitLoadDataAddress(ptr_reg, try self.staticDataSymbolName(id));
+
+            const temp_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(temp_reg);
+            try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, slot, size);
+
+            return self.stackLocationForLayout(layout_idx, slot);
+        }
+
         fn emitAddUsizeImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: usize) Allocator.Error!void {
             if (imm == 0) {
                 if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
@@ -15714,6 +15749,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 );
             }
             unreachable;
+        }
+
+        fn staticDataSymbolName(self: *Self, id: LIR.StaticDataId) Allocator.Error![]const u8 {
+            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+            errdefer self.allocator.free(symbol_name);
+            try self.static_data_names.append(self.allocator, symbol_name);
+            return symbol_name;
         }
 
         fn verifyStaticStringBytes(str_bytes: []const u8) void {

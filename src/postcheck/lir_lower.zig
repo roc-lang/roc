@@ -125,6 +125,7 @@ const Lowerer = struct {
     fn_map: []LIR.LirProcSpecId,
     local_map: []?LIR.LocalId,
     comptime_site_map: []?LIR.ComptimeSiteId,
+    static_data_map: []?LIR.StaticDataId,
     type_layouts: []?layout.Idx,
     const_plan_map: []?LirProgram.ConstPlanId,
     next_join_point: u32 = 0,
@@ -158,6 +159,10 @@ const Lowerer = struct {
         errdefer allocator.free(comptime_site_map);
         @memset(comptime_site_map, null);
 
+        const static_data_map = try allocator.alloc(?LIR.StaticDataId, program.static_data_values.items.len);
+        errdefer allocator.free(static_data_map);
+        @memset(static_data_map, null);
+
         const type_layouts = try allocator.alloc(?layout.Idx, program.types.types.items.len);
         errdefer allocator.free(type_layouts);
         @memset(type_layouts, null);
@@ -174,6 +179,7 @@ const Lowerer = struct {
             .fn_map = fn_map,
             .local_map = local_map,
             .comptime_site_map = comptime_site_map,
+            .static_data_map = static_data_map,
             .type_layouts = type_layouts,
             .const_plan_map = const_plan_map,
             .loop_stack = .empty,
@@ -182,6 +188,7 @@ const Lowerer = struct {
 
     fn deinit(self: *Lowerer) void {
         self.loop_stack.deinit(self.allocator);
+        self.allocator.free(self.static_data_map);
         self.allocator.free(self.const_plan_map);
         self.allocator.free(self.type_layouts);
         self.allocator.free(self.comptime_site_map);
@@ -197,14 +204,18 @@ const Lowerer = struct {
             .runtime_schemas = self.runtime_schemas,
         };
         self.loop_stack.deinit(self.allocator);
+        self.allocator.free(self.static_data_map);
         self.allocator.free(self.const_plan_map);
         self.allocator.free(self.type_layouts);
+        self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.local_map);
         self.allocator.free(self.fn_map);
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.fn_map = &.{};
         self.local_map = &.{};
+        self.comptime_site_map = &.{};
+        self.static_data_map = &.{};
         self.type_layouts = &.{};
         self.const_plan_map = &.{};
         self.loop_stack = .empty;
@@ -388,6 +399,27 @@ const Lowerer = struct {
         const plan = try self.buildConstPlan(ty);
         self.result.const_plans.items[@intFromEnum(id)] = plan;
         return id;
+    }
+
+    fn lirStaticDataFor(
+        self: *Lowerer,
+        id: Common.StaticDataId,
+        ty: Type.TypeId,
+        layout_idx: layout.Idx,
+    ) Common.LowerError!LIR.StaticDataId {
+        const index: usize = @intFromEnum(id);
+        if (self.static_data_map[index]) |existing| return existing;
+
+        const request = self.program.static_data_values.items[index];
+        const lir_id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
+        try self.result.static_data_values.append(self.allocator, .{
+            .const_ref = request.const_ref,
+            .checked_type = request.checked_type,
+            .layout_idx = layout_idx,
+            .plan = try self.constPlanOfType(ty),
+        });
+        self.static_data_map[index] = lir_id;
+        return lir_id;
     }
 
     fn buildConstPlan(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LirProgram.ConstPlan {
@@ -750,6 +782,11 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
+            .static_data => |id| try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = try self.lirStaticDataFor(id, expr_data.ty, self.result.store.getLocal(target).layout_idx) },
+                .next = next,
+            } }),
             .uninitialized, .uninitialized_payload => next,
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
