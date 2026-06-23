@@ -3648,6 +3648,7 @@ const HotReloadRebuild = struct {
     inputs_path: []const u8,
     generation: u64,
     allocation: HotReloadImageAllocation,
+    published_reported: bool = false,
 
     fn cancelAndJoin(self: *HotReloadRebuild) void {
         terminateWatchChild(self.child);
@@ -3831,21 +3832,34 @@ fn finishHotReloadRebuild(
     const changed_during_refresh = try refreshWatchState(ctx, state, signal, new_inputs);
 
     if (rebuild_succeeded) {
-        try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
-        ctx.io.flush();
+        try reportHotReloadRebuildPublished(ctx, rebuild);
     }
 
     return changed_during_refresh;
+}
+
+fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
+    if (rebuild.published_reported) return;
+    try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
+    ctx.io.flush();
+    rebuild.published_reported = true;
 }
 
 fn reportHotReloadAcknowledgement(
     ctx: *CliCtx,
     control: *const ipc.hot_reload.Control,
     last_reported_ack: *u64,
+    active_rebuild: ?*HotReloadRebuild,
 ) CliOutputWriteError!?u64 {
     const ack = ipc.hot_reload.acknowledgement(control) orelse return null;
     const generation = ack.generation;
     if (generation == 0 or generation <= last_reported_ack.*) return null;
+
+    if (active_rebuild) |rebuild| {
+        if (generation == rebuild.generation and ack.status != .none) {
+            try reportHotReloadRebuildPublished(ctx, rebuild);
+        }
+    }
 
     switch (ack.status) {
         .none => return null,
@@ -4272,7 +4286,12 @@ fn runHotReloadDevShim(
     }
 
     while (!host_child.done.load(.seq_cst)) {
-        if (try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack)) |_| {
+        if (try reportHotReloadAcknowledgement(
+            ctx,
+            hot_reload_control,
+            &last_reported_ack,
+            if (active_rebuild) |*rebuild| rebuild else null,
+        )) |_| {
             if (active_rebuild == null) {
                 try hotReloadSweepImageDescriptors(
                     ctx.gpa,
@@ -4351,7 +4370,12 @@ fn runHotReloadDevShim(
     host_child.thread.join();
     host_child_joined = true;
     defer destroyHotShimChild(ctx, host_child);
-    _ = try reportHotReloadAcknowledgement(ctx, hot_reload_control, &last_reported_ack);
+    _ = try reportHotReloadAcknowledgement(
+        ctx,
+        hot_reload_control,
+        &last_reported_ack,
+        if (active_rebuild) |*rebuild| rebuild else null,
+    );
 
     if (active_rebuild) |*rebuild| {
         rebuild.cancelAndJoin();
@@ -5158,6 +5182,7 @@ fn writeDevRunImageToSharedMemory(
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
+        codegen.enable_hot_reload = hot_reload_allocation != null;
 
         try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -9603,7 +9628,7 @@ const WatchCommand = union(enum) {
     build: cli_args.BuildArgs,
 };
 
-const WatchPathError = std.process.CurrentPathAllocError;
+const WatchPathError = Allocator.Error || std.process.CurrentPathError;
 const WatchCollectPathsError = WatchPathError;
 const WatchSnapshotError = Allocator.Error;
 const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
@@ -9774,8 +9799,9 @@ fn absolutePathFromCwd(ctx: *CliCtx, path: []const u8) WatchPathError![]const u8
         return std.fs.path.resolve(ctx.gpa, &.{path});
     }
 
-    const cwd = try std.process.currentPathAlloc(ctx.io.std_io, ctx.gpa);
-    defer ctx.gpa.free(cwd);
+    var cwd_buffer: [std.fs.max_path_bytes]u8 = @splat(0);
+    const cwd_len = try std.process.currentPath(ctx.io.std_io, &cwd_buffer);
+    const cwd = cwd_buffer[0..cwd_len];
     return std.fs.path.resolve(ctx.gpa, &.{ cwd, path });
 }
 
@@ -10212,6 +10238,7 @@ fn readWatchInputsFileAfterChild(ctx: *CliCtx, file_path: []const u8, extra_path
             error.WatchInputsMalformed => try ctx.io.stderr().print("Error: watch child wrote malformed source input state to {s}.\n", .{file_path}),
             error.Unexpected,
             error.Canceled,
+            error.NameTooLong,
             error.CurrentDirUnlinked,
             => try ctx.io.stderr().print("Error: failed to resolve an explicit watch path while reading source input state from {s}: {}\n", .{ file_path, err }),
         }

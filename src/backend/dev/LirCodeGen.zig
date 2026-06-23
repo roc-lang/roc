@@ -909,6 +909,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// - object_file: Generating relocatable object files, use symbol references for builtins
         generation_mode: GenerationMode = .native_execution,
 
+        /// Whether shim-executed host-callable functions and boxed callbacks
+        /// participate in the hot-reload code reference protocol.
+        enable_hot_reload: bool = false,
+
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
         enable_default_platform_runtime: bool = false,
@@ -10909,7 +10913,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
-            const capture_prefix_size: u32 = if (self.generation_mode == .shim_execution)
+            const capture_prefix_size: u32 = if (self.enable_hot_reload)
                 builtins.erased_callable.hot_reload_capture_prefix_size
             else
                 0;
@@ -10927,7 +10931,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
-            const hot_reload_code_ref_slot: ?i32 = if (self.generation_mode == .shim_execution) blk: {
+            const hot_reload_code_ref_slot: ?i32 = if (self.enable_hot_reload) blk: {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_retain_current), .hot_reload_retain_current);
@@ -10949,7 +10953,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
-            if (self.generation_mode == .shim_execution) {
+            if (self.enable_hot_reload) {
                 const hot_drop_reg = try self.allocTempGeneral();
                 try self.emitBuiltinAddress(
                     hot_drop_reg,
@@ -11691,7 +11695,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitHotReloadEnterForHostCallable(self: *Self) Allocator.Error!?i32 {
-            if (self.generation_mode != .shim_execution) return null;
+            if (!self.enable_hot_reload) return null;
 
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const code_ref_slot = self.codegen.allocStackSlot(8);
@@ -14221,7 +14225,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_stack = self.codegen.allocStackSlot(8);
             const capture_arg_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, capture_arg_reg, frame_ptr, capture_ptr_slot);
-            if (self.generation_mode == .shim_execution) {
+            if (self.enable_hot_reload) {
                 try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, builtins.erased_callable.hot_reload_capture_prefix_size);
             }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
