@@ -1050,8 +1050,10 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
             0,
         );
 
-        const symbol_flags: u32 = if (data_export.is_global)
+        const symbol_flags: u32 = if (data_export.is_exported)
             0
+        else if (data_export.is_global)
+            WasmLinking.SymFlag.VISIBILITY_HIDDEN
         else
             WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN;
         const symbol_offset: usize = @intCast(data_export.symbol_offset);
@@ -6258,6 +6260,7 @@ test "addStaticDataExports defines forward data symbols used by code relocations
         .bytes = &.{ 9, 8, 7, 6 },
         .alignment = 4,
         .is_global = false,
+        .is_exported = false,
         .relocations = &.{},
     }};
     try module.addStaticDataExports(&exports);
@@ -6289,6 +6292,7 @@ test "mergeModuleForObject resolves undefined static data symbols" {
         .bytes = &.{ 9, 8, 7, 6 },
         .alignment = 4,
         .is_global = false,
+        .is_exported = false,
         .relocations = &.{},
     }};
     var static_module = try Self.staticDataModule(allocator, &exports);

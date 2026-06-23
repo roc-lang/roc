@@ -5634,7 +5634,7 @@ fn staticDataLinkRootSymbols(
         static_data_exports.len + @as(usize, if (root_default_platform_backtrace) 2 else 0),
     );
     for (static_data_exports) |data_export| {
-        if (!data_export.is_global) continue;
+        if (!data_export.is_exported) continue;
         try symbols.append(data_export.symbol_name);
     }
     if (root_default_platform_backtrace) {
@@ -5658,7 +5658,7 @@ fn sharedLibraryAppExports(
         try symbols.append(entrypoint.symbol_name);
     }
     for (static_data_exports) |data_export| {
-        if (!data_export.is_global) continue;
+        if (!data_export.is_exported) continue;
         try symbols.append(data_export.symbol_name);
     }
 

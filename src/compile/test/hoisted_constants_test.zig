@@ -470,6 +470,7 @@ test "reachable top-level data lowers to internal static data exports" {
     defer static_data_exports.deinitProvidedDataExports(gpa, exports);
 
     try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
+    try expectInternalStaticValueExportsAreLinkableOnly(exports);
     try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68, 85, 102 }));
     try std.testing.expect(!exportsContainSequence(exports, &.{ 201, 202, 203, 204, 205, 206 }));
 }
@@ -1539,6 +1540,18 @@ fn countInternalStaticValueExports(exports: []const @import("backend").StaticDat
         }
     }
     return count;
+}
+
+fn expectInternalStaticValueExportsAreLinkableOnly(exports: []const @import("backend").StaticDataExport) !void {
+    var found = false;
+    for (exports) |static_export| {
+        if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_value_")) continue;
+
+        found = true;
+        try std.testing.expect(static_export.is_global);
+        try std.testing.expect(!static_export.is_exported);
+    }
+    try std.testing.expect(found);
 }
 
 fn exportsContainSequence(exports: []const @import("backend").StaticDataExport, sequence: []const u8) bool {

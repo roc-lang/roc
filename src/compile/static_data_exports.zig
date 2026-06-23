@@ -185,6 +185,7 @@ const StaticDataBuilder = struct {
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
                 .is_global = true,
+                .is_exported = true,
                 .relocations = materialized.relocations,
             });
         }
@@ -201,7 +202,8 @@ const StaticDataBuilder = struct {
                 .symbol_name = symbol_name,
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
-                .is_global = false,
+                .is_global = true,
+                .is_exported = false,
                 .relocations = materialized.relocations,
             });
         }
@@ -578,7 +580,11 @@ const StaticDataBuilder = struct {
         if (item_plans.len != items.len) staticDataInvariant("tuple const plan length differed from ConstStore node");
         const tuple_layout = self.layoutValue(tuple_layout_idx);
         if (tuple_layout.tag == .zst) return;
-        if (tuple_layout.tag != .struct_) staticDataInvariant("tuple const plan had non-struct layout");
+        if (tuple_layout.tag != .struct_) {
+            if (items.len != 1) staticDataInvariant("non-struct tuple layout had multiple fields");
+            try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = items[0] }, item_plans[0], tuple_layout_idx);
+            return;
+        }
 
         for (item_plans, 0..) |item_plan, i| {
             const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(tuple_layout.getStruct().idx, @intCast(i));
@@ -606,7 +612,11 @@ const StaticDataBuilder = struct {
         if (field_plans.len != fields.len) staticDataInvariant("record const plan length differed from ConstStore node");
         const record_layout = self.layoutValue(record_layout_idx);
         if (record_layout.tag == .zst) return;
-        if (record_layout.tag != .struct_) staticDataInvariant("record const plan had non-struct layout");
+        if (record_layout.tag != .struct_) {
+            if (fields.len != 1) staticDataInvariant("non-struct record layout had multiple fields");
+            try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = fields[0] }, field_plans[0], record_layout_idx);
+            return;
+        }
 
         for (field_plans, 0..) |field_plan, i| {
             const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, @intCast(i));
@@ -901,6 +911,7 @@ const StaticDataBuilder = struct {
             .bytes = bytes,
             .alignment = alignment,
             .is_global = false,
+            .is_exported = false,
             .relocations = relocations,
         });
 

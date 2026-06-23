@@ -13,8 +13,18 @@ pub const StaticDataExport = struct {
     symbol_offset: u32 = 0,
     /// Required alignment of the symbol inside the readonly section.
     alignment: u32,
-    /// Whether the symbol should be visible to the host linker.
+    /// Whether the object-file symbol should have global linker binding.
+    ///
+    /// Internal static constants referenced from a separately compiled LLVM
+    /// object need this so the linker can resolve `roc__static_value_*`
+    /// references across object files.
     is_global: bool = true,
+    /// Whether this symbol is part of the host-visible ABI.
+    ///
+    /// Exported data symbols are rooted under section garbage collection and
+    /// included in shared-library/module export lists. Internal static
+    /// constants can be linker-global without being host-exported.
+    is_exported: bool = true,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
 };
