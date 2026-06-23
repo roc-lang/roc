@@ -133,6 +133,7 @@ pub const posix = if (!is_windows) struct {
 
     pub const PROT_READ = 0x01;
     pub const PROT_WRITE = 0x02;
+    pub const PROT_EXEC = 0x04;
     pub const MAP_SHARED = 0x0001;
     pub const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
@@ -322,15 +323,26 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
 
 /// Map shared memory into the process address space
 pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
-    return mapMemoryWithLogging(handle, size, base_addr, true);
+    return mapMemoryWithLogging(handle, size, base_addr, true, false);
 }
 
 /// Map shared memory without logging failures.
 pub fn mapMemoryNoLog(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
-    return mapMemoryWithLogging(handle, size, base_addr, false);
+    return mapMemoryWithLogging(handle, size, base_addr, false, false);
 }
 
-fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log_failure: bool) SharedMemoryError!*anyopaque {
+/// Map shared memory so the process can later make pages executable.
+pub fn mapMemoryExecutable(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
+    return mapMemoryWithLogging(handle, size, base_addr, true, true);
+}
+
+fn mapMemoryWithLogging(
+    handle: Handle,
+    size: usize,
+    base_addr: ?*anyopaque,
+    log_failure: bool,
+    executable_capable: bool,
+) SharedMemoryError!*anyopaque {
     switch (builtin.os.tag) {
         .windows => {
             const ptr = if (base_addr) |addr|
@@ -362,10 +374,12 @@ fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log
             return ptr.?;
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
+            const exec_prot: c_int = if (executable_capable) posix.PROT_EXEC else 0;
+            const prot = posix.PROT_READ | posix.PROT_WRITE | exec_prot;
             const ptr = posix.mmap(
                 base_addr,
                 size,
-                posix.PROT_READ | posix.PROT_WRITE,
+                prot,
                 posix.MAP_SHARED,
                 handle,
                 0,

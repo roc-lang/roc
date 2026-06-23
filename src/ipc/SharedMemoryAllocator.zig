@@ -240,6 +240,16 @@ pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io, page_size: usize) (c
     return fromFd(handle, fd_info.size, page_size);
 }
 
+/// Creates a SharedMemoryAllocator from coordination info and maps it so pages
+/// can later be marked executable. This is only for the machine-code shim.
+pub fn fromCoordinationExecutable(gpa: std.mem.Allocator, io: std.Io, page_size: usize) (coordination.CoordinationError || platform.SharedMemoryError)!SharedMemoryAllocator {
+    var fd_info = try coordination.readFdInfo(gpa, io);
+    defer fd_info.deinit(gpa);
+
+    const handle = try coordination.parseHandle(fd_info.fd_str);
+    return fromFdExecutable(handle, fd_info.size, page_size);
+}
+
 /// Creates a SharedMemoryAllocator from an existing file descriptor.
 /// This is used by child processes to access shared memory created by the parent.
 pub fn fromFd(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
@@ -247,6 +257,24 @@ pub fn fromFd(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryEr
 
     // Map the memory using the provided handle
     const base_ptr = try platform.mapMemory(fd, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
+    errdefer platform.unmapMemory(base_ptr, aligned_size);
+
+    return SharedMemoryAllocator{
+        .handle = fd,
+        .base_ptr = @ptrCast(@alignCast(base_ptr)),
+        .total_size = aligned_size,
+        .offset = std.atomic.Value(usize).init(@sizeOf(Header)),
+        .is_owner = false,
+        .page_size = page_size,
+    };
+}
+
+/// Creates a SharedMemoryAllocator from an existing file descriptor and maps it
+/// so pages can later be marked executable.
+pub fn fromFdExecutable(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
+    const aligned_size = std.mem.alignForward(usize, size, page_size);
+
+    const base_ptr = try platform.mapMemoryExecutable(fd, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
     errdefer platform.unmapMemory(base_ptr, aligned_size);
 
     return SharedMemoryAllocator{
@@ -613,6 +641,25 @@ test "shared memory allocator cross-process" {
             item.* = @intCast(i * 2);
         }
     }
+}
+
+test "fromFdExecutable maps pages that can be marked executable" {
+    const page_size = try getSystemPageSize();
+    var owner = try SharedMemoryAllocator.create(std.testing.io, page_size * 2, page_size);
+    defer owner.deinit(std.testing.allocator);
+
+    const executable_handle = if (comptime platform.is_windows)
+        owner.handle
+    else blk: {
+        const duped = std.c.dup(owner.handle);
+        if (duped < 0) return error.DuplicateSharedMemoryHandleFailed;
+        break :blk duped;
+    };
+    var executable = try SharedMemoryAllocator.fromFdExecutable(executable_handle, page_size * 2, page_size);
+    defer executable.deinit(std.testing.allocator);
+
+    try platform.protectMappedMemory(executable.base_ptr, page_size, .read_execute);
+    try platform.protectMappedMemory(executable.base_ptr, page_size, .read_write);
 }
 
 test "shared memory allocator thread safety" {
