@@ -372,6 +372,7 @@ pub const ScopeMap = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
+            .e_break,
             .e_bytes_literal,
             => {},
         }

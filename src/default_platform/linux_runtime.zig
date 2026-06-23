@@ -9,6 +9,7 @@ const linux = std.os.linux;
 
 pub const panic = std.debug.no_panic;
 
+const stdout_fd: i32 = 1;
 const stderr_fd: i32 = 2;
 const ansi_function_name = "\x1b[94m";
 const ansi_reset = "\x1b[0m";
@@ -17,6 +18,7 @@ const allocation_header_words = 3;
 const allocation_header_size = allocation_header_words * @sizeOf(usize);
 const alt_signal_stack_size: usize = 64 * 1024;
 const max_backtrace_frames = 64;
+const seamless_slice_tag: usize = 1;
 
 const BacktraceEntry = extern struct {
     start: usize,
@@ -29,13 +31,24 @@ const BacktraceEntry = extern struct {
     column: u32,
 };
 
-extern const roc_default_backtrace_table: [*]const BacktraceEntry;
-extern const roc_default_backtrace_count: usize;
+const roc_default_backtrace_table = @extern(*const [*]const BacktraceEntry, .{
+    .name = "roc_default_backtrace_table",
+    .linkage = .weak,
+});
+const roc_default_backtrace_count = @extern(*const usize, .{
+    .name = "roc_default_backtrace_count",
+    .linkage = .weak,
+});
 
 comptime {
     if (builtin.os.tag != .linux) {
         @compileError("default platform Linux runtime must be built for Linux");
     }
+
+    @export(&defaultMemcpy, .{ .name = "memcpy", .linkage = .weak });
+    @export(&defaultMemmove, .{ .name = "memmove", .linkage = .weak });
+    @export(&defaultMemset, .{ .name = "memset", .linkage = .weak });
+    @export(&defaultTrunc, .{ .name = "trunc", .linkage = .weak });
 }
 
 export fn roc_default_runtime_init() callconv(.c) void {
@@ -61,6 +74,18 @@ export fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) noreturn {
     writeLiteral(stderr_fd, "\n\n");
     printBacktrace(@returnAddress(), @frameAddress());
     exitFailure();
+}
+
+export fn roc_default_echo_line(str: RocStr) callconv(.c) void {
+    var owned = str;
+    const message = owned.asSlice();
+    writeAll(stdout_fd, message);
+    writeLiteral(stdout_fd, "\n");
+    owned.decref();
+}
+
+export fn roc_default_exit(code: u8) callconv(.c) noreturn {
+    linux.exit_group(code);
 }
 
 export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
@@ -198,19 +223,19 @@ const X86_64UContext = extern struct {
 };
 
 const Aarch64MContext = extern struct {
-    fault_address: u64,
-    regs: [31]u64,
+    fault_address: u64 align(16),
+    regs: [30]u64,
+    lr: u64,
     sp: u64,
     pc: u64,
-    pstate: u64,
-    reserved: [4096]u8 align(16),
 };
 
 const Aarch64UContext = extern struct {
-    flags: u64,
+    flags: usize,
     link: ?*anyopaque,
     stack: linux.stack_t,
     sigmask: linux.sigset_t,
+    unused: [120]u8,
     mcontext: Aarch64MContext,
 };
 
@@ -292,10 +317,15 @@ fn printMappedInstructionPointer(ip: usize) void {
 }
 
 fn lookupBacktraceEntry(ip: usize) ?BacktraceEntry {
+    const count_ptr = roc_default_backtrace_count orelse return null;
+    const table_ptr = roc_default_backtrace_table orelse return null;
+    const count = count_ptr.*;
+    const table = table_ptr.*;
+
     var best: ?BacktraceEntry = null;
     var i: usize = 0;
-    while (i < roc_default_backtrace_count) : (i += 1) {
-        const entry = roc_default_backtrace_table[i];
+    while (i < count) : (i += 1) {
+        const entry = table[i];
         if (ip < entry.start) continue;
         if (entry.end != 0 and ip >= entry.end) continue;
         if (best == null or entry.start > best.?.start) {
@@ -364,3 +394,99 @@ fn writeUnsigned(fd: i32, value: anytype) void {
 fn exitFailure() noreturn {
     linux.exit_group(1);
 }
+
+fn defaultMemcpy(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        dest[i] = src[i];
+    }
+    return dest;
+}
+
+fn defaultMemmove(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
+    if (@intFromPtr(dest) <= @intFromPtr(src)) {
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            dest[i] = src[i];
+        }
+    } else {
+        var i = len;
+        while (i != 0) {
+            i -= 1;
+            dest[i] = src[i];
+        }
+    }
+    return dest;
+}
+
+fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
+    const byte: u8 = @bitCast(@as(i8, @truncate(value)));
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        dest[i] = byte;
+    }
+    return dest;
+}
+
+fn defaultTrunc(value: f64) callconv(.c) f64 {
+    const bits: u64 = @bitCast(value);
+    const exponent_bits = (bits >> 52) & 0x7ff;
+    const exponent: i32 = @as(i32, @intCast(exponent_bits)) - 1023;
+
+    if (exponent >= 52) return value;
+    if (exponent < 0) return @bitCast(bits & (@as(u64, 1) << 63));
+
+    const fraction_bits: u6 = @intCast(52 - exponent);
+    const fraction_mask = (@as(u64, 1) << fraction_bits) - 1;
+    return @bitCast(bits & ~fraction_mask);
+}
+
+const RocStr = extern struct {
+    bytes: ?[*]u8,
+    capacity_or_alloc_ptr: usize,
+    length: usize,
+
+    fn isSmallStr(self: RocStr) bool {
+        return @as(isize, @bitCast(self.length)) < 0;
+    }
+
+    fn isSeamlessSlice(self: RocStr) bool {
+        return !self.isSmallStr() and (self.capacity_or_alloc_ptr & seamless_slice_tag) == seamless_slice_tag;
+    }
+
+    fn len(self: RocStr) usize {
+        if (self.isSmallStr()) {
+            const raw: *const [@sizeOf(RocStr)]u8 = @ptrCast(&self);
+            return raw.*[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
+        }
+        return self.length;
+    }
+
+    fn allocationPtr(self: RocStr) ?[*]u8 {
+        if (self.isSmallStr()) return null;
+        if (self.isSeamlessSlice()) {
+            return @ptrFromInt(self.capacity_or_alloc_ptr & ~seamless_slice_tag);
+        }
+        return self.bytes;
+    }
+
+    fn asSlice(self: *const RocStr) []const u8 {
+        const ptr: [*]const u8 = if (self.isSmallStr())
+            @ptrCast(self)
+        else
+            @ptrCast(self.bytes.?);
+        return ptr[0..self.len()];
+    }
+
+    fn decref(self: *RocStr) void {
+        const data = self.allocationPtr() orelse return;
+        const refcount_ptr: *isize = @ptrCast(@alignCast(data - @sizeOf(usize)));
+        const refcount = refcount_ptr.*;
+        if (refcount == 0) return;
+
+        const last = @atomicRmw(isize, refcount_ptr, .Sub, 1, .monotonic);
+        if (last == 1) {
+            roc_dealloc(data - @sizeOf(usize), @alignOf(usize));
+        }
+    }
+};

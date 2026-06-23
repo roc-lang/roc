@@ -108,6 +108,10 @@ fn countFloats(store: *const Store, idx: Idx, maybe_float_bits: *?u16) u8 {
             var count: u8 = 0;
             var i: u32 = 0;
             while (i < field_count) : (i += 1) {
+                // Unnamed padding is opaque, alignment-1 bytes, never a float
+                // member, so any padding makes the aggregate non-homogeneous (it
+                // falls back to size-based integer classification).
+                if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
                 const field_layout = store.getStructFieldLayout(struct_idx, i);
                 const field_count_floats = countFloats(store, field_layout, maybe_float_bits);
                 if (field_count_floats == invalid_float_count) return invalid_float_count;
@@ -230,6 +234,25 @@ test "aarch64 classify: mixed and Dec aggregates are not HFAs" {
     // Dec is i128-backed, so a struct of one Dec is an integer aggregate (16 bytes).
     const one_dec = try testStruct(&store, &.{.dec});
     try testing.expectEqual(Class.double_integer, classifyType(&store, one_dec));
+}
+
+test "aarch64 classify: unnamed padding makes an aggregate non-HFA" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // { a : F32, b : F32, _ : F32 } — three f32-sized fields, but the third is unnamed,
+    // alignment-1 padding rather than a float member, so this is NOT a homogeneous float
+    // aggregate. It falls back to size-based classification (12 bytes -> two registers).
+    const padded = try store.putNominalStructFields(&.{
+        .{ .index = 0, .layout = .f32 },
+        .{ .index = 1, .layout = .f32 },
+        .{ .index = 2, .layout = .f32, .is_padding = true },
+    });
+    try testing.expectEqual(Class.double_integer, classifyType(&store, padded));
+
+    // Contrast: with all three as real float members it IS a 3×f32 HFA.
+    const hfa = try testStruct(&store, &.{ .f32, .f32, .f32 });
+    try testing.expectEqual(Class{ .float_array = .{ .count = 3, .elem_bits = 32 } }, classifyType(&store, hfa));
 }
 
 test "aarch64 classify: Bool (a one-byte enum) uses one register" {

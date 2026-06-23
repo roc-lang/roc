@@ -27,6 +27,7 @@ const Symbol = lir_defs.Symbol;
 const LirPattern = lir_defs.LirPattern;
 const LirPatternId = lir_defs.LirPatternId;
 const LirPatternSpan = lir_defs.LirPatternSpan;
+const U64Span = lir_defs.U64Span;
 
 /// Source-level name to use when presenting a specialized LIR proc in debug output.
 pub const ProcDebugName = extern struct {
@@ -43,6 +44,7 @@ str_match_arms: std.ArrayList(StrMatchArm),
 join_points: std.ArrayList(JoinPoint),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
+u64s: std.ArrayList(u64),
 proc_specs: std.ArrayList(LirProcSpec),
 strings: base.StringLiteral.Store,
 allocator: Allocator,
@@ -57,6 +59,9 @@ source_file_ends: std.ArrayList(u32),
 /// Source location per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `SourceLoc.none`; they have no source counterpart.
 cf_stmt_locs: std.ArrayList(base.SourceLoc),
+/// Checked source region per statement, parallel to `cf_stmts`. Reference-count
+/// statements always record `Region.zero`; they have no source counterpart.
+cf_stmt_regions: std.ArrayList(base.Region),
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: std.ArrayList(base.SourceLoc),
 /// Source-level debug names for procs that have source names.
@@ -67,6 +72,8 @@ local_names: std.ArrayList(u32),
 /// Ambient location recorded by `addCFStmt`/`addProcSpec`. Lowering sets
 /// this on entry to each source node it lowers.
 current_loc: base.SourceLoc,
+/// Ambient checked source region recorded by `addCFStmt`.
+current_region: base.Region,
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -78,6 +85,7 @@ pub fn init(allocator: Allocator) Self {
         .join_points = std.ArrayList(JoinPoint).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
+        .u64s = std.ArrayList(u64).empty,
         .proc_specs = std.ArrayList(LirProcSpec).empty,
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
@@ -87,10 +95,12 @@ pub fn init(allocator: Allocator) Self {
         .source_file_bytes = std.ArrayList(u8).empty,
         .source_file_ends = std.ArrayList(u32).empty,
         .cf_stmt_locs = std.ArrayList(base.SourceLoc).empty,
+        .cf_stmt_regions = std.ArrayList(base.Region).empty,
         .proc_locs = std.ArrayList(base.SourceLoc).empty,
         .proc_debug_names = std.ArrayList(ProcDebugName).empty,
         .local_names = std.ArrayList(u32).empty,
         .current_loc = base.SourceLoc.none,
+        .current_region = base.Region.zero(),
     };
 }
 
@@ -103,6 +113,7 @@ pub fn deinit(self: *Self) void {
     self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
+    self.u64s.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
     self.strings.deinit(self.allocator);
     self.patterns.deinit(self.allocator);
@@ -110,6 +121,7 @@ pub fn deinit(self: *Self) void {
     self.source_file_bytes.deinit(self.allocator);
     self.source_file_ends.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
+    self.cf_stmt_regions.deinit(self.allocator);
     self.proc_locs.deinit(self.allocator);
     self.proc_debug_names.deinit(self.allocator);
     self.local_names.deinit(self.allocator);
@@ -195,6 +207,11 @@ pub fn sourceFileName(self: *const Self, file: u32) []const u8 {
 /// Source location of a statement.
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     return self.cf_stmt_locs.items[@intFromEnum(id)];
+}
+
+/// Checked source region of a statement.
+pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
+    return self.cf_stmt_regions.items[@intFromEnum(id)];
 }
 
 /// Source location of a proc.
@@ -328,15 +345,74 @@ pub fn getLocalSpan(self: *const Self, span: LocalSpan) []const LocalId {
     return self.local_ids.items[span.start..][0..span.len];
 }
 
+/// Stores u64 values and returns the corresponding flat-storage span.
+pub fn addU64Span(self: *Self, values: []const u64) Allocator.Error!U64Span {
+    if (values.len == 0) return U64Span.empty();
+
+    const start = @as(u32, @intCast(self.u64s.items.len));
+    try self.u64s.appendSlice(self.allocator, values);
+    return .{ .start = start, .len = @intCast(values.len) };
+}
+
+/// Resolves a u64 span to its stored slice.
+pub fn getU64Span(self: *const Self, span: U64Span) []const u64 {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.u64s.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: u64 span start={d} len={d} exceeds u64 storage len={d}",
+                .{ span.start, span.len, self.u64s.items.len },
+            );
+        }
+    }
+    return self.u64s.items[span.start..][0..span.len];
+}
+
 /// Appends a statement/control-flow node and returns its id.
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.items.len;
     try self.cf_stmts.append(self.allocator, stmt);
-    const loc = switch (stmt) {
-        .incref, .decref, .free => base.SourceLoc.none,
-        else => self.current_loc,
+    const has_source = switch (stmt) {
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => false,
+
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => true,
     };
+    const loc = if (has_source) self.current_loc else base.SourceLoc.none;
+    const region = if (has_source) self.current_region else base.Region.zero();
     try self.cf_stmt_locs.append(self.allocator, loc);
+    try self.cf_stmt_regions.append(self.allocator, region);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 

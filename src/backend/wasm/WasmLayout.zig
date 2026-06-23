@@ -159,6 +159,8 @@ fn structAlignWasm(ls: *const layout.Store, struct_idx: layout.StructIdx) Error!
     var max_align: u32 = 1;
     for (0..sorted_fields.len) |i| {
         const field = sorted_fields.get(i);
+        // Padding spacers are alignment 1 and never inflate the struct's alignment.
+        if (field.is_padding) continue;
         const field_align = (try wasmSizeAlign(field.layout, ls)).alignment;
         if (field_align > max_align) max_align = field_align;
     }
@@ -173,8 +175,10 @@ fn structSizeWasm(ls: *const layout.Store, struct_idx: layout.StructIdx) Error!u
     for (0..sorted_fields.len) |i| {
         const field = sorted_fields.get(i);
         const field_sa = try wasmSizeAlign(field.layout, ls);
-        if (field_sa.alignment > max_align) max_align = field_sa.alignment;
-        offset = alignUp(offset, field_sa.alignment);
+        // Padding spacers are alignment 1 (their value layout's alignment is ignored).
+        const field_align: u32 = if (field.is_padding) 1 else field_sa.alignment;
+        if (field_align > max_align) max_align = field_align;
+        offset = alignUp(offset, field_align);
         offset += field_sa.size;
     }
     return alignUp(offset, max_align);
@@ -187,7 +191,7 @@ fn structSizeWasm(ls: *const layout.Store, struct_idx: layout.StructIdx) Error!u
 fn wasmSizeAlign(root_idx: layout.Idx, ls: *const layout.Store) Error!SizeAlign {
     const Item = union(enum) {
         enter: layout.Idx,
-        combine_struct: u32,
+        combine_struct: layout.StructIdx,
         combine_tag: u32,
     };
 
@@ -217,7 +221,7 @@ fn wasmSizeAlign(root_idx: layout.Idx, ls: *const layout.Store) Error!SizeAlign 
                 .struct_ => {
                     const sd = ls.getStructData(l.getStruct().idx);
                     const fields = ls.struct_fields.sliceRange(sd.getFields());
-                    try work.append(wa, .{ .combine_struct = @intCast(fields.len) });
+                    try work.append(wa, .{ .combine_struct = l.getStruct().idx });
                     var i: usize = fields.len;
                     while (i > 0) {
                         i -= 1;
@@ -236,13 +240,18 @@ fn wasmSizeAlign(root_idx: layout.Idx, ls: *const layout.Store) Error!SizeAlign 
                 },
             }
         },
-        .combine_struct => |field_count| {
+        .combine_struct => |struct_idx| {
+            const sd = ls.getStructData(struct_idx);
+            const fields = ls.struct_fields.sliceRange(sd.getFields());
+            const field_count: u32 = @intCast(fields.len);
             const base = results.items.len - field_count;
             var offset: u32 = 0;
             var max_align: u32 = 1;
-            for (results.items[base..]) |field_sa| {
-                if (field_sa.alignment > max_align) max_align = field_sa.alignment;
-                offset = alignUp(offset, field_sa.alignment);
+            for (results.items[base..], 0..) |field_sa, fi| {
+                // Padding spacers are alignment 1 and never inflate the struct's alignment.
+                const field_align: u32 = if (fields.get(fi).is_padding) 1 else field_sa.alignment;
+                if (field_align > max_align) max_align = field_align;
+                offset = alignUp(offset, field_align);
                 offset += field_sa.size;
             }
             const size = alignUp(offset, max_align);

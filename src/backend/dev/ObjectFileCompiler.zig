@@ -68,6 +68,7 @@ pub const CompilationError = error{
 /// Supports compilation to any RocTarget via runtime-to-comptime dispatch.
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
+    enable_default_platform_runtime: bool = false,
 
     pub fn init(allocator: Allocator) ObjectFileCompiler {
         return .{ .allocator = allocator };
@@ -89,7 +90,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime);
     }
 
     /// Compile to an object file and write it to a path.
@@ -184,6 +185,7 @@ fn compileWithCodeGen(
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
+    enable_default_platform_runtime: bool,
 ) CompilationError!CompilationResult {
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
@@ -205,6 +207,7 @@ fn compileWithCodeGen(
 
     // Set object file mode to generate relocatable symbol references instead of direct pointers
     codegen.generation_mode = .object_file;
+    codegen.enable_default_platform_runtime = enable_default_platform_runtime;
 
     // Compile all procedures first
     if (proc_specs.len > 0) {
@@ -582,6 +585,7 @@ fn crossCompileDispatch(
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
+    enable_default_platform_runtime: bool,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     inline for (enum_info.fields) |field| {
@@ -598,6 +602,7 @@ fn crossCompileDispatch(
                     static_data_exports,
                     proc_specs,
                     comptime_target,
+                    enable_default_platform_runtime,
                 );
             } else {
                 return CompilationError.UnsupportedTarget;

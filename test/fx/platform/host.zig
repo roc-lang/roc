@@ -925,9 +925,12 @@ fn hostedStdoutLine(str: RocStr) callconv(.c) void {
 /// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Builder as argument
+// Mirrors `Builder := { value : Str, count : U64 }`. Nominal records lay out in
+// declared field order, so the host struct lists `value` before `count` to match
+// the Roc declaration (not alphabetical order).
 const BuilderArgs = extern struct {
-    count: u64,
     value: RocStr,
+    count: u64,
 };
 
 fn hostedBuilderPrintValue(builder: BuilderArgs) callconv(.c) void {
@@ -967,6 +970,29 @@ fn hostedHostGetGreeting(host: HostRecord) callconv(.c) RocStr {
     // Create the result string: "Hello, <name>!"
     var buf: [256]u8 = undefined;
     const result_str = std.fmt.bufPrint(&buf, "Hello, {s}!", .{name_slice}) catch "Hello!";
+    return RocStr.fromSlice(result_str, ops);
+}
+
+/// Hosted function: Padded.check! — end-to-end host-interop check for a nominal
+/// record with an unnamed padding field. The Roc type is
+/// `Padded := { z : U32, _ : U32, a : U32 }`, whose runtime layout must match
+/// this extern struct (declared order, with four reserved padding bytes): z@0,
+/// _pad@4, a@8. We read `z` and `a` and return "<z*100 + a>", so a layout
+/// mismatch (wrong field order or dropped padding) yields the wrong number.
+const PaddedArgs = extern struct { z: u32, _pad: u32, a: u32 };
+
+comptime {
+    // Lock in the byte offsets this test asserts against the Roc layout.
+    std.debug.assert(@offsetOf(PaddedArgs, "z") == 0);
+    std.debug.assert(@offsetOf(PaddedArgs, "a") == 8);
+    std.debug.assert(@sizeOf(PaddedArgs) == 12);
+}
+
+fn hostedPaddedCheck(padded: PaddedArgs) callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
+    const result: u64 = @as(u64, padded.z) * 100 + padded.a;
+    var buf: [32]u8 = undefined;
+    const result_str = std.fmt.bufPrint(&buf, "{d}", .{result}) catch "err";
     return RocStr.fromSlice(result_str, ops);
 }
 
@@ -1347,6 +1373,7 @@ comptime {
     @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
     @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
+    @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
     @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });

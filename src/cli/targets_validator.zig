@@ -257,7 +257,7 @@ pub fn createValidationReport(
 
             try report.document.addCodeBlock(
                 \\    targets: {
-                \\        inputs: "targets/",
+                \\        inputs_dir: "targets/",
                 \\        x64linux: { inputs: ["host.o", app] },
                 \\        arm64linux: { inputs: ["host.o", app] },
                 \\        x64mac: { inputs: ["host.o", app] },
@@ -799,7 +799,7 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
         \\    packages {}
         \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        x64linux: { inputs: ["host.o", app] },
         \\        arm64mac: { inputs: [app] },
         \\        x64mac: { inputs: ["libhost.a", app], output: Shared },
@@ -862,7 +862,7 @@ test "TargetsConfig.fromAST extracts targets configuration" {
         \\    packages {}
         \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        x64linux: { inputs: ["host.o", app] },
         \\        arm64linux: { inputs: [app] },
         \\    }

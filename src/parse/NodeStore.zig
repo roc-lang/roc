@@ -1065,6 +1065,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(rb.mapper));
             node.data.lhs = data_start;
         },
+        .nominal_record => |nr| {
+            node.tag = .nominal_record;
+            node.region = nr.region;
+            node.data.lhs = @intFromEnum(nr.mapper);
+            node.data.rhs = @intFromEnum(nr.backing);
+        },
         .block => |body| {
             node.tag = .block;
             node.region = body.region;
@@ -1078,6 +1084,15 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.main_token = @intFromEnum(f.patt);
             node.data.lhs = @intFromEnum(f.expr);
             node.data.rhs = @intFromEnum(f.body);
+        },
+        .@"break" => |b| {
+            node.tag = .break_expr;
+            node.region = b.region;
+        },
+        .@"return" => |r| {
+            node.tag = .return_expr;
+            node.region = r.region;
+            node.data.lhs = @intFromEnum(r.expr);
         },
         .ellipsis => |e| {
             node.tag = .ellipsis;
@@ -2136,6 +2151,17 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
+        .break_expr => {
+            return .{ .@"break" = .{
+                .region = node.region,
+            } };
+        },
+        .return_expr => {
+            return .{ .@"return" = .{
+                .expr = @enumFromInt(node.data.lhs),
+                .region = node.region,
+            } };
+        },
         .malformed => {
             return .{ .malformed = .{
                 .reason = @enumFromInt(node.data.lhs),
@@ -2153,6 +2179,13 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                     .start = fields_start,
                     .len = fields_len,
                 } },
+                .region = node.region,
+            } };
+        },
+        .nominal_record => {
+            return .{ .nominal_record = .{
+                .mapper = @enumFromInt(node.data.lhs),
+                .backing = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },
@@ -2887,7 +2920,7 @@ pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []A
 pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const node = Node{
         .tag = .targets_section,
-        .main_token = section.inputs_path orelse 0,
+        .main_token = section.inputs_dir orelse 0,
         .data = .{
             .lhs = section.entries.span.start,
             .rhs = section.entries.span.len,
@@ -3208,10 +3241,10 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     std.debug.assert(node.tag == .targets_section);
 
-    const inputs_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
+    const inputs_dir: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
 
     return .{
-        .inputs_path = inputs_path,
+        .inputs_dir = inputs_dir,
         .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
         .region = node.region,
     };

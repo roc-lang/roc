@@ -64,6 +64,14 @@ pub const FnDef = union(enum) {
     local_hosted: HostedFn,
     imported_hosted: HostedFn,
     checked_generated: names.ProcTemplate,
+    parser_runtime: struct {
+        owner: names.ProcTemplate,
+        expr: checked.CheckedExprId,
+    },
+    encode_to_runtime: struct {
+        owner: names.ProcTemplate,
+        expr: checked.CheckedExprId,
+    },
 };
 
 /// Hosted function metadata output by checking and carried through lowering.
@@ -138,6 +146,16 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
             writeBytes(hasher, "checked_generated");
             writeProcTemplate(hasher, template);
         },
+        .parser_runtime => |runtime| {
+            writeBytes(hasher, "parser_runtime");
+            writeProcTemplate(hasher, runtime.owner);
+            writeU32(hasher, @intFromEnum(runtime.expr));
+        },
+        .encode_to_runtime => |runtime| {
+            writeBytes(hasher, "encode_to_runtime");
+            writeProcTemplate(hasher, runtime.owner);
+            writeU32(hasher, @intFromEnum(runtime.expr));
+        },
     }
 }
 
@@ -170,6 +188,7 @@ pub const Local = struct {
     symbol: Common.Symbol,
     ty: Type.TypeId,
     binder: ?checked.PatternBinderId = null,
+    capture_id: ?u32 = null,
 };
 
 /// Local id paired with its monomorphic type.
@@ -213,6 +232,10 @@ pub const ProcCallee = union(enum) {
 pub const CallProc = struct {
     callee: ProcCallee,
     args: Span(ExprId),
+    /// This direct call is on an explicitly generated cold path. Later stages
+    /// may use this to avoid inlining and to attach backend cold-call metadata;
+    /// they must not infer coldness from callee names or source paths.
+    is_cold: bool = false,
 };
 
 /// Low-level builtin call.
@@ -232,6 +255,46 @@ pub const MatchExpr = struct {
 pub const IfExpr = struct {
     branches: Span(IfBranch),
     final_else: ExprId,
+};
+
+/// Compiler-generated branch that ties an ordinary presence condition to the
+/// payload local whose initialization that condition represents. The
+/// initialized branch may read `payload`; the uninitialized branch must not.
+pub const InitializedPayloadSwitch = struct {
+    cond: ExprId,
+    cond_mask: u64 = 1,
+    payload: LocalId,
+    uninitialized_is_cold: bool = false,
+    initialized: ExprId,
+    uninitialized: ExprId,
+};
+
+/// Compiler-generated Try sequencing. This preserves ordinary `Try` values in
+/// user code while giving LIR lowering an explicit producer/consumer edge for
+/// `Ok` continuation and `Err` propagation.
+pub const TrySequence = struct {
+    try_expr: ExprId,
+    ok_local: LocalId,
+    /// The Err propagation edge is compiler-proven cold. LIR lowering may
+    /// preserve this as explicit branch metadata; backends must not infer it.
+    err_is_cold: bool = false,
+    ok_body: ExprId,
+};
+
+/// Compiler-generated Try sequencing whose Ok payload is an immediately
+/// destructured record. LIR lowering can bind the requested record fields
+/// directly from the Ok tag payload instead of first materializing the whole
+/// payload record.
+pub const TryRecordSequence = struct {
+    try_expr: ExprId,
+    value_local: LocalId,
+    value_field: names.RecordFieldNameId,
+    rest_local: LocalId,
+    rest_field: names.RecordFieldNameId,
+    /// The Err propagation edge is compiler-proven cold. LIR lowering may
+    /// preserve this as explicit branch metadata; backends must not infer it.
+    err_is_cold: bool = false,
+    ok_body: ExprId,
 };
 
 /// Block expression with statements and a final expression.
@@ -263,6 +326,7 @@ pub const ComptimeSiteKind = enum {
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
     region: base.Region,
+    checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
 };
 
@@ -321,6 +385,18 @@ pub const ExprData = union(enum) {
     },
     match_: MatchExpr,
     if_: IfExpr,
+    /// Compiler-generated uninitialized value marker. LIR lowering may leave
+    /// the target local unbound instead of assigning a sentinel. This must only
+    /// be generated in contexts that are dominated by an initialized-payload
+    /// check before the value is read.
+    uninitialized,
+    uninitialized_payload: struct {
+        condition: LocalId,
+        mask: u64 = 1,
+    },
+    if_initialized_payload: InitializedPayloadSwitch,
+    try_sequence: TrySequence,
+    try_record_sequence: TryRecordSequence,
     block: BlockExpr,
     loop_: LoopExpr,
     break_: ?ExprId,
@@ -361,6 +437,7 @@ pub const PatData = union(enum) {
     },
     record: Span(RecordDestruct),
     tuple: Span(PatId),
+    list: ListPattern,
     tag: struct {
         name: names.TagNameId,
         payloads: Span(PatId),
@@ -397,6 +474,22 @@ pub const StrPatternStep = struct {
 pub const RecordDestruct = struct {
     name: names.RecordFieldNameId,
     pattern: PatId,
+};
+
+/// List destructuring pattern: fixed element patterns plus an optional rest
+/// that captures the remaining slice. The element patterns before the rest
+/// match from the front; those at or after the rest's index match from the
+/// back.
+pub const ListPattern = struct {
+    patterns: Span(PatId),
+    rest: ?ListRestPattern,
+};
+
+/// The `..`/`.. as name` portion of a list pattern. `index` is how many fixed
+/// element patterns precede it; `pattern` binds the captured slice when present.
+pub const ListRestPattern = struct {
+    index: u32,
+    pattern: ?PatId,
 };
 
 /// Match branch.
@@ -512,8 +605,12 @@ pub const Program = struct {
     source_files: std.ArrayList([]const u8),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: std.ArrayList(base.SourceLoc),
+    /// Checked source region per expression, parallel to `exprs`.
+    expr_regions: std.ArrayList(base.Region),
     /// Source location per statement, parallel to `stmts`.
     stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Checked source region per statement, parallel to `stmts`.
+    stmt_regions: std.ArrayList(base.Region),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; owned by this program).
     local_names: std.ArrayList([]const u8),
@@ -521,6 +618,8 @@ pub const Program = struct {
     /// entry to each source node, so synthetic glue nodes inherit the location
     /// of the source node they were derived from.
     current_loc: base.SourceLoc,
+    /// Ambient checked source region recorded by `addExpr`/`addStmt`.
+    current_region: base.Region,
 
     pub fn init(allocator: std.mem.Allocator) Program {
         return .{
@@ -552,9 +651,12 @@ pub const Program = struct {
             .comptime_sites = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
+            .expr_regions = .empty,
             .stmt_locs = .empty,
+            .stmt_regions = .empty,
             .local_names = .empty,
             .current_loc = base.SourceLoc.none,
+            .current_region = base.Region.zero(),
         };
     }
 
@@ -563,7 +665,9 @@ pub const Program = struct {
             if (name.len > 0) self.allocator.free(name);
         }
         self.local_names.deinit(self.allocator);
+        self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
+        self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
@@ -613,6 +717,7 @@ pub const Program = struct {
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
+        try self.expr_regions.append(self.allocator, self.current_region);
         return id;
     }
 
@@ -639,9 +744,19 @@ pub const Program = struct {
         return self.expr_locs.items[@intFromEnum(id)];
     }
 
+    /// Checked source region of an expression.
+    pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
+        return self.expr_regions.items[@intFromEnum(id)];
+    }
+
     /// Source location of a statement.
     pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
         return self.stmt_locs.items[@intFromEnum(id)];
+    }
+
+    /// Checked source region of a statement.
+    pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
+        return self.stmt_regions.items[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat: Pat) std.mem.Allocator.Error!PatId {
@@ -654,6 +769,7 @@ pub const Program = struct {
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
+        try self.stmt_regions.append(self.allocator, self.current_region);
         return id;
     }
 
@@ -661,6 +777,7 @@ pub const Program = struct {
         self: *Program,
         kind: ComptimeSiteKind,
         region: base.Region,
+        checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
     ) std.mem.Allocator.Error!ComptimeSiteId {
         const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
@@ -669,6 +786,7 @@ pub const Program = struct {
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .region = region,
+            .checked_site = checked_site,
             .branch_regions = owned_branch_regions,
         });
         return id;
@@ -722,6 +840,10 @@ pub const Program = struct {
         try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
         try self.local_names.append(self.allocator, "");
         return id;
+    }
+
+    pub fn setLocalCaptureId(self: *Program, id: LocalId, capture_id: u32) void {
+        self.locals.items[@intFromEnum(id)].capture_id = capture_id;
     }
 
     /// Record the source-level name of a local (dupes; empty means none).

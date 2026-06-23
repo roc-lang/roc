@@ -206,6 +206,7 @@
 const std = @import("std");
 
 const SourceLoc = @import("base").SourceLoc;
+const Region = @import("base").Region;
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Mono = @import("../monotype/ast.zig");
@@ -485,6 +486,8 @@ const Pass = struct {
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
+            .uninitialized,
+            .uninitialized_payload,
             => {},
             .list,
             .tuple,
@@ -563,6 +566,19 @@ const Pass = struct {
             },
             .break_ => |maybe| if (maybe) |value| try self.markArgUsesInExpr(fn_id, value, changed),
             .continue_ => |continue_| for (self.program.exprSpan(continue_.values)) |value| try self.markArgUsesInExpr(fn_id, value, changed),
+            .if_initialized_payload => |payload_switch| {
+                try self.markArgUsesInExpr(fn_id, payload_switch.cond, changed);
+                try self.markArgUsesInExpr(fn_id, payload_switch.initialized, changed);
+                try self.markArgUsesInExpr(fn_id, payload_switch.uninitialized, changed);
+            },
+            .try_sequence => |sequence| {
+                try self.markArgUsesInExpr(fn_id, sequence.try_expr, changed);
+                try self.markArgUsesInExpr(fn_id, sequence.ok_body, changed);
+            },
+            .try_record_sequence => |sequence| {
+                try self.markArgUsesInExpr(fn_id, sequence.try_expr, changed);
+                try self.markArgUsesInExpr(fn_id, sequence.ok_body, changed);
+            },
         }
     }
 
@@ -606,6 +622,8 @@ const Pass = struct {
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
+            .uninitialized,
+            .uninitialized_payload,
             => {},
             .list,
             .tuple,
@@ -663,6 +681,19 @@ const Pass = struct {
             },
             .break_ => |maybe| if (maybe) |value| try self.collectCallPatternsInExpr(owner, value),
             .continue_ => |continue_| try self.collectCallPatternsInExprSpan(owner, continue_.values),
+            .if_initialized_payload => |payload_switch| {
+                try self.collectCallPatternsInExpr(owner, payload_switch.cond);
+                try self.collectCallPatternsInExpr(owner, payload_switch.initialized);
+                try self.collectCallPatternsInExpr(owner, payload_switch.uninitialized);
+            },
+            .try_sequence => |sequence| {
+                try self.collectCallPatternsInExpr(owner, sequence.try_expr);
+                try self.collectCallPatternsInExpr(owner, sequence.ok_body);
+            },
+            .try_record_sequence => |sequence| {
+                try self.collectCallPatternsInExpr(owner, sequence.try_expr);
+                try self.collectCallPatternsInExpr(owner, sequence.ok_body);
+            },
         }
     }
 
@@ -859,6 +890,8 @@ const Pass = struct {
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
+            .uninitialized,
+            .uninitialized_payload,
             => {},
             .list,
             .tuple,
@@ -913,6 +946,19 @@ const Pass = struct {
             },
             .break_ => |maybe| if (maybe) |value| try self.rewriteCallsInExpr(value, done),
             .continue_ => |continue_| try self.rewriteCallsInExprSpan(continue_.values, done),
+            .if_initialized_payload => |payload_switch| {
+                try self.rewriteCallsInExpr(payload_switch.cond, done);
+                try self.rewriteCallsInExpr(payload_switch.initialized, done);
+                try self.rewriteCallsInExpr(payload_switch.uninitialized, done);
+            },
+            .try_sequence => |sequence| {
+                try self.rewriteCallsInExpr(sequence.try_expr, done);
+                try self.rewriteCallsInExpr(sequence.ok_body, done);
+            },
+            .try_record_sequence => |sequence| {
+                try self.rewriteCallsInExpr(sequence.try_expr, done);
+                try self.rewriteCallsInExpr(sequence.ok_body, done);
+            },
         }
     }
 
@@ -980,6 +1026,7 @@ const Pass = struct {
                 self.program.exprs.items[@intFromEnum(expr_id)].data = .{ .call_proc = .{
                     .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before rewriting") },
                     .args = try self.program.addExprSpan(rewritten_args.items),
+                    .is_cold = call.is_cold,
                 } };
                 return;
             }
@@ -1214,6 +1261,7 @@ const Cloner = struct {
     inline_direct_calls: bool,
     inline_direct_requires_known_arg: bool,
     current_loc: SourceLoc,
+    current_region: Region,
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
@@ -1229,6 +1277,7 @@ const Cloner = struct {
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = true,
             .current_loc = SourceLoc.none,
+            .current_region = Region.zero(),
         };
     }
 
@@ -1246,6 +1295,7 @@ const Cloner = struct {
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = false,
             .current_loc = SourceLoc.none,
+            .current_region = Region.zero(),
         };
     }
 
@@ -1260,13 +1310,20 @@ const Cloner = struct {
 
     fn buildArgs(self: *Cloner) Allocator.Error!Ast.Span(Ast.TypedLocal) {
         const source_fn = self.pass.program.fns.items[@intFromEnum(self.source_fn)];
-        const source_args = self.pass.program.typedLocalSpan(source_fn.args);
+        const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
+        defer self.pass.allocator.free(source_args);
         if (source_args.len != self.pattern.args.len) Common.invariant("call-pattern argument count differed from source function arity");
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
         self.current_loc = switch (source_fn.body) {
             .roc => |body| self.pass.program.exprLoc(body),
             .hosted => SourceLoc.none,
+        };
+        self.current_region = switch (source_fn.body) {
+            .roc => |body| self.pass.program.exprRegion(body),
+            .hosted => Region.zero(),
         };
 
         var args = std.ArrayList(Ast.TypedLocal).empty;
@@ -1349,14 +1406,20 @@ const Cloner = struct {
     fn cloneExpr(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
         self.current_loc = self.pass.program.exprLoc(expr_id);
+        self.current_region = self.pass.program.exprRegion(expr_id);
         return try self.materialize(try self.cloneExprValue(expr_id));
     }
 
     fn cloneExprValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
         self.current_loc = self.pass.program.exprLoc(expr_id);
+        self.current_region = self.pass.program.exprRegion(expr_id);
 
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
@@ -1369,7 +1432,8 @@ const Cloner = struct {
             },
             .fn_ref => |fn_id| return try self.callableValue(expr.ty, fn_id),
             .tag => |tag| {
-                const payload_exprs = self.pass.program.exprSpan(tag.payloads);
+                const payload_exprs = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(tag.payloads));
+                defer self.pass.allocator.free(payload_exprs);
                 const payloads = try self.pass.arena.allocator().alloc(Value, payload_exprs.len);
                 for (payload_exprs, 0..) |payload, index| {
                     payloads[index] = try self.cloneExprValue(payload);
@@ -1381,7 +1445,8 @@ const Cloner = struct {
                 } };
             },
             .record => |fields_span| {
-                const source_fields = self.pass.program.fieldExprSpan(fields_span);
+                const source_fields = try self.pass.allocator.dupe(Ast.FieldExpr, self.pass.program.fieldExprSpan(fields_span));
+                defer self.pass.allocator.free(source_fields);
                 const fields = try self.pass.arena.allocator().alloc(FieldValue, source_fields.len);
                 for (source_fields, 0..) |field, index| {
                     fields[index] = .{
@@ -1395,7 +1460,8 @@ const Cloner = struct {
                 } };
             },
             .tuple => |items_span| {
-                const source_items = self.pass.program.exprSpan(items_span);
+                const source_items = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(items_span));
+                defer self.pass.allocator.free(source_items);
                 const items = try self.pass.arena.allocator().alloc(Value, source_items.len);
                 for (source_items, 0..) |item, index| {
                     items[index] = try self.cloneExprValue(item);
@@ -1451,6 +1517,7 @@ const Cloner = struct {
                 } } }) };
             },
             .call_proc => |call| {
+                if (call.is_cold) return .{ .expr = try self.cloneExprPlain(expr_id) };
                 if (!self.inline_direct_calls) return .{ .expr = try self.cloneExprPlain(expr_id) };
                 const has_known_shape_arg = try self.directCallHasKnownShapeArg(call.args);
                 if (self.inline_direct_requires_known_arg and !has_known_shape_arg) {
@@ -1576,12 +1643,17 @@ const Cloner = struct {
     fn cloneExprPlain(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
         self.current_loc = self.pass.program.exprLoc(expr_id);
+        self.current_region = self.pass.program.exprRegion(expr_id);
 
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| .{ .local = local },
             .unit => .unit,
+            .uninitialized => .uninitialized,
+            .uninitialized_payload => |payload| .{ .uninitialized_payload = payload },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
@@ -1626,6 +1698,29 @@ const Cloner = struct {
             .loop_ => |loop| return try self.cloneLoop(expr.ty, loop),
             .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
             .continue_ => |continue_| try self.cloneContinue(continue_),
+            .if_initialized_payload => |payload_switch| .{ .if_initialized_payload = .{
+                .cond = try self.cloneExpr(payload_switch.cond),
+                .cond_mask = payload_switch.cond_mask,
+                .payload = payload_switch.payload,
+                .uninitialized_is_cold = payload_switch.uninitialized_is_cold,
+                .initialized = try self.cloneExpr(payload_switch.initialized),
+                .uninitialized = try self.cloneExpr(payload_switch.uninitialized),
+            } },
+            .try_sequence => |sequence| .{ .try_sequence = .{
+                .try_expr = try self.cloneExpr(sequence.try_expr),
+                .ok_local = sequence.ok_local,
+                .err_is_cold = sequence.err_is_cold,
+                .ok_body = try self.cloneExpr(sequence.ok_body),
+            } },
+            .try_record_sequence => |sequence| .{ .try_record_sequence = .{
+                .try_expr = try self.cloneExpr(sequence.try_expr),
+                .value_local = sequence.value_local,
+                .value_field = sequence.value_field,
+                .rest_local = sequence.rest_local,
+                .rest_field = sequence.rest_field,
+                .err_is_cold = sequence.err_is_cold,
+                .ok_body = try self.cloneExpr(sequence.ok_body),
+            } },
             .return_ => |value| .{ .return_ = try self.cloneExpr(value) },
             .crash => |msg| .{ .crash = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
@@ -1776,8 +1871,10 @@ const Cloner = struct {
     }
 
     fn cloneLoop(self: *Cloner, ty: Type.TypeId, loop: anytype) Common.LowerError!Ast.ExprId {
-        const params = self.pass.program.typedLocalSpan(loop.params);
-        const initial_values = self.pass.program.exprSpan(loop.initial_values);
+        const params = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
+        defer self.pass.allocator.free(params);
+        const initial_values = try self.pass.allocator.dupe(Ast.ExprId, self.pass.program.exprSpan(loop.initial_values));
+        defer self.pass.allocator.free(initial_values);
         if (params.len != initial_values.len) Common.invariant("loop parameter count differed from initial value count");
 
         const values = try self.pass.allocator.alloc(Value, initial_values.len);
@@ -1852,12 +1949,14 @@ const Cloner = struct {
             .values = try self.cloneExprSpan(continue_.values),
         } };
         const values = self.pass.program.exprSpan(continue_.values);
-        if (values.len != loop.values.len) Common.invariant("continue value count differed from specialized loop pattern");
+        const source_values = try self.pass.allocator.dupe(Ast.ExprId, values);
+        defer self.pass.allocator.free(source_values);
+        if (source_values.len != loop.values.len) Common.invariant("continue value count differed from specialized loop pattern");
 
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
 
-        for (loop.values, values) |shape, value_expr| {
+        for (loop.values, source_values) |shape, value_expr| {
             const value = try self.cloneExprValue(value_expr);
             if (!shapeMatchesValue(self.pass.program, shape, value)) {
                 if (!try self.appendFieldReadExprsFromValue(shape, value, &new_values)) {
@@ -1883,6 +1982,14 @@ const Cloner = struct {
     }
 
     fn cloneCallProc(self: *Cloner, call: @import("../monotype/ast.zig").CallProc) Common.LowerError!Ast.ExprData {
+        if (call.is_cold) {
+            return .{ .call_proc = .{
+                .callee = call.callee,
+                .args = try self.cloneExprSpan(call.args),
+                .is_cold = true,
+            } };
+        }
+
         const callee = Ast.callProcCallee(call);
         const raw = @intFromEnum(callee);
         if (raw < self.pass.plans.len) {
@@ -1905,6 +2012,7 @@ const Cloner = struct {
                     return .{ .call_proc = .{
                         .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
                         .args = try self.pass.program.addExprSpan(rewritten_args.items),
+                        .is_cold = call.is_cold,
                     } };
                 }
             }
@@ -1912,6 +2020,7 @@ const Cloner = struct {
         return .{ .call_proc = .{
             .callee = call.callee,
             .args = try self.cloneExprSpan(call.args),
+            .is_cold = call.is_cold,
         } };
     }
 
@@ -2211,6 +2320,9 @@ const Cloner = struct {
                     .backing = backing,
                 } };
             },
+            // List patterns are not statically destructured during
+            // specialization; fall back to the runtime match.
+            .list,
             .int_lit,
             .dec_lit,
             .frac_f32_lit,
@@ -2608,6 +2720,8 @@ const Cloner = struct {
                 };
                 return try self.bindPatToValue(backing_pat, nominal.backing.*);
             },
+            // List patterns are not statically bound during specialization.
+            .list,
             .int_lit,
             .dec_lit,
             .frac_f32_lit,
@@ -2634,6 +2748,13 @@ const Cloner = struct {
             } },
             .record => |fields| .{ .record = try self.cloneRecordDestructSpan(fields) },
             .tuple => |items| .{ .tuple = try self.clonePatSpan(items) },
+            .list => |list| .{ .list = .{
+                .patterns = try self.clonePatSpan(list.patterns),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |rest_pattern| try self.clonePat(rest_pattern) else null,
+                } else null,
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.clonePatSpan(tag.payloads),
@@ -2671,7 +2792,10 @@ const Cloner = struct {
     fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!Ast.StmtId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
         self.current_loc = self.pass.program.stmtLoc(stmt_id);
+        self.current_region = self.pass.program.stmtRegion(stmt_id);
 
         const stmt = self.pass.program.stmts.items[@intFromEnum(stmt_id)];
         return try self.addStmt(switch (stmt) {
@@ -3067,14 +3191,20 @@ const Cloner = struct {
     fn addExpr(self: *Cloner, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
         const saved_loc = self.pass.program.current_loc;
         defer self.pass.program.current_loc = saved_loc;
+        const saved_region = self.pass.program.current_region;
+        defer self.pass.program.current_region = saved_region;
         self.pass.program.current_loc = self.current_loc;
+        self.pass.program.current_region = self.current_region;
         return try self.pass.program.addExpr(expr);
     }
 
     fn addStmt(self: *Cloner, stmt: Ast.Stmt) Allocator.Error!Ast.StmtId {
         const saved_loc = self.pass.program.current_loc;
         defer self.pass.program.current_loc = saved_loc;
+        const saved_region = self.pass.program.current_region;
+        defer self.pass.program.current_region = saved_region;
         self.pass.program.current_loc = self.current_loc;
+        self.pass.program.current_region = self.current_region;
         return try self.pass.program.addStmt(stmt);
     }
 };
@@ -3098,6 +3228,8 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
         => 0,
         .list,
         .tuple,
@@ -3152,6 +3284,14 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .loop_ => |loop| localUseCountInExprSpan(program, local, loop.initial_values) + localUseCountInExpr(program, local, loop.body),
         .break_ => |maybe| if (maybe) |value| localUseCountInExpr(program, local, value) else 0,
         .continue_ => |continue_| localUseCountInExprSpan(program, local, continue_.values),
+        .if_initialized_payload => |payload_switch| localUseCountInExpr(program, local, payload_switch.cond) +
+            (if (payload_switch.payload == local) @as(usize, 1) else 0) +
+            localUseCountInExpr(program, local, payload_switch.initialized) +
+            localUseCountInExpr(program, local, payload_switch.uninitialized),
+        .try_sequence => |sequence| localUseCountInExpr(program, local, sequence.try_expr) +
+            if (sequence.ok_local == local) 0 else localUseCountInExpr(program, local, sequence.ok_body),
+        .try_record_sequence => |sequence| localUseCountInExpr(program, local, sequence.try_expr) +
+            if (sequence.value_local == local or sequence.rest_local == local) 0 else localUseCountInExpr(program, local, sequence.ok_body),
     };
 }
 
@@ -3205,6 +3345,8 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .dec_lit,
         .str_lit,
         .fn_ref,
+        .uninitialized,
+        .uninitialized_payload,
         => {},
         .crash, .comptime_exhaustiveness_failed => scan.seen_effect = true,
         .list,
@@ -3294,6 +3436,40 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         },
         .continue_ => |continue_| {
             scanLocalUseInExprSpan(program, local, continue_.values, scan);
+            scan.seen_effect = true;
+        },
+        .if_initialized_payload => |payload_switch| {
+            scanLocalUseInExpr(program, local, payload_switch.cond, scan);
+
+            var initialized_scan = scan.*;
+            if (payload_switch.payload == local) {
+                if (initialized_scan.seen_effect) {
+                    initialized_scan.found_after_effect = true;
+                } else {
+                    initialized_scan.found_before_effect = true;
+                }
+            }
+            scanLocalUseInExpr(program, local, payload_switch.initialized, &initialized_scan);
+
+            var uninitialized_scan = scan.*;
+            scanLocalUseInExpr(program, local, payload_switch.uninitialized, &uninitialized_scan);
+
+            scan.found_before_effect = scan.found_before_effect or initialized_scan.found_before_effect or uninitialized_scan.found_before_effect;
+            scan.found_after_effect = scan.found_after_effect or initialized_scan.found_after_effect or uninitialized_scan.found_after_effect;
+            scan.seen_effect = scan.seen_effect or initialized_scan.seen_effect or uninitialized_scan.seen_effect;
+        },
+        .try_sequence => |sequence| {
+            scanLocalUseInExpr(program, local, sequence.try_expr, scan);
+            if (sequence.ok_local != local) {
+                scanLocalUseInExpr(program, local, sequence.ok_body, scan);
+            }
+            scan.seen_effect = true;
+        },
+        .try_record_sequence => |sequence| {
+            scanLocalUseInExpr(program, local, sequence.try_expr, scan);
+            if (sequence.value_local != local and sequence.rest_local != local) {
+                scanLocalUseInExpr(program, local, sequence.ok_body, scan);
+            }
             scan.seen_effect = true;
         },
     }

@@ -39,11 +39,12 @@ run = |initial, count| {
     $boxed
 }
 
-main! = || {
-    final_box = run(Box.box({ tick: 0, plants: [] }), 512)
+main! = |seed| {
+    count = seed + 512
+    final_box = run(Box.box({ tick: 0, plants: [] }), count)
     final = Box.unbox(final_box)
 
-    if final.tick == 512 and List.len(final.plants) < 20 {
+    if final.tick == count and List.len(final.plants) < 20 {
         "ok"
     } else {
         "bad"

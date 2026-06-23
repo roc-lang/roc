@@ -186,6 +186,14 @@ export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) 
     return @ptrCast(new_user_ptr);
 }
 
+export fn roc_runtime_seed() callconv(.c) u64 {
+    return 0;
+}
+
+export fn roc_host_wrap_token(value: u64) callconv(.c) u64 {
+    return value + 1;
+}
+
 export fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
     env_imports.roc_dbg(bytes, len);
 }

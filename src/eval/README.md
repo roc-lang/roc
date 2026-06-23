@@ -1,8 +1,8 @@
 # Interpreter Overview
 
 This directory contains Roc's interpreter. It powers the REPL, the interpreter
-shim (for `roc run` and `roc build` in interpreter mode), and the evaluation
-tests. This document introduces the core pieces so a new contributor can
+shim (for the default `roc` command and `roc build` in interpreter mode), and
+the evaluation tests. This document introduces the core pieces so a new contributor can
 navigate the code without prior context.
 
 ## High-Level Architecture

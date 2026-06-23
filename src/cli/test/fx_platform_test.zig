@@ -632,7 +632,7 @@ test "fx platform checked directly finds sibling modules" {
     }
 }
 
-test "custom platform and package qualifiers work in roc run" {
+test "custom platform and package qualifiers work in default roc command" {
     // Regression test for package qualifier extraction and execution.
     // Apps can use any identifier for their platform/package qualifiers (e.g., "fx" instead of "pf").
     // The qualifier must be correctly extracted from the app header for module resolution.
@@ -666,7 +666,7 @@ test "custom platform and package qualifiers work in roc run" {
         return error.PackageQualifierNotRecognized;
     }
 
-    // Check that roc run succeeded
+    // Check that the default roc command succeeded
     switch (run_result.term) {
         .exited => |code| {
             if (code != 0) {
@@ -996,7 +996,7 @@ test "fx platform issue8433" {
 }
 
 test "run aborts on type errors by default" {
-    // Tests that roc run aborts when there are type errors (without --allow-errors)
+    // Tests that the default roc command aborts when there are type errors (without --allow-errors)
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{}, "test/fx/run_allow_errors.roc");
@@ -1011,7 +1011,7 @@ test "run aborts on type errors by default" {
 }
 
 test "run aborts on parse errors by default" {
-    // Tests that roc run aborts when there are parse errors (without --allow-errors)
+    // Tests that the default roc command aborts when there are parse errors (without --allow-errors)
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{}, "test/fx/parse_error.roc");
@@ -1026,7 +1026,7 @@ test "run aborts on parse errors by default" {
 }
 
 test "run with --allow-errors attempts execution despite type errors" {
-    // Tests that roc run --allow-errors attempts to execute even with type errors.
+    // Tests that `roc --allow-errors` attempts to execute even with type errors.
     // TODO: remove Windows workaround once the shared LIR image path
     // handles crash-on-type-error consistently on Windows.
     const opt_flag: []const u8 = if (@import("builtin").os.tag == .windows) "--opt=interpreter" else "--opt=dev";
@@ -1461,6 +1461,34 @@ test "fx platform valid nested where-clause static dispatch builds" {
     try testing.expect(std.mem.find(u8, build_result.stderr, "postcheck invariant violated") == null);
 }
 
+test "fx platform divergent if with all crash branches does not hit postcheck invariant" {
+    const allocator = testing.allocator;
+
+    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env_map.deinit();
+
+    const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "build",
+        "--no-cache",
+        "test/fx/divergent_if_all_branches_crash_repro.roc",
+    }, .{
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+
+    const did_abort = switch (build_result.term) {
+        .exited => |code| code == 134,
+        .signal => true,
+        else => true,
+    };
+    try testing.expect(!did_abort);
+    try testing.expect(std.mem.find(u8, build_result.stderr, "postcheck invariant violated") == null);
+    try testing.expect(std.mem.find(u8, build_result.stderr, "panic") == null);
+}
+
 test "external platform memory alignment regression" {
     // SKIPPED: aoc_day2.roc crashes at runtime due to a dev backend bug with
     // mutable variables + for loops + closures (.contains/.append).
@@ -1693,10 +1721,10 @@ test "default app resolves a sibling type module imported with exposing" {
     const allocator = std.testing.allocator;
 
     // A headerless file with `main!` runs as a "default app": its source is
-    // staged into a temp dir and compiled with a synthetic echo platform, while
-    // sibling imports resolve against the file's original directory. Here the
-    // sibling `FooBar.roc` is a type module whose associated value `square` is
-    // brought into scope via `exposing` and then called.
+    // staged into a temp dir and compiled with a synthetic default platform,
+    // while sibling imports resolve against the file's original directory. Here
+    // the sibling `FooBar.roc` is a type module whose associated value `square`
+    // is brought into scope via `exposing` and then called.
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -1706,8 +1734,11 @@ test "default app resolves a sibling type module imported with exposing" {
         \\import FooBar exposing [square]
         \\
         \\main! = |_arg| {
-        \\    echo!(square(12).to_str())
-        \\    Ok({})
+        \\    if square(12) == 144 {
+        \\        Ok({})
+        \\    } else {
+        \\        Err(Exit(1))
+        \\    }
         \\}
         ,
     });
@@ -1743,6 +1774,5 @@ test "default app resolves a sibling type module imported with exposing" {
         },
     }
 
-    // 12 * 12 = 144, printed by the echo platform's `echo!`.
-    try testing.expect(std.mem.find(u8, result.stdout, "144") != null);
+    try testing.expectEqualStrings("", result.stdout);
 }

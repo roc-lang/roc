@@ -202,6 +202,19 @@ type_id_to_rust = |type_table, type_id| {
 	}
 }
 
+## Render one struct field declaration for a record field. Unnamed
+## nominal-record padding fields become fixed-size byte arrays (`[u8; size]`);
+## named fields use their resolved Rust type.
+rust_record_field_decl : List(TypeRepr), RecordField -> Str
+rust_record_field_decl = |type_table, field| {
+	rust_type = if field.is_padding {
+		"[u8; ${U64.to_str(field.size)}]"
+	} else {
+		type_id_to_rust(type_table, field.type_id)
+	}
+	"    pub ${field.name}: ${rust_type},\n"
+}
+
 ## Convert a TypeRepr to its Rust type string
 type_repr_to_rust : List(TypeRepr), TypeRepr -> Str
 type_repr_to_rust = |type_table, type_repr| {
@@ -281,7 +294,7 @@ is_repr_refcounted = |type_table, type_repr| {
 		RocBox(_) => Bool.True
 		RocList(_) => Bool.True
 		RocFunction(_) => Bool.True
-		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
+		RocRecord(rec) => List.any(rec.fields, |field| !field.is_padding and is_type_refcounted(type_table, field.type_id))
 		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
 		_ => Bool.False
 	}
@@ -1053,11 +1066,7 @@ generate_element_type_structs_rust = |type_table| {
 					struct_name = name_to_struct_name(rec.name)
 					var $field_strs = ""
 					for field in rec.fields {
-						rust_type = type_id_to_rust(type_table, field.type_id)
-						$field_strs = Str.concat(
-							$field_strs,
-							"    pub ${field.name}: ${rust_type},\n",
-						)
+						$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, field))
 					}
 
 					# Size/alignment assertions (guarded by pointer width)
@@ -1185,11 +1194,7 @@ generate_all_record_structs_rust = |hosted_functions, type_table| {
 
 			var $fields = ""
 			for field in type_table_result.fields {
-				rust_type = type_id_to_rust(type_table, field.type_id)
-				$fields = Str.concat(
-					$fields,
-					"    pub ${field.name}: ${rust_type},\n",
-				)
+				$fields = Str.concat($fields, rust_record_field_decl(type_table, field))
 			}
 
 			assertions = if type_table_result.size > 0 {
@@ -1240,11 +1245,7 @@ generate_args_struct_rust = |func, type_table| {
 	if type_table_result.found {
 		var $fields = ""
 		for field in type_table_result.fields {
-			rust_type = type_id_to_rust(type_table, field.type_id)
-			$fields = Str.concat(
-				$fields,
-				"    pub ${field.name}: ${rust_type},\n",
-			)
+			$fields = Str.concat($fields, rust_record_field_decl(type_table, field))
 		}
 
 		assertions = if type_table_result.size > 0 {

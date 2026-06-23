@@ -49,10 +49,29 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - type_alias_decl.md:7:1:7:34
 OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
+**DUPLICATE DEFINITION**
+The name `Try` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_alias_decl.md:7:1:7:34:**
+```roc
+Try(ok, err) : [Ok(ok), Err(err)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Try` was already defined here:
+**type_alias_decl.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/main.roc" }
+```
+^
+
+
 **OPEN EXT NOT ALLOWED IN TYPE DECLARATION**
 You cannot use a `..` inside a type declaration:
 

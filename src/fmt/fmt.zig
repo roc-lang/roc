@@ -1737,6 +1737,20 @@ const Formatter = struct {
             .ellipsis => {
                 try fmt.pushAll("...");
             },
+            .@"return" => |r| {
+                try fmt.pushAll("return");
+                const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
+                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatExprDiscard(r.expr);
+            },
+            .@"break" => {
+                try fmt.pushAll("break");
+            },
             .record_builder => |rb| {
                 // Format record builder: { field: value, ... }.TypeName
                 const fields = fmt.ast.store.recordFieldSlice(rb.fields);
@@ -2038,13 +2052,13 @@ const Formatter = struct {
 
         var has_content = false;
 
-        // Format inputs: directory directive if present
-        if (targets.inputs_path) |inputs_token| {
+        // Format inputs_dir: directory directive if present
+        if (targets.inputs_dir) |inputs_token| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("inputs: ");
+            try fmt.pushAll("inputs_dir: ");
             try fmt.push('"');
             try fmt.pushTokenText(inputs_token);
             try fmt.push('"');
@@ -3487,7 +3501,7 @@ test "issue 8989: platform header targets section is preserved" {
         \\    packages {}
         \\    provides {}
         \\    targets: {
-        \\        inputs: "build/",
+        \\        inputs_dir: "build/",
         \\        x64linux: { inputs: ["host.o", app] },
         \\        arm64linux: { inputs: ["host.o", app], output: Shared },
         \\    }

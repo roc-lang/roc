@@ -22,6 +22,12 @@ pub fn expectLowersToLir(app_body: []const u8) anyerror!void {
     try runToLir(app_body, null);
 }
 
+/// Lower an app at `app_path` to LIR. Reaching the end without a panic means
+/// the app checked cleanly and passed ARC certification.
+pub fn expectAppPathLowersToLir(app_path: []const u8) anyerror!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null);
+}
+
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
 /// a regression that made lowering (e.g. capture order) depend on iteration or
 /// scheduling order would fail here rather than silently.
@@ -93,6 +99,10 @@ fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) anyerror!void {
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
+    try lowerAppPathToLir(gpa, app_path, dump);
+}
+
+fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.Io.Writer) anyerror!void {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();

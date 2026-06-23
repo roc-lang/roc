@@ -280,10 +280,11 @@ test "lower aarch64: pointer-shaped byval layouts use integer registers" {
 
     const box_idx = try store.insertLayout(layout.Layout.box(elem_idx));
     const ptr_idx = try store.insertLayout(layout.Layout.ptr(elem_idx));
-    const call = try lower(arena, &store, .aarch64, &.{ box_idx, ptr_idx }, .i32, false);
+    const call = try lower(arena, &store, .aarch64, &.{ box_idx, ptr_idx }, box_idx, false);
 
     try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.args[0]);
     try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.args[1]);
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.ret);
 }
 
 test "lower x86_64 sysv: Plant in one int eightbyte, mixed struct splits" {
@@ -319,4 +320,20 @@ test "lower win64: 16-byte struct is indirect, Plant is one register" {
     const two_words = try testStruct(&store, &.{ .i64, .i64 });
     const c2 = try lower(arena, &store, .x86_64_windows, &.{two_words}, .i32, false);
     try testing.expectEqual(Placement.indirect, c2.args[0]);
+}
+
+test "lower wasm32: single-variant tag union returns payload register" {
+    var store = try Store.init(testing.allocator, .u32);
+    defer store.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const box_idx = try store.insertLayout(layout.Layout.box(.u64));
+    const wrapped_u64 = try store.putTagUnion(&.{.u64});
+    const call = try lower(arena, &store, .wasm32, &.{ box_idx, box_idx }, wrapped_u64, false);
+
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.ret);
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 4 }}, call.args[0]);
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 4 }}, call.args[1]);
 }

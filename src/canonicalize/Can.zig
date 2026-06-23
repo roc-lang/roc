@@ -889,6 +889,7 @@ fn populateBuiltinAutoImportedTypes(
     // Ident.Idx values are not transferable between stores.
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
+        .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
@@ -943,6 +944,7 @@ pub fn populateModuleEnvs(
 ) Allocator.Error!void {
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
+        .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
@@ -1009,7 +1011,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
+    const builtin_types = [_][]const u8{ "Bool", "ParseTagUnionSpec", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
@@ -1955,7 +1957,10 @@ fn registerTypeDecl(
             if (ast_stmt_idx) |idx| self.parserTypePathForAstStatement(idx) else null,
         );
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
-        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+        break :blk switch (type_decl.kind) {
+            .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+        };
     };
 
     // Canonicalize where clauses if present
@@ -4960,19 +4965,51 @@ fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.Nu
     return null;
 }
 
+fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
+    const import_idx = external.import_idx orelse return false;
+    const import_name_idx = self.env.imports.imports.items.items[@intFromEnum(import_idx)];
+    return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
+}
+
 /// Record, for an explicitly-suffixed numeric literal (e.g. `123.U8` or
-/// `5.Foo`), what its suffix type resolves to in the current scope. The type
+/// `5.Foo`), what its suffix target resolves to in the current scope. The type
 /// checker consumes this so it can unify the literal against the right concrete
 /// type without re-running scope resolution. The caller has already verified
 /// `type_ident` names a type binding in scope.
 fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
     const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
-    if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .builtin = num_kind });
+    const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
+        if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+        } else {
+            try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+        }
         return;
-    }
-    if (try self.scopeLookupOrPrepareTypeDecl(type_ident)) |stmt_idx| {
-        try self.env.recordNumericSuffixType(node_idx, .{ .local = stmt_idx });
+    };
+    switch (binding_location.binding.*) {
+        .local_nominal, .local_alias, .associated_nominal => |stmt_idx| {
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .local = stmt_idx });
+        },
+        .external_nominal => |external| {
+            if (self.externalTypeBindingIsCompilerBuiltin(external)) {
+                if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+                    try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
+                    return;
+                }
+            }
+            const import_idx = external.import_idx orelse {
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+                return;
+            };
+            const target_node_idx = external.target_node_idx orelse {
+                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+                return;
+            };
+            try self.env.recordNumericSuffixTarget(node_idx, .{ .external = .{
+                .import_idx = import_idx,
+                .target_node_idx = target_node_idx,
+            } });
+        },
     }
 }
 
@@ -5983,6 +6020,26 @@ fn introduceItemsAliased(
                 .target = target,
             };
             try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
+
+            // An exposed type is a first-class type binding, exactly like the
+            // module's auto-exposed main type above. This is what lets its
+            // associated functions be reached through the exposed short name
+            // (e.g. `Square.create` after `import Chess exposing [Square]`).
+            if (is_type_name) {
+                if (target.typeDeclNode()) |type_node_idx| {
+                    try self.setExternalTypeBinding(
+                        current_scope,
+                        item_name,
+                        module_name,
+                        exposed_item.name,
+                        self.env.getIdent(exposed_item.name),
+                        type_node_idx,
+                        module_import_idx,
+                        import_region,
+                        .module_was_found,
+                    );
+                }
+            }
         }
     } else {
         // No module_envs provided, introduce all items without validation
@@ -6585,7 +6642,7 @@ fn canonicalizeQualifiedIdentExpr(
     const module_alias = self.parse_ir.tokens.resolveIdentifier(qualifier_tok) orelse return null;
 
     if (qualifier_tokens.len == 1) {
-        if (try self.canonicalizeTypeVarAliasDispatch(module_alias, ident, region)) |expr| {
+        if (try self.canonicalizeTypeDispatchOwner(module_alias, ident, region)) |expr| {
             return expr;
         }
     }
@@ -6614,31 +6671,87 @@ fn canonicalizeQualifiedIdentExpr(
     return try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens);
 }
 
-fn canonicalizeTypeVarAliasDispatch(
+fn canonicalizeTypeDispatchOwner(
     self: *Self,
-    module_alias: Ident.Idx,
-    ident: Ident.Idx,
+    owner_name: Ident.Idx,
+    method_name: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!?CanonicalizedExpr {
-    for (self.scopes.items) |*scope| {
-        switch (scope.lookupTypeVarAlias(module_alias)) {
-            .found => |binding| {
-                const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
-                    .e_type_method_call = .{
-                        .type_var_alias_stmt = binding.statement_idx,
-                        .method_name = ident,
-                        .method_name_region = region,
-                        .args = .{ .span = .{ .start = 0, .len = 0 } },
-                    },
-                }, region);
+    const type_dispatch_stmt = (try self.typeDispatchOwnerStatement(owner_name, method_name)) orelse return null;
+    const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
+        .e_type_method_call = .{
+            .type_dispatch_stmt = type_dispatch_stmt,
+            .method_name = method_name,
+            .method_name_region = region,
+            .args = .{ .span = DataSpan.empty() },
+        },
+    }, region);
 
-                return CanonicalizedExpr{ .idx = dispatch_expr_idx, .free_vars = DataSpan.empty() };
-            },
+    return CanonicalizedExpr{ .idx = dispatch_expr_idx, .free_vars = DataSpan.empty() };
+}
+
+fn typeDispatchOwnerStatement(
+    self: *Self,
+    owner_name: Ident.Idx,
+    method_name: Ident.Idx,
+) std.mem.Allocator.Error!?Statement.Idx {
+    for (self.scopes.items) |*scope| {
+        switch (scope.lookupTypeVarAlias(owner_name)) {
+            .found => |binding| return binding.statement_idx,
             .not_found => {},
         }
     }
 
-    return null;
+    if (!method_name.eql(self.env.idents.parser_for)) return null;
+
+    const binding_location = (try self.scopeLookupOrPrepareTypeBinding(owner_name)) orelse return null;
+    return switch (binding_location.binding.*) {
+        .local_alias => |stmt_idx| stmt_idx,
+        .local_nominal, .associated_nominal, .external_nominal => null,
+    };
+}
+
+fn canonicalizeTypeDispatchApply(
+    self: *Self,
+    stacks: *ExprKernelWork,
+    frame_allocator: std.mem.Allocator,
+    region: Region,
+    owner_name: Ident.Idx,
+    method_name: Ident.Idx,
+    args_span: AST.Expr.Span,
+) std.mem.Allocator.Error!bool {
+    const type_dispatch_stmt = (try self.typeDispatchOwnerStatement(owner_name, method_name)) orelse return false;
+    const args_slice = self.parse_ir.store.exprSlice(args_span);
+    try stacks.pushFinishTypeDispatchApply(frame_allocator, .{
+        .region = region,
+        .type_dispatch_stmt = type_dispatch_stmt,
+        .method_name = method_name,
+        .arg_count = args_slice.len,
+    });
+    var i = args_slice.len;
+    while (i > 0) {
+        i -= 1;
+        try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
+    }
+    return true;
+}
+
+fn canonicalizeTypeDispatchFieldAccess(
+    self: *Self,
+    region: Region,
+    owner_name: Ident.Idx,
+    method_name: Ident.Idx,
+) std.mem.Allocator.Error!?CanonicalizedExpr {
+    const type_dispatch_stmt = (try self.typeDispatchOwnerStatement(owner_name, method_name)) orelse return null;
+    const expr_idx = try self.env.addExpr(CIR.Expr{
+        .e_type_method_call = .{
+            .type_dispatch_stmt = type_dispatch_stmt,
+            .method_name = method_name,
+            .method_name_region = region,
+            .args = .{ .span = DataSpan.empty() },
+        },
+    }, region);
+    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
 }
 
 fn canonicalizeTypeAssociatedLookup(
@@ -6661,6 +6774,29 @@ fn canonicalizeTypeAssociatedLookup(
             if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, type_qualified_idx, region)) |pattern_idx| {
                 return try self.canonicalizedAssociatedLookup(owner_path, pattern_idx, region);
             }
+        }
+
+        // A type imported via `import M exposing [T]` is an `external_nominal`
+        // binding. Its associated functions live in `M` under the
+        // `<M>.<T>.<method>` exposed name, reached through the binding's import.
+        switch (binding_location.binding.*) {
+            .external_nominal => |ext| {
+                if (self.lookupAvailableModuleEnv(ext.module_ident)) |external_type_env| {
+                    const module_env = external_type_env.env;
+                    const original_type_text = self.env.getIdent(ext.original_ident);
+                    const qualified_type_idx = try self.insertQualifiedIdent(module_env.module_name, original_type_text);
+                    const fully_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(qualified_type_idx), field_text);
+                    const qualified_text = self.env.getIdent(fully_qualified_idx);
+
+                    if (module_env.common.findIdent(qualified_text)) |qname_ident| {
+                        if (module_env.getExposedValueNodeIndexById(qname_ident)) |target_node_idx| {
+                            const import_idx = ext.import_idx orelse try self.getOrCreateAutoImportIdent(ext.module_ident);
+                            return try self.canonicalizedExternalLookup(import_idx, target_node_idx, type_qualified_idx, region);
+                        }
+                    }
+                }
+            },
+            else => {},
         }
     }
 
@@ -7605,6 +7741,10 @@ const DefiniteInitAnalyzer = struct {
                 _ = try self.analyzeExpr(ret.expr, state, breaks);
                 break :blk false;
             },
+            .e_break => blk: {
+                try breaks.append(self.allocator, try state.clone(self.allocator));
+                break :blk false;
+            },
             .e_for => |for_| try self.analyzeForLike(for_.expr, for_.body, state, breaks),
             .e_run_low_level => |run| try self.analyzeExprSpan(run.args, state, breaks),
         };
@@ -7943,21 +8083,21 @@ fn canonicalizeBlockTypeDeclStatement(
 ) std.mem.Allocator.Error!BlockTypeDeclStatementResult {
     const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
-    const is_type_var_alias = type_var_alias_check: {
-        if (type_decl.kind != .alias) break :type_var_alias_check false;
-        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch break :type_var_alias_check false;
+    const is_type_var_alias = type_dispatch_check: {
+        if (type_decl.kind != .alias) break :type_dispatch_check false;
+        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch break :type_dispatch_check false;
         const header_args = self.parse_ir.store.typeAnnoSlice(ast_header.args);
-        if (header_args.len > 0) break :type_var_alias_check false;
+        if (header_args.len > 0) break :type_dispatch_check false;
 
         const ast_anno = self.parse_ir.store.getTypeAnno(type_decl.anno);
-        if (ast_anno != .ty_var) break :type_var_alias_check false;
+        if (ast_anno != .ty_var) break :type_dispatch_check false;
 
         const type_var_tok = ast_anno.ty_var.tok;
-        const type_var_ident = self.parse_ir.tokens.resolveIdentifier(type_var_tok) orelse break :type_var_alias_check false;
+        const type_var_ident = self.parse_ir.tokens.resolveIdentifier(type_var_tok) orelse break :type_dispatch_check false;
         const lookup_result = self.scopeLookupTypeVar(type_var_ident);
-        if (lookup_result != .found) break :type_var_alias_check false;
+        if (lookup_result != .found) break :type_dispatch_check false;
 
-        break :type_var_alias_check true;
+        break :type_dispatch_check true;
     };
 
     if (is_type_var_alias) {
@@ -8021,7 +8161,10 @@ fn canonicalizeBlockTypeDeclStatement(
             self.parserTypePathForAstStatement(ast_stmt_idx),
         );
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
-        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+        break :blk switch (type_decl.kind) {
+            .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+        };
     };
 
     const type_decl_stmt: Statement = switch (type_decl.kind) {
@@ -8219,9 +8362,10 @@ fn canonicalizeStandaloneBlockStatement(
         .@"break" => |break_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
             if (self.loop_depth == 0) {
-                _ = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
+                const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
                     .region = region,
                 } });
+                return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
             }
 
             const stmt_idx = try self.env.addStatement(Statement{ .s_break = .{} }, region);
@@ -8760,6 +8904,12 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         }
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = ret.expr, .loop_depth = expr_frame.loop_depth } });
                     },
+                    .e_break => {
+                        if (expr_frame.loop_depth == 0) {
+                            facts.has_loop_owned_break = true;
+                            return facts;
+                        }
+                    },
                     .e_crash => {
                         facts.has_exit = true;
                     },
@@ -9205,6 +9355,16 @@ fn runExprKernel(
                     const ellipsis_expr = try self.env.addExpr(Expr{ .e_ellipsis = .{} }, region);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = ellipsis_expr, .free_vars = DataSpan.empty() });
                 },
+                .@"break" => |b| {
+                    const region = self.parse_ir.tokenizedRegionToRegion(b.region);
+                    const break_expr = if (self.loop_depth == 0)
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .break_outside_loop = .{
+                            .region = region,
+                        } })
+                    else
+                        try self.env.addExpr(Expr{ .e_break = .{} }, region);
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = break_expr, .free_vars = DataSpan.empty() });
+                },
                 .list => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const items_slice = self.parse_ir.store.exprSlice(e.items);
@@ -9322,6 +9482,15 @@ fn runExprKernel(
                             try stacks.pushParse(frame_allocator, .{ .idx = fields[field_i].value_expr_idx, .target = .scratch });
                         }
                     }
+                },
+                .nominal_record => |nr| {
+                    const region = self.parse_ir.tokenizedRegionToRegion(nr.region);
+                    try stacks.pushFinishNominalRecord(frame_allocator, .{
+                        .region = region,
+                        .mapper = nr.mapper,
+                        .captures_top = self.scratch_captures.top(),
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = nr.backing, .target = .scratch });
                 },
                 .record_builder => |rb| {
                     const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
@@ -9450,6 +9619,9 @@ fn runExprKernel(
                     const saved_in_expect = self.in_expect;
                     self.in_expect = false;
 
+                    const saved_loop_depth = self.loop_depth;
+                    self.loop_depth = 0;
+
                     const saved_defining_patterns_start = self.defining_patterns_start;
                     const saved_defining_pattern = self.defining_pattern;
                     self.defining_patterns_start = null;
@@ -9464,6 +9636,7 @@ fn runExprKernel(
                         .captures_top = self.scratch_captures.top(),
                         .saved_enclosing_lambda = saved_enclosing_lambda,
                         .saved_in_expect = saved_in_expect,
+                        .saved_loop_depth = saved_loop_depth,
                         .saved_defining_patterns_start = saved_defining_patterns_start,
                         .saved_defining_pattern = saved_defining_pattern,
                     });
@@ -9619,6 +9792,12 @@ fn runExprKernel(
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e.expr, .target = .scratch });
                 },
+                .@"return" => |e| {
+                    try stacks.pushFinishReturn(frame_allocator, .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = e.expr, .target = .scratch });
+                },
                 .suffix_single_question => |e| {
                     try stacks.pushFinishSuffixSingleQuestion(frame_allocator, .{
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
@@ -9752,71 +9931,44 @@ fn runExprKernel(
                     if (left_expr == .ident) {
                         const left_ident = left_expr.ident;
                         if (self.parse_ir.tokens.resolveIdentifier(left_ident.token)) |left_name| {
-                            switch (self.currentScope().lookupTypeVarAlias(left_name)) {
-                                .found => |binding| {
-                                    const right_expr = self.parse_ir.store.getExpr(e.right);
-                                    switch (right_expr) {
-                                        .apply => |apply| {
-                                            const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
-                                            if (method_expr == .ident) {
-                                                const method_name = self.parse_ir.tokens.resolveIdentifier(method_expr.ident.token) orelse {
-                                                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                                                        .region = region,
-                                                    } });
-                                                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                                                    scheduled_field_access = true;
-                                                    continue :expr_kernel_loop .dispatch;
-                                                };
-                                                const args_slice = self.parse_ir.store.exprSlice(apply.args);
-                                                try stacks.pushFinishTypeVarApply(frame_allocator, .{
-                                                    .region = region,
-                                                    .type_var_alias_stmt = binding.statement_idx,
-                                                    .method_name = method_name,
-                                                    .arg_count = args_slice.len,
-                                                });
-                                                var i = args_slice.len;
-                                                while (i > 0) {
-                                                    i -= 1;
-                                                    try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
-                                                }
-                                            } else {
-                                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                                                    .region = region,
-                                                } });
-                                                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                                            }
-                                            scheduled_field_access = true;
-                                        },
-                                        .ident => |right_ident| {
-                                            const method_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse {
-                                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                                                    .region = region,
-                                                } });
-                                                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                                                scheduled_field_access = true;
-                                                continue :expr_kernel_loop .dispatch;
-                                            };
-                                            const expr_idx = try self.env.addExpr(CIR.Expr{
-                                                .e_type_method_call = .{
-                                                    .type_var_alias_stmt = binding.statement_idx,
-                                                    .method_name = method_name,
-                                                    .method_name_region = region,
-                                                    .args = .{ .span = DataSpan.empty() },
-                                                },
-                                            }, region);
-                                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
-                                            scheduled_field_access = true;
-                                        },
-                                        else => {
+                            const right_expr = self.parse_ir.store.getExpr(e.right);
+                            switch (right_expr) {
+                                .apply => |apply| {
+                                    const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
+                                    if (method_expr == .ident) {
+                                        const method_name = self.parse_ir.tokens.resolveIdentifier(method_expr.ident.token) orelse {
                                             const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                                                 .region = region,
                                             } });
                                             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
                                             scheduled_field_access = true;
-                                        },
+                                            continue :expr_kernel_loop .dispatch;
+                                        };
+                                        scheduled_field_access = try self.canonicalizeTypeDispatchApply(
+                                            &stacks,
+                                            frame_allocator,
+                                            region,
+                                            left_name,
+                                            method_name,
+                                            apply.args,
+                                        );
                                     }
                                 },
-                                .not_found => {},
+                                .ident => |right_ident| {
+                                    const method_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse {
+                                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                                            .region = region,
+                                        } });
+                                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                                        scheduled_field_access = true;
+                                        continue :expr_kernel_loop .dispatch;
+                                    };
+                                    if (try self.canonicalizeTypeDispatchFieldAccess(region, left_name, method_name)) |type_dispatch_expr| {
+                                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, type_dispatch_expr);
+                                        scheduled_field_access = true;
+                                    }
+                                },
+                                else => {},
                             }
 
                             if (!scheduled_field_access) {
@@ -9921,41 +10073,27 @@ fn runExprKernel(
                         continue :expr_kernel_loop .dispatch;
                     }
 
-                    var scheduled_type_var_apply = false;
+                    var scheduled_type_dispatch_apply = false;
                     if (ast_fn == .ident) {
                         const ident_expr = ast_fn.ident;
                         const qualifier_tokens = self.parse_ir.store.tokenSlice(ident_expr.qualifiers);
                         if (qualifier_tokens.len == 1) {
                             const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
-                            if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |alias_name| {
-                                for (self.scopes.items) |*scope| {
-                                    const lookup_result = scope.lookupTypeVarAlias(alias_name);
-                                    switch (lookup_result) {
-                                        .found => |binding| {
-                                            if (self.parse_ir.tokens.resolveIdentifier(ident_expr.token)) |method_name| {
-                                                const args_slice = self.parse_ir.store.exprSlice(e.args);
-                                                try stacks.pushFinishTypeVarApply(frame_allocator, .{
-                                                    .region = region,
-                                                    .type_var_alias_stmt = binding.statement_idx,
-                                                    .method_name = method_name,
-                                                    .arg_count = args_slice.len,
-                                                });
-                                                var i = args_slice.len;
-                                                while (i > 0) {
-                                                    i -= 1;
-                                                    try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
-                                                }
-                                                scheduled_type_var_apply = true;
-                                                break;
-                                            }
-                                        },
-                                        .not_found => {},
-                                    }
+                            if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |owner_name| {
+                                if (self.parse_ir.tokens.resolveIdentifier(ident_expr.token)) |method_name| {
+                                    scheduled_type_dispatch_apply = try self.canonicalizeTypeDispatchApply(
+                                        &stacks,
+                                        frame_allocator,
+                                        region,
+                                        owner_name,
+                                        method_name,
+                                        e.args,
+                                    );
                                 }
                             }
                         }
                     }
-                    if (scheduled_type_var_apply) {
+                    if (scheduled_type_dispatch_apply) {
                         continue :expr_kernel_loop .dispatch;
                     }
 
@@ -10394,9 +10532,12 @@ fn runExprKernel(
                 .@"break" => |break_stmt| {
                     const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
                     if (self.loop_depth == 0) {
-                        _ = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
+                        const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
                             .region = region,
                         } });
+                        try self.addBlockStatement(blockContextFromState(work), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() });
+                        try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
+                        continue :expr_kernel_loop .dispatch;
                     }
 
                     const stmt_idx = try self.env.addStatement(Statement{
@@ -10910,6 +11051,32 @@ fn runExprKernel(
 
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars });
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_return => {
+            const state = stacks.takeFinishReturn();
+            const result_start = child_slots.items.len - 1;
+            const can_inner = child_slots.items[result_start].expr orelse {
+                child_slots.shrinkRetainingCapacity(result_start);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
+                continue :expr_kernel_loop .dispatch;
+            };
+
+            const return_expr = if (self.enclosing_lambda) |lambda_idx|
+                try self.env.addExpr(Expr{ .e_return = .{
+                    .expr = can_inner.idx,
+                    .lambda = lambda_idx,
+                    .context = .return_expr,
+                } }, state.region)
+            else
+                try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                    .region = state.region,
+                    .context = .return_expr,
+                } });
+
+            child_slots.shrinkRetainingCapacity(result_start);
+            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = return_expr, .free_vars = can_inner.free_vars });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -11445,8 +11612,8 @@ fn runExprKernel(
 
             continue :expr_kernel_loop .dispatch;
         },
-        .finish_type_var_apply => {
-            const state = stacks.takeFinishTypeVarApply();
+        .finish_type_dispatch_apply => {
+            const state = stacks.takeFinishTypeDispatchApply();
             const result_start = child_slots.items.len - state.arg_count;
             const child_slice = child_slots.items[result_start..];
 
@@ -11459,7 +11626,7 @@ fn runExprKernel(
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
             const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{ .e_type_method_call = .{
-                .type_var_alias_stmt = state.type_var_alias_stmt,
+                .type_dispatch_stmt = state.type_dispatch_stmt,
                 .method_name = state.method_name,
                 .method_name_region = state.region,
                 .args = args_span,
@@ -11525,6 +11692,25 @@ fn runExprKernel(
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span });
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_nominal_record => {
+            const state = stacks.takeFinishNominalRecord();
+            defer self.scratch_captures.clearFrom(state.captures_top);
+
+            const result_start = child_slots.items.len - 1;
+            const backing_expr = child_slots.items[result_start].expr orelse blk: {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = state.region,
+                } });
+                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            };
+
+            const result_expr = try self.finishNominalRecordExpr(state.mapper, backing_expr.idx, state.region, backing_expr.free_vars);
+
+            child_slots.shrinkRetainingCapacity(result_start);
+            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, result_expr);
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -11620,6 +11806,7 @@ fn runExprKernel(
             defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.enclosing_lambda = state.saved_enclosing_lambda;
             defer self.in_expect = state.saved_in_expect;
+            defer self.loop_depth = state.saved_loop_depth;
             defer self.defining_patterns_start = state.saved_defining_patterns_start;
             defer self.defining_pattern = state.saved_defining_pattern;
             defer self.scratch_captures.clearFrom(state.captures_top);
@@ -12255,10 +12442,33 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         },
     }, region);
 
+    if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| {
+        const bool_stmt_idx = bool_info.statement_idx orelse {
+            @panic("Builtin Bool had no statement during boolean operator canonicalization");
+        };
+        const target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse {
+            @panic("Builtin Bool had no target node during boolean operator canonicalization");
+        };
+        const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
+        const import_idx = try self.env.imports.getOrPutWithIdent(
+            self.env.gpa,
+            self.env.common.getStringStore(),
+            CIR.Import.compiler_builtin_import_name,
+            builtin_ident,
+        );
+        return try self.env.addExpr(CIR.Expr{
+            .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, region);
+    }
+
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.bool)) orelse {
         @panic("Bool type binding was absent during boolean operator canonicalization");
     };
-
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
@@ -12920,6 +13130,32 @@ fn lookupImportedExposedTypeNode(
     return target.typeDeclNode();
 }
 
+fn lookupImportedTypeDeclNode(
+    self: *Self,
+    imported_env: *const ModuleEnv,
+    item_text: []const u8,
+) std.mem.Allocator.Error!?u32 {
+    const scratch_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(scratch_top);
+
+    const module_qualified_text = try self.scratchQualifiedText(imported_env.module_name, item_text);
+    const qualified_ident = imported_env.common.findIdent(module_qualified_text) orelse
+        imported_env.common.findIdent(item_text) orelse
+        return null;
+
+    for (imported_env.store.sliceStatements(imported_env.all_statements)) |stmt_idx| {
+        const header_idx = switch (imported_env.store.getStatement(stmt_idx)) {
+            .s_nominal_decl => |decl| decl.header,
+            .s_alias_decl => |alias| alias.header,
+            else => continue,
+        };
+        const header = imported_env.store.getTypeHeader(header_idx);
+        if (header.name.eql(qualified_ident)) return @intFromEnum(stmt_idx);
+    }
+
+    return null;
+}
+
 fn lookupExposedTargetByText(
     imported_env: *const ModuleEnv,
     type_text: []const u8,
@@ -12931,6 +13167,246 @@ fn lookupExposedTargetByText(
     }
 
     return null;
+}
+
+fn finishNominalRecordExpr(
+    self: *Self,
+    mapper_idx: AST.Expr.Idx,
+    backing_expr_idx: Expr.Idx,
+    region: Region,
+    free_vars: DataSpan,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const mapper = self.parse_ir.store.getExpr(mapper_idx);
+    return switch (mapper) {
+        .tag => |tag| try self.finishNominalRecordForType(tag, backing_expr_idx, region, free_vars),
+        else => CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        },
+    };
+}
+
+fn finishNominalRecordForType(
+    self: *Self,
+    type_expr: AST.TagExpr,
+    backing_expr_idx: Expr.Idx,
+    region: Region,
+    free_vars: DataSpan,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const type_region = self.parse_ir.tokens.resolve(type_expr.token);
+
+    if (type_expr.qualifiers.span.len == 0) {
+        const type_ident = self.parse_ir.tokens.resolveIdentifier(type_expr.token) orelse {
+            return CanonicalizedExpr{
+                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = region,
+                } }),
+                .free_vars = DataSpan.empty(),
+            };
+        };
+
+        if (try self.scopeLookupOrPrepareTypeDecl(type_ident)) |nominal_type_decl_stmt_idx| {
+            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                .s_nominal_decl => {
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_nominal = .{
+                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                            .backing_expr = backing_expr_idx,
+                            .backing_type = .record,
+                        },
+                    }, region);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
+                },
+                .s_alias_decl => {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = type_ident,
+                            .region = type_region,
+                        } }),
+                        .free_vars = DataSpan.empty(),
+                    };
+                },
+                else => {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                            .region = type_region,
+                        } }),
+                        .free_vars = DataSpan.empty(),
+                    };
+                },
+            }
+        }
+
+        if (self.scopeLookupExposedItem(type_ident)) |exposed_info| {
+            const module_name = exposed_info.module_name;
+            const import_idx = self.scopeLookupImportedModule(module_name) orelse {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                        .module_name = module_name,
+                        .region = region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            };
+            const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = type_ident,
+                        .region = type_region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            };
+            const target_node_idx = blk: {
+                if (exposed_info.target) |target| {
+                    if (target.typeDeclNode()) |node_idx| break :blk node_idx;
+                } else {
+                    const original_name_text = self.env.getIdent(exposed_info.original_name);
+                    if (try self.lookupImportedExposedTypeNode(imported_type.env, original_name_text)) |node_idx| break :blk node_idx;
+                }
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = type_ident,
+                        .region = type_region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            };
+            if (try self.validateImportedNominalTagTarget(Expr.Idx, imported_type.env, target_node_idx, module_name, type_ident, type_region)) |malformed_idx| {
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            }
+            const expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_nominal_external = .{
+                    .module_idx = import_idx,
+                    .target_node_idx = target_node_idx,
+                    .backing_expr = backing_expr_idx,
+                    .backing_type = .record,
+                },
+            }, region);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
+        }
+
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                .name = type_ident,
+                .region = type_region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    }
+
+    const qualifier_toks = self.parse_ir.store.tokenSlice(type_expr.qualifiers);
+    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+    const first_tok_idx = qualifier_toks[0];
+    const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse {
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    };
+    const is_imported = self.scopeLookupModule(first_tok_ident) != null;
+    const full_type_name = self.parse_ir.resolveQualifiedName(type_expr.qualifiers, type_expr.token, &strip_tokens);
+
+    if (!is_imported) {
+        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
+        const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) orelse {
+            return CanonicalizedExpr{
+                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                    .name = full_type_ident,
+                    .region = type_region,
+                } }),
+                .free_vars = DataSpan.empty(),
+            };
+        };
+
+        switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+            .s_nominal_decl => {
+                const expr_idx = try self.env.addExpr(CIR.Expr{
+                    .e_nominal = .{
+                        .nominal_type_decl = nominal_type_decl_stmt_idx,
+                        .backing_expr = backing_expr_idx,
+                        .backing_type = .record,
+                    },
+                }, region);
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
+            },
+            .s_alias_decl => {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                        .name = full_type_ident,
+                        .region = type_region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            },
+            else => {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                        .region = type_region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            },
+        }
+    }
+
+    const module_info = self.scopeLookupModule(first_tok_ident).?;
+    const module_name = module_info.module_name;
+    const import_idx = self.scopeLookupImportedModule(module_name) orelse {
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                .module_name = module_name,
+                .region = region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    };
+
+    const first_alias_len = self.env.getIdent(first_tok_ident).len;
+    std.debug.assert(full_type_name.len > first_alias_len);
+    std.debug.assert(full_type_name[first_alias_len] == '.');
+    const type_name = full_type_name[first_alias_len + 1 ..];
+    const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
+    const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                .module_name = module_name,
+                .type_name = type_name_ident,
+                .region = type_region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    };
+    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_name)) orelse {
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                .module_name = module_name,
+                .type_name = type_name_ident,
+                .region = type_region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    };
+
+    if (try self.validateImportedNominalTagTarget(Expr.Idx, imported_type.env, target_node_idx, module_name, type_name_ident, type_region)) |malformed_idx| {
+        return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+    }
+
+    const expr_idx = try self.env.addExpr(CIR.Expr{
+        .e_nominal_external = .{
+            .module_idx = import_idx,
+            .target_node_idx = target_node_idx,
+            .backing_expr = backing_expr_idx,
+            .backing_type = .record,
+        },
+    }, region);
+    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
 }
 
 fn finishTagExprWithArgs(
@@ -14117,6 +14593,7 @@ const ExprKernelLabel = enum {
     finish_list,
     finish_tuple,
     finish_dbg,
+    finish_return,
     finish_tuple_access,
     finish_unary,
     finish_suffix_single_question,
@@ -14130,11 +14607,12 @@ const ExprKernelLabel = enum {
     finish_module_qualified_call,
     finish_apply,
     finish_tag,
-    finish_type_var_apply,
+    finish_type_dispatch_apply,
     finish_record,
     finish_lambda,
     finish_if_then_else,
     finish_if_without_else,
+    finish_nominal_record,
     finish_record_builder,
     for_after_list,
     finish_for_expr,
@@ -14334,6 +14812,10 @@ const ExprFinishDbgWork = struct {
     region: Region,
 };
 
+const ExprFinishReturnWork = struct {
+    region: Region,
+};
+
 const ExprFinishTupleAccessWork = struct {
     region: Region,
     free_vars_start: u32,
@@ -14416,9 +14898,9 @@ const ExprFinishTagWork = struct {
     arg_count: usize,
 };
 
-const ExprFinishTypeVarApplyWork = struct {
+const ExprFinishTypeDispatchApplyWork = struct {
     region: Region,
-    type_var_alias_stmt: Statement.Idx,
+    type_dispatch_stmt: Statement.Idx,
     method_name: Ident.Idx,
     arg_count: usize,
 };
@@ -14439,6 +14921,7 @@ const ExprFinishLambdaWork = struct {
     captures_top: u32,
     saved_enclosing_lambda: ?Expr.Idx,
     saved_in_expect: bool,
+    saved_loop_depth: u32,
     saved_defining_patterns_start: ?u32,
     saved_defining_pattern: ?Pattern.Idx,
 };
@@ -14465,6 +14948,12 @@ const ExprFinishRecordBuilderWork = struct {
     captures_top: u32,
     fields: []const ExprRecordBuilderFieldWork,
     explicit_value_count: usize,
+};
+
+const ExprFinishNominalRecordWork = struct {
+    region: Region,
+    mapper: AST.Expr.Idx,
+    captures_top: u32,
 };
 
 const ExprForAfterListWork = struct {
@@ -14571,6 +15060,7 @@ const ExprKernelWork = struct {
     finish_list: std.ArrayList(ExprFinishListWork) = .empty,
     finish_tuple: std.ArrayList(ExprFinishTupleWork) = .empty,
     finish_dbg: std.ArrayList(ExprFinishDbgWork) = .empty,
+    finish_return: std.ArrayList(ExprFinishReturnWork) = .empty,
     finish_tuple_access: std.ArrayList(ExprFinishTupleAccessWork) = .empty,
     finish_unary: std.ArrayList(ExprFinishUnaryWork) = .empty,
     finish_suffix_single_question: std.ArrayList(ExprFinishSuffixSingleQuestionWork) = .empty,
@@ -14584,11 +15074,12 @@ const ExprKernelWork = struct {
     finish_module_qualified_call: std.ArrayList(ExprFinishModuleQualifiedCallWork) = .empty,
     finish_apply: std.ArrayList(ExprFinishApplyWork) = .empty,
     finish_tag: std.ArrayList(ExprFinishTagWork) = .empty,
-    finish_type_var_apply: std.ArrayList(ExprFinishTypeVarApplyWork) = .empty,
+    finish_type_dispatch_apply: std.ArrayList(ExprFinishTypeDispatchApplyWork) = .empty,
     finish_record: std.ArrayList(ExprFinishRecordWork) = .empty,
     finish_lambda: std.ArrayList(ExprFinishLambdaWork) = .empty,
     finish_if_then_else: std.ArrayList(ExprFinishIfThenElseWork) = .empty,
     finish_if_without_else: std.ArrayList(ExprFinishIfWithoutElseWork) = .empty,
+    finish_nominal_record: std.ArrayList(ExprFinishNominalRecordWork) = .empty,
     finish_record_builder: std.ArrayList(ExprFinishRecordBuilderWork) = .empty,
     for_after_list: std.ArrayList(ExprForAfterListWork) = .empty,
     finish_for_expr: std.ArrayList(ExprFinishForExprWork) = .empty,
@@ -14623,6 +15114,7 @@ const ExprKernelWork = struct {
             .finish_list => _ = self.takeFinishList(),
             .finish_tuple => _ = self.takeFinishTuple(),
             .finish_dbg => _ = self.takeFinishDbg(),
+            .finish_return => _ = self.takeFinishReturn(),
             .finish_tuple_access => _ = self.takeFinishTupleAccess(),
             .finish_unary => _ = self.takeFinishUnary(),
             .finish_suffix_single_question => _ = self.takeFinishSuffixSingleQuestion(),
@@ -14636,11 +15128,12 @@ const ExprKernelWork = struct {
             .finish_module_qualified_call => _ = self.takeFinishModuleQualifiedCall(),
             .finish_apply => _ = self.takeFinishApply(),
             .finish_tag => _ = self.takeFinishTag(),
-            .finish_type_var_apply => _ = self.takeFinishTypeVarApply(),
+            .finish_type_dispatch_apply => _ = self.takeFinishTypeDispatchApply(),
             .finish_record => _ = self.takeFinishRecord(),
             .finish_lambda => _ = self.takeFinishLambda(),
             .finish_if_then_else => _ = self.takeFinishIfThenElse(),
             .finish_if_without_else => _ = self.takeFinishIfWithoutElse(),
+            .finish_nominal_record => _ = self.takeFinishNominalRecord(),
             .finish_record_builder => _ = self.takeFinishRecordBuilder(),
             .for_after_list => _ = self.takeForAfterList(),
             .finish_for_expr => _ = self.takeFinishForExpr(),
@@ -14704,6 +15197,7 @@ const ExprKernelWork = struct {
         self.finish_list.deinit(allocator);
         self.finish_tuple.deinit(allocator);
         self.finish_dbg.deinit(allocator);
+        self.finish_return.deinit(allocator);
         self.finish_tuple_access.deinit(allocator);
         self.finish_unary.deinit(allocator);
         self.finish_suffix_single_question.deinit(allocator);
@@ -14717,11 +15211,12 @@ const ExprKernelWork = struct {
         self.finish_module_qualified_call.deinit(allocator);
         self.finish_apply.deinit(allocator);
         self.finish_tag.deinit(allocator);
-        self.finish_type_var_apply.deinit(allocator);
+        self.finish_type_dispatch_apply.deinit(allocator);
         self.finish_record.deinit(allocator);
         self.finish_lambda.deinit(allocator);
         self.finish_if_then_else.deinit(allocator);
         self.finish_if_without_else.deinit(allocator);
+        self.finish_nominal_record.deinit(allocator);
         self.finish_record_builder.deinit(allocator);
         self.for_after_list.deinit(allocator);
         self.finish_for_expr.deinit(allocator);
@@ -14758,6 +15253,7 @@ const ExprKernelWork = struct {
         self.finish_list.clearRetainingCapacity();
         self.finish_tuple.clearRetainingCapacity();
         self.finish_dbg.clearRetainingCapacity();
+        self.finish_return.clearRetainingCapacity();
         self.finish_tuple_access.clearRetainingCapacity();
         self.finish_unary.clearRetainingCapacity();
         self.finish_suffix_single_question.clearRetainingCapacity();
@@ -14771,11 +15267,12 @@ const ExprKernelWork = struct {
         self.finish_module_qualified_call.clearRetainingCapacity();
         self.finish_apply.clearRetainingCapacity();
         self.finish_tag.clearRetainingCapacity();
-        self.finish_type_var_apply.clearRetainingCapacity();
+        self.finish_type_dispatch_apply.clearRetainingCapacity();
         self.finish_record.clearRetainingCapacity();
         self.finish_lambda.clearRetainingCapacity();
         self.finish_if_then_else.clearRetainingCapacity();
         self.finish_if_without_else.clearRetainingCapacity();
+        self.finish_nominal_record.clearRetainingCapacity();
         self.finish_record_builder.clearRetainingCapacity();
         self.for_after_list.clearRetainingCapacity();
         self.finish_for_expr.clearRetainingCapacity();
@@ -14929,6 +15426,12 @@ const ExprKernelWork = struct {
         try self.pushLabel(allocator, .finish_dbg, self.current_target);
     }
 
+    inline fn pushFinishReturn(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishReturnWork) std.mem.Allocator.Error!void {
+        try self.finish_return.append(allocator, item);
+        errdefer _ = self.finish_return.pop();
+        try self.pushLabel(allocator, .finish_return, self.current_target);
+    }
+
     inline fn pushFinishTupleAccess(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishTupleAccessWork) std.mem.Allocator.Error!void {
         try self.finish_tuple_access.append(allocator, item);
         errdefer _ = self.finish_tuple_access.pop();
@@ -15007,10 +15510,10 @@ const ExprKernelWork = struct {
         try self.pushLabel(allocator, .finish_tag, self.current_target);
     }
 
-    inline fn pushFinishTypeVarApply(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishTypeVarApplyWork) std.mem.Allocator.Error!void {
-        try self.finish_type_var_apply.append(allocator, item);
-        errdefer _ = self.finish_type_var_apply.pop();
-        try self.pushLabel(allocator, .finish_type_var_apply, self.current_target);
+    inline fn pushFinishTypeDispatchApply(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishTypeDispatchApplyWork) std.mem.Allocator.Error!void {
+        try self.finish_type_dispatch_apply.append(allocator, item);
+        errdefer _ = self.finish_type_dispatch_apply.pop();
+        try self.pushLabel(allocator, .finish_type_dispatch_apply, self.current_target);
     }
 
     inline fn pushFinishRecord(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishRecordWork) std.mem.Allocator.Error!void {
@@ -15035,6 +15538,12 @@ const ExprKernelWork = struct {
         try self.finish_if_without_else.append(allocator, item);
         errdefer _ = self.finish_if_without_else.pop();
         try self.pushLabel(allocator, .finish_if_without_else, self.current_target);
+    }
+
+    inline fn pushFinishNominalRecord(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishNominalRecordWork) std.mem.Allocator.Error!void {
+        try self.finish_nominal_record.append(allocator, item);
+        errdefer _ = self.finish_nominal_record.pop();
+        try self.pushLabel(allocator, .finish_nominal_record, self.current_target);
     }
 
     inline fn pushFinishRecordBuilder(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishRecordBuilderWork) std.mem.Allocator.Error!void {
@@ -15177,6 +15686,10 @@ const ExprKernelWork = struct {
         return self.finish_dbg.pop() orelse unreachable;
     }
 
+    inline fn takeFinishReturn(self: *ExprKernelWork) ExprFinishReturnWork {
+        return self.finish_return.pop() orelse unreachable;
+    }
+
     inline fn takeFinishTupleAccess(self: *ExprKernelWork) ExprFinishTupleAccessWork {
         return self.finish_tuple_access.pop() orelse unreachable;
     }
@@ -15229,8 +15742,8 @@ const ExprKernelWork = struct {
         return self.finish_tag.pop() orelse unreachable;
     }
 
-    inline fn takeFinishTypeVarApply(self: *ExprKernelWork) ExprFinishTypeVarApplyWork {
-        return self.finish_type_var_apply.pop() orelse unreachable;
+    inline fn takeFinishTypeDispatchApply(self: *ExprKernelWork) ExprFinishTypeDispatchApplyWork {
+        return self.finish_type_dispatch_apply.pop() orelse unreachable;
     }
 
     inline fn takeFinishRecord(self: *ExprKernelWork) ExprFinishRecordWork {
@@ -15247,6 +15760,10 @@ const ExprKernelWork = struct {
 
     inline fn takeFinishIfWithoutElse(self: *ExprKernelWork) ExprFinishIfWithoutElseWork {
         return self.finish_if_without_else.pop() orelse unreachable;
+    }
+
+    inline fn takeFinishNominalRecord(self: *ExprKernelWork) ExprFinishNominalRecordWork {
+        return self.finish_nominal_record.pop() orelse unreachable;
     }
 
     inline fn takeFinishRecordBuilder(self: *ExprKernelWork) ExprFinishRecordBuilderWork {
@@ -16154,6 +16671,12 @@ fn scopeIntroduceVar(
 const TypeAnnoCtx = struct {
     type: TypeAnnoCtxType,
     found_underscore: bool,
+    /// When this annotation is the top-level backing of a nominal (or opaque)
+    /// type declaration, this holds that backing annotation's AST index. A
+    /// record annotation may contain unnamed fields (`_` / `_name`) only when it
+    /// is exactly this node; nested records (e.g. a field's type) never match,
+    /// so the comparison is self-scoping with no need to clear on descent.
+    nominal_backing_anno: ?AST.TypeAnno.Idx = null,
 
     const TypeAnnoCtxType = enum(u2) {
         /// Regular type declarations - no new type vars can be introduced
@@ -16166,6 +16689,10 @@ const TypeAnnoCtx = struct {
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
         return .{ .type = typ, .found_underscore = false };
+    }
+
+    pub fn initNominalBacking(backing_anno: AST.TypeAnno.Idx) TypeAnnoCtx {
+        return .{ .type = .type_decl_anno, .found_underscore = false, .nominal_backing_anno = backing_anno };
     }
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
@@ -16184,6 +16711,28 @@ const TypeAnnoCtx = struct {
 
 fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_type: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!TypeAnno.Idx {
     var ctx = TypeAnnoCtx.init(type_anno_ctx_type);
+    return runTypeAnnoKernel(self, anno_idx, &ctx);
+}
+
+/// Canonicalize the top-level backing annotation of a nominal/opaque type
+/// declaration, allowing unnamed record fields (`_` / `_name`) directly inside
+/// that backing record. Used in place of `canonicalizeTypeAnno(.type_decl_anno)`
+/// for nominal/opaque declarations (aliases keep the plain entry point so they
+/// reject unnamed fields).
+fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
+    // The backing record may be wrapped in parentheses (e.g. `Foo := ({ ... })`).
+    // The kernel descends through parens and compares each record against the
+    // backing AST index, so point the comparison at the unwrapped node it will
+    // actually reach — otherwise the inner record's unnamed fields are mistaken
+    // for a structural record and rejected.
+    var backing_anno = anno_idx;
+    while (true) {
+        switch (self.parse_ir.store.getTypeAnno(backing_anno)) {
+            .parens => |parens| backing_anno = parens.anno,
+            else => break,
+        }
+    }
+    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno);
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 
@@ -16245,6 +16794,9 @@ const TypeAnnoKernelRecordNextWork = struct {
     field_index: usize,
     scratch_top: u32,
     scratch_record_fields_top: u32,
+    /// True when this record is the top-level backing of a nominal/opaque
+    /// declaration, where unnamed fields (`_` / `_name`) are permitted.
+    is_nominal_backing: bool,
 };
 const TypeAnnoKernelRecordAfterFieldWork = struct {
     record: @TypeOf(@as(AST.TypeAnno, undefined).record),
@@ -16254,6 +16806,10 @@ const TypeAnnoKernelRecordAfterFieldWork = struct {
     scratch_record_fields_top: u32,
     field_name: Ident.Idx,
     field_region: Region,
+    is_nominal_backing: bool,
+    /// True when this field is unnamed padding (kept in the canonical record
+    /// annotation but excluded from the backing record row).
+    is_unnamed: bool,
 };
 const TypeAnnoKernelRecordAfterNamedExtWork = struct {
     region: Region,
@@ -16688,12 +17244,17 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     }
                 },
                 .record => |record| {
+                    const is_nominal_backing = if (type_anno_ctx.nominal_backing_anno) |backing|
+                        backing == current_idx
+                    else
+                        false;
                     try stacks.pushRecordNext(frame_allocator, .{
                         .record = record,
                         .region = self.parse_ir.tokenizedRegionToRegion(record.region),
                         .field_index = 0,
                         .scratch_top = self.env.store.scratchAnnoRecordFieldTop(),
                         .scratch_record_fields_top = self.scratch_record_fields.top(),
+                        .is_nominal_backing = is_nominal_backing,
                     });
                 },
                 .tag_union => |tag_union| {
@@ -16916,10 +17477,31 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .field_index = state.field_index + 1,
                             .scratch_top = state.scratch_top,
                             .scratch_record_fields_top = state.scratch_record_fields_top,
+                            .is_nominal_backing = state.is_nominal_backing,
                         });
                         continue :typeannokernel_loop .dispatch;
                     },
                 };
+
+                const name_tag = self.parse_ir.tokens.tokenTag(ast_field.name);
+                const is_unnamed = name_tag == .Underscore or name_tag == .NamedUnderscore;
+                if (is_unnamed and !state.is_nominal_backing) {
+                    // Unnamed fields are only permitted in nominal record
+                    // declarations; in a structural record they are rejected and
+                    // the field is dropped (it can never be referenced anyway).
+                    try self.env.pushDiagnostic(Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    try stacks.pushRecordNext(frame_allocator, .{
+                        .record = state.record,
+                        .region = state.region,
+                        .field_index = state.field_index + 1,
+                        .scratch_top = state.scratch_top,
+                        .scratch_record_fields_top = state.scratch_record_fields_top,
+                        .is_nominal_backing = state.is_nominal_backing,
+                    });
+                    continue :typeannokernel_loop .dispatch;
+                }
 
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse try self.env.insertIdent(Ident.for_text("malformed_field"));
                 try stacks.pushRecordAfterField(frame_allocator, .{
@@ -16930,6 +17512,8 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     .scratch_record_fields_top = state.scratch_record_fields_top,
                     .field_name = field_name,
                     .field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    .is_nominal_backing = state.is_nominal_backing,
+                    .is_unnamed = is_unnamed,
                 });
                 try stacks.pushParse(frame_allocator, ast_field.ty);
             }
@@ -16942,18 +17526,26 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const field_cir_idx = try self.env.addAnnoRecordField(.{
                 .name = state.field_name,
                 .ty = canonicalized_ty,
+                .is_unnamed = state.is_unnamed,
             }, state.field_region);
             try self.env.store.addScratchAnnoRecordField(field_cir_idx);
-            try self.scratch_record_fields.append(types.RecordField{
-                .name = state.field_name,
-                .var_ = ModuleEnv.varFrom(field_cir_idx),
-            });
+            // Unnamed fields stay in the canonical record annotation (so the
+            // nominal declaration keeps its declared field order, including
+            // padding) but are excluded from the backing record row, so they
+            // are never name-resolved, unified, or required at construction.
+            if (!state.is_unnamed) {
+                try self.scratch_record_fields.append(types.RecordField{
+                    .name = state.field_name,
+                    .var_ = ModuleEnv.varFrom(field_cir_idx),
+                });
+            }
             try stacks.pushRecordNext(frame_allocator, .{
                 .record = state.record,
                 .region = state.region,
                 .field_index = state.field_index + 1,
                 .scratch_top = state.scratch_top,
                 .scratch_record_fields_top = state.scratch_record_fields_top,
+                .is_nominal_backing = state.is_nominal_backing,
             });
 
             continue :typeannokernel_loop .dispatch;
@@ -17397,6 +17989,23 @@ fn canonicalizeTypeAnnoBasicType(
             } } } }, region);
         }
 
+        if (try self.scopeLookupTypeBinding(first_qualifier_ident)) |binding_location| {
+            switch (binding_location.binding.*) {
+                .external_nominal => |external| {
+                    if (try self.resolveNestedExternalTypeAnno(external, qualified_prefix, qualified_name_ident, region)) |anno_idx| {
+                        return anno_idx;
+                    }
+
+                    return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
+                        .parent_name = first_qualifier_ident,
+                        .nested_name = type_name_ident,
+                        .region = region,
+                    } });
+                },
+                else => {},
+            }
+        }
+
         // Not a local qualified type, so treat as an external type from a module
         // Get qualifiers excluding the last one for module alias
         const module_qualifiers: AST.Token.Span = if (qualifier_toks.len > 1)
@@ -17472,6 +18081,27 @@ fn canonicalizeTypeAnnoBasicType(
     }
 }
 
+fn resolveNestedExternalTypeAnno(
+    self: *Self,
+    external: Scope.ExternalTypeBinding,
+    type_path_text: []const u8,
+    type_path_ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!?TypeAnno.Idx {
+    const import_idx = external.import_idx orelse return null;
+    const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
+        self.lookupAvailableModuleEnv(external.original_ident) orelse
+        return null;
+    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse
+        (try self.lookupImportedTypeDeclNode(imported_type.env, type_path_text)) orelse
+        return null;
+
+    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
+        .module_idx = import_idx,
+        .target_node_idx = target_node_idx,
+    } } } }, region);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind: AST.TypeDeclKind) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
@@ -17498,19 +18128,6 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
             .region = region,
         } });
     };
-
-    // Check if this is a builtin type
-    // Allow builtin type names to be redeclared in the Builtin module
-    // (e.g., Str := ... within Builtin.roc)
-    // Use identifier index comparison instead of string comparison for efficiency
-    if (TypeAnno.Builtin.isBuiltinTypeIdent(name_ident, self.env.idents)) {
-        if (self.env.module_role != .builtin) {
-            return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
-                .ident = name_ident,
-                .region = region,
-            } });
-        }
-    }
 
     // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.env.store.scratchTypeAnnoTop();
@@ -18240,9 +18857,18 @@ pub fn introduceType(
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    const shadowed_external_region: ?Region = if (current_scope.type_bindings.get(name_ident)) |binding| switch (binding) {
+        .external_nominal => |external| external.origin_region,
+        else => null,
+    } else null;
+
+    const ShadowedType = union(enum) {
+        statement: Statement.Idx,
+        region: Region,
+    };
 
     // Check for shadowing in parent scopes
-    var shadowed_in_parent: ?Statement.Idx = null;
+    var shadowed_in_parent: ?ShadowedType = null;
     if (self.scopes.items.len > 1) {
         var i = self.scopes.items.len - 1;
         while (i > 0) {
@@ -18250,12 +18876,12 @@ pub fn introduceType(
             const scope = &self.scopes.items[i];
             if (scope.type_bindings.get(name_ident)) |binding| {
                 shadowed_in_parent = switch (binding) {
-                    .local_nominal => |stmt| stmt,
-                    .local_alias => |stmt| stmt,
-                    .associated_nominal => |stmt| stmt,
-                    .external_nominal => null,
+                    .local_nominal => |stmt| .{ .statement = stmt },
+                    .local_alias => |stmt| .{ .statement = stmt },
+                    .associated_nominal => |stmt| .{ .statement = stmt },
+                    .external_nominal => |external| .{ .region = external.origin_region },
                 };
-                if (shadowed_in_parent) |_| break;
+                break;
             }
         }
     }
@@ -18263,13 +18889,32 @@ pub fn introduceType(
     // Determine if this is an alias or nominal type based on the statement
     const stmt = self.env.store.getStatement(type_decl_stmt);
     const is_alias = stmt == .s_alias_decl;
+    if (shadowed_external_region) |original_region| {
+        try current_scope.type_bindings.put(
+            gpa,
+            name_ident,
+            if (is_alias) Scope.TypeBinding{ .local_alias = type_decl_stmt } else Scope.TypeBinding{ .local_nominal = type_decl_stmt },
+        );
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = name_ident,
+                .region = region,
+                .original_region = original_region,
+            },
+        });
+        return;
+    }
+
     const result = try current_scope.introduceTypeDeclWithKind(gpa, name_ident, type_decl_stmt, is_alias, null);
 
     switch (result) {
         .success => {
             // Check if we're shadowing a type in a parent scope
-            if (shadowed_in_parent) |shadowed_stmt| {
-                const original_region = self.env.store.getStatementRegion(shadowed_stmt);
+            if (shadowed_in_parent) |shadowed| {
+                const original_region = switch (shadowed) {
+                    .statement => |shadowed_stmt| self.env.store.getStatementRegion(shadowed_stmt),
+                    .region => |original_region| original_region,
+                };
                 try self.env.pushDiagnostic(Diagnostic{
                     .shadowing_warning = .{
                         .ident = name_ident,
@@ -18584,6 +19229,18 @@ fn setExternalTypeBinding(
 ) Allocator.Error!void {
     // Check if type already exists in this scope (mirrors Scope.introduceTypeDecl logic)
     if (scope.type_bindings.get(local_ident)) |existing_binding| {
+        // Binding the same external type to the same name twice is idempotent,
+        // not a conflict. This happens when a type module's main type is both
+        // auto-exposed and named explicitly, as in `import M exposing [M]`.
+        switch (existing_binding) {
+            .external_nominal => |ext| {
+                if (ext.module_ident.eql(module_ident) and ext.original_ident.eql(original_ident)) {
+                    return;
+                }
+            },
+            else => {},
+        }
+
         // Extract the original region from the existing binding for the diagnostic
         const original_region = switch (existing_binding) {
             .local_nominal, .local_alias, .associated_nominal => Region.zero(),
@@ -18907,7 +19564,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
     }
 }
 
-/// Handle module-qualified types like Json.Decoder
+/// Handle module-qualified types like Json.CustomType
 /// Create an annotation from a type annotation
 fn createAnnotationFromTypeAnno(
     self: *Self,

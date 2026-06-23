@@ -1208,6 +1208,13 @@ pub const BuiltinSymbols = struct {
     dec_to_int_try_unsafe: u32, // roc_builtins_dec_to_int_try_unsafe
     dec_to_f32: u32, // roc_builtins_dec_to_f32_try_unsafe
     float_to_str: u32, // roc_builtins_float_to_str
+    float_pow: u32, // roc_builtins_float_pow
+    float_sin: u32, // roc_builtins_float_sin
+    float_cos: u32, // roc_builtins_float_cos
+    float_tan: u32, // roc_builtins_float_tan
+    float_asin: u32, // roc_builtins_float_asin
+    float_acos: u32, // roc_builtins_float_acos
+    float_atan: u32, // roc_builtins_float_atan
     int_to_str: u32, // roc_builtins_int_to_str
     int_from_str: u32, // roc_builtins_int_from_str
     dec_from_str: u32, // roc_builtins_dec_from_str
@@ -1226,6 +1233,7 @@ pub const BuiltinSymbols = struct {
     str_release_excess_capacity: u32, // roc_builtins_str_release_excess_capacity
     str_with_capacity: u32, // roc_builtins_str_with_capacity
     str_drop_prefix: u32, // roc_builtins_str_drop_prefix
+    str_drop_prefix_caseless_ascii: u32, // roc_builtins_str_drop_prefix_caseless_ascii
     str_drop_suffix: u32, // roc_builtins_str_drop_suffix
     str_with_ascii_lowercased: u32, // roc_builtins_str_with_ascii_lowercased
     str_with_ascii_uppercased: u32, // roc_builtins_str_with_ascii_uppercased
@@ -1267,6 +1275,13 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_dec_to_int_try_unsafe", "dec_to_int_try_unsafe" },
         .{ "roc_builtins_dec_to_f32_try_unsafe", "dec_to_f32" },
         .{ "roc_builtins_float_to_str", "float_to_str" },
+        .{ "roc_builtins_float_pow", "float_pow" },
+        .{ "roc_builtins_float_sin", "float_sin" },
+        .{ "roc_builtins_float_cos", "float_cos" },
+        .{ "roc_builtins_float_tan", "float_tan" },
+        .{ "roc_builtins_float_asin", "float_asin" },
+        .{ "roc_builtins_float_acos", "float_acos" },
+        .{ "roc_builtins_float_atan", "float_atan" },
         .{ "roc_builtins_int_to_str", "int_to_str" },
         .{ "roc_builtins_int_from_str", "int_from_str" },
         .{ "roc_builtins_dec_from_str", "dec_from_str" },
@@ -1283,6 +1298,7 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_str_release_excess_capacity", "str_release_excess_capacity" },
         .{ "roc_builtins_str_with_capacity", "str_with_capacity" },
         .{ "roc_builtins_str_drop_prefix", "str_drop_prefix" },
+        .{ "roc_builtins_str_drop_prefix_caseless_ascii", "str_drop_prefix_caseless_ascii" },
         .{ "roc_builtins_str_drop_suffix", "str_drop_suffix" },
         .{ "roc_builtins_str_with_ascii_lowercased", "str_with_ascii_lowercased" },
         .{ "roc_builtins_str_with_ascii_uppercased", "str_with_ascii_uppercased" },
@@ -5645,7 +5661,7 @@ test "BuiltinSymbols — all symbols found after merge" {
 
     // Spot check a few fields (populate returns function index = i + 1, since index 0 is the import)
     try std.testing.expectEqual(@as(u32, 1), syms.dec_mul); // function index 1 (first defined fn after import)
-    try std.testing.expectEqual(@as(u32, 21), syms.str_trim); // function index 21
+    try std.testing.expectEqual(@as(u32, 28), syms.str_trim); // function index 28
 }
 
 test "BuiltinSymbols — fails when symbol missing" {

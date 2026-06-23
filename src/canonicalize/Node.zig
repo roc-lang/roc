@@ -117,6 +117,7 @@ pub const Tag = enum {
     expr_for,
     expr_record_builder,
     expr_return,
+    expr_break,
     match_branch,
     match_branch_pattern,
     type_header,
@@ -215,6 +216,7 @@ pub const Tag = enum {
     diag_malformed_where_clause,
     diag_where_clause_not_allowed_in_type_decl,
     diag_open_ext_not_allowed_in_type_decl,
+    diag_unnamed_field_not_allowed_in_structural_record,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
@@ -680,13 +682,13 @@ pub const Payload = extern union {
     };
 
     pub const ExprTypeMethodCall = extern struct {
-        type_var_alias_stmt: u32,
+        type_dispatch_stmt: u32,
         method_name: u32,
         method_call_data_idx: u32,
     };
 
     pub const ExprTypeDispatchCall = extern struct {
-        type_var_alias_stmt: u32,
+        type_dispatch_stmt: u32,
         method_name: u32,
         method_call_data_idx: u32,
         constraint_fn_var: u32,
@@ -1105,7 +1107,8 @@ pub const Payload = extern union {
     pub const TyRecordField = extern struct {
         name: u32,
         ty: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        is_unnamed: bool = false,
+        _padding: [3]u8 = .{ 0, 0, 0 },
     };
 
     pub const ExposedItem = extern struct {

@@ -1,28 +1,29 @@
-//! Interpreter shim for already-lowered LIR images.
+//! Shim for already-lowered LIR images.
 //!
-//! The compiler parent process publishes an ARC-inserted LIR image into
-//! shared memory. This shim maps that image, creates zero-copy LIR views, and
-//! invokes the requested platform entrypoint through the LIR interpreter.
+//! The compiler parent process publishes an ARC-inserted LIR image into shared
+//! memory, or embeds one directly in an interpreter-mode executable. This shim
+//! views that LIR image and invokes the requested platform entrypoint through
+//! the LIR interpreter.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const builtins = @import("builtins");
 const eval = @import("eval");
 const ipc = @import("ipc");
 const layout = @import("layout");
 const lir = @import("lir");
+const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
 
 /// Route std.debug.print / std.debug.panic through the minimal shim_io vtable so
-/// the shim archive does not pull in `std.Io.Threaded` (which would drag in
-/// statx/clock_gettime/etc. and break roc-compiled program self-containment).
+/// the shim archive does not pull in `std.Io.Threaded`.
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 /// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
 pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
 
-/// Disables stack-trace capture in the shim; see `shim_io.std_options_no_stack_tracing`.
-/// Empty stack traces are fine for the shim since panics here go through the host's RocOps.
+/// Disables stack-trace capture in the shim; panics here go through the host's RocOps.
 pub const std_options = shim_io.std_options_no_stack_tracing;
 
 const Allocator = std.mem.Allocator;
@@ -35,7 +36,7 @@ const RuntimeState = struct {
 };
 
 const ShimError = error{
-    LirImageUnavailable,
+    ImageUnavailable,
     InvalidEntrypoint,
     OutOfMemory,
 };
@@ -45,11 +46,6 @@ var runtime_state: RuntimeState = undefined;
 var runtime_state_mutex: std.Io.Mutex = .init;
 
 /// IO used for the shim's coordination reads and mutex.
-///
-/// We use the minimal `shim_io` vtable instead of `std.Io.Threaded` to keep the
-/// shim libc- and compiler_rt-free (see [[feedback_roc_libc_independence]]):
-/// pulling in the threaded vtable would link in `statx`, `clock_gettime`, etc.,
-/// which roc-compiled user programs must not require.
 fn shimIo() std.Io {
     return shim_io.io();
 }
@@ -64,6 +60,10 @@ fn openRuntimeState(gpa: Allocator) anyerror!RuntimeState {
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
+    if (shm.total_size < header_offset + @sizeOf(lir.LirImage.Header)) return error.InvalidLirImage;
+    const image_magic = std.mem.readInt(u32, shm.base_ptr[header_offset..][0..4], .little);
+    if (image_magic != lir.LirImage.MAGIC) return error.InvalidLirImage;
+
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(shm.base_ptr + header_offset));
     const view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, gpa);
 
@@ -82,8 +82,8 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
     if (runtime_state_initialized) return &runtime_state;
 
     runtime_state = openRuntimeState(allocator()) catch {
-        ops.crash("Interpreter shim could not map the LIR image");
-        return error.LirImageUnavailable;
+        ops.crash("LIR shim could not map the compiled Roc image");
+        return error.ImageUnavailable;
     };
     runtime_state_initialized = true;
     return &runtime_state;
@@ -145,15 +145,15 @@ fn evaluateEntrypointInView(
     arg_ptr: ?*anyopaque,
 ) ShimError!void {
     const entrypoint = entrypointForOrdinal(view, entry_idx) orelse {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("interpreter shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
         }
         unreachable;
     };
 
     const gpa = allocator();
     const arg_layouts = argLayoutsForProc(gpa, &view.store, entrypoint.root_proc) catch {
-        ops.crash("Interpreter shim could not allocate entrypoint argument layouts");
+        ops.crash("LIR shim could not allocate entrypoint argument layouts");
         return error.OutOfMemory;
     };
     defer gpa.free(arg_layouts);
@@ -164,7 +164,7 @@ fn evaluateEntrypointInView(
         &view.layouts,
         ops,
     ) catch {
-        ops.crash("Interpreter shim could not initialize the LIR interpreter");
+        ops.crash("LIR shim could not initialize the LIR interpreter");
         return error.OutOfMemory;
     };
     defer interpreter.deinit();
@@ -184,83 +184,24 @@ fn evaluateEntrypointInView(
 
 fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) ShimError!lir.LirImage.ProgramView {
     if (image_len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
-        ops.crash("Interpreter shim received an invalid embedded LIR image");
-        return error.LirImageUnavailable;
+        ops.crash("LIR shim received an invalid embedded LIR image");
+        return error.ImageUnavailable;
     }
 
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(image_base));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    if (header.magic != lir.LirImage.MAGIC) {
+        ops.crash("LIR shim received a non-LIR embedded image");
+        return error.ImageUnavailable;
+    }
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, image_len, allocator()) catch {
-        ops.crash("Interpreter shim could not view the embedded LIR image");
-        return error.LirImageUnavailable;
+        ops.crash("LIR shim could not view the embedded LIR image");
+        return error.ImageUnavailable;
     };
 }
 
-// --- Symbol-ABI host bridge
-// Under the symbol ABI the host defines the runtime symbols and hosted
-// functions; nothing hands the interpreter a RocOps. The generated platform
-// shim calls roc_shim_get_ops() to obtain one built over those symbols, with
-// the hosted dispatch table supplied by the generated module.
-
-const extern_host = struct {
-    extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
-    extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
-    extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
-    extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
-    extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
-    extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
-};
-
-/// Hosted dispatch table defined by the generated platform shim module, in
-/// hosted-section order.
-extern const roc_shim_hosted_fns: [*]const builtins.host_abi.HostedFn;
-extern const roc_shim_hosted_count: usize;
-
-fn shimAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return extern_host.roc_alloc(length, alignment);
-}
-
-fn shimDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    extern_host.roc_dealloc(ptr, alignment);
-}
-
-fn shimRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return extern_host.roc_realloc(ptr, new_length, alignment);
-}
-
-fn shimDbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    extern_host.roc_dbg(bytes, len);
-}
-
-fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    extern_host.roc_expect_failed(bytes, len);
-}
-
-fn shimCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    extern_host.roc_crashed(bytes, len);
-}
-
-var shim_ops: RocOps = undefined;
-var shim_ops_initialized = false;
-
 export fn roc_shim_get_ops() callconv(.c) *anyopaque {
-    if (!shim_ops_initialized) {
-        shim_ops = .{
-            .env = @ptrCast(&shim_ops),
-            .roc_alloc = shimAlloc,
-            .roc_dealloc = shimDealloc,
-            .roc_realloc = shimRealloc,
-            .roc_dbg = shimDbg,
-            .roc_expect_failed = shimExpectFailed,
-            .roc_crashed = shimCrashed,
-            .hosted_fns = .{
-                .count = @intCast(roc_shim_hosted_count),
-                .fns = @constCast(roc_shim_hosted_fns),
-            },
-        };
-        shim_ops_initialized = true;
-    }
-    return @ptrCast(&shim_ops);
+    return shim_host_abi.getOpsOpaque();
 }
 
 export fn roc_entrypoint(
@@ -270,7 +211,7 @@ export fn roc_entrypoint(
     arg_ptr: ?*anyopaque,
 ) callconv(.c) void {
     evaluateEntrypoint(entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
-        error.LirImageUnavailable,
+        error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => {},
@@ -286,19 +227,19 @@ export fn roc_entrypoint_from_image(
     image_len: usize,
 ) callconv(.c) void {
     const base = image_base orelse {
-        ops.crash("Interpreter shim received no embedded LIR image");
+        ops.crash("LIR shim received no embedded LIR image");
         return;
     };
 
     const view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
-        error.LirImageUnavailable,
+        error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return,
     };
 
     evaluateEntrypointInView(&view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
-        error.LirImageUnavailable,
+        error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => {},

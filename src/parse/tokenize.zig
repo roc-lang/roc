@@ -453,6 +453,11 @@ pub const TokenizedBuffer = struct {
 
     /// Loads the current token if it is an identifier.
     /// Otherwise returns null.
+    /// Returns the tag of the token at the given index.
+    pub fn tokenTag(self: *const TokenizedBuffer, token: Token.Idx) Token.Tag {
+        return self.tokens.items(.tag)[@intCast(token)];
+    }
+
     pub fn resolveIdentifier(self: *const TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
         const tag = self.tokens.items(.tag)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];

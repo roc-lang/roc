@@ -138,6 +138,9 @@ pub const Diagnostic = union(enum) {
     open_ext_not_allowed_in_type_decl: struct {
         region: Region,
     },
+    unnamed_field_not_allowed_in_structural_record: struct {
+        region: Region,
+    },
     var_across_function_boundary: struct {
         region: Region,
     },
@@ -400,6 +403,7 @@ pub const Diagnostic = union(enum) {
             .malformed_where_clause => |d| d.region,
             .where_clause_not_allowed_in_type_decl => |d| d.region,
             .open_ext_not_allowed_in_type_decl => |d| d.region,
+            .unnamed_field_not_allowed_in_structural_record => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,

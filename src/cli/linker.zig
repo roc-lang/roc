@@ -12,7 +12,8 @@ const embedded_lld = @import("embedded_lld");
 const stack_probe = embedded_lld.stack_probe;
 const CodeSignature = @import("vendor_macho").CodeSignature;
 const DwarfSplice = @import("macho/DwarfSplice.zig");
-const RocTarget = @import("roc_target").RocTarget;
+const roc_target = @import("roc_target");
+const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
@@ -35,8 +36,8 @@ pub const TargetAbi = enum {
     gnu,
 
     /// Convert from RocTarget to TargetAbi
-    pub fn fromRocTarget(roc_target: RocTarget) TargetAbi {
-        return if (roc_target.isStatic()) .musl else .gnu;
+    pub fn fromRocTarget(target: RocTarget) TargetAbi {
+        return if (target.isStatic()) .musl else .gnu;
     }
 };
 
@@ -425,11 +426,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 else => try args.append("arm64"), // default to arm64
             }
 
-            // Add platform version - use a conservative minimum that works across macOS versions
+            // Add platform version metadata required by Mach-O links.
             try args.append("-platform_version");
             try args.append("macos");
-            try args.append("13.0"); // minimum deployment target
-            try args.append("13.0"); // SDK version
+            try args.append(roc_target.macos_deployment.linker_version);
+            try args.append(roc_target.macos_deployment.linker_version);
 
             if (config.macho_dwarf_object != null) {
                 // The post-link DWARF splice adds a __DWARF load command, so

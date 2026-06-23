@@ -182,6 +182,9 @@ pub const BuildEnv = struct {
     /// Compiler role to assign to the root module of this build.
     root_module_role: ModuleEnv.ModuleRole = .user,
 
+    /// Optional source directory used to resolve imports from the root module.
+    root_source_dir_override: ?[]const u8 = null,
+
     /// Size limits applied during package version resolution.
     resolution_config: package_resolution.Config = .{},
 
@@ -444,6 +447,10 @@ pub const BuildEnv = struct {
         self.root_module_role = role;
     }
 
+    pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
+        self.root_source_dir_override = source_dir;
+    }
+
     /// Build an app file specifically (validates it's an app)
     pub fn buildApp(self: *BuildEnv, app_file: []const u8) anyerror!void {
         // Build and let the main function handle everything
@@ -636,6 +643,9 @@ pub const BuildEnv = struct {
         const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         coord_pkg.modules.items[root_id].module_role = self.root_module_role;
+        if (self.root_source_dir_override) |source_dir| {
+            coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
+        }
         if (self.packages.get(pkg_name)) |queued_root_pkg| {
             if (queued_root_pkg.kind == .platform) {
                 coord_pkg.modules.items[root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(queued_root_pkg.targets_config);
@@ -1474,11 +1484,10 @@ pub const BuildEnv = struct {
         defer self.gpa.free(joined);
 
         const with_ext = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{joined});
-        errdefer self.gpa.free(with_ext);
+        defer self.gpa.free(with_ext);
 
         // Canonicalize and sandbox
         const canon = try std.fs.path.resolve(self.gpa, &.{with_ext});
-        self.gpa.free(with_ext);
         // Enforce sandbox for dotted resolution: must be within the current package root (first workspace root).
         // If multiple roots are registered, we still require the resolved path to match at least one.
         if (!PathUtils.isWithinRoot(canon, self.workspace_roots.items)) {
@@ -2412,6 +2421,7 @@ pub const BuildEnv = struct {
                 &keys,
                 relation_artifact,
                 binding,
+                root_artifact.platform_required_bindings.relationClosure(binding),
             );
         }
 
@@ -2847,3 +2857,20 @@ pub const OrderedSink = struct {
         return out;
     }
 };
+
+test "issue 9737: dottedToPath frees its scratch path exactly once on the PathOutsideWorkspace error path" {
+    const gpa = std.testing.allocator;
+
+    // dottedToPath only reads `gpa` and `workspace_roots`, so a minimal BuildEnv
+    // with just those fields set is enough to exercise it.
+    var env: BuildEnv = undefined;
+    env.gpa = gpa;
+    env.workspace_roots = std.array_list.Managed([]const u8).init(gpa);
+    defer env.workspace_roots.deinit();
+
+    // No workspace roots are registered, so the resolved "<root>/Mod.roc" is
+    // outside the workspace and dottedToPath takes its error path. On that path
+    // it must free its `with_ext` scratch allocation exactly once; freeing it a
+    // second time is a double free that the testing allocator detects.
+    try std.testing.expectError(error.PathOutsideWorkspace, env.dottedToPath("/tmp/roc-issue-9737", "Mod"));
+}

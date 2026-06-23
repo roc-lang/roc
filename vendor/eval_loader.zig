@@ -50,7 +50,11 @@ pub const ElfDynLib = struct {
     sym_count: usize,
 
     /// Trusts the file. A malicious file can execute arbitrary code.
-    pub fn open(path: [:0]const u8) anyerror!ElfDynLib {
+    ///
+    /// `resolver` binds undefined symbols (compiler-rt libcalls that native
+    /// codegen emits but the loaded image does not define) to host
+    /// implementations; pass null to leave them unresolved.
+    pub fn open(path: [:0]const u8, resolver: ?self_relocate.UndefinedSymbolResolver) anyerror!ElfDynLib {
         const io = std.Options.debug_io;
         const file = try std.Io.Dir.cwd().openFile(io, path, .{});
         defer file.close(io);
@@ -192,7 +196,7 @@ pub const ElfDynLib = struct {
 
         // Apply the object's dynamic relocations now that every segment holds
         // its correct bytes.
-        self_relocate.applyDynamicRelocations(base);
+        self_relocate.applyDynamicRelocations(base, resolver);
 
         return .{
             .memory = loaded,

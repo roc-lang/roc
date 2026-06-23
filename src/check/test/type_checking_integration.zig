@@ -1901,8 +1901,8 @@ test "check type - if else - different branch types 3" {
 }
 
 // Dual-kind literal var (flex/flex merge): both branches are OPEN literals, so
-// unification merges a `from_literal: numeral` and a `from_literal: quote`
-// constraint onto one var. No type satisfies both, so the program is always
+// unification merges a numeral-origin and a quote-origin constraint onto one var.
+// No type satisfies both, so the program is always
 // rejected — but the diagnostic must not depend on which unify side each literal
 // arrived on. `varLiteralKind` tie-breaks dual-kind vars to `.numeral` (matching
 // `numericDefaultPhaseForConstraints` and `flexLiteralDefaultKind`), so BOTH
@@ -2951,6 +2951,27 @@ test "check type - crash" {
         .{ .pass = .{ .def = "main" } },
         "U64",
     );
+}
+
+test "check type - if with all crash branches makes following code unreachable" {
+    const source =
+        \\choose : Bool -> Str
+        \\choose = |flag| {
+        \\    if flag {
+        \\        crash "true branch"
+        \\    } else {
+        \\        crash "false branch"
+        \\    }
+        \\
+        \\    after = "after"
+        \\    after
+        \\}
+    ;
+
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"UNREACHABLE CODE"},
+    } }, "Bool -> Str");
 }
 
 // dbg //

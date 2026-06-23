@@ -80,11 +80,11 @@ pub fn copyVar(
         .rank = types_mod.Rank.generalized,
     });
 
-    // NOTE: a copied var whose content is a flex carrying a `from_literal`
-    // constraint is an open literal in the destination module. Registering it
-    // on the checker's open-literal worklist is the CALLER's job (see
-    // `Check.copyVar`, which walks `var_mapping` after the copy) — this
-    // module only copies type data between stores.
+    // NOTE: a copied var whose content is a flex carrying a literal-conversion
+    // constraint is an open literal in the destination module. Registering it on
+    // the checker's open-literal worklist is the CALLER's job (see `Check.copyVar`,
+    // which walks `var_mapping` after the copy) — this module only copies type
+    // data between stores.
     return placeholder_var;
 }
 

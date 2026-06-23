@@ -307,6 +307,14 @@ pub const Interpreter = struct {
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
     failed_call_stack: std.ArrayList(LirProcSpecId),
+    /// Source location of the LIR statement currently being interpreted.
+    active_stmt_loc: base.SourceLoc = base.SourceLoc.none,
+    /// Checked source region of the LIR statement currently being interpreted.
+    active_stmt_region: base.Region = base.Region.zero(),
+    /// Source location captured when the current evaluation first failed.
+    failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
+    /// Checked source region captured when the current evaluation first failed.
+    failed_stmt_region: base.Region = base.Region.zero(),
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
 
@@ -649,6 +657,16 @@ pub const Interpreter = struct {
         return self.failed_call_stack.items;
     }
 
+    pub fn getFailedSourceLoc(self: *const LirInterpreter) ?base.SourceLoc {
+        if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_loc;
+        return null;
+    }
+
+    pub fn getFailedCheckedRegion(self: *const LirInterpreter) ?base.Region {
+        if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_region;
+        return null;
+    }
+
     pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
         return self.comptime_failed_site;
     }
@@ -662,6 +680,44 @@ pub const Interpreter = struct {
         try self.failed_call_stack.appendSlice(self.evalAllocator(), self.call_stack.items);
     }
 
+    fn recordActiveFailureLocIfUnset(self: *LirInterpreter) void {
+        if (self.failed_stmt_loc.hasLocation()) return;
+        if (self.active_stmt_loc.hasLocation()) {
+            self.failed_stmt_loc = self.active_stmt_loc;
+            self.failed_stmt_region = self.active_stmt_region;
+        }
+    }
+
+    fn recordCallerFailureLocForSourcelessCallee(
+        self: *LirInterpreter,
+        call_loc: base.SourceLoc,
+        call_region: base.Region,
+    ) void {
+        if (!call_loc.hasLocation()) return;
+        if (!self.failed_stmt_loc.hasLocation()) {
+            self.failed_stmt_loc = call_loc;
+            self.failed_stmt_region = call_region;
+        }
+    }
+
+    fn recordCallerFailureLocForCalleeError(
+        self: *LirInterpreter,
+        call_loc: base.SourceLoc,
+        call_region: base.Region,
+        err: Error,
+    ) void {
+        switch (err) {
+            error.Crash,
+            error.DivisionByZero,
+            error.RuntimeError,
+            => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region),
+            error.OutOfMemory,
+            error.ComptimeExhaustiveness,
+            error.ExpectErr,
+            => {},
+        }
+    }
+
     /// Release ownership of an evaluated result value.
     /// Decrements reference counts for any heap-allocated data (strings, lists, boxes)
     /// according to the value's layout. No-op for non-refcounted types (ints, bools, etc).
@@ -670,6 +726,7 @@ pub const Interpreter = struct {
     }
 
     fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
+        self.recordActiveFailureLocIfUnset();
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
     }
@@ -704,6 +761,7 @@ pub const Interpreter = struct {
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
+        self.recordActiveFailureLocIfUnset();
         self.roc_env.reportCrash(message);
         return error.Crash;
     }
@@ -872,6 +930,10 @@ pub const Interpreter = struct {
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
+        self.active_stmt_loc = base.SourceLoc.none;
+        self.active_stmt_region = base.Region.zero();
+        self.failed_stmt_loc = base.SourceLoc.none;
+        self.failed_stmt_region = base.Region.zero();
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
 
@@ -881,6 +943,7 @@ pub const Interpreter = struct {
             defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
             const sj = setjmp(&eval_jmp_buf);
             if (sj != 0) {
+                self.recordActiveFailureLocIfUnset();
                 self.recordFailedCallStackIfUnset() catch {};
                 return error.Crash;
             }
@@ -1157,6 +1220,9 @@ pub const Interpreter = struct {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
+                    // Padding spacers hold uninitialized bytes; there is no value
+                    // to validate against their (size-only) layout.
+                    if (field.is_padding) continue;
                     const field_offset = self.layout_store.getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     var next_len = path_len;
                     if (next_len < path_buf.len) {
@@ -1461,9 +1527,11 @@ pub const Interpreter = struct {
                 .comptime_branch_taken => |marker| marker.next,
                 .incref => |stmt_next| stmt_next.next,
                 .decref => |stmt_next| stmt_next.next,
+                .decref_if_initialized => |stmt_next| stmt_next.next,
                 .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
+                .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
                 .runtime_error,
@@ -1718,6 +1786,8 @@ pub const Interpreter = struct {
         var current = start_stmt;
         while (true) {
             const stmt = self.store.getCFStmt(current);
+            self.active_stmt_loc = self.store.stmtLoc(current);
+            self.active_stmt_region = self.store.stmtRegion(current);
             switch (stmt) {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
@@ -1740,7 +1810,12 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    const result = try self.evalProcById(assign.proc, arg_values, arg_layouts);
+                    const call_loc = self.active_stmt_loc;
+                    const call_region = self.active_stmt_region;
+                    const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        return err;
+                    };
                     self.setLocalChecked(
                         frame,
                         current,
@@ -1756,13 +1831,18 @@ pub const Interpreter = struct {
                 .assign_call_erased => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const result = try self.evalErasedCall(
+                    const call_loc = self.active_stmt_loc;
+                    const call_region = self.active_stmt_region;
+                    const result = self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
                         try self.localLayouts(arg_locals),
                         self.store.getLocal(assign.target).layout_idx,
-                    );
+                    ) catch |err| {
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        return err;
+                    };
                     self.setLocalChecked(
                         frame,
                         current,
@@ -1909,6 +1989,38 @@ pub const Interpreter = struct {
                     );
                     current = dec.next;
                 },
+                .decref_if_initialized => |dec| {
+                    const cond_value = try self.readSwitchValue(
+                        try self.getLocalChecked(frame, dec.cond),
+                        self.store.getLocal(dec.cond).layout_idx,
+                    );
+                    if ((cond_value & dec.cond_mask) == dec.cond_mask) {
+                        if (builtin.mode == .Debug and !frame.isAssigned(dec.value)) {
+                            debugPrint(
+                                "LIR/interpreter invariant violated before decref_if_initialized: local {d} unassigned in proc {d} at stmt {d}\n",
+                                .{ @intFromEnum(dec.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                            );
+                            self.debugDumpProc(frame.proc_id);
+                            self.debugPrintStmtChain(current, 20);
+                        }
+                        trace_rc.log("stmt decref_if_initialized: proc={d} stmt={d} cond={d} mask=0x{x} local={d} layout={d} ptr=0x{x}", .{
+                            @intFromEnum(frame.proc_id),
+                            @intFromEnum(current),
+                            @intFromEnum(dec.cond),
+                            dec.cond_mask,
+                            @intFromEnum(dec.value),
+                            @intFromEnum(self.store.getLocal(dec.value).layout_idx),
+                            @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
+                        });
+                        self.performExplicitRcStmt(
+                            dec.rc,
+                            try self.getLocalChecked(frame, dec.value),
+                            0,
+                            dec.atomicity,
+                        );
+                    }
+                    current = dec.next;
+                },
                 .free => |free_stmt| {
                     if (builtin.mode == .Debug and !frame.isAssigned(free_stmt.value)) {
                         debugPrint(
@@ -1962,6 +2074,29 @@ pub const Interpreter = struct {
                         }
                     }
                     current = target;
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    const cond_value = try self.readSwitchValue(
+                        try self.getLocalChecked(frame, switch_stmt.cond),
+                        self.store.getLocal(switch_stmt.cond).layout_idx,
+                    );
+                    if (trace.enabled) {
+                        trace.log(
+                            "switch_initialized_payload: cond_local={d} mask=0x{x} payload_local={d} value={d} initialized={d} uninitialized={d}",
+                            .{
+                                @intFromEnum(switch_stmt.cond),
+                                switch_stmt.cond_mask,
+                                @intFromEnum(switch_stmt.payload),
+                                cond_value,
+                                @intFromEnum(switch_stmt.initialized_branch),
+                                @intFromEnum(switch_stmt.uninitialized_branch),
+                            },
+                        );
+                    }
+                    current = if ((cond_value & switch_stmt.cond_mask) == switch_stmt.cond_mask)
+                        switch_stmt.initialized_branch
+                    else
+                        switch_stmt.uninitialized_branch;
                 },
                 .str_match => |str_match| {
                     current = try self.execStrMatch(frame, current, str_match);
@@ -2209,6 +2344,16 @@ pub const Interpreter = struct {
                     });
                     stack.append(self.evalAllocator(), dec.next) catch return;
                 },
+                .decref_if_initialized => |dec| {
+                    debugPrint("    {d}: decref_if_initialized cond={d} mask=0x{x} value={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(dec.cond),
+                        dec.cond_mask,
+                        @intFromEnum(dec.value),
+                        @intFromEnum(dec.next),
+                    });
+                    stack.append(self.evalAllocator(), dec.next) catch return;
+                },
                 .free => |dec| {
                     debugPrint("    {d}: free value={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
@@ -2232,6 +2377,18 @@ pub const Interpreter = struct {
                         });
                         stack.append(self.evalAllocator(), branch.body) catch return;
                     }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    debugPrint("    {d}: switch_initialized_payload cond={d} mask=0x{x} payload={d} initialized={d} uninitialized={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(switch_stmt.cond),
+                        switch_stmt.cond_mask,
+                        @intFromEnum(switch_stmt.payload),
+                        @intFromEnum(switch_stmt.initialized_branch),
+                        @intFromEnum(switch_stmt.uninitialized_branch),
+                    });
+                    stack.append(self.evalAllocator(), switch_stmt.initialized_branch) catch return;
+                    stack.append(self.evalAllocator(), switch_stmt.uninitialized_branch) catch return;
                 },
                 .str_match => |str_match| {
                     debugPrint("    {d}: str_match source={d} on_match={d} on_miss={d}\n", .{
@@ -2931,6 +3088,9 @@ pub const Interpreter = struct {
         var expected_field_count: usize = 0;
         for (0..expected_info.fields.len) |i| {
             const field = expected_info.fields.get(@intCast(i));
+            // Padding spacers carry indices past every named field and are never
+            // constructed, so they must not raise the expected named-field count.
+            if (field.is_padding) continue;
             expected_field_count = @max(expected_field_count, @as(usize, @intCast(field.index)) + 1);
         }
         if (builtin.mode == .Debug and field_locals.len < expected_field_count) {
@@ -3535,7 +3695,8 @@ pub const Interpreter = struct {
         if (self.struct_field_plans.get(id)) |plan| return plan;
 
         const field_layout_idx = self.layout_store.getStructFieldLayout(struct_plan.struct_idx, field_index);
-        const plan: ?layout_mod.RcFieldPlan = if (!self.layoutContainsRc(field_layout_idx) or
+        const plan: ?layout_mod.RcFieldPlan = if (self.layout_store.getStructFieldIsPadding(struct_plan.struct_idx, field_index) or
+            !self.layoutContainsRc(field_layout_idx) or
             self.layout_store.getStructFieldSize(struct_plan.struct_idx, field_index) == 0)
             null
         else
@@ -3661,6 +3822,8 @@ pub const Interpreter = struct {
             .struct_ => blk: {
                 const sd = self.layout_store.getStructData(layout_val.getStruct().idx);
                 for (0..sd.fields.count) |i| {
+                    // Padding spacers hold uninitialized bytes, never a refcounted value.
+                    if (self.layout_store.getStructFieldIsPadding(layout_val.getStruct().idx, @intCast(i))) continue;
                     const field_layout = self.layout_store.getStructFieldLayout(layout_val.getStruct().idx, @intCast(i));
                     if (self.layoutContainsRc(field_layout)) break :blk true;
                 }
@@ -4252,6 +4415,40 @@ pub const Interpreter = struct {
                 val.write(u8, if (result) 1 else 0);
                 break :blk val;
             },
+            .str_is_eq_static_small => blk: {
+                const result = builtins.str.strEqualStaticSmall(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    args[3].read(u64),
+                    args[4].read(u64),
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_static_small_word_eq => blk: {
+                const result = builtins.str.strStaticSmallWordEq(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    args[3].read(u64),
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_static_small_word_caseless_eq => blk: {
+                const result = builtins.str.strStaticSmallWordCaselessEq(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    args[3].read(u64),
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
             .str_concat => self.callBuiltinStr2Mode(builtins.str.strConcatC, valueToRocStr(args[0]), valueToRocStr(args[1]), updateModeForArg0(ll.unique_args), ll.ret_layout),
             .str_contains => blk: {
                 const result = builtins.str.strContains(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -4292,6 +4489,58 @@ pub const Interpreter = struct {
             },
             .str_drop_prefix => self.callBuiltinStr2(builtins.str.strDropPrefix, valueToRocStr(args[0]), valueToRocStr(args[1]), ll.ret_layout),
             .str_drop_suffix => self.callBuiltinStr2(builtins.str.strDropSuffix, valueToRocStr(args[0]), valueToRocStr(args[1]), ll.ret_layout),
+            .str_find_first => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.findFirst(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+
+                const layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (layout_val.tag != .struct_) {
+                    return self.runtimeError("str_find_first expected a record return layout");
+                }
+                const record_idx = layout_val.getStruct().idx;
+                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
+                if (fields.len != 3 or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
+                {
+                    return self.runtimeError("str_find_first expected fields after Str, before Str, found Bool");
+                }
+
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.before));
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 2)).write(u8, if (result.found) 1 else 0);
+                break :blk val;
+            },
+            .str_drop_prefix_caseless_ascii => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.strDropPrefixCaselessAscii(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+
+                const layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (layout_val.tag != .struct_) {
+                    return self.runtimeError("str_drop_prefix_caseless_ascii expected a record return layout");
+                }
+                const record_idx = layout_val.getStruct().idx;
+                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
+                if (fields.len != 2 or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .bool)
+                {
+                    return self.runtimeError("str_drop_prefix_caseless_ascii expected fields after Str, found Bool");
+                }
+
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1)).write(u8, if (result.found) 1 else 0);
+                break :blk val;
+            },
             .str_count_utf8_bytes => blk: {
                 const result = builtins.str.countUtf8Bytes(valueToRocStr(args[0]));
                 const val = try self.alloc(ll.ret_layout);
@@ -4471,6 +4720,26 @@ pub const Interpreter = struct {
                 const bits: u64 = @bitCast(args[0].read(f64));
                 const result = builtins.str.floatToStrFromBits(bits, false, &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .f32_to_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u32, @bitCast(args[0].read(f32)));
+                break :blk val;
+            },
+            .f32_from_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(f32, @bitCast(args[0].read(u32)));
+                break :blk val;
+            },
+            .f64_to_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, @bitCast(args[0].read(f64)));
+                break :blk val;
+            },
+            .f64_from_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(f64, @bitCast(args[0].read(u64)));
+                break :blk val;
             },
             .num_to_str => blk: {
                 // Generic num_to_str uses arg layout to determine type
@@ -4957,6 +5226,12 @@ pub const Interpreter = struct {
             .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff),
             .num_pow => self.evalNumPow(args[0], args[1], ll.ret_layout, arg_layout),
             .num_sqrt => self.evalNumSqrt(args[0], ll.ret_layout, arg_layout),
+            .num_sin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .sin),
+            .num_cos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .cos),
+            .num_tan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .tan),
+            .num_asin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .asin),
+            .num_acos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .acos),
+            .num_atan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .atan),
             .num_log => self.evalNumLog(args[0], ll.ret_layout, arg_layout),
             .num_round => self.evalNumRound(args[0], ll.ret_layout, arg_layout),
             .num_floor => self.evalNumFloor(args[0], ll.ret_layout, arg_layout),
@@ -5689,6 +5964,9 @@ pub const Interpreter = struct {
                 var field_index: usize = 0;
                 while (field_index < fields.len) : (field_index += 1) {
                     const field = fields.get(@intCast(field_index));
+                    // Padding spacers hold uninitialized bytes; they are not part
+                    // of a value's identity and must never be compared.
+                    if (field.is_padding) continue;
                     const field_layout = field.layout;
                     const field_size = self.helper.sizeOf(field_layout);
                     if (field_size == 0) continue;
@@ -5740,7 +6018,7 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        // Returns 0=LT, 1=EQ, 2=GT
+        // Runtime tag order for [LT, EQ, GT]: EQ=0, GT=1, LT=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
                 8 => cmpOrder(u8, a.read(u8), b.read(u8)),
@@ -5850,9 +6128,11 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @sqrt(dec.toF64());
-                val.write(i128, (RocDec{ .num = builtins.dec.fromF64C(f, &self.roc_ops) }).num);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                val.write(i128, builtins.dec.sqrtC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @sqrt(a.read(f32))),
@@ -5870,7 +6150,13 @@ pub const Interpreter = struct {
     fn evalNumLog(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) })),
+            .dec => {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
+            },
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @log(a.read(f32))),
                 64 => val.write(f64, @log(a.read(f64))),
@@ -5884,17 +6170,68 @@ pub const Interpreter = struct {
         return val;
     }
 
+    const FloatUnaryMathOp = enum {
+        sin,
+        cos,
+        tan,
+        asin,
+        acos,
+        atan,
+    };
+
+    fn floatUnaryMath(comptime F: type, value: F, comptime op: FloatUnaryMathOp) F {
+        return switch (op) {
+            .sin => std.math.sin(value),
+            .cos => std.math.cos(value),
+            .tan => std.math.tan(value),
+            .asin => std.math.asin(value),
+            .acos => std.math.acos(value),
+            .atan => std.math.atan(value),
+        };
+    }
+
+    fn evalNumFloatUnaryMath(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, comptime op: FloatUnaryMathOp) Error!Value {
+        const val = try self.alloc(ret_layout);
+        switch (try self.numericOperandKind(arg_layout)) {
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, floatUnaryMath(f32, a.read(f32), op)),
+                64 => val.write(f64, floatUnaryMath(f64, a.read(f64), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float {s} width {d}", .{ @tagName(op), bits }),
+            },
+            .dec => {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const dec = RocDec{ .num = a.read(i128) };
+                const result = switch (op) {
+                    .sin => builtins.dec.sinC(dec, &self.roc_ops),
+                    .cos => builtins.dec.cosC(dec, &self.roc_ops),
+                    .tan => builtins.dec.tanC(dec, &self.roc_ops),
+                    .asin => builtins.dec.asinC(dec, &self.roc_ops),
+                    .acos => builtins.dec.acosC(dec, &self.roc_ops),
+                    .atan => builtins.dec.atanC(dec, &self.roc_ops),
+                };
+                val.write(i128, result);
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
+                .{ @tagName(op), @intFromEnum(arg_layout) },
+            ),
+        }
+        return val;
+    }
+
     fn evalNumRound(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => {
                 const dec = RocDec{ .num = a.read(i128) };
-                const f = @round(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
+                val.write(i128, RocDec.round(dec, &self.roc_ops).num);
             },
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@round(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@round(a.read(f64))))),
+                32 => val.write(f32, @round(a.read(f32))),
+                64 => val.write(f64, @round(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float round width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -5908,14 +6245,13 @@ pub const Interpreter = struct {
     fn evalNumFloor(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @floor(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
-            },
+            .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Dec num_floor survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@floor(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@floor(a.read(f64))))),
+                32 => val.write(f32, @floor(a.read(f32))),
+                64 => val.write(f64, @floor(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float floor width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -5929,14 +6265,13 @@ pub const Interpreter = struct {
     fn evalNumCeiling(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @ceil(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
-            },
+            .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Dec num_ceiling survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@ceil(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@ceil(a.read(f64))))),
+                32 => val.write(f32, @ceil(a.read(f32))),
+                64 => val.write(f64, @ceil(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float ceiling width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -6959,9 +7294,9 @@ pub const Interpreter = struct {
     }
 
     fn cmpOrder(comptime T: type, av: T, bv: T) u8 {
-        if (av < bv) return 0; // LT
-        if (av == bv) return 1; // EQ
-        return 2; // GT
+        if (av == bv) return 0; // EQ
+        if (av > bv) return 1; // GT
+        return 2; // LT
     }
 
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {

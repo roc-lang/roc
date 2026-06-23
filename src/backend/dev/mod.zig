@@ -24,7 +24,9 @@ pub const object_reader = @import("object_reader.zig");
 const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
+pub const applyRelocationsWithContext = relocation_mod.applyRelocationsWithContext;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
+pub const SymbolResolverContext = relocation_mod.SymbolResolverContext;
 pub const ValueStorage = @import("ValueStorage.zig");
 pub const ObjectWriter = @import("ObjectWriter.zig");
 pub const Dwarf = @import("Dwarf.zig");
@@ -52,6 +54,7 @@ pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("O
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
 pub const StaticStringData = @import("StaticStringData.zig");
+pub const RunImage = @import("RunImage.zig");
 pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
 pub const writeFileWindowsAvSafe = @import("ObjectFileCompiler.zig").writeFileWindowsAvSafe;

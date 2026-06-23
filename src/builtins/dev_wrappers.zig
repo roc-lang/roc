@@ -15,6 +15,7 @@ const erased_callable = @import("erased_callable.zig");
 const dec = @import("dec.zig");
 const hash = @import("hash.zig");
 const i128h = @import("compiler_rt_128.zig");
+const float_tan = @import("float_math/tan.zig");
 const numeric_conversions = @import("numeric_conversions.zig");
 
 const RocStr = str.RocStr;
@@ -23,6 +24,19 @@ const FromUtf8Try = str.FromUtf8Try;
 // Use a local opaque pointer type for RocOps to avoid importing host_abi.zig
 // which has a tracy dependency. The actual struct layout is handled by utils.zig.
 const RocOps = utils.RocOps;
+
+/// Field offsets for the dev backend's `Str.find_first` result copy.
+pub const StrFindFirstLayout = extern struct {
+    after_offset: u32,
+    before_offset: u32,
+    found_offset: u32,
+};
+
+/// Field offsets for the dev backend's `Str.drop_prefix_caseless_ascii` result copy.
+pub const StrDropPrefixCaselessAsciiLayout = extern struct {
+    after_offset: u32,
+    found_offset: u32,
+};
 
 // Re-export commonly used functions
 pub const rcNone = utils.rcNone;
@@ -115,7 +129,7 @@ const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listDecref = list.listDecref;
 const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
-const RcIncFn = *const fn (?[*]u8, u64, *RocOps) callconv(.c) void;
+const RcIncFn = *const fn (?[*]u8, isize, *RocOps) callconv(.c) void;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -164,10 +178,51 @@ pub fn roc_builtins_str_equal(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_byt
     return strEqual(a, b);
 }
 
+/// Wrapper: strEqualStaticSmall(RocStr, u64, u64, u64, u64) -> bool
+pub fn roc_builtins_str_equal_static_small(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, static_len: u64, word0: u64, word1: u64, word2: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return str.strEqualStaticSmall(a, static_len, word0, word1, word2);
+}
+
+/// Wrapper: strStaticSmallWordEq(RocStr, u64, u64, u64) -> bool
+pub fn roc_builtins_str_static_small_word_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return str.strStaticSmallWordEq(a, offset, active_len, word);
+}
+
+/// Wrapper: strStaticSmallWordCaselessEq(RocStr, u64, u64, u64) -> bool
+pub fn roc_builtins_str_static_small_word_caseless_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, offset: u64, active_len: u64, word: u64) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    return str.strStaticSmallWordCaselessEq(a, offset, active_len, word);
+}
+
 /// Wrapper: countUtf8Bytes(RocStr) -> u64
 pub fn roc_builtins_str_count_utf8_bytes(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     return countUtf8Bytes(s);
+}
+
+/// Wrapper: findFirst(RocStr, RocStr, *RocOps) -> { before, found, after }
+pub fn roc_builtins_str_find_first(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrFindFirstLayout, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    const result = str.findFirst(a, b, roc_ops);
+    const out_bytes: [*]u8 = @ptrCast(out);
+
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.after_offset))).* = result.after;
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.before_offset))).* = result.before;
+    @as(*u8, @ptrCast(@alignCast(out_bytes + layout.found_offset))).* = if (result.found) 1 else 0;
+}
+
+/// Wrapper: strDropPrefixCaselessAscii(RocStr, RocStr, *RocOps) -> { after, found }
+pub fn roc_builtins_str_drop_prefix_caseless_ascii(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrDropPrefixCaselessAsciiLayout, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    const result = str.strDropPrefixCaselessAscii(a, b, roc_ops);
+    const out_bytes: [*]u8 = @ptrCast(out);
+
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.after_offset))).* = result.after;
+    @as(*u8, @ptrCast(@alignCast(out_bytes + layout.found_offset))).* = if (result.found) 1 else 0;
 }
 
 /// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool
@@ -1384,6 +1439,62 @@ pub fn roc_builtins_dec_div_trunc(out_low: *u64, out_high: *u64, a_low: u64, a_h
     out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
 }
 
+/// Dec power (decomposed)
+pub fn roc_builtins_dec_pow(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
+    const result = dec.powC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+}
+
+fn writeDecUnaryResult(out_low: *u64, out_high: *u64, result: i128) void {
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+}
+
+/// Dec square root (decomposed)
+pub fn roc_builtins_dec_sqrt(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.sqrtC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec sine (decomposed)
+pub fn roc_builtins_dec_sin(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.sinC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec cosine (decomposed)
+pub fn roc_builtins_dec_cos(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.cosC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec tangent (decomposed)
+pub fn roc_builtins_dec_tan(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.tanC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec arcsine (decomposed)
+pub fn roc_builtins_dec_asin(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.asinC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec arccosine (decomposed)
+pub fn roc_builtins_dec_acos(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.acosC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec arctangent (decomposed)
+pub fn roc_builtins_dec_atan(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.atanC(dec.RocDec{ .num = a }, roc_ops));
+}
+
 // ── i128 div/rem wrappers (decomposed) ──
 
 /// u128 div trunc (decomposed)
@@ -1536,6 +1647,125 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
 /// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = str.floatToStrFromBits(val_bits, is_f32, roc_ops);
+}
+
+/// Return the floor of an F32 or F64 value passed as F64, preserving the requested width.
+pub fn roc_builtins_float_floor(val: f64, float_width: u8) callconv(.c) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(@floor(@as(f32, @floatCast(val))))),
+        8 => @floor(val),
+        else => unreachable,
+    };
+}
+
+/// Return the ceiling of an F32 or F64 value passed as F64, preserving the requested width.
+pub fn roc_builtins_float_ceiling(val: f64, float_width: u8) callconv(.c) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(@ceil(@as(f32, @floatCast(val))))),
+        8 => @ceil(val),
+        else => unreachable,
+    };
+}
+
+/// Raise an F32 or F64 base to an exponent, with both values passed as F64.
+pub fn roc_builtins_float_pow(base: f64, exponent: f64, float_width: u8) callconv(.c) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(std.math.pow(f32, @as(f32, @floatCast(base)), @as(f32, @floatCast(exponent))))),
+        8 => std.math.pow(f64, base, exponent),
+        else => unreachable,
+    };
+}
+
+const FloatUnaryMathOp = enum {
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+};
+
+fn floatUnaryMath(val: f64, float_width: u8, comptime op: FloatUnaryMathOp) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(switch (op) {
+            .sin => std.math.sin(@as(f32, @floatCast(val))),
+            .cos => std.math.cos(@as(f32, @floatCast(val))),
+            .tan => float_tan.tan32(@as(f32, @floatCast(val))),
+            .asin => std.math.asin(@as(f32, @floatCast(val))),
+            .acos => std.math.acos(@as(f32, @floatCast(val))),
+            .atan => std.math.atan(@as(f32, @floatCast(val))),
+        })),
+        8 => switch (op) {
+            .sin => std.math.sin(val),
+            .cos => std.math.cos(val),
+            .tan => float_tan.tan64(val),
+            .asin => std.math.asin(val),
+            .acos => std.math.acos(val),
+            .atan => std.math.atan(val),
+        },
+        else => unreachable,
+    };
+}
+
+/// Return the sine of an F32 or F64 value passed as F64.
+pub fn roc_builtins_float_sin(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .sin);
+}
+
+/// Return the cosine of an F32 or F64 value passed as F64.
+pub fn roc_builtins_float_cos(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .cos);
+}
+
+/// Return the tangent of an F32 or F64 value passed as F64.
+pub fn roc_builtins_float_tan(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .tan);
+}
+
+/// Return the arcsine of an F32 or F64 value passed as F64.
+pub fn roc_builtins_float_asin(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .asin);
+}
+
+/// Return the arccosine of an F32 or F64 value passed as F64.
+pub fn roc_builtins_float_acos(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .acos);
+}
+
+/// Return the arctangent of an F32 or F64 value passed as F64.
+pub fn roc_builtins_float_atan(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .atan);
+}
+
+test "float floor and ceiling wrappers" {
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_floor(3.9, 4));
+    try std.testing.expectEqual(@as(f64, -4.0), roc_builtins_float_floor(-3.2, 4));
+    try std.testing.expectEqual(@as(f64, 4.0), roc_builtins_float_ceiling(3.2, 4));
+    try std.testing.expectEqual(@as(f64, -3.0), roc_builtins_float_ceiling(-3.2, 4));
+
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_floor(3.9, 8));
+    try std.testing.expectEqual(@as(f64, -4.0), roc_builtins_float_floor(-3.2, 8));
+    try std.testing.expectEqual(@as(f64, 4.0), roc_builtins_float_ceiling(3.2, 8));
+    try std.testing.expectEqual(@as(f64, -3.0), roc_builtins_float_ceiling(-3.2, 8));
+}
+
+test "float pow wrapper" {
+    try std.testing.expectEqual(@as(f64, 8.0), roc_builtins_float_pow(2.0, 3.0, 4));
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_pow(9.0, 0.5, 4));
+
+    try std.testing.expectEqual(@as(f64, 8.0), roc_builtins_float_pow(2.0, 3.0, 8));
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_pow(9.0, 0.5, 8));
+}
+
+test "float trig wrappers" {
+    inline for (.{ @as(u8, 4), @as(u8, 8) }) |width| {
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_sin(0.0, width));
+        try std.testing.expectEqual(@as(f64, 1.0), roc_builtins_float_cos(0.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_tan(0.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_asin(0.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_acos(1.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_atan(0.0, width));
+    }
 }
 
 test "direct float wrapper f32" {
