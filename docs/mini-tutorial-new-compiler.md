@@ -698,7 +698,7 @@ The initial hello world example at the start is a special kind of app, a headerl
 Many Roc apps you encounter will have a header similar to this one:
 
 ```ruby
-app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/0.8/8qf28cxTaxwA16Xe3VBR7YSP2KLVUqDHiPpFYgyikEa1.tar.zst" }
+app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/0.9/8GdFEvQYS3TeAZxKvTzCLVdQiomweGtXcdZkXNDEeABq.tar.zst" }
 ```
 
 Let's break the header down:
