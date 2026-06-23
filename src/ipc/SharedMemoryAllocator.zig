@@ -16,18 +16,21 @@
 //! to the child process. Uses anonymous file mapping objects with handle inheritance.
 //!
 //! **POSIX (Linux/macOS/BSD)**: Creates a coordination file next to the child executable
-//! containing the file descriptor and size. Linux uses `memfd_create`, macOS uses
-//! an unlinked temporary file so generated code pages can be marked executable,
-//! and BSDs use `shm_open`.
+//! containing the file descriptor and size. Linux uses `memfd_create`, while
+//! macOS and BSDs use `shm_open` for ordinary shared memory.
 //!
 //! An important detail is that it provides access to the child process via a file
 //! descriptor rather than using named shared memory. As it turns out, macOS has a
 //! security restriction where if a process creates an executable on disk (which Roc's
 //! compiler does), and then runs that executable, the child process is not allowed
-//! to call shm_open(). (If it tries to, shm_open always fails with errno 13.) macOS
-//! POSIX shm objects also cannot back the dev shim's executable code pages. If the
-//! parent process instead gives a regular fd to the child, the child can map the
-//! shared memory and the machine-code shim can mark generated code pages executable.
+//! to call shm_open(). (If it tries to, shm_open always fails with errno 13.) If the
+//! parent process instead gives a fd to the child for the shared memory, the child
+//! process is allowed to use that to map in the shared memory and access it that way.
+//!
+//! macOS POSIX shm objects cannot back the dev shim's executable code pages, so
+//! callers that need to `mprotect` generated code use the explicit executable
+//! creation path. On macOS that path uses an unlinked temporary file as the fd
+//! backing; ordinary shared-memory users stay on `shm_open`.
 //!
 //! The coordination logic is handled by `src/ipc/coordination.zig`, while the
 //! low-level platform operations are abstracted in `src/ipc/platform.zig`.
@@ -74,14 +77,33 @@ pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
 
 /// Creates a new anonymous shared memory region with the given size
 pub fn create(io: std.Io, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
-    return createWithMapFailureLogging(io, size, page_size, true);
+    return createWithMapFailureLogging(io, size, page_size, true, .normal);
 }
 
-fn createWithMapFailureLogging(io: std.Io, size: usize, page_size: usize, log_map_failure: bool) platform.SharedMemoryError!SharedMemoryAllocator {
+/// Creates a shared memory region whose pages can later be marked executable.
+pub fn createExecutable(io: std.Io, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
+    return createWithMapFailureLogging(io, size, page_size, true, .executable);
+}
+
+const MappingKind = enum {
+    normal,
+    executable,
+};
+
+fn createWithMapFailureLogging(
+    io: std.Io,
+    size: usize,
+    page_size: usize,
+    log_map_failure: bool,
+    mapping_kind: MappingKind,
+) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Create the shared memory mapping
-    const handle = try platform.createMapping(io, aligned_size);
+    const handle = switch (mapping_kind) {
+        .normal => try platform.createMapping(io, aligned_size),
+        .executable => try platform.createExecutableMapping(io, aligned_size),
+    };
     errdefer platform.closeHandle(handle, true);
 
     // Map the memory
@@ -145,13 +167,33 @@ pub fn createWithMinSize(
     min_size: usize,
     page_size: usize,
 ) platform.SharedMemoryError!SharedMemoryAllocator {
+    return createWithMinSizeKind(io, preferred_size, min_size, page_size, .normal);
+}
+
+/// Like `createWithMinSize`, but uses backing whose pages can later be marked executable.
+pub fn createExecutableWithMinSize(
+    io: std.Io,
+    preferred_size: usize,
+    min_size: usize,
+    page_size: usize,
+) platform.SharedMemoryError!SharedMemoryAllocator {
+    return createWithMinSizeKind(io, preferred_size, min_size, page_size, .executable);
+}
+
+fn createWithMinSizeKind(
+    io: std.Io,
+    preferred_size: usize,
+    min_size: usize,
+    page_size: usize,
+    mapping_kind: MappingKind,
+) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_preferred = std.mem.alignForward(usize, preferred_size, page_size);
     const aligned_min = std.mem.alignForward(usize, @min(min_size, preferred_size), page_size);
 
     var current_size = aligned_preferred;
     while (true) {
         const log_map_failure = platform.is_windows or current_size <= aligned_min;
-        if (createWithMapFailureLogging(io, current_size, page_size, log_map_failure)) |shm| {
+        if (createWithMapFailureLogging(io, current_size, page_size, log_map_failure, mapping_kind)) |shm| {
             if (current_size < aligned_preferred) {
                 std.log.warn(
                     "shared memory: OS rejected preferred reservation of {} bytes; using {} bytes instead",
@@ -620,7 +662,7 @@ test "shared memory allocator cross-process" {
 
 test "fromFd maps pages that can be marked executable" {
     const page_size = try getSystemPageSize();
-    var owner = try SharedMemoryAllocator.create(std.testing.io, page_size * 2, page_size);
+    var owner = try SharedMemoryAllocator.createExecutable(std.testing.io, page_size * 2, page_size);
     defer owner.deinit(std.testing.allocator);
 
     const executable_handle = if (comptime platform.is_windows)

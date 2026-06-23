@@ -745,7 +745,7 @@ test "loaded dev program borrows direct shared image metadata" {
     };
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    var shm = try SharedMemoryAllocator.createExecutable(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
 
     const entrypoints = [_]RunImage.EntrypointInput{

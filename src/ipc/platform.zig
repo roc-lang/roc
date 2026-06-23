@@ -237,67 +237,78 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
 
             return fd;
         },
-        .macos => {
-            var random_buf: [8]u8 = undefined;
-            io.random(&random_buf);
-            const random_val = std.mem.readInt(u64, &random_buf, .little);
-
-            var file_path_buf: [std.fmt.count("/tmp/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
-            const file_path = std.fmt.bufPrintZ(&file_path_buf, "/tmp/roc_shm_{}", .{random_val}) catch unreachable;
-            const fd = std.c.open(
-                file_path,
-                std.c.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true },
-                @as(std.c.mode_t, 0o600),
-            );
-            if (fd < 0) return error.TempFileOpenFailed;
-
-            if (std.c.unlink(file_path) != 0) {
-                _ = std.c.close(fd);
-                return error.TempFileUnlinkFailed;
-            }
-
-            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
-                _ = std.c.close(fd);
-                return error.FtruncateFailed;
-            }
-
-            return fd;
-        },
-        .freebsd, .openbsd, .netbsd => {
-            // Use shm_open with a random name
-            var random_buf: [8]u8 = undefined;
-            io.random(&random_buf);
-            const random_val = std.mem.readInt(u64, &random_buf, .little);
-            // The name is "/roc_shm_" + a u64, so size the buffer to the longest
-            // possible such name (largest u64) plus a NUL — it can never overflow.
-            var shm_name_buf: [std.fmt.count("/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
-            const shm_name_null_terminated = std.fmt.bufPrintZ(&shm_name_buf, "/roc_shm_{}", .{random_val}) catch unreachable;
-            const fd = posix.shm_open(
-                shm_name_null_terminated,
-                @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
-                0o600,
-            );
-
-            if (fd < 0) {
-                return error.ShmOpenFailed;
-            }
-
-            // Immediately unlink so it gets cleaned up when all references are closed
-            if (posix.shm_unlink(shm_name_null_terminated) != 0) {
-                _ = std.c.close(fd);
-                return error.ShmUnlinkFailed;
-            }
-
-            // Set the size of the shared memory
-            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
-                _ = std.c.close(fd);
-                return error.FtruncateFailed;
-            }
-
-            return fd;
-        },
+        .macos, .freebsd, .openbsd, .netbsd => return createPosixShmMapping(io, size),
         else => return error.UnsupportedPlatform,
     }
+}
+
+/// Create shared memory whose pages can later be marked executable.
+pub fn createExecutableMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
+    return switch (builtin.os.tag) {
+        .macos => createUnlinkedTempFileMapping(io, size),
+        else => createMapping(io, size),
+    };
+}
+
+fn createUnlinkedTempFileMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
+    var random_buf: [8]u8 = undefined;
+    io.random(&random_buf);
+    const random_val = std.mem.readInt(u64, &random_buf, .little);
+
+    var file_path_buf: [std.fmt.count("/tmp/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
+    const file_path = std.fmt.bufPrintZ(&file_path_buf, "/tmp/roc_shm_{}", .{random_val}) catch unreachable;
+    const fd = std.c.open(
+        file_path,
+        std.c.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true },
+        @as(std.c.mode_t, 0o600),
+    );
+    if (fd < 0) return error.TempFileOpenFailed;
+
+    if (std.c.unlink(file_path) != 0) {
+        _ = std.c.close(fd);
+        return error.TempFileUnlinkFailed;
+    }
+
+    if (std.c.ftruncate(fd, @intCast(size)) != 0) {
+        _ = std.c.close(fd);
+        return error.FtruncateFailed;
+    }
+
+    return fd;
+}
+
+fn createPosixShmMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
+    // Use shm_open with a random name
+    var random_buf: [8]u8 = undefined;
+    io.random(&random_buf);
+    const random_val = std.mem.readInt(u64, &random_buf, .little);
+    // The name is "/roc_shm_" + a u64, so size the buffer to the longest
+    // possible such name (largest u64) plus a NUL - it can never overflow.
+    var shm_name_buf: [std.fmt.count("/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
+    const shm_name_null_terminated = std.fmt.bufPrintZ(&shm_name_buf, "/roc_shm_{}", .{random_val}) catch unreachable;
+    const fd = posix.shm_open(
+        shm_name_null_terminated,
+        @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
+        0o600,
+    );
+
+    if (fd < 0) {
+        return error.ShmOpenFailed;
+    }
+
+    // Immediately unlink so it gets cleaned up when all references are closed.
+    if (posix.shm_unlink(shm_name_null_terminated) != 0) {
+        _ = std.c.close(fd);
+        return error.ShmUnlinkFailed;
+    }
+
+    // Set the size of the shared memory.
+    if (std.c.ftruncate(fd, @intCast(size)) != 0) {
+        _ = std.c.close(fd);
+        return error.FtruncateFailed;
+    }
+
+    return fd;
 }
 
 /// Open an existing named shared memory mapping

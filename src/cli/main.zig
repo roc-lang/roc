@@ -687,6 +687,11 @@ fn createSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFail
     return SharedMemoryAllocator.createWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 
+/// Create the shared-memory arena used for dev-shim machine code.
+fn createExecutableSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFailed, FtruncateFailed, InvalidHandle, MapViewOfFileFailed, MemfdCreateFailed, MmapFailed, OpenFileMappingFailed, OutOfMemory, ShmOpenFailed, ShmUnlinkFailed, TempFileOpenFailed, TempFileUnlinkFailed, UnsupportedPlatform }!SharedMemoryAllocator {
+    return SharedMemoryAllocator.createExecutableWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
+}
+
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator.Error || error{ InvalidUtf8, PathAlreadyExists, Unexpected })!void {
     if (comptime builtin.target.os.tag == .windows) {
@@ -5273,7 +5278,7 @@ fn publishDevRunImage(
     enable_hot_reload: bool,
 ) CliMainError!SharedMemoryHandle {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemory(ctx.io.std_io, page_size);
+    var shm = try createExecutableSharedMemory(ctx.io.std_io, page_size);
     errdefer shm.deinit(ctx.gpa);
 
     const hot_reload_allocation: ?HotReloadImageAllocation = if (enable_hot_reload) blk: {
