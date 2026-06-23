@@ -7408,7 +7408,7 @@ fn collectExpectBindingPatterns(
     while (stack.pop()) |expr_idx| {
         switch (env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
-                if (std.mem.indexOfScalar(CIR.Pattern.Idx, patterns.items, lookup.pattern_idx) == null) {
+                if (std.mem.findScalar(CIR.Pattern.Idx, patterns.items, lookup.pattern_idx) == null) {
                     try patterns.append(allocator, lookup.pattern_idx);
                 }
             },
