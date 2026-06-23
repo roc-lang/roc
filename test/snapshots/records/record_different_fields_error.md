@@ -450,7 +450,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
-		(e-dispatch-call (method "negate") (constraint-fn-var 128)
+		(e-dispatch-call (method "negate") (constraint-fn-var 131)
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(args)))
