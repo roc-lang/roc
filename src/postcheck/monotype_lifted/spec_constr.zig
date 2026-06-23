@@ -3292,6 +3292,7 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .field_access => |field| exprContainsReturn(program, field.receiver),
         .tuple_access => |access| exprContainsReturn(program, access.tuple),
         .structural_eq => |eq| exprContainsReturn(program, eq.lhs) or exprContainsReturn(program, eq.rhs),
+        .structural_hash => |h| exprContainsReturn(program, h.value) or exprContainsReturn(program, h.hasher),
         .match_ => |match| blk: {
             if (exprContainsReturn(program, match.scrutinee)) break :blk true;
             for (program.branchSpan(match.branches)) |branch| {
