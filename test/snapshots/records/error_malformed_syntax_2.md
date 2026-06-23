@@ -18,8 +18,7 @@ DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 │                                                                             │
 │  { age: 42, name = "Alice" }                                                │
 │         ‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    error_malformed_syntax_2.md:1:8
+└──────────────────────────────────────────── error_malformed_syntax_2.md:1:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                               ┌────────────────────────────────┐
@@ -28,8 +27,7 @@ DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 │                                                                             │
 │  { age: 42, name = "Alice" }                                                │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    error_malformed_syntax_2.md:1:10
+└─────────────────────────────────────────── error_malformed_syntax_2.md:1:10 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                     ┌──────────────────────────┐
@@ -38,8 +36,7 @@ DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 │                                                                             │
 │  { age: 42, name = "Alice" }                                                │
 │    ‾‾‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    error_malformed_syntax_2.md:1:3
+└──────────────────────────────────────────── error_malformed_syntax_2.md:1:3 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

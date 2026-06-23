@@ -16,8 +16,7 @@ TYPE MISMATCH - can_list_two_elements.md:1:5:1:12
 │                                                                             │
 │  [1, "hello"]                                                               │
 │      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_list_two_elements.md:1:5
+└─────────────────────────────────────────────── can_list_two_elements.md:1:5 ┘
 
     The type was determined to be:
 

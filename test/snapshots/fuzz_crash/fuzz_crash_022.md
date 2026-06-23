@@ -38,8 +38,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │  ‾‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:1
+└────────────────────────────────────────────────────── fuzz_crash_022.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                          ┌─────────────────────────────────────┐
@@ -48,8 +47,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │                    ‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:19
+└───────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                                                  ┌─────────────┐
@@ -58,8 +56,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:28
+└───────────────────────────────────────────────────── fuzz_crash_022.md:1:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -68,8 +65,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:29
+└───────────────────────────────────────────────────── fuzz_crash_022.md:1:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -78,8 +74,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:30
+└───────────────────────────────────────────────────── fuzz_crash_022.md:1:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -88,8 +83,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │                                 ‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:32
+└───────────────────────────────────────────────────── fuzz_crash_022.md:1:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -98,8 +92,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  getUser = |id| if (id > 1!) "big" else "l"                                 │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:6:27
+└───────────────────────────────────────────────────── fuzz_crash_022.md:6:27 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -108,8 +101,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  getUser = |id| if (id > 1!) "big" else "l"                                 │
 │                                    ‾‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:6:35
+└───────────────────────────────────────────────────── fuzz_crash_022.md:6:35 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -118,8 +110,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  -ain! = |_| getUser(900)                                                   │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:8:7
+└────────────────────────────────────────────────────── fuzz_crash_022.md:8:7 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                                  ┌─────────────┐
@@ -128,8 +119,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │                                                                             │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:9:1
+└────────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -138,8 +128,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │                                                                             │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:9:1
+└────────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                               ┌────────────────┐
@@ -148,8 +137,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │                    ‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:19
+└───────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
 
 INVALID IF CONDITION
 
@@ -161,8 +149,7 @@ The condition must be a valid expression that evaluates to a Bool value (Bool.tr
 │                                                                             │
 │  getUser = |id| if (id > 1!) "big" else "l"                                 │
 │             ‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:6:12
+└───────────────────────────────────────────────────── fuzz_crash_022.md:6:12 ┘
 
     If you don't need this variable, prefix it with an underscore like _id to
     suppress this warning.
@@ -172,8 +159,7 @@ The condition must be a valid expression that evaluates to a Bool value (Bool.tr
 │                                                                             │
 │  app [main!] { |f: platform "c" }                                           │
 │                 ‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:1:16
+└───────────────────────────────────────────────────── fuzz_crash_022.md:1:16 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -183,8 +169,7 @@ The condition must be a valid expression that evaluates to a Bool value (Bool.tr
 │                                                                             │
 │  ser : UserId -> Str                                                        │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_022.md:5:1
+└────────────────────────────────────────────────────── fuzz_crash_022.md:5:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

@@ -49,8 +49,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field$special: "dollar",                                               │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:6:10
+└────────────────────────────────────── record_different_fields_error.md:6:10 ┘
 
                                          ┌─────────────────────────────────────┐
 ┌─ The token " is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
@@ -58,8 +57,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      _privateField: "leading underscore",                                   │
 │                     ‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:2:20
+└────────────────────────────────────── record_different_fields_error.md:2:20 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                               ┌────────────────────────────────┐
@@ -68,8 +66,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      _privateField: "leading underscore",                                   │
 │                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:2:21
+└────────────────────────────────────── record_different_fields_error.md:2:21 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -78,8 +75,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      _privateField: "leading underscore",                                   │
 │                                        ‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:2:39
+└────────────────────────────────────── record_different_fields_error.md:2:39 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -88,8 +84,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      _privateField: "leading underscore",                                   │
 │                                         ‾                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:2:40
+└────────────────────────────────────── record_different_fields_error.md:2:40 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                          ┌─────────────────────────────────────┐
@@ -98,8 +93,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field_: "trailing underscore",                                         │
 │              ‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:3:13
+└────────────────────────────────────── record_different_fields_error.md:3:13 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                               ┌────────────────────────────────┐
@@ -108,8 +102,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field_: "trailing underscore",                                         │
 │               ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:3:14
+└────────────────────────────────────── record_different_fields_error.md:3:14 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -118,8 +111,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field_: "trailing underscore",                                         │
 │                                  ‾                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:3:33
+└────────────────────────────────────── record_different_fields_error.md:3:33 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -128,8 +120,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field_: "trailing underscore",                                         │
 │                                   ‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:3:34
+└────────────────────────────────────── record_different_fields_error.md:3:34 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -138,8 +129,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      PascalCase: "pascal",                                                  │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:4:15
+└────────────────────────────────────── record_different_fields_error.md:4:15 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -148,8 +138,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      PascalCase: "pascal",                                                  │
 │                          ‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:4:25
+└────────────────────────────────────── record_different_fields_error.md:4:25 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -158,8 +147,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      kebab-case: "kebab",                                                   │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:5:15
+└────────────────────────────────────── record_different_fields_error.md:5:15 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -168,8 +156,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      kebab-case: "kebab",                                                   │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:5:24
+└────────────────────────────────────── record_different_fields_error.md:5:24 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                          ┌─────────────────────────────────────┐
@@ -178,8 +165,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field$special: "dollar",                                               │
 │                     ‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:6:20
+└────────────────────────────────────── record_different_fields_error.md:6:20 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                               ┌────────────────────────────────┐
@@ -188,8 +174,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field$special: "dollar",                                               │
 │                      ‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:6:21
+└────────────────────────────────────── record_different_fields_error.md:6:21 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -198,8 +183,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field$special: "dollar",                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:6:27
+└────────────────────────────────────── record_different_fields_error.md:6:27 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -208,8 +192,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field$special: "dollar",                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:6:28
+└────────────────────────────────────── record_different_fields_error.md:6:28 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -218,8 +201,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field@symbol: "at symbol",                                             │
 │           ‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:7:10
+└────────────────────────────────────── record_different_fields_error.md:7:10 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -228,8 +210,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field@symbol: "at symbol",                                             │
 │                  ‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:7:17
+└────────────────────────────────────── record_different_fields_error.md:7:17 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -238,8 +219,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field@symbol: "at symbol",                                             │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:7:30
+└────────────────────────────────────── record_different_fields_error.md:7:30 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                     ┌──────────────────────────┐
@@ -248,8 +228,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      _privateField: "leading underscore",                                   │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:2:5
+└─────────────────────────────────────── record_different_fields_error.md:2:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -259,8 +238,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field_: "trailing underscore",                                         │
 │      ‾‾‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:3:5
+└─────────────────────────────────────── record_different_fields_error.md:3:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -270,8 +248,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      PascalCase: "pascal",                                                  │
 │      ‾‾‾‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:4:5
+└─────────────────────────────────────── record_different_fields_error.md:4:5 ┘
 
     It has the type:
 
@@ -285,8 +262,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      PascalCase: "pascal",                                                  │
 │                  ‾‾‾‾‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:4:17
+└────────────────────────────────────── record_different_fields_error.md:4:17 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -297,8 +273,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      kebab-case: "kebab",                                                   │
 │                  ‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:5:17
+└────────────────────────────────────── record_different_fields_error.md:5:17 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -309,8 +284,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field$special: "dollar",                                               │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:6:5
+└─────────────────────────────────────── record_different_fields_error.md:6:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -320,8 +294,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 │                                                                             │
 │      field@symbol: "at symbol",                                             │
 │                    ‾‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_different_fields_error.md:7:19
+└────────────────────────────────────── record_different_fields_error.md:7:19 ┘
 
     The value's type, which does not have a method named from_quote, is:
 

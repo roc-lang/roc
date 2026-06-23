@@ -29,8 +29,7 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 │                                                                             │
 │  Container : a -> [Container(a)]                                            │
 │              ‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_associated_in_tuples.md:9:13
+└─────────────────────────────────────── nominal_associated_in_tuples.md:9:13 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -42,8 +41,7 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 │                                                                             │
 │  Container : a -> [Container(a)]                                            │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_associated_in_tuples.md:9:29
+└─────────────────────────────────────── nominal_associated_in_tuples.md:9:29 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -55,8 +53,7 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 │                                                                             │
 │  boxed : Container(Foo.Bar)                                                 │
 │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_associated_in_tuples.md:11:9
+└─────────────────────────────────────── nominal_associated_in_tuples.md:11:9 ┘
 
 # TOKENS
 ~~~zig

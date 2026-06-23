@@ -20,8 +20,7 @@ MISSING METHOD - generalize_alias_in_record.md:5:11:5:12
 │                                                                             │
 │  main = (r.f(1), r.f("a"))                                                  │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    generalize_alias_in_record.md:5:11
+└───────────────────────────────────────── generalize_alias_in_record.md:5:11 ┘
 
     The value's type, which does not have a method named f, is:
 

@@ -37,8 +37,7 @@ UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 │                                                                             │
 │      unused_var = 42                                                        │
 │      ‾‾‾‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unused_vars_block.md:5:5
+└─────────────────────────────────────────────────── unused_vars_block.md:5:5 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _unused_var to suppress this warning.
@@ -48,8 +47,7 @@ UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 │                                                                             │
 │      another_unused = "hello"                                               │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unused_vars_block.md:11:5
+└────────────────────────────────────────────────── unused_vars_block.md:11:5 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _another_unused to suppress this warning.

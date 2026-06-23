@@ -21,8 +21,7 @@ TOO MANY ARGS - test_instantiation_arity_mismatch.md:5:5:5:19
 │                                                                             │
 │      identity(1, 2)                                                         │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    test_instantiation_arity_mismatch.md:5:5
+└─────────────────────────────────── test_instantiation_arity_mismatch.md:5:5 ┘
 
     The identity function has the type:
 

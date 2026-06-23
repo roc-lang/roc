@@ -218,8 +218,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   where                                                                     │
 │   ‾‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:13:2
+└───────────────────────────────────────────────────────── everything.md:13:2 ┘
 
     Where clauses should look like:     where [a.method : Type]
                                                                  ┌─────────────┐
@@ -228,8 +227,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a1 : (                                                         │
 │    ‾‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:14:3
+└───────────────────────────────────────────────────────── everything.md:14:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -238,8 +236,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a1 : (                                                         │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:14:9
+└───────────────────────────────────────────────────────── everything.md:14:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -248,8 +245,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a1 : (                                                         │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:14:10
+└──────────────────────────────────────────────────────── everything.md:14:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -258,8 +254,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a1 : (                                                         │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:14:11
+└──────────────────────────────────────────────────────── everything.md:14:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -268,8 +263,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a1 : (                                                         │
 │             ‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:14:12
+└──────────────────────────────────────────────────────── everything.md:14:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -278,8 +272,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a1 : (                                                         │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:14:16
+└──────────────────────────────────────────────────────── everything.md:14:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -288,8 +281,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a1 : (                                                         │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:14:18
+└──────────────────────────────────────────────────────── everything.md:14:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -298,8 +290,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     a,                                                                      │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:15:4
+└───────────────────────────────────────────────────────── everything.md:15:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -308,8 +299,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     a,                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:15:5
+└───────────────────────────────────────────────────────── everything.md:15:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -318,8 +308,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     a                                                                       │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:16:4
+└───────────────────────────────────────────────────────── everything.md:16:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -328,8 +317,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str,                                                                │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:17:3
+└───────────────────────────────────────────────────────── everything.md:17:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -338,8 +326,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str,                                                                │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:17:5
+└───────────────────────────────────────────────────────── everything.md:17:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -352,8 +339,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str,                                                                │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:17:11
+└──────────────────────────────────────────────────────── everything.md:17:11 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -374,8 +360,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a2 : (                                                         │
 │    ‾‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:18:3
+└───────────────────────────────────────────────────────── everything.md:18:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -384,8 +369,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a2 : (                                                         │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:18:9
+└───────────────────────────────────────────────────────── everything.md:18:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -394,8 +378,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a2 : (                                                         │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:18:10
+└──────────────────────────────────────────────────────── everything.md:18:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -404,8 +387,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a2 : (                                                         │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:18:11
+└──────────────────────────────────────────────────────── everything.md:18:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -414,8 +396,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a2 : (                                                         │
 │             ‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:18:12
+└──────────────────────────────────────────────────────── everything.md:18:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -424,8 +405,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a2 : (                                                         │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:18:16
+└──────────────────────────────────────────────────────── everything.md:18:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -434,8 +414,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(a).a2 : (                                                         │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:18:18
+└──────────────────────────────────────────────────────── everything.md:18:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -444,8 +423,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     a,                                                                      │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:19:4
+└───────────────────────────────────────────────────────── everything.md:19:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -454,8 +432,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     a,                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:19:5
+└───────────────────────────────────────────────────────── everything.md:19:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -464,8 +441,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     a                                                                       │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:20:4
+└───────────────────────────────────────────────────────── everything.md:20:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -474,8 +450,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str                                                                 │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:21:3
+└───────────────────────────────────────────────────────── everything.md:21:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -484,8 +459,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str                                                                 │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:21:5
+└───────────────────────────────────────────────────────── everything.md:21:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -498,8 +472,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  B(b) : b                                                                   │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:22:1
+└───────────────────────────────────────────────────────── everything.md:22:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -520,8 +493,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  B(b) : b                                                                   │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:22:2
+└───────────────────────────────────────────────────────── everything.md:22:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -530,8 +502,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  B(b) : b                                                                   │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:22:3
+└───────────────────────────────────────────────────────── everything.md:22:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -540,8 +511,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  B(b) : b                                                                   │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:22:4
+└───────────────────────────────────────────────────────── everything.md:22:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -550,8 +520,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  B(b) : b                                                                   │
 │       ‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:22:6
+└───────────────────────────────────────────────────────── everything.md:22:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -560,8 +529,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  B(b) : b                                                                   │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:22:8
+└───────────────────────────────────────────────────────── everything.md:22:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -570,8 +538,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   where                                                                     │
 │   ‾‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:23:2
+└───────────────────────────────────────────────────────── everything.md:23:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -580,8 +547,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b1 : (                                                         │
 │    ‾‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:24:3
+└───────────────────────────────────────────────────────── everything.md:24:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -590,8 +556,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b1 : (                                                         │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:24:9
+└───────────────────────────────────────────────────────── everything.md:24:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -600,8 +565,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b1 : (                                                         │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:24:10
+└──────────────────────────────────────────────────────── everything.md:24:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -610,8 +574,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b1 : (                                                         │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:24:11
+└──────────────────────────────────────────────────────── everything.md:24:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -620,8 +583,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b1 : (                                                         │
 │             ‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:24:12
+└──────────────────────────────────────────────────────── everything.md:24:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -630,8 +592,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b1 : (                                                         │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:24:16
+└──────────────────────────────────────────────────────── everything.md:24:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -640,8 +601,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b1 : (                                                         │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:24:18
+└──────────────────────────────────────────────────────── everything.md:24:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -650,8 +610,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     b,                                                                      │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:25:4
+└───────────────────────────────────────────────────────── everything.md:25:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -660,8 +619,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     b,                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:25:5
+└───────────────────────────────────────────────────────── everything.md:25:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -670,8 +628,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     b                                                                       │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:26:4
+└───────────────────────────────────────────────────────── everything.md:26:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -680,8 +637,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str,                                                                │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:27:3
+└───────────────────────────────────────────────────────── everything.md:27:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -690,8 +646,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str,                                                                │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:27:5
+└───────────────────────────────────────────────────────── everything.md:27:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -704,8 +659,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str,                                                                │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:27:11
+└──────────────────────────────────────────────────────── everything.md:27:11 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -726,8 +680,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b2 : (                                                         │
 │    ‾‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:28:3
+└───────────────────────────────────────────────────────── everything.md:28:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -736,8 +689,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b2 : (                                                         │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:28:9
+└───────────────────────────────────────────────────────── everything.md:28:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -746,8 +698,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b2 : (                                                         │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:28:10
+└──────────────────────────────────────────────────────── everything.md:28:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -756,8 +707,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b2 : (                                                         │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:28:11
+└──────────────────────────────────────────────────────── everything.md:28:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -766,8 +716,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b2 : (                                                         │
 │             ‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:28:12
+└──────────────────────────────────────────────────────── everything.md:28:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -776,8 +725,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b2 : (                                                         │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:28:16
+└──────────────────────────────────────────────────────── everything.md:28:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -786,8 +734,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    module(b).b2 : (                                                         │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:28:18
+└──────────────────────────────────────────────────────── everything.md:28:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -796,8 +743,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     b,                                                                      │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:29:4
+└───────────────────────────────────────────────────────── everything.md:29:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -806,8 +752,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     b,                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:29:5
+└───────────────────────────────────────────────────────── everything.md:29:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -816,8 +761,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     b                                                                       │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:30:4
+└───────────────────────────────────────────────────────── everything.md:30:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -826,8 +770,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str                                                                 │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:31:3
+└───────────────────────────────────────────────────────── everything.md:31:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -836,8 +779,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │    ) -> Str                                                                 │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:31:5
+└───────────────────────────────────────────────────────── everything.md:31:5 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -850,8 +792,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  C(                                                                         │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:33:1
+└───────────────────────────────────────────────────────── everything.md:33:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -872,8 +813,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  C(                                                                         │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:33:2
+└───────────────────────────────────────────────────────── everything.md:33:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -882,8 +822,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   a,                                                                        │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:34:2
+└───────────────────────────────────────────────────────── everything.md:34:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -892,8 +831,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   a,                                                                        │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:34:3
+└───────────────────────────────────────────────────────── everything.md:34:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -902,8 +840,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   b                                                                         │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:35:2
+└───────────────────────────────────────────────────────── everything.md:35:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -912,8 +849,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  ) : (                                                                      │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:36:1
+└───────────────────────────────────────────────────────── everything.md:36:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -922,8 +858,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  ) : (                                                                      │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:36:3
+└───────────────────────────────────────────────────────── everything.md:36:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -932,8 +867,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  ) : (                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:36:5
+└───────────────────────────────────────────────────────── everything.md:36:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -942,8 +876,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   a,                                                                        │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:37:2
+└───────────────────────────────────────────────────────── everything.md:37:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -952,8 +885,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   a,                                                                        │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:37:3
+└───────────────────────────────────────────────────────── everything.md:37:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -962,8 +894,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   b                                                                         │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:38:2
+└───────────────────────────────────────────────────────── everything.md:38:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -972,8 +903,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  )                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:39:1
+└───────────────────────────────────────────────────────── everything.md:39:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                           ┌────────────────────┐
@@ -982,8 +912,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │             ‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:12
+└──────────────────────────────────────────────────────── everything.md:56:12 ┘
 
     Where clauses should look like:     where [a.method : Type]
                                                                  ┌─────────────┐
@@ -992,8 +921,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                   ‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:18
+└──────────────────────────────────────────────────────── everything.md:56:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1002,8 +930,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:24
+└──────────────────────────────────────────────────────── everything.md:56:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1012,8 +939,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                          ‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:25
+└──────────────────────────────────────────────────────── everything.md:56:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1022,8 +948,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:26
+└──────────────────────────────────────────────────────── everything.md:56:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1032,8 +957,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                            ‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:27
+└──────────────────────────────────────────────────────── everything.md:56:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1042,8 +966,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:29
+└──────────────────────────────────────────────────────── everything.md:56:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1052,8 +975,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                                ‾‾‾‾‾‾                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:31
+└──────────────────────────────────────────────────────── everything.md:56:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1062,8 +984,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                                      ‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:37
+└──────────────────────────────────────────────────────── everything.md:56:37 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1072,8 +993,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                                       ‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:38
+└──────────────────────────────────────────────────────── everything.md:56:38 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1082,8 +1002,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                                        ‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:39
+└──────────────────────────────────────────────────────── everything.md:56:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1092,8 +1011,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │                                         ‾‾                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:40
+└──────────────────────────────────────────────────────── everything.md:56:40 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                 ┌──────────────────────────────────────────────┐
@@ -1103,8 +1021,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  A(a) : a                                                                   │
 │   where                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:12:1
+└───────────────────────────────────────────────────────── everything.md:12:1 ┘
 
     You're attempting do this here:
                                                              ┌─────────────────┐
@@ -1113,8 +1030,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  ) : C(                                                                     │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:43:5
+└───────────────────────────────────────────────────────── everything.md:43:5 ┘
 
     This type is referenced here:
                                                       ┌────────────────────────┐
@@ -1123,8 +1039,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │             ‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:12
+└──────────────────────────────────────────────────────── everything.md:56:12 ┘
 
     Check the syntax of your where clause.
                                                              ┌─────────────────┐
@@ -1133,8 +1048,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │      b                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:88:5
+└───────────────────────────────────────────────────────── everything.md:88:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -1144,8 +1058,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │     b                                                                       │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:93:4
+└───────────────────────────────────────────────────────── everything.md:93:4 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -1155,8 +1068,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │      b                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:98:5
+└───────────────────────────────────────────────────────── everything.md:98:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -1166,8 +1078,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │      b                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:104:5
+└──────────────────────────────────────────────────────── everything.md:104:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -1177,8 +1088,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   h1 = {                                                                    │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:59:2
+└───────────────────────────────────────────────────────── everything.md:59:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h1 to
     suppress this warning.
@@ -1188,8 +1098,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   h2 = h(                                                                   │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:67:2
+└───────────────────────────────────────────────────────── everything.md:67:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h2 to
     suppress this warning.
@@ -1199,8 +1108,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   h3 = A(                                                                   │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:71:2
+└───────────────────────────────────────────────────────── everything.md:71:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h3 to
     suppress this warning.
@@ -1210,8 +1118,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   h4 = [                                                                    │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:75:2
+└───────────────────────────────────────────────────────── everything.md:75:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h4 to
     suppress this warning.
@@ -1221,8 +1128,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │   h5 = (                                                                    │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:79:2
+└───────────────────────────────────────────────────────── everything.md:79:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _h5 to
     suppress this warning.
@@ -1232,8 +1138,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │                                                                             │
 │  g : e -> e where module(e).A, module(e).B                                  │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:56:1
+└───────────────────────────────────────────────────────── everything.md:56:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -1265,8 +1170,7 @@ NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 │     ]                                                                       │
 │    ) => a                                                                   │
 │   }                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    everything.md:84:2
+└───────────────────────────────────────────────────────── everything.md:84:2 ┘
 
     The value being matched on has type:
             [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]

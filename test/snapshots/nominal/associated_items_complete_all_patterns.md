@@ -837,8 +837,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_forward := [A].{                                                        │
 │  ‾‾‾‾‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:2:1
+└────────────────────────────── associated_items_complete_all_patterns.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -847,8 +846,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_forward := [A].{                                                        │
 │             ‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:2:12
+└───────────────────────────── associated_items_complete_all_patterns.md:2:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -857,8 +855,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_forward := [A].{                                                        │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:2:15
+└───────────────────────────── associated_items_complete_all_patterns.md:2:15 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -867,8 +864,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_forward := [A].{                                                        │
 │                  ‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:2:17
+└───────────────────────────── associated_items_complete_all_patterns.md:2:17 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -889,8 +885,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_forward := [A].{                                                        │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:2:18
+└───────────────────────────── associated_items_complete_all_patterns.md:2:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -899,8 +894,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_forward := [A].{                                                        │
 │                    ‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:2:19
+└───────────────────────────── associated_items_complete_all_patterns.md:2:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -909,8 +903,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:5:1
+└────────────────────────────── associated_items_complete_all_patterns.md:5:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -919,8 +912,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_scope := [B].{                                                          │
 │  ‾‾‾‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:8:1
+└────────────────────────────── associated_items_complete_all_patterns.md:8:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -929,8 +921,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_scope := [B].{                                                          │
 │           ‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:8:10
+└───────────────────────────── associated_items_complete_all_patterns.md:8:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -939,8 +930,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_scope := [B].{                                                          │
 │              ‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:8:13
+└───────────────────────────── associated_items_complete_all_patterns.md:8:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -949,8 +939,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_scope := [B].{                                                          │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:8:15
+└───────────────────────────── associated_items_complete_all_patterns.md:8:15 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -971,8 +960,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_scope := [B].{                                                          │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:8:16
+└───────────────────────────── associated_items_complete_all_patterns.md:8:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -981,8 +969,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_scope := [B].{                                                          │
 │                  ‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:8:17
+└───────────────────────────── associated_items_complete_all_patterns.md:8:17 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -991,8 +978,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:10:1
+└───────────────────────────── associated_items_complete_all_patterns.md:10:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1001,8 +987,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_inner_first := [C].{                                                    │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:13:1
+└───────────────────────────── associated_items_complete_all_patterns.md:13:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1011,8 +996,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_inner_first := [C].{                                                    │
 │                 ‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:13:16
+└──────────────────────────── associated_items_complete_all_patterns.md:13:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1021,8 +1005,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_inner_first := [C].{                                                    │
 │                    ‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:13:19
+└──────────────────────────── associated_items_complete_all_patterns.md:13:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1031,8 +1014,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_inner_first := [C].{                                                    │
 │                      ‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:13:21
+└──────────────────────────── associated_items_complete_all_patterns.md:13:21 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1053,8 +1035,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_inner_first := [C].{                                                    │
 │                       ‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:13:22
+└──────────────────────────── associated_items_complete_all_patterns.md:13:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1063,8 +1044,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_inner_first := [C].{                                                    │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:13:23
+└──────────────────────────── associated_items_complete_all_patterns.md:13:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1073,8 +1053,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:19:1
+└───────────────────────────── associated_items_complete_all_patterns.md:19:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1083,8 +1062,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_2 = d2_inner_first.Inner.inner_val                                      │
 │                       ‾‾‾‾‾‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:21:22
+└──────────────────────────── associated_items_complete_all_patterns.md:21:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1093,8 +1071,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_2 = d2_inner_first.Inner.inner_val                                      │
 │                             ‾‾‾‾‾‾‾‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:21:28
+└──────────────────────────── associated_items_complete_all_patterns.md:21:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1103,8 +1080,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_val_middle := [G].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:23:1
+└───────────────────────────── associated_items_complete_all_patterns.md:23:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1113,8 +1089,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_val_middle := [G].{                                               │
 │                      ‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:23:21
+└──────────────────────────── associated_items_complete_all_patterns.md:23:21 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1123,8 +1098,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_val_middle := [G].{                                               │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:23:24
+└──────────────────────────── associated_items_complete_all_patterns.md:23:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1133,8 +1107,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_val_middle := [G].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:23:26
+└──────────────────────────── associated_items_complete_all_patterns.md:23:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1155,8 +1128,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_val_middle := [G].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:23:27
+└──────────────────────────── associated_items_complete_all_patterns.md:23:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1165,8 +1137,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_val_middle := [G].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:23:28
+└──────────────────────────── associated_items_complete_all_patterns.md:23:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1175,8 +1146,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:29:1
+└───────────────────────────── associated_items_complete_all_patterns.md:29:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1185,8 +1155,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_3 = d2_outer_val_middle.Inner.inner_val                                 │
 │                            ‾‾‾‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:30:27
+└──────────────────────────── associated_items_complete_all_patterns.md:30:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1195,8 +1164,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_3 = d2_outer_val_middle.Inner.inner_val                                 │
 │                                  ‾‾‾‾‾‾‾‾‾‾                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:30:33
+└──────────────────────────── associated_items_complete_all_patterns.md:30:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1205,8 +1173,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_refs_inner := [I].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:32:1
+└───────────────────────────── associated_items_complete_all_patterns.md:32:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1215,8 +1182,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_refs_inner := [I].{                                               │
 │                      ‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:32:21
+└──────────────────────────── associated_items_complete_all_patterns.md:32:21 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1225,8 +1191,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_refs_inner := [I].{                                               │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:32:24
+└──────────────────────────── associated_items_complete_all_patterns.md:32:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1235,8 +1200,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_refs_inner := [I].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:32:26
+└──────────────────────────── associated_items_complete_all_patterns.md:32:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1257,8 +1221,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_refs_inner := [I].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:32:27
+└──────────────────────────── associated_items_complete_all_patterns.md:32:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1267,8 +1230,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_outer_refs_inner := [I].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:32:28
+└──────────────────────────── associated_items_complete_all_patterns.md:32:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1277,8 +1239,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
 │                                     ‾‾‾‾‾‾                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:33:36
+└──────────────────────────── associated_items_complete_all_patterns.md:33:36 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1287,8 +1248,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
 │                                           ‾‾‾‾‾‾‾‾‾‾                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:33:42
+└──────────────────────────── associated_items_complete_all_patterns.md:33:42 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1297,8 +1257,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:38:1
+└───────────────────────────── associated_items_complete_all_patterns.md:38:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1307,8 +1266,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_scope_violation := [K].{                                                │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:41:1
+└───────────────────────────── associated_items_complete_all_patterns.md:41:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1317,8 +1275,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_scope_violation := [K].{                                                │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:41:20
+└──────────────────────────── associated_items_complete_all_patterns.md:41:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1327,8 +1284,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_scope_violation := [K].{                                                │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:41:23
+└──────────────────────────── associated_items_complete_all_patterns.md:41:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1337,8 +1293,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_scope_violation := [K].{                                                │
 │                          ‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:41:25
+└──────────────────────────── associated_items_complete_all_patterns.md:41:25 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1359,8 +1314,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_scope_violation := [K].{                                                │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:41:26
+└──────────────────────────── associated_items_complete_all_patterns.md:41:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1369,8 +1323,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_scope_violation := [K].{                                                │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:41:27
+└──────────────────────────── associated_items_complete_all_patterns.md:41:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1379,8 +1332,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:47:1
+└───────────────────────────── associated_items_complete_all_patterns.md:47:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1389,8 +1341,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_siblings := [M].{                                                       │
 │  ‾‾‾‾‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:49:1
+└───────────────────────────── associated_items_complete_all_patterns.md:49:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1399,8 +1350,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_siblings := [M].{                                                       │
 │              ‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:49:13
+└──────────────────────────── associated_items_complete_all_patterns.md:49:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1409,8 +1359,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_siblings := [M].{                                                       │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:49:16
+└──────────────────────────── associated_items_complete_all_patterns.md:49:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1419,8 +1368,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_siblings := [M].{                                                       │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:49:18
+└──────────────────────────── associated_items_complete_all_patterns.md:49:18 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1441,8 +1389,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_siblings := [M].{                                                       │
 │                    ‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:49:19
+└──────────────────────────── associated_items_complete_all_patterns.md:49:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1451,8 +1398,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_siblings := [M].{                                                       │
 │                     ‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:49:20
+└──────────────────────────── associated_items_complete_all_patterns.md:49:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -1461,8 +1407,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          valA = d2_siblings.InnerB.valB + 1                                 │
 │                            ‾‾‾‾‾‾‾                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:51:27
+└──────────────────────────── associated_items_complete_all_patterns.md:51:27 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -1472,8 +1417,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          valA = d2_siblings.InnerB.valB + 1                                 │
 │                            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:51:27
+└──────────────────────────── associated_items_complete_all_patterns.md:51:27 ┘
 
     To fix this, remove the expression at the very end.
                                                                  ┌─────────────┐
@@ -1482,8 +1426,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:57:1
+└───────────────────────────── associated_items_complete_all_patterns.md:57:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1492,8 +1435,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_5 = d2_siblings.InnerA.valA                                             │
 │                    ‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:58:19
+└──────────────────────────── associated_items_complete_all_patterns.md:58:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1502,8 +1444,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_5 = d2_siblings.InnerA.valA                                             │
 │                           ‾‾‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:58:26
+└──────────────────────────── associated_items_complete_all_patterns.md:58:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1512,8 +1453,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_types_then_vals := [P].{                                                │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:60:1
+└───────────────────────────── associated_items_complete_all_patterns.md:60:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1522,8 +1462,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_types_then_vals := [P].{                                                │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:60:20
+└──────────────────────────── associated_items_complete_all_patterns.md:60:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1532,8 +1471,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_types_then_vals := [P].{                                                │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:60:23
+└──────────────────────────── associated_items_complete_all_patterns.md:60:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1542,8 +1480,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_types_then_vals := [P].{                                                │
 │                          ‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:60:25
+└──────────────────────────── associated_items_complete_all_patterns.md:60:25 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1564,8 +1501,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_types_then_vals := [P].{                                                │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:60:26
+└──────────────────────────── associated_items_complete_all_patterns.md:60:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1574,8 +1510,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_types_then_vals := [P].{                                                │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:60:27
+└──────────────────────────── associated_items_complete_all_patterns.md:60:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1584,8 +1519,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:70:1
+└───────────────────────────── associated_items_complete_all_patterns.md:70:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1594,8 +1528,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_2 = d3_types_then_vals.L2.val2                                          │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:72:26
+└──────────────────────────── associated_items_complete_all_patterns.md:72:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1604,8 +1537,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_2 = d3_types_then_vals.L2.val2                                          │
 │                              ‾‾‾‾‾                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:72:29
+└──────────────────────────── associated_items_complete_all_patterns.md:72:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1614,8 +1546,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:73:26
+└──────────────────────────── associated_items_complete_all_patterns.md:73:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1624,8 +1555,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:73:29
+└──────────────────────────── associated_items_complete_all_patterns.md:73:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1634,8 +1564,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
 │                                 ‾‾‾‾‾                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:73:32
+└──────────────────────────── associated_items_complete_all_patterns.md:73:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1644,8 +1573,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_vals_then_types := [S].{                                                │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:75:1
+└───────────────────────────── associated_items_complete_all_patterns.md:75:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1654,8 +1582,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_vals_then_types := [S].{                                                │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:75:20
+└──────────────────────────── associated_items_complete_all_patterns.md:75:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1664,8 +1591,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_vals_then_types := [S].{                                                │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:75:23
+└──────────────────────────── associated_items_complete_all_patterns.md:75:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1674,8 +1600,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_vals_then_types := [S].{                                                │
 │                          ‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:75:25
+└──────────────────────────── associated_items_complete_all_patterns.md:75:25 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1696,8 +1621,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_vals_then_types := [S].{                                                │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:75:26
+└──────────────────────────── associated_items_complete_all_patterns.md:75:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1706,8 +1630,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_vals_then_types := [S].{                                                │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:75:27
+└──────────────────────────── associated_items_complete_all_patterns.md:75:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1716,8 +1639,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:85:1
+└───────────────────────────── associated_items_complete_all_patterns.md:85:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1726,8 +1648,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_5 = d3_vals_then_types.L2.val2                                          │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:87:26
+└──────────────────────────── associated_items_complete_all_patterns.md:87:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1736,8 +1657,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_5 = d3_vals_then_types.L2.val2                                          │
 │                              ‾‾‾‾‾                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:87:29
+└──────────────────────────── associated_items_complete_all_patterns.md:87:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1746,8 +1666,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:88:26
+└──────────────────────────── associated_items_complete_all_patterns.md:88:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1756,8 +1675,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:88:29
+└──────────────────────────── associated_items_complete_all_patterns.md:88:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1766,8 +1684,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
 │                                 ‾‾‾‾‾                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:88:32
+└──────────────────────────── associated_items_complete_all_patterns.md:88:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1776,8 +1693,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l1_scope_violation := [V].{                                             │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:90:1
+└───────────────────────────── associated_items_complete_all_patterns.md:90:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1786,8 +1702,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l1_scope_violation := [V].{                                             │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:90:23
+└──────────────────────────── associated_items_complete_all_patterns.md:90:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1796,8 +1711,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l1_scope_violation := [V].{                                             │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:90:26
+└──────────────────────────── associated_items_complete_all_patterns.md:90:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1806,8 +1720,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l1_scope_violation := [V].{                                             │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:90:28
+└──────────────────────────── associated_items_complete_all_patterns.md:90:28 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1828,8 +1741,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l1_scope_violation := [V].{                                             │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:90:29
+└──────────────────────────── associated_items_complete_all_patterns.md:90:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1838,8 +1750,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l1_scope_violation := [V].{                                             │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:90:30
+└──────────────────────────── associated_items_complete_all_patterns.md:90:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1848,8 +1759,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:98:1
+└───────────────────────────── associated_items_complete_all_patterns.md:98:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1858,8 +1768,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l2_scope_violation := [Y].{                                             │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:100:1
+└──────────────────────────── associated_items_complete_all_patterns.md:100:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1868,8 +1777,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l2_scope_violation := [Y].{                                             │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:100:23
+└─────────────────────────── associated_items_complete_all_patterns.md:100:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1878,8 +1786,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l2_scope_violation := [Y].{                                             │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:100:26
+└─────────────────────────── associated_items_complete_all_patterns.md:100:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1888,8 +1795,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l2_scope_violation := [Y].{                                             │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:100:28
+└─────────────────────────── associated_items_complete_all_patterns.md:100:28 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1910,8 +1816,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l2_scope_violation := [Y].{                                             │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:100:29
+└─────────────────────────── associated_items_complete_all_patterns.md:100:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1920,8 +1825,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_l2_scope_violation := [Y].{                                             │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:100:30
+└─────────────────────────── associated_items_complete_all_patterns.md:100:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1930,8 +1834,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:108:1
+└──────────────────────────── associated_items_complete_all_patterns.md:108:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1940,8 +1843,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_val_after_nested := [AB].{                                              │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:110:1
+└──────────────────────────── associated_items_complete_all_patterns.md:110:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1950,8 +1852,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_val_after_nested := [AB].{                                              │
 │                      ‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:110:21
+└─────────────────────────── associated_items_complete_all_patterns.md:110:21 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1960,8 +1861,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_val_after_nested := [AB].{                                              │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:110:24
+└─────────────────────────── associated_items_complete_all_patterns.md:110:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -1970,8 +1870,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_val_after_nested := [AB].{                                              │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:110:27
+└─────────────────────────── associated_items_complete_all_patterns.md:110:27 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -1992,8 +1891,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_val_after_nested := [AB].{                                              │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:110:28
+└─────────────────────────── associated_items_complete_all_patterns.md:110:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2002,8 +1900,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_val_after_nested := [AB].{                                              │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:110:29
+└─────────────────────────── associated_items_complete_all_patterns.md:110:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2012,8 +1909,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:120:1
+└──────────────────────────── associated_items_complete_all_patterns.md:120:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2022,8 +1918,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_8 = d3_val_after_nested.L2.val2                                         │
 │                            ‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:122:27
+└─────────────────────────── associated_items_complete_all_patterns.md:122:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2032,8 +1927,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_8 = d3_val_after_nested.L2.val2                                         │
 │                               ‾‾‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:122:30
+└─────────────────────────── associated_items_complete_all_patterns.md:122:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2042,8 +1936,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
 │                            ‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:123:27
+└─────────────────────────── associated_items_complete_all_patterns.md:123:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2052,8 +1945,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
 │                               ‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:123:30
+└─────────────────────────── associated_items_complete_all_patterns.md:123:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2062,8 +1954,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
 │                                  ‾‾‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:123:33
+└─────────────────────────── associated_items_complete_all_patterns.md:123:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2072,8 +1963,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_types_then_vals := [AE].{                                           │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:125:1
+└──────────────────────────── associated_items_complete_all_patterns.md:125:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2082,8 +1972,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_types_then_vals := [AE].{                                           │
 │                         ‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:125:24
+└─────────────────────────── associated_items_complete_all_patterns.md:125:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2092,8 +1981,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_types_then_vals := [AE].{                                           │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:125:27
+└─────────────────────────── associated_items_complete_all_patterns.md:125:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2102,8 +1990,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_types_then_vals := [AE].{                                           │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:125:30
+└─────────────────────────── associated_items_complete_all_patterns.md:125:30 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2124,8 +2011,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_types_then_vals := [AE].{                                           │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:125:31
+└─────────────────────────── associated_items_complete_all_patterns.md:125:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2134,8 +2020,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_types_then_vals := [AE].{                                           │
 │                                 ‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:125:32
+└─────────────────────────── associated_items_complete_all_patterns.md:125:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2144,8 +2029,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:139:1
+└──────────────────────────── associated_items_complete_all_patterns.md:139:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2154,8 +2038,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
 │                               ‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:140:30
+└─────────────────────────── associated_items_complete_all_patterns.md:140:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2164,8 +2047,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
 │                                  ‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:140:33
+└─────────────────────────── associated_items_complete_all_patterns.md:140:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2174,8 +2056,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
 │                                     ‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:140:36
+└─────────────────────────── associated_items_complete_all_patterns.md:140:36 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2184,8 +2065,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
 │                                        ‾‾‾‾‾                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:140:39
+└─────────────────────────── associated_items_complete_all_patterns.md:140:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2194,8 +2074,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_vals_then_types := [AI].{                                           │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:142:1
+└──────────────────────────── associated_items_complete_all_patterns.md:142:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2204,8 +2083,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_vals_then_types := [AI].{                                           │
 │                         ‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:142:24
+└─────────────────────────── associated_items_complete_all_patterns.md:142:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2214,8 +2092,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_vals_then_types := [AI].{                                           │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:142:27
+└─────────────────────────── associated_items_complete_all_patterns.md:142:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2224,8 +2101,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_vals_then_types := [AI].{                                           │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:142:30
+└─────────────────────────── associated_items_complete_all_patterns.md:142:30 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2246,8 +2122,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_vals_then_types := [AI].{                                           │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:142:31
+└─────────────────────────── associated_items_complete_all_patterns.md:142:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2256,8 +2131,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_all_vals_then_types := [AI].{                                           │
 │                                 ‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:142:32
+└─────────────────────────── associated_items_complete_all_patterns.md:142:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2266,8 +2140,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:156:1
+└──────────────────────────── associated_items_complete_all_patterns.md:156:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2276,8 +2149,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
 │                               ‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:157:30
+└─────────────────────────── associated_items_complete_all_patterns.md:157:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2286,8 +2158,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
 │                                  ‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:157:33
+└─────────────────────────── associated_items_complete_all_patterns.md:157:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2296,8 +2167,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
 │                                     ‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:157:36
+└─────────────────────────── associated_items_complete_all_patterns.md:157:36 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2306,8 +2176,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
 │                                        ‾‾‾‾‾                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:157:39
+└─────────────────────────── associated_items_complete_all_patterns.md:157:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2316,8 +2185,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_reverse_types := [AM].{                                                 │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:159:1
+└──────────────────────────── associated_items_complete_all_patterns.md:159:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2326,8 +2194,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_reverse_types := [AM].{                                                 │
 │                   ‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:159:18
+└─────────────────────────── associated_items_complete_all_patterns.md:159:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2336,8 +2203,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_reverse_types := [AM].{                                                 │
 │                      ‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:159:21
+└─────────────────────────── associated_items_complete_all_patterns.md:159:21 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2346,8 +2212,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_reverse_types := [AM].{                                                 │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:159:24
+└─────────────────────────── associated_items_complete_all_patterns.md:159:24 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2368,8 +2233,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_reverse_types := [AM].{                                                 │
 │                          ‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:159:25
+└─────────────────────────── associated_items_complete_all_patterns.md:159:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2378,8 +2242,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_reverse_types := [AM].{                                                 │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:159:26
+└─────────────────────────── associated_items_complete_all_patterns.md:159:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2388,8 +2251,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:173:1
+└──────────────────────────── associated_items_complete_all_patterns.md:173:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2398,8 +2260,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
 │                         ‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:174:24
+└─────────────────────────── associated_items_complete_all_patterns.md:174:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2408,8 +2269,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
 │                            ‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:174:27
+└─────────────────────────── associated_items_complete_all_patterns.md:174:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2418,8 +2278,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
 │                               ‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:174:30
+└─────────────────────────── associated_items_complete_all_patterns.md:174:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2428,8 +2287,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
 │                                  ‾‾‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:174:33
+└─────────────────────────── associated_items_complete_all_patterns.md:174:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2438,8 +2296,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_interleaved := [AQ].{                                                   │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:176:1
+└──────────────────────────── associated_items_complete_all_patterns.md:176:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2448,8 +2305,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_interleaved := [AQ].{                                                   │
 │                 ‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:176:16
+└─────────────────────────── associated_items_complete_all_patterns.md:176:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2458,8 +2314,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_interleaved := [AQ].{                                                   │
 │                    ‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:176:19
+└─────────────────────────── associated_items_complete_all_patterns.md:176:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2468,8 +2323,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_interleaved := [AQ].{                                                   │
 │                       ‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:176:22
+└─────────────────────────── associated_items_complete_all_patterns.md:176:22 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2490,8 +2344,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_interleaved := [AQ].{                                                   │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:176:23
+└─────────────────────────── associated_items_complete_all_patterns.md:176:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2500,8 +2353,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_interleaved := [AQ].{                                                   │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:176:24
+└─────────────────────────── associated_items_complete_all_patterns.md:176:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2510,8 +2362,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:190:1
+└──────────────────────────── associated_items_complete_all_patterns.md:190:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2520,8 +2371,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
 │                       ‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:191:22
+└─────────────────────────── associated_items_complete_all_patterns.md:191:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2530,8 +2380,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
 │                          ‾‾‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:191:25
+└─────────────────────────── associated_items_complete_all_patterns.md:191:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2540,8 +2389,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
 │                             ‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:191:28
+└─────────────────────────── associated_items_complete_all_patterns.md:191:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2550,8 +2398,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
 │                                ‾‾‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:191:31
+└─────────────────────────── associated_items_complete_all_patterns.md:191:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2560,8 +2407,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_val_after_l4 := [BA].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:193:1
+└──────────────────────────── associated_items_complete_all_patterns.md:193:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2570,8 +2416,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_val_after_l4 := [BA].{                                               │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:193:20
+└─────────────────────────── associated_items_complete_all_patterns.md:193:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2580,8 +2425,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_val_after_l4 := [BA].{                                               │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:193:23
+└─────────────────────────── associated_items_complete_all_patterns.md:193:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2590,8 +2434,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_val_after_l4 := [BA].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:193:26
+└─────────────────────────── associated_items_complete_all_patterns.md:193:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2612,8 +2455,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_val_after_l4 := [BA].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:193:27
+└─────────────────────────── associated_items_complete_all_patterns.md:193:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2622,8 +2464,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_val_after_l4 := [BA].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:193:28
+└─────────────────────────── associated_items_complete_all_patterns.md:193:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2632,8 +2473,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:202:1
+└──────────────────────────── associated_items_complete_all_patterns.md:202:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2642,8 +2482,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:203:26
+└─────────────────────────── associated_items_complete_all_patterns.md:203:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2652,8 +2491,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:203:29
+└─────────────────────────── associated_items_complete_all_patterns.md:203:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2662,8 +2500,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
 │                                 ‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:203:32
+└─────────────────────────── associated_items_complete_all_patterns.md:203:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2672,8 +2509,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
 │                                    ‾‾‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:203:35
+└─────────────────────────── associated_items_complete_all_patterns.md:203:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2682,8 +2518,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_val_after_l3 := [BE].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:205:1
+└──────────────────────────── associated_items_complete_all_patterns.md:205:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2692,8 +2527,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_val_after_l3 := [BE].{                                               │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:205:20
+└─────────────────────────── associated_items_complete_all_patterns.md:205:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2702,8 +2536,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_val_after_l3 := [BE].{                                               │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:205:23
+└─────────────────────────── associated_items_complete_all_patterns.md:205:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2712,8 +2545,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_val_after_l3 := [BE].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:205:26
+└─────────────────────────── associated_items_complete_all_patterns.md:205:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2734,8 +2566,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_val_after_l3 := [BE].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:205:27
+└─────────────────────────── associated_items_complete_all_patterns.md:205:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2744,8 +2575,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_val_after_l3 := [BE].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:205:28
+└─────────────────────────── associated_items_complete_all_patterns.md:205:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2754,8 +2584,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:217:1
+└──────────────────────────── associated_items_complete_all_patterns.md:217:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2764,8 +2593,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:218:26
+└─────────────────────────── associated_items_complete_all_patterns.md:218:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2774,8 +2602,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:218:29
+└─────────────────────────── associated_items_complete_all_patterns.md:218:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2784,8 +2611,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
 │                                 ‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:218:32
+└─────────────────────────── associated_items_complete_all_patterns.md:218:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2794,8 +2620,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
 │                                    ‾‾‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:218:35
+└─────────────────────────── associated_items_complete_all_patterns.md:218:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2804,8 +2629,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_val_after_l2 := [BI].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:220:1
+└──────────────────────────── associated_items_complete_all_patterns.md:220:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2814,8 +2638,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_val_after_l2 := [BI].{                                               │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:220:20
+└─────────────────────────── associated_items_complete_all_patterns.md:220:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2824,8 +2647,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_val_after_l2 := [BI].{                                               │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:220:23
+└─────────────────────────── associated_items_complete_all_patterns.md:220:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2834,8 +2656,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_val_after_l2 := [BI].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:220:26
+└─────────────────────────── associated_items_complete_all_patterns.md:220:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2856,8 +2677,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_val_after_l2 := [BI].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:220:27
+└─────────────────────────── associated_items_complete_all_patterns.md:220:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2866,8 +2686,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_val_after_l2 := [BI].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:220:28
+└─────────────────────────── associated_items_complete_all_patterns.md:220:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2876,8 +2695,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:234:1
+└──────────────────────────── associated_items_complete_all_patterns.md:234:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2886,8 +2704,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:235:26
+└─────────────────────────── associated_items_complete_all_patterns.md:235:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2896,8 +2713,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:235:29
+└─────────────────────────── associated_items_complete_all_patterns.md:235:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2906,8 +2722,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
 │                                 ‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:235:32
+└─────────────────────────── associated_items_complete_all_patterns.md:235:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2916,8 +2731,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
 │                                    ‾‾‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:235:35
+└─────────────────────────── associated_items_complete_all_patterns.md:235:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2926,8 +2740,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_scope_violation := [BM].{                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:237:1
+└──────────────────────────── associated_items_complete_all_patterns.md:237:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2936,8 +2749,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_scope_violation := [BM].{                                            │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:237:23
+└─────────────────────────── associated_items_complete_all_patterns.md:237:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2946,8 +2758,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_scope_violation := [BM].{                                            │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:237:26
+└─────────────────────────── associated_items_complete_all_patterns.md:237:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2956,8 +2767,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_scope_violation := [BM].{                                            │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:237:29
+└─────────────────────────── associated_items_complete_all_patterns.md:237:29 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -2978,8 +2788,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_scope_violation := [BM].{                                            │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:237:30
+└─────────────────────────── associated_items_complete_all_patterns.md:237:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2988,8 +2797,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l1_scope_violation := [BM].{                                            │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:237:31
+└─────────────────────────── associated_items_complete_all_patterns.md:237:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -2998,8 +2806,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:247:1
+└──────────────────────────── associated_items_complete_all_patterns.md:247:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3008,8 +2815,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_scope_violation := [BQ].{                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:249:1
+└──────────────────────────── associated_items_complete_all_patterns.md:249:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3018,8 +2824,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_scope_violation := [BQ].{                                            │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:249:23
+└─────────────────────────── associated_items_complete_all_patterns.md:249:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3028,8 +2833,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_scope_violation := [BQ].{                                            │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:249:26
+└─────────────────────────── associated_items_complete_all_patterns.md:249:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3038,8 +2842,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_scope_violation := [BQ].{                                            │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:249:29
+└─────────────────────────── associated_items_complete_all_patterns.md:249:29 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3060,8 +2863,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_scope_violation := [BQ].{                                            │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:249:30
+└─────────────────────────── associated_items_complete_all_patterns.md:249:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3070,8 +2872,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l2_scope_violation := [BQ].{                                            │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:249:31
+└─────────────────────────── associated_items_complete_all_patterns.md:249:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3080,8 +2881,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:259:1
+└──────────────────────────── associated_items_complete_all_patterns.md:259:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3090,8 +2890,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_scope_violation := [BU].{                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:261:1
+└──────────────────────────── associated_items_complete_all_patterns.md:261:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3100,8 +2899,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_scope_violation := [BU].{                                            │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:261:23
+└─────────────────────────── associated_items_complete_all_patterns.md:261:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3110,8 +2908,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_scope_violation := [BU].{                                            │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:261:26
+└─────────────────────────── associated_items_complete_all_patterns.md:261:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3120,8 +2917,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_scope_violation := [BU].{                                            │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:261:29
+└─────────────────────────── associated_items_complete_all_patterns.md:261:29 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3142,8 +2938,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_scope_violation := [BU].{                                            │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:261:30
+└─────────────────────────── associated_items_complete_all_patterns.md:261:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3152,8 +2947,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_l3_scope_violation := [BU].{                                            │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:261:31
+└─────────────────────────── associated_items_complete_all_patterns.md:261:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3162,8 +2956,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:271:1
+└──────────────────────────── associated_items_complete_all_patterns.md:271:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3172,8 +2965,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_types_then_vals := [BY].{                                           │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:273:1
+└──────────────────────────── associated_items_complete_all_patterns.md:273:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3182,8 +2974,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_types_then_vals := [BY].{                                           │
 │                         ‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:273:24
+└─────────────────────────── associated_items_complete_all_patterns.md:273:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3192,8 +2983,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_types_then_vals := [BY].{                                           │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:273:27
+└─────────────────────────── associated_items_complete_all_patterns.md:273:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3202,8 +2992,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_types_then_vals := [BY].{                                           │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:273:30
+└─────────────────────────── associated_items_complete_all_patterns.md:273:30 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3224,8 +3013,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_types_then_vals := [BY].{                                           │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:273:31
+└─────────────────────────── associated_items_complete_all_patterns.md:273:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3234,8 +3022,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_types_then_vals := [BY].{                                           │
 │                                 ‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:273:32
+└─────────────────────────── associated_items_complete_all_patterns.md:273:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3244,8 +3031,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:291:1
+└──────────────────────────── associated_items_complete_all_patterns.md:291:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3254,8 +3040,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
 │                               ‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:292:30
+└─────────────────────────── associated_items_complete_all_patterns.md:292:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3264,8 +3049,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
 │                                  ‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:292:33
+└─────────────────────────── associated_items_complete_all_patterns.md:292:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3274,8 +3058,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
 │                                     ‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:292:36
+└─────────────────────────── associated_items_complete_all_patterns.md:292:36 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3284,8 +3067,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
 │                                        ‾‾‾                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:292:39
+└─────────────────────────── associated_items_complete_all_patterns.md:292:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3294,8 +3076,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
 │                                           ‾‾‾‾‾                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:292:42
+└─────────────────────────── associated_items_complete_all_patterns.md:292:42 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3304,8 +3085,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_vals_then_types := [CD].{                                           │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:294:1
+└──────────────────────────── associated_items_complete_all_patterns.md:294:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3314,8 +3094,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_vals_then_types := [CD].{                                           │
 │                         ‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:294:24
+└─────────────────────────── associated_items_complete_all_patterns.md:294:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3324,8 +3103,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_vals_then_types := [CD].{                                           │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:294:27
+└─────────────────────────── associated_items_complete_all_patterns.md:294:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3334,8 +3112,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_vals_then_types := [CD].{                                           │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:294:30
+└─────────────────────────── associated_items_complete_all_patterns.md:294:30 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3356,8 +3133,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_vals_then_types := [CD].{                                           │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:294:31
+└─────────────────────────── associated_items_complete_all_patterns.md:294:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3366,8 +3142,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_all_vals_then_types := [CD].{                                           │
 │                                 ‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:294:32
+└─────────────────────────── associated_items_complete_all_patterns.md:294:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3376,8 +3151,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:312:1
+└──────────────────────────── associated_items_complete_all_patterns.md:312:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3386,8 +3160,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
 │                               ‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:313:30
+└─────────────────────────── associated_items_complete_all_patterns.md:313:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3396,8 +3169,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
 │                                  ‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:313:33
+└─────────────────────────── associated_items_complete_all_patterns.md:313:33 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3406,8 +3178,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
 │                                     ‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:313:36
+└─────────────────────────── associated_items_complete_all_patterns.md:313:36 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3416,8 +3187,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
 │                                        ‾‾‾                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:313:39
+└─────────────────────────── associated_items_complete_all_patterns.md:313:39 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3426,8 +3196,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
 │                                           ‾‾‾‾‾                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:313:42
+└─────────────────────────── associated_items_complete_all_patterns.md:313:42 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3436,8 +3205,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_deep_interleave := [CI].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:315:1
+└──────────────────────────── associated_items_complete_all_patterns.md:315:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3446,8 +3214,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_deep_interleave := [CI].{                                               │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:315:20
+└─────────────────────────── associated_items_complete_all_patterns.md:315:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3456,8 +3223,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_deep_interleave := [CI].{                                               │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:315:23
+└─────────────────────────── associated_items_complete_all_patterns.md:315:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3466,8 +3232,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_deep_interleave := [CI].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:315:26
+└─────────────────────────── associated_items_complete_all_patterns.md:315:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3488,8 +3253,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_deep_interleave := [CI].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:315:27
+└─────────────────────────── associated_items_complete_all_patterns.md:315:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3498,8 +3262,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_deep_interleave := [CI].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:315:28
+└─────────────────────────── associated_items_complete_all_patterns.md:315:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3508,8 +3271,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:333:1
+└──────────────────────────── associated_items_complete_all_patterns.md:333:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3518,8 +3280,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:334:26
+└─────────────────────────── associated_items_complete_all_patterns.md:334:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3528,8 +3289,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:334:29
+└─────────────────────────── associated_items_complete_all_patterns.md:334:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3538,8 +3298,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
 │                                 ‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:334:32
+└─────────────────────────── associated_items_complete_all_patterns.md:334:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3548,8 +3307,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
 │                                    ‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:334:35
+└─────────────────────────── associated_items_complete_all_patterns.md:334:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3558,8 +3316,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
 │                                       ‾‾‾‾‾                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:334:38
+└─────────────────────────── associated_items_complete_all_patterns.md:334:38 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3568,8 +3325,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_val_after_l5 := [CN].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:336:1
+└──────────────────────────── associated_items_complete_all_patterns.md:336:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3578,8 +3334,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_val_after_l5 := [CN].{                                               │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:336:20
+└─────────────────────────── associated_items_complete_all_patterns.md:336:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3588,8 +3343,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_val_after_l5 := [CN].{                                               │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:336:23
+└─────────────────────────── associated_items_complete_all_patterns.md:336:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3598,8 +3352,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_val_after_l5 := [CN].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:336:26
+└─────────────────────────── associated_items_complete_all_patterns.md:336:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3620,8 +3373,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_val_after_l5 := [CN].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:336:27
+└─────────────────────────── associated_items_complete_all_patterns.md:336:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3630,8 +3382,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_val_after_l5 := [CN].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:336:28
+└─────────────────────────── associated_items_complete_all_patterns.md:336:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3640,8 +3391,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:348:1
+└──────────────────────────── associated_items_complete_all_patterns.md:348:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3650,8 +3400,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:349:26
+└─────────────────────────── associated_items_complete_all_patterns.md:349:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3660,8 +3409,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:349:29
+└─────────────────────────── associated_items_complete_all_patterns.md:349:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3670,8 +3418,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
 │                                 ‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:349:32
+└─────────────────────────── associated_items_complete_all_patterns.md:349:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3680,8 +3427,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
 │                                    ‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:349:35
+└─────────────────────────── associated_items_complete_all_patterns.md:349:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3690,8 +3436,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
 │                                       ‾‾‾‾‾                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:349:38
+└─────────────────────────── associated_items_complete_all_patterns.md:349:38 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3700,8 +3445,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_val_after_l4 := [CS].{                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:351:1
+└──────────────────────────── associated_items_complete_all_patterns.md:351:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3710,8 +3454,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_val_after_l4 := [CS].{                                               │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:351:20
+└─────────────────────────── associated_items_complete_all_patterns.md:351:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3720,8 +3463,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_val_after_l4 := [CS].{                                               │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:351:23
+└─────────────────────────── associated_items_complete_all_patterns.md:351:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3730,8 +3472,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_val_after_l4 := [CS].{                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:351:26
+└─────────────────────────── associated_items_complete_all_patterns.md:351:26 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3752,8 +3493,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_val_after_l4 := [CS].{                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:351:27
+└─────────────────────────── associated_items_complete_all_patterns.md:351:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3762,8 +3502,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_val_after_l4 := [CS].{                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:351:28
+└─────────────────────────── associated_items_complete_all_patterns.md:351:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3772,8 +3511,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:365:1
+└──────────────────────────── associated_items_complete_all_patterns.md:365:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3782,8 +3520,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:366:26
+└─────────────────────────── associated_items_complete_all_patterns.md:366:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3792,8 +3529,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:366:29
+└─────────────────────────── associated_items_complete_all_patterns.md:366:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3802,8 +3538,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
 │                                 ‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:366:32
+└─────────────────────────── associated_items_complete_all_patterns.md:366:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3812,8 +3547,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
 │                                    ‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:366:35
+└─────────────────────────── associated_items_complete_all_patterns.md:366:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3822,8 +3556,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
 │                                       ‾‾‾‾‾                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:366:38
+└─────────────────────────── associated_items_complete_all_patterns.md:366:38 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3832,8 +3565,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_val_last := [DC].{                                                   │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:368:1
+└──────────────────────────── associated_items_complete_all_patterns.md:368:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3842,8 +3574,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_val_last := [DC].{                                                   │
 │                 ‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:368:16
+└─────────────────────────── associated_items_complete_all_patterns.md:368:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3852,8 +3583,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_val_last := [DC].{                                                   │
 │                    ‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:368:19
+└─────────────────────────── associated_items_complete_all_patterns.md:368:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3862,8 +3592,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_val_last := [DC].{                                                   │
 │                       ‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:368:22
+└─────────────────────────── associated_items_complete_all_patterns.md:368:22 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -3884,8 +3613,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_val_last := [DC].{                                                   │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:368:23
+└─────────────────────────── associated_items_complete_all_patterns.md:368:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3894,8 +3622,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_val_last := [DC].{                                                   │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:368:24
+└─────────────────────────── associated_items_complete_all_patterns.md:368:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3904,8 +3631,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:386:1
+└──────────────────────────── associated_items_complete_all_patterns.md:386:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3914,8 +3640,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_7 = d5_l1_val_last.L2.val2                                              │
 │                       ‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:388:22
+└─────────────────────────── associated_items_complete_all_patterns.md:388:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3924,8 +3649,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_7 = d5_l1_val_last.L2.val2                                              │
 │                          ‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:388:25
+└─────────────────────────── associated_items_complete_all_patterns.md:388:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3934,8 +3658,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
 │                       ‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:389:22
+└─────────────────────────── associated_items_complete_all_patterns.md:389:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3944,8 +3667,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
 │                          ‾‾‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:389:25
+└─────────────────────────── associated_items_complete_all_patterns.md:389:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3954,8 +3676,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
 │                             ‾‾‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:389:28
+└─────────────────────────── associated_items_complete_all_patterns.md:389:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3964,8 +3685,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
 │                       ‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:390:22
+└─────────────────────────── associated_items_complete_all_patterns.md:390:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3974,8 +3694,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
 │                          ‾‾‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:390:25
+└─────────────────────────── associated_items_complete_all_patterns.md:390:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3984,8 +3703,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
 │                             ‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:390:28
+└─────────────────────────── associated_items_complete_all_patterns.md:390:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -3994,8 +3712,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
 │                                ‾‾‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:390:31
+└─────────────────────────── associated_items_complete_all_patterns.md:390:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4004,8 +3721,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
 │                        ‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:391:23
+└─────────────────────────── associated_items_complete_all_patterns.md:391:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4014,8 +3730,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
 │                           ‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:391:26
+└─────────────────────────── associated_items_complete_all_patterns.md:391:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4024,8 +3739,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
 │                              ‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:391:29
+└─────────────────────────── associated_items_complete_all_patterns.md:391:29 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4034,8 +3748,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
 │                                 ‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:391:32
+└─────────────────────────── associated_items_complete_all_patterns.md:391:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4044,8 +3757,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
 │                                    ‾‾‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:391:35
+└─────────────────────────── associated_items_complete_all_patterns.md:391:35 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4054,8 +3766,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_to_l5_violation := [DH].{                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:393:1
+└──────────────────────────── associated_items_complete_all_patterns.md:393:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4064,8 +3775,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_to_l5_violation := [DH].{                                            │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:393:23
+└─────────────────────────── associated_items_complete_all_patterns.md:393:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4074,8 +3784,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_to_l5_violation := [DH].{                                            │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:393:26
+└─────────────────────────── associated_items_complete_all_patterns.md:393:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4084,8 +3793,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_to_l5_violation := [DH].{                                            │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:393:29
+└─────────────────────────── associated_items_complete_all_patterns.md:393:29 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -4106,8 +3814,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_to_l5_violation := [DH].{                                            │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:393:30
+└─────────────────────────── associated_items_complete_all_patterns.md:393:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4116,8 +3823,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l1_to_l5_violation := [DH].{                                            │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:393:31
+└─────────────────────────── associated_items_complete_all_patterns.md:393:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4126,8 +3832,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:405:1
+└──────────────────────────── associated_items_complete_all_patterns.md:405:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4136,8 +3841,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_to_l5_violation := [DM].{                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:407:1
+└──────────────────────────── associated_items_complete_all_patterns.md:407:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4146,8 +3850,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_to_l5_violation := [DM].{                                            │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:407:23
+└─────────────────────────── associated_items_complete_all_patterns.md:407:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4156,8 +3859,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_to_l5_violation := [DM].{                                            │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:407:26
+└─────────────────────────── associated_items_complete_all_patterns.md:407:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4166,8 +3868,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_to_l5_violation := [DM].{                                            │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:407:29
+└─────────────────────────── associated_items_complete_all_patterns.md:407:29 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -4188,8 +3889,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_to_l5_violation := [DM].{                                            │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:407:30
+└─────────────────────────── associated_items_complete_all_patterns.md:407:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4198,8 +3898,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l3_to_l5_violation := [DM].{                                            │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:407:31
+└─────────────────────────── associated_items_complete_all_patterns.md:407:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4208,8 +3907,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:419:1
+└──────────────────────────── associated_items_complete_all_patterns.md:419:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4218,8 +3916,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_to_l5_violation := [DR].{                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:421:1
+└──────────────────────────── associated_items_complete_all_patterns.md:421:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4228,8 +3925,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_to_l5_violation := [DR].{                                            │
 │                        ‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:421:23
+└─────────────────────────── associated_items_complete_all_patterns.md:421:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4238,8 +3934,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_to_l5_violation := [DR].{                                            │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:421:26
+└─────────────────────────── associated_items_complete_all_patterns.md:421:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4248,8 +3943,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_to_l5_violation := [DR].{                                            │
 │                              ‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:421:29
+└─────────────────────────── associated_items_complete_all_patterns.md:421:29 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -4270,8 +3964,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_to_l5_violation := [DR].{                                            │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:421:30
+└─────────────────────────── associated_items_complete_all_patterns.md:421:30 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4280,8 +3973,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_l4_to_l5_violation := [DR].{                                            │
 │                                ‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:421:31
+└─────────────────────────── associated_items_complete_all_patterns.md:421:31 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -4290,8 +3982,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  }                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:433:1
+└──────────────────────────── associated_items_complete_all_patterns.md:433:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                           ┌────────────────────┐
@@ -4300,8 +3991,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_1 = d1_forward.first                                                    │
 │         ‾‾‾‾‾‾‾‾‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:6:8
+└────────────────────────────── associated_items_complete_all_patterns.md:6:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4310,8 +4000,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d1_2 = d1_scope.inner                                                      │
 │         ‾‾‾‾‾‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:11:8
+└───────────────────────────── associated_items_complete_all_patterns.md:11:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4320,8 +4009,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_1 = d2_inner_first.outer_val                                            │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:20:8
+└───────────────────────────── associated_items_complete_all_patterns.md:20:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4330,8 +4018,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_2 = d2_inner_first.Inner.inner_val                                      │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:21:8
+└───────────────────────────── associated_items_complete_all_patterns.md:21:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4341,8 +4028,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │      Inner := [H].{                                                         │
 │          inner_val = outer_val                                              │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:24:5
+└───────────────────────────── associated_items_complete_all_patterns.md:24:5 ┘
 
     The redeclaration is here:
 
@@ -4359,8 +4045,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      outer_val = 500                                                        │
 │      ‾‾‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:28:5
+└───────────────────────────── associated_items_complete_all_patterns.md:28:5 ┘
 
     The redeclaration is here:
 
@@ -4376,8 +4061,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_3 = d2_outer_val_middle.Inner.inner_val                                 │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:30:8
+└───────────────────────────── associated_items_complete_all_patterns.md:30:8 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -4386,8 +4070,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
 │      ‾‾‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:33:5
+└───────────────────────────── associated_items_complete_all_patterns.md:33:5 ┘
 
     The redeclaration is here:
 
@@ -4403,8 +4086,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      outer_val = d2_outer_refs_inner.Inner.inner_val                        │
 │                  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:33:17
+└──────────────────────────── associated_items_complete_all_patterns.md:33:17 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4414,8 +4096,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │      Inner := [J].{                                                         │
 │          inner_val = 600                                                    │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:35:5
+└───────────────────────────── associated_items_complete_all_patterns.md:35:5 ┘
 
     The redeclaration is here:
 
@@ -4432,8 +4113,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_4 = d2_outer_refs_inner.outer_val                                       │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:39:8
+└───────────────────────────── associated_items_complete_all_patterns.md:39:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4443,8 +4123,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │      Inner := [L].{                                                         │
 │          inner_private = 700                                                │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:42:5
+└───────────────────────────── associated_items_complete_all_patterns.md:42:5 ┘
 
     The redeclaration is here:
 
@@ -4461,8 +4140,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      outer_trying_inner = inner_private                                     │
 │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:46:26
+└──────────────────────────── associated_items_complete_all_patterns.md:46:26 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4471,8 +4149,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          valA = d2_siblings.InnerB.valB + 1                                 │
 │                 ‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:51:16
+└──────────────────────────── associated_items_complete_all_patterns.md:51:16 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4481,8 +4158,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d2_5 = d2_siblings.InnerA.valA                                             │
 │         ‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:58:8
+└───────────────────────────── associated_items_complete_all_patterns.md:58:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4491,8 +4167,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_1 = d3_types_then_vals.val1                                             │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:71:8
+└───────────────────────────── associated_items_complete_all_patterns.md:71:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4501,8 +4176,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_2 = d3_types_then_vals.L2.val2                                          │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:72:8
+└───────────────────────────── associated_items_complete_all_patterns.md:72:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4511,8 +4185,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_3 = d3_types_then_vals.L2.L3.val3                                       │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:73:8
+└───────────────────────────── associated_items_complete_all_patterns.md:73:8 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -4521,8 +4194,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 30                                                              │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:76:5
+└───────────────────────────── associated_items_complete_all_patterns.md:76:5 ┘
 
     The redeclaration is here:
 
@@ -4543,8 +4215,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              val3 = val1 + val2                                             │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:78:5
+└───────────────────────────── associated_items_complete_all_patterns.md:78:5 ┘
 
     The redeclaration is here:
 
@@ -4564,8 +4235,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_4 = d3_vals_then_types.val1                                             │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:86:8
+└───────────────────────────── associated_items_complete_all_patterns.md:86:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4574,8 +4244,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_5 = d3_vals_then_types.L2.val2                                          │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:87:8
+└───────────────────────────── associated_items_complete_all_patterns.md:87:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4584,8 +4253,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_6 = d3_vals_then_types.L2.L3.val3                                       │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:88:8
+└───────────────────────────── associated_items_complete_all_patterns.md:88:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4597,8 +4265,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              l3_private = 999                                               │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:91:5
+└───────────────────────────── associated_items_complete_all_patterns.md:91:5 ┘
 
     The redeclaration is here:
 
@@ -4618,8 +4285,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      bad_l1 = l3_private                                                    │
 │               ‾‾‾‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:97:14
+└──────────────────────────── associated_items_complete_all_patterns.md:97:14 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4633,8 +4299,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          bad_l2 = l3_secret                                                 │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:101:5
+└──────────────────────────── associated_items_complete_all_patterns.md:101:5 ┘
 
     The redeclaration is here:
 
@@ -4659,8 +4324,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = val1 * 3                                                    │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:111:5
+└──────────────────────────── associated_items_complete_all_patterns.md:111:5 ┘
 
     The redeclaration is here:
 
@@ -4680,8 +4344,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 5                                                               │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:119:5
+└──────────────────────────── associated_items_complete_all_patterns.md:119:5 ┘
 
     The redeclaration is here:
 
@@ -4697,8 +4360,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_7 = d3_val_after_nested.val1                                            │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:121:8
+└──────────────────────────── associated_items_complete_all_patterns.md:121:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4707,8 +4369,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_8 = d3_val_after_nested.L2.val2                                         │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:122:8
+└──────────────────────────── associated_items_complete_all_patterns.md:122:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -4717,8 +4378,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d3_9 = d3_val_after_nested.L2.L3.val3                                      │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:123:8
+└──────────────────────────── associated_items_complete_all_patterns.md:123:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4736,8 +4396,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = 2                                                           │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:126:5
+└──────────────────────────── associated_items_complete_all_patterns.md:126:5 ┘
 
     The redeclaration is here:
 
@@ -4757,8 +4416,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 1                                                               │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:138:5
+└──────────────────────────── associated_items_complete_all_patterns.md:138:5 ┘
 
     The redeclaration is here:
 
@@ -4774,8 +4432,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                                │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:140:8
+└──────────────────────────── associated_items_complete_all_patterns.md:140:8 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -4784,8 +4441,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 10                                                              │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:143:5
+└──────────────────────────── associated_items_complete_all_patterns.md:143:5 ┘
 
     The redeclaration is here:
 
@@ -4810,8 +4466,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              }                                                              │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:145:5
+└──────────────────────────── associated_items_complete_all_patterns.md:145:5 ┘
 
     The redeclaration is here:
 
@@ -4831,8 +4486,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                                │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:157:8
+└──────────────────────────── associated_items_complete_all_patterns.md:157:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4850,8 +4504,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = val1 + 1                                                    │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:160:5
+└──────────────────────────── associated_items_complete_all_patterns.md:160:5 ┘
 
     The redeclaration is here:
 
@@ -4871,8 +4524,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 7                                                               │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:172:5
+└──────────────────────────── associated_items_complete_all_patterns.md:172:5 ┘
 
     The redeclaration is here:
 
@@ -4888,8 +4540,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                      │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:174:8
+└──────────────────────────── associated_items_complete_all_patterns.md:174:8 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -4898,8 +4549,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 15                                                              │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:177:5
+└──────────────────────────── associated_items_complete_all_patterns.md:177:5 ┘
 
     The redeclaration is here:
 
@@ -4924,8 +4574,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = val1 + 5                                                    │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:179:5
+└──────────────────────────── associated_items_complete_all_patterns.md:179:5 ┘
 
     The redeclaration is here:
 
@@ -4945,8 +4594,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_4 = d4_interleaved.L2.L3.L4.val4                                        │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:191:8
+└──────────────────────────── associated_items_complete_all_patterns.md:191:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -4961,8 +4609,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              val3 = 12                                                      │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:194:5
+└──────────────────────────── associated_items_complete_all_patterns.md:194:5 ┘
 
     The redeclaration is here:
 
@@ -4982,8 +4629,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                    │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:203:8
+└──────────────────────────── associated_items_complete_all_patterns.md:203:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5001,8 +4647,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = 4                                                           │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:206:5
+└──────────────────────────── associated_items_complete_all_patterns.md:206:5 ┘
 
     The redeclaration is here:
 
@@ -5022,8 +4667,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                    │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:218:8
+└──────────────────────────── associated_items_complete_all_patterns.md:218:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5041,8 +4685,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = val1 + 10                                                   │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:221:5
+└──────────────────────────── associated_items_complete_all_patterns.md:221:5 ┘
 
     The redeclaration is here:
 
@@ -5062,8 +4705,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 3                                                               │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:233:5
+└──────────────────────────── associated_items_complete_all_patterns.md:233:5 ┘
 
     The redeclaration is here:
 
@@ -5079,8 +4721,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                    │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:235:8
+└──────────────────────────── associated_items_complete_all_patterns.md:235:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5094,8 +4735,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              }                                                              │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:238:5
+└──────────────────────────── associated_items_complete_all_patterns.md:238:5 ┘
 
     The redeclaration is here:
 
@@ -5115,8 +4755,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      bad = l4_val                                                           │
 │            ‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:246:11
+└─────────────────────────── associated_items_complete_all_patterns.md:246:11 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5132,8 +4771,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          bad = l4_secret                                                    │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:250:5
+└──────────────────────────── associated_items_complete_all_patterns.md:250:5 ┘
 
     The redeclaration is here:
 
@@ -5160,8 +4798,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              attempt = l4_private                                           │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:262:5
+└──────────────────────────── associated_items_complete_all_patterns.md:262:5 ┘
 
     The redeclaration is here:
 
@@ -5194,8 +4831,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = 2                                                           │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:274:5
+└──────────────────────────── associated_items_complete_all_patterns.md:274:5 ┘
 
     The redeclaration is here:
 
@@ -5215,8 +4851,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 1                                                               │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:290:5
+└──────────────────────────── associated_items_complete_all_patterns.md:290:5 ┘
 
     The redeclaration is here:
 
@@ -5232,8 +4867,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                             │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:292:8
+└──────────────────────────── associated_items_complete_all_patterns.md:292:8 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -5242,8 +4876,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 100                                                             │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:295:5
+└──────────────────────────── associated_items_complete_all_patterns.md:295:5 ┘
 
     The redeclaration is here:
 
@@ -5272,8 +4905,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              }                                                              │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:297:5
+└──────────────────────────── associated_items_complete_all_patterns.md:297:5 ┘
 
     The redeclaration is here:
 
@@ -5293,8 +4925,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                             │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:313:8
+└──────────────────────────── associated_items_complete_all_patterns.md:313:8 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -5303,8 +4934,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 2                                                               │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:316:5
+└──────────────────────────── associated_items_complete_all_patterns.md:316:5 ┘
 
     The redeclaration is here:
 
@@ -5333,8 +4963,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │          val2 = val1 + 1                                                    │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:318:5
+└──────────────────────────── associated_items_complete_all_patterns.md:318:5 ┘
 
     The redeclaration is here:
 
@@ -5354,8 +4983,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                 │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:334:8
+└──────────────────────────── associated_items_complete_all_patterns.md:334:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5373,8 +5001,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              }                                                              │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:337:5
+└──────────────────────────── associated_items_complete_all_patterns.md:337:5 ┘
 
     The redeclaration is here:
 
@@ -5394,8 +5021,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                 │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:349:8
+└──────────────────────────── associated_items_complete_all_patterns.md:349:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5415,8 +5041,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              val3 = 3                                                       │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:352:5
+└──────────────────────────── associated_items_complete_all_patterns.md:352:5 ┘
 
     The redeclaration is here:
 
@@ -5436,8 +5061,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                 │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:366:8
+└──────────────────────────── associated_items_complete_all_patterns.md:366:8 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5459,8 +5083,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              }                                                              │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:369:5
+└──────────────────────────── associated_items_complete_all_patterns.md:369:5 ┘
 
     The redeclaration is here:
 
@@ -5480,8 +5103,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      val1 = 5                                                               │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:385:5
+└──────────────────────────── associated_items_complete_all_patterns.md:385:5 ┘
 
     The redeclaration is here:
 
@@ -5497,8 +5119,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_6 = d5_l1_val_last.val1                                                 │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:387:8
+└──────────────────────────── associated_items_complete_all_patterns.md:387:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -5507,8 +5128,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_7 = d5_l1_val_last.L2.val2                                              │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:388:8
+└──────────────────────────── associated_items_complete_all_patterns.md:388:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -5517,8 +5137,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_8 = d5_l1_val_last.L2.L3.val3                                           │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:389:8
+└──────────────────────────── associated_items_complete_all_patterns.md:389:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -5527,8 +5146,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                        │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:390:8
+└──────────────────────────── associated_items_complete_all_patterns.md:390:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -5537,8 +5155,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                    │
 │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:391:9
+└──────────────────────────── associated_items_complete_all_patterns.md:391:9 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5554,8 +5171,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              }                                                              │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:394:5
+└──────────────────────────── associated_items_complete_all_patterns.md:394:5 ┘
 
     The redeclaration is here:
 
@@ -5575,8 +5191,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      bad = deep_secret                                                      │
 │      ‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:404:5
+└──────────────────────────── associated_items_complete_all_patterns.md:404:5 ┘
 
     The redeclaration is here:
 
@@ -5592,8 +5207,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │                                                                             │
 │      bad = deep_secret                                                      │
 │            ‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:404:11
+└─────────────────────────── associated_items_complete_all_patterns.md:404:11 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -5611,8 +5225,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              bad = l5_secret                                                │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:408:5
+└──────────────────────────── associated_items_complete_all_patterns.md:408:5 ┘
 
     The redeclaration is here:
 
@@ -5641,8 +5254,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │              }                                                              │
 │          }                                                                  │
 │      }                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:422:5
+└──────────────────────────── associated_items_complete_all_patterns.md:422:5 ┘
 
     The redeclaration is here:
 
@@ -6092,8 +5704,7 @@ TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:
 │          }                                                                  │
 │      }                                                                      │
 │  }                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    associated_items_complete_all_patterns.md:2:1
+└────────────────────────────── associated_items_complete_all_patterns.md:2:1 ┘
 
     This file is named Test.roc, but no top-level nominal type named Test was
     found.

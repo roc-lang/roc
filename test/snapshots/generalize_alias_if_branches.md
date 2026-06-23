@@ -20,8 +20,7 @@ TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 │                                                                             │
 │  main = (picked(1), picked("a"))                                            │
 │                            ‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    generalize_alias_if_branches.md:5:27
+└─────────────────────────────────────── generalize_alias_if_branches.md:5:27 ┘
 
     The type was determined to be:
 

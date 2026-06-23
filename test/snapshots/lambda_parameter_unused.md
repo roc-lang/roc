@@ -41,8 +41,7 @@ UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 │                                                                             │
 │  add = |unused| 42                                                          │
 │         ‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    lambda_parameter_unused.md:5:8
+└───────────────────────────────────────────── lambda_parameter_unused.md:5:8 ┘
 
     If you don't need this variable, prefix it with an underscore like _unused
     to suppress this warning.
@@ -52,8 +51,7 @@ UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 │                                                                             │
 │  multiply = |_factor| _factor * 2                                           │
 │                       ‾‾‾‾‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    lambda_parameter_unused.md:9:22
+└──────────────────────────────────────────── lambda_parameter_unused.md:9:22 ┘
 
     Variables prefixed with _ are intended to be unused. Remove the underscore
     prefix: factor.

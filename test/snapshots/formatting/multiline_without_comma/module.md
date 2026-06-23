@@ -24,8 +24,7 @@ PARSE ERROR - module.md:3:1:3:2
 │                                                                             │
 │   a,                                                                        │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    module.md:1:2
+└────────────────────────────────────────────────────────────── module.md:1:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -34,8 +33,7 @@ PARSE ERROR - module.md:3:1:3:2
 │                                                                             │
 │   a,                                                                        │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    module.md:1:3
+└────────────────────────────────────────────────────────────── module.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -44,8 +42,7 @@ PARSE ERROR - module.md:3:1:3:2
 │                                                                             │
 │   b                                                                         │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    module.md:2:2
+└────────────────────────────────────────────────────────────── module.md:2:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -54,8 +51,7 @@ PARSE ERROR - module.md:3:1:3:2
 │                                                                             │
 │  ]                                                                          │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    module.md:3:1
+└────────────────────────────────────────────────────────────── module.md:3:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

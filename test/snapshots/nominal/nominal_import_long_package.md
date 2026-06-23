@@ -19,8 +19,7 @@ UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 │                                                                             │
 │  red : CE                                                                   │
 │        ‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_import_long_package.md:3:7
+└───────────────────────────────────────── nominal_import_long_package.md:3:7 ┘
 
     This type is referenced here:
 # TOKENS

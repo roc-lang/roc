@@ -68,8 +68,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  processRequest : Request -> Response                                       │
 │                   ‾‾‾‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:5:18
+└──────────────────────────────────────── can_import_type_annotations.md:5:18 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -78,8 +77,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  processRequest : Request -> Response                                       │
 │                              ‾‾‾‾‾‾‾‾                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:5:29
+└──────────────────────────────────────── can_import_type_annotations.md:5:29 ┘
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -88,8 +86,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  processRequest = |req| Http.defaultResponse                                │
 │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:6:24
+└──────────────────────────────────────── can_import_type_annotations.md:6:24 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -98,8 +95,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  processRequest = |req| Http.defaultResponse                                │
 │                    ‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:6:19
+└──────────────────────────────────────── can_import_type_annotations.md:6:19 ┘
 
     If you don't need this variable, prefix it with an underscore like _req to
     suppress this warning.
@@ -109,8 +105,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  parseJson : Str -> Json.Value                                              │
 │                         ‾‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:8:24
+└──────────────────────────────────────── can_import_type_annotations.md:8:24 ┘
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -119,8 +114,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  parseJson = |input| Json.parse(input)                                      │
 │                      ‾‾‾‾‾‾‾‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:9:21
+└──────────────────────────────────────── can_import_type_annotations.md:9:21 ┘
 
     Is there an import or exposing missing up-top?
                                                             ┌──────────────────┐
@@ -130,8 +124,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                 │
 │                  ‾‾‾‾‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:11:17
+└─────────────────────────────────────── can_import_type_annotations.md:11:17 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -141,8 +134,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                 │
 │                                      ‾‾‾‾‾‾‾‾‾                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:11:37
+└─────────────────────────────────────── can_import_type_annotations.md:11:37 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -151,8 +143,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                 │
 │                                                     ‾‾‾‾‾‾                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:11:52
+└─────────────────────────────────────── can_import_type_annotations.md:11:52 ┘
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -161,8 +152,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │      result = Json.decode(request.body)                                     │
 │               ‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:13:14
+└─────────────────────────────────────── can_import_type_annotations.md:13:14 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -171,8 +161,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │          Ok(data) => Ok(Http.success(data))                                 │
 │                         ‾‾‾‾‾‾‾‾‾‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:15:24
+└─────────────────────────────────────── can_import_type_annotations.md:15:24 ┘
 
     Is there an import or exposing missing up-top?
                                                             ┌──────────────────┐
@@ -181,8 +170,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  config : Json.Config                                                       │
 │               ‾‾‾‾‾‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:20:14
+└─────────────────────────────────────── can_import_type_annotations.md:20:14 ┘
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -191,8 +179,7 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │                                                                             │
 │  config = Json.defaultConfig                                                │
 │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:21:10
+└─────────────────────────────────────── can_import_type_annotations.md:21:10 ┘
 
     Is there an import or exposing missing up-top?
                                                             ┌──────────────────┐
@@ -200,20 +187,18 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │  json.Json, but that module was not found in this Roc     └─────────────────┬┘
 │  project.                                                                   │
 │                                                                             │
-│  advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)│
-│                              ‾‾‾‾‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:24:29
+│  …n.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)                │
+│           ‾‾‾‾‾‾‾                                                           │
+└─────────────────────────────────────── can_import_type_annotations.md:24:29 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
 ┌─ The type Value is qualified by the module json.Json, ────┤ MODULE NOT FOUND │
 │  but that module was not found in this Roc project.       └─────────────────┬┘
 │                                                                             │
-│  advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)│
-│                                                      ‾‾‾‾‾‾                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:24:53
+│  …Try(Json.Value, Json.Parser.Error)                                        │
+│           ‾‾‾‾‾‾                                                            │
+└─────────────────────────────────────── can_import_type_annotations.md:24:53 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -221,20 +206,18 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 │  json.Json, but that module was not found in this Roc     └─────────────────┬┘
 │  project.                                                                   │
 │                                                                             │
-│  advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)│
-│                                                                         ‾‾‾‾‾‾│
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:24:72
+│  …n.Parser.Error)                                                           │
+│           ‾‾‾‾‾‾                                                            │
+└─────────────────────────────────────── can_import_type_annotations.md:24:72 ┘
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
 ┌─ Nothing is named parseWith in this scope. ─────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
 │                                                                             │
-│  advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)│
-│                                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_type_annotations.md:25:40
+│  … input| Json.Parser.parseWith(parserConfig, input)                        │
+│           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
+└─────────────────────────────────────── can_import_type_annotations.md:25:40 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

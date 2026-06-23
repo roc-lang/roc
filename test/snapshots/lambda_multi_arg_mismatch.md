@@ -36,8 +36,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 │                                                                             │
 │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                            │
 │                          ‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    lambda_multi_arg_mismatch.md:3:25
+└────────────────────────────────────────── lambda_multi_arg_mismatch.md:3:25 ┘
 
     If you don't need this variable, prefix it with an underscore like _x3 to
     suppress this warning.
@@ -47,8 +46,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 │                                                                             │
 │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                            │
 │                                  ‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    lambda_multi_arg_mismatch.md:3:33
+└────────────────────────────────────────── lambda_multi_arg_mismatch.md:3:33 ┘
 
     If you don't need this variable, prefix it with an underscore like _x5 to
     suppress this warning.
@@ -58,8 +56,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 │                                                                             │
 │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                            │
 │                                          ‾‾                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    lambda_multi_arg_mismatch.md:3:41
+└────────────────────────────────────────── lambda_multi_arg_mismatch.md:3:41 ┘
 
     If you don't need this variable, prefix it with an underscore like _x7 to
     suppress this warning.
@@ -69,8 +66,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 │                                                                             │
 │      3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH                  │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    lambda_multi_arg_mismatch.md:13:5
+└────────────────────────────────────────── lambda_multi_arg_mismatch.md:13:5 ┘
 
     The value's type, which does not have a method named from_numeral, is:
 
@@ -81,8 +77,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 │                                                                             │
 │      "world",   # x3: Str (should be 'a' = U64) - MISMATCH                  │
 │      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    lambda_multi_arg_mismatch.md:11:5
+└────────────────────────────────────────── lambda_multi_arg_mismatch.md:11:5 ┘
 
     The value's type, which does not have a method named from_quote, is:
 

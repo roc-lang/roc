@@ -29,8 +29,7 @@ DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
 │                                                                             │
 │      x = 20  # Should shadow top-level x                                    │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_basic_scoping.md:7:5
+└─────────────────────────────────────────────────── can_basic_scoping.md:7:5 ┘
 
     The redeclaration is here:
 

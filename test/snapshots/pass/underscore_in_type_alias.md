@@ -37,8 +37,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  MyType : _                                                                 │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:1:1
+└──────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -49,8 +48,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  MyType : _                                                                 │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:1:1
+└──────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -61,8 +59,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  ComplexType := List(_)                                                     │
 │                      ‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:5:21
+└─────────────────────────────────────────── underscore_in_type_alias.md:5:21 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -73,8 +70,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  ComplexType := List(_)                                                     │
 │                 ‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:5:16
+└─────────────────────────────────────────── underscore_in_type_alias.md:5:16 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -85,8 +81,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  MyType : _                                                                 │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:1:1
+└──────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -97,8 +92,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  MyType : _                                                                 │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:1:1
+└──────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -109,8 +103,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  MyType : _                                                                 │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:1:1
+└──────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -121,8 +114,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  TupleType := (_, U32, _)                                                   │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:11:15
+└────────────────────────────────────────── underscore_in_type_alias.md:11:15 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -133,8 +125,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  MyType : _                                                                 │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:1:1
+└──────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -145,8 +136,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 │                                                                             │
 │  TagType := [Some(_), None]                                                 │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_type_alias.md:13:18
+└────────────────────────────────────────── underscore_in_type_alias.md:13:18 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type

@@ -25,8 +25,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │    ‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:3
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -35,8 +34,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │       ‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:6
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -45,8 +43,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:7
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -55,8 +52,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:8
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -65,8 +61,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │          ‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:9
+└────────────────────────────────────────────────────── fuzz_crash_059.md:2:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -75,8 +70,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │              ‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:13
+└───────────────────────────────────────────────────── fuzz_crash_059.md:2:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -85,8 +79,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │               ‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:14
+└───────────────────────────────────────────────────── fuzz_crash_059.md:2:14 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -95,8 +88,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  G if 0{}else||0                                                            │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:2:15
+└───────────────────────────────────────────────────── fuzz_crash_059.md:2:15 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                             ┌──────────────────┐
@@ -105,8 +97,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 │                                                                             │
 │  app[]{f:platform""}import B as                                             │
 │  G if 0{}else||0                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_059.md:1:20
+└───────────────────────────────────────────────────── fuzz_crash_059.md:1:20 ┘
 
     You're attempting to use this module here:
 # TOKENS

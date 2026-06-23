@@ -20,8 +20,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 │                                                                             │
 │  0 b:S                                                                      │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_018.md:1:1
+└────────────────────────────────────────────────────── fuzz_crash_018.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -30,8 +29,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 │                                                                             │
 │  .R                                                                         │
 │  ‾‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_018.md:2:1
+└────────────────────────────────────────────────────── fuzz_crash_018.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                              ┌─────────────────┐
@@ -40,8 +38,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 │                                                                             │
 │  0 b:S                                                                      │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_018.md:1:5
+└────────────────────────────────────────────────────── fuzz_crash_018.md:1:5 ┘
 
     This type is referenced here:
                                                     ┌──────────────────────────┐
@@ -50,8 +47,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 │                                                                             │
 │  0 b:S                                                                      │
 │    ‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_018.md:1:3
+└────────────────────────────────────────────────────── fuzz_crash_018.md:1:3 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

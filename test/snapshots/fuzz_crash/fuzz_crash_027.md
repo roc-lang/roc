@@ -241,8 +241,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   crash "Unreachtement                                                      │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:118:8
+└──────────────────────────────────────────────────── fuzz_crash_027.md:118:8 ┘
 
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
@@ -250,8 +249,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Maya) : [ #                                                                │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:40:5
+└───────────────────────────────────────────────────── fuzz_crash_027.md:40:5 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -272,8 +270,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Maya) : [ #                                                                │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:40:7
+└───────────────────────────────────────────────────── fuzz_crash_027.md:40:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -282,8 +279,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Maya) : [ #                                                                │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:40:9
+└───────────────────────────────────────────────────── fuzz_crash_027.md:40:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -292,8 +288,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  ] #se                                                                      │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:41:1
+└───────────────────────────────────────────────────── fuzz_crash_027.md:41:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -302,8 +297,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  e[, # afarg                                                                │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:124:3
+└──────────────────────────────────────────────────── fuzz_crash_027.md:124:3 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                              ┌─────────────────┐
@@ -312,8 +306,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    ), 456, # ee                                                             │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:125:3
+└──────────────────────────────────────────────────── fuzz_crash_027.md:125:3 ┘
 
     Lists must be closed with ] and list items must be separated by commas.
     For example:     [1, 2, 3]
@@ -323,8 +316,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   ]                                                                         │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:126:2
+└──────────────────────────────────────────────────── fuzz_crash_027.md:126:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -333,8 +325,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:131:9
+└──────────────────────────────────────────────────── fuzz_crash_027.md:131:9 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -343,8 +334,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:132:8
+└──────────────────────────────────────────────────── fuzz_crash_027.md:132:8 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -353,18 +343,16 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   m_tuple = (                                                               │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:133:10
+└─────────────────────────────────────────────────── fuzz_crash_027.md:133:10 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
 ┌─ The token = is not expected in an ─────────┤ UNEXPECTED TOKEN IN EXPRESSION │
 │  expression.                                └───────────────────────────────┬┘
 │                                                                             │
-│   bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5│
+│   bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3… │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:141:8
+└──────────────────────────────────────────────────── fuzz_crash_027.md:141:8 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -373,8 +361,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   stale = some_fn(arg1)?.statod()?.ned()?.recd?                             │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:142:8
+└──────────────────────────────────────────────────── fuzz_crash_027.md:142:8 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -383,8 +370,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  } # Commenl decl                                                           │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:148:1
+└──────────────────────────────────────────────────── fuzz_crash_027.md:148:1 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -393,8 +379,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  empty : {}                                                                 │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:150:7
+└──────────────────────────────────────────────────── fuzz_crash_027.md:150:7 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -403,8 +388,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  empty = {}                                                                 │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:151:7
+└──────────────────────────────────────────────────── fuzz_crash_027.md:151:7 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -413,8 +397,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  tuple : Value((a, b, c))                                                   │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:153:7
+└──────────────────────────────────────────────────── fuzz_crash_027.md:153:7 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -423,8 +406,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  expect {                                                                   │
 │  ‾‾‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:155:1
+└──────────────────────────────────────────────────── fuzz_crash_027.md:155:1 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                              ┌─────────────────┐
@@ -433,8 +415,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │                                                                             │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:160:1
+└──────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
     Lists must be closed with ] and list items must be separated by commas.
     For example:     [1, 2, 3]
@@ -444,8 +425,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │                                                                             │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:160:1
+└──────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                             ┌──────────────────┐
@@ -455,8 +435,7 @@ Numbers cannot have leading zeros.
 │  import Stdot                                                               │
 │    exposing [ #tem                                                          │
 │    ] # Cose                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:6:1
+└────────────────────────────────────────────────────── fuzz_crash_027.md:6:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -465,8 +444,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  import Bae as Gooe                                                         │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:12:1
+└───────────────────────────────────────────────────── fuzz_crash_027.md:12:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -475,8 +453,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  import                                                                     │
 │   Ba                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:13:1
+└───────────────────────────────────────────────────── fuzz_crash_027.md:13:1 ┘
 
     You're attempting to use this module here:
                                                              ┌─────────────────┐
@@ -485,8 +462,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Foo : (Bar, Baz)                                                           │
 │         ‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:26:8
+└───────────────────────────────────────────────────── fuzz_crash_027.md:26:8 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -495,8 +471,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Foo : (Bar, Baz)                                                           │
 │              ‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:26:13
+└──────────────────────────────────────────────────── fuzz_crash_027.md:26:13 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -505,8 +480,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   Bar, #                                                                    │
 │   ‾‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:29:2
+└───────────────────────────────────────────────────── fuzz_crash_027.md:29:2 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -515,8 +489,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   Baz, #m                                                                   │
 │   ‾‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:30:2
+└───────────────────────────────────────────────────── fuzz_crash_027.md:30:2 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -525,8 +498,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Some(a) : { foo : Ok(a), bar : g }                                         │
 │                    ‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:32:19
+└──────────────────────────────────────────────────── fuzz_crash_027.md:32:19 ┘
 
     This type is referenced here:
                                                     ┌──────────────────────────┐
@@ -535,8 +507,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Some(a) : { foo : Ok(a), bar : g }                                         │
 │                                 ‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:32:32
+└──────────────────────────────────────────────────── fuzz_crash_027.md:32:32 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -548,8 +519,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   bar : Som# Afld                                                           │
 │         ‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:34:8
+└───────────────────────────────────────────────────── fuzz_crash_027.md:34:8 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -558,8 +528,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   bar : Som                                                                 │
 │         ‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:38:8
+└───────────────────────────────────────────────────── fuzz_crash_027.md:38:8 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -568,8 +537,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Func(a) : Maybe(a), a -> Maybe(a)                                          │
 │            ‾‾‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:43:11
+└──────────────────────────────────────────────────── fuzz_crash_027.md:43:11 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -578,8 +546,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  Func(a) : Maybe(a), a -> Maybe(a)                                          │
 │                           ‾‾‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:43:26
+└──────────────────────────────────────────────────── fuzz_crash_027.md:43:26 ┘
 
     This type is referenced here:
                                                      ┌─────────────────────────┐
@@ -588,8 +555,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  () #r                                                                      │
 │  ‾‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:52:1
+└───────────────────────────────────────────────────── fuzz_crash_027.md:52:1 ┘
 
     If you want to represent nothing, try using an empty record: {}.
                                                           ┌────────────────────┐
@@ -598,8 +564,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │     x x                                                                     │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:65:4
+└───────────────────────────────────────────────────── fuzz_crash_027.md:65:4 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -608,8 +573,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │     x x                                                                     │
 │       ‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:65:6
+└───────────────────────────────────────────────────── fuzz_crash_027.md:65:6 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -618,8 +582,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │     => ment                                                                 │
 │        ‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:71:7
+└───────────────────────────────────────────────────── fuzz_crash_027.md:71:7 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -628,8 +591,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  # Thnt!                                                                    │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:1:1
+└────────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -639,8 +601,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    [1, 2 | 5, 3, .. as rest] => 123                                         │
 │        ‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:74:7
+└───────────────────────────────────────────────────── fuzz_crash_027.md:74:7 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -650,8 +611,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  # Thnt!                                                                    │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:1:1
+└────────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -661,8 +621,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  ist                                                                        │
 │  ‾‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:76:1
+└───────────────────────────────────────────────────── fuzz_crash_027.md:76:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _ist to
     suppress this warning.
@@ -672,8 +631,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    (1, 2 | 5, 3) => 123                                                     │
 │        ‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:81:7
+└───────────────────────────────────────────────────── fuzz_crash_027.md:81:7 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -683,8 +641,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
 │                                      ‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:82:37
+└──────────────────────────────────────────────────── fuzz_crash_027.md:82:37 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -693,8 +650,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
 │                      ‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:82:21
+└──────────────────────────────────────────────────── fuzz_crash_027.md:82:21 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -704,8 +660,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    { foo: 1, bar: 2 | 7 } => 12                                             │
 │                   ‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:89:18
+└──────────────────────────────────────────────────── fuzz_crash_027.md:89:18 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -715,8 +670,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   b,                                                                        │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:62:2
+└───────────────────────────────────────────────────── fuzz_crash_027.md:62:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -726,8 +680,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   blah == 1 # Commnt                                                        │
 │   ‾‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:97:2
+└───────────────────────────────────────────────────── fuzz_crash_027.md:97:2 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -736,8 +689,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  main! : List(String) -> Try({}, _)                                         │
 │               ‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:99:14
+└──────────────────────────────────────────────────── fuzz_crash_027.md:99:14 ┘
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -746,8 +698,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   expect blah == 1                                                          │
 │          ‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:103:9
+└──────────────────────────────────────────────────── fuzz_crash_027.md:103:9 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -756,8 +707,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   some_func(                                                                │
 │   ‾‾‾‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:114:2
+└──────────────────────────────────────────────────── fuzz_crash_027.md:114:2 ┘
 
     Is there an import or exposing missing up-top?
                                                          ┌─────────────────────┐
@@ -766,8 +716,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │  # Thnt!                                                                    │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:1:1
+└────────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
                                                              ┌─────────────────┐
@@ -776,8 +725,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   tag_with = Ok(number)                                                     │
 │   ‾‾‾‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:119:2
+└──────────────────────────────────────────────────── fuzz_crash_027.md:119:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _tag_with to suppress this warning.
@@ -787,8 +735,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   ited = "Hello, ${world}"                                                  │
 │   ‾‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:120:2
+└──────────────────────────────────────────────────── fuzz_crash_027.md:120:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _ited to
     suppress this warning.
@@ -798,8 +745,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   list = [                                                                  │
 │   ‾‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:121:2
+└──────────────────────────────────────────────────── fuzz_crash_027.md:121:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _list to
     suppress this warning.
@@ -809,8 +755,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    List( #rg                                                                │
 │    ),                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:21:3
+└───────────────────────────────────────────────────── fuzz_crash_027.md:21:3 ┘
 
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
@@ -820,8 +765,7 @@ Numbers cannot have leading zeros.
 │   Bar, #                                                                    │
 │   Baz, #m                                                                   │
 │  ) # Co                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:28:1
+└───────────────────────────────────────────────────── fuzz_crash_027.md:28:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -831,8 +775,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │   if num {                                                                  │
 │      ‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:50:5
+└───────────────────────────────────────────────────── fuzz_crash_027.md:50:5 ┘
 
     It is:
 
@@ -875,8 +818,7 @@ Numbers cannot have leading zeros.
 │     } => 12                                                                 │
 │    Ok(123) => 121000                                                        │
 │   }                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:64:17
+└──────────────────────────────────────────────────── fuzz_crash_027.md:64:17 ┘
 
     In the second pattern, lue is:
 
@@ -894,8 +836,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    "foo" => # ent                                                           │
 │    ‾‾‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:68:3
+└───────────────────────────────────────────────────── fuzz_crash_027.md:68:3 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -906,8 +847,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    "foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet                         │
 │    ‾‾‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:70:3
+└───────────────────────────────────────────────────── fuzz_crash_027.md:70:3 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -947,8 +887,7 @@ Numbers cannot have leading zeros.
 │     } => 12                                                                 │
 │    Ok(123) => 121000                                                        │
 │   }                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:64:22
+└──────────────────────────────────────────────────── fuzz_crash_027.md:64:22 ┘
 
     This fifth branch is trying to match:
 
@@ -970,8 +909,7 @@ Numbers cannot have leading zeros.
 │   match_time(                                                               │
 │    ..., #                                                                   │
 │   )                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:111:2
+└──────────────────────────────────────────────────── fuzz_crash_027.md:111:2 ┘
 
     The match_time function has the type:
 
@@ -984,8 +922,7 @@ Numbers cannot have leading zeros.
 │                                                                             │
 │    tag                                                                      │
 │    ‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_027.md:106:3
+└──────────────────────────────────────────────────── fuzz_crash_027.md:106:3 ┘
 
     It has the type:
 

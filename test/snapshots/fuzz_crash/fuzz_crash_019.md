@@ -212,8 +212,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   match a {lue  {                                                           │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:52:16
+└──────────────────────────────────────────────────── fuzz_crash_019.md:52:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -222,8 +221,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │     1 "for" => 20[1, ] # t                                                  │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:58:4
+└───────────────────────────────────────────────────── fuzz_crash_019.md:58:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -232,8 +230,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    ment                                                                     │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:59:3
+└───────────────────────────────────────────────────── fuzz_crash_019.md:59:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -242,8 +239,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    [1, 2, 3,est]123                                                         │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:60:16
+└──────────────────────────────────────────────────── fuzz_crash_019.md:60:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -252,8 +248,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    ] 23                                                                     │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:62:5
+└───────────────────────────────────────────────────── fuzz_crash_019.md:62:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -262,8 +257,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    3.1 314                                                                  │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:63:7
+└───────────────────────────────────────────────────── fuzz_crash_019.md:63:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -272,8 +266,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    (1, 2, 3)123                                                             │
 │             ‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:66:12
+└──────────────────────────────────────────────────── fuzz_crash_019.md:66:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                             ┌──────────────────┐
@@ -283,8 +276,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │  import Stdot                                                               │
 │    exposing [ #tem                                                          │
 │  Cust]                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:6:1
+└────────────────────────────────────────────────────── fuzz_crash_019.md:6:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -293,8 +285,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  import Bae as Gooe                                                         │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:10:1
+└───────────────────────────────────────────────────── fuzz_crash_019.md:10:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -303,8 +294,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  import                                                                     │
 │   Ba                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:11:1
+└───────────────────────────────────────────────────── fuzz_crash_019.md:11:1 ┘
 
     You're attempting to use this module here:
                                                              ┌─────────────────┐
@@ -313,8 +303,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  Map(a, b) : Lis, (ab) -> List(b)                                           │
 │              ‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:13:13
+└──────────────────────────────────────────────────── fuzz_crash_019.md:13:13 ┘
 
     This type is referenced here:
                                                     ┌──────────────────────────┐
@@ -323,8 +312,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  Map(a, b) : Lis, (ab) -> List(b)                                           │
 │                    ‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:13:19
+└──────────────────────────────────────────────────── fuzz_crash_019.md:13:19 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -336,8 +324,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    (ab) -> # row                                                            │
 │     ‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:19:4
+└───────────────────────────────────────────────────── fuzz_crash_019.md:19:4 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -349,8 +336,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │     List(   b ) #z)                                                         │
 │             ‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:20:12
+└──────────────────────────────────────────────────── fuzz_crash_019.md:20:12 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -362,8 +348,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  Som : { foo : O, bar : g }                                                 │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:24:15
+└──────────────────────────────────────────────────── fuzz_crash_019.md:24:15 ┘
 
     This type is referenced here:
                                                     ┌──────────────────────────┐
@@ -372,8 +357,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  Som : { foo : O, bar : g }                                                 │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:24:24
+└──────────────────────────────────────────────────── fuzz_crash_019.md:24:24 ┘
 
     Type variables must be introduced in a type annotation before they can be
     used.
@@ -385,8 +369,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  one : U6                                                                   │
 │        ‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:37:7
+└───────────────────────────────────────────────────── fuzz_crash_019.md:37:7 ┘
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -395,8 +378,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │     s exp0                                                                  │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:42:4
+└───────────────────────────────────────────────────── fuzz_crash_019.md:42:4 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -405,8 +387,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │     s exp0                                                                  │
 │       ‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:42:6
+└───────────────────────────────────────────────────── fuzz_crash_019.md:42:6 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -415,8 +396,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    r                                                                        │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:45:3
+└───────────────────────────────────────────────────── fuzz_crash_019.md:45:3 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -425,8 +405,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   x                                                                         │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:53:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:53:2 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -435,8 +414,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   match a {lue  {                                                           │
 │            ‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:52:11
+└──────────────────────────────────────────────────── fuzz_crash_019.md:52:11 ┘
 
     If you don't need this variable, prefix it with an underscore like _lue to
     suppress this warning.
@@ -446,8 +424,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    Blue=> {x                                                                │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:55:11
+└──────────────────────────────────────────────────── fuzz_crash_019.md:55:11 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -456,8 +433,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   er #ent                                                                   │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:57:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:57:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _er to
     suppress this warning.
@@ -467,8 +443,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    ment                                                                     │
 │    ‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:59:3
+└───────────────────────────────────────────────────── fuzz_crash_019.md:59:3 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -477,8 +452,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    [1, 2, 3,est]123                                                         │
 │             ‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:60:12
+└──────────────────────────────────────────────────── fuzz_crash_019.md:60:12 ┘
 
     If you don't need this variable, prefix it with an underscore like _est to
     suppress this warning.
@@ -488,8 +462,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   nt                                                                        │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:72:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:72:2 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -498,8 +471,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  main! : Listlt({}, _)                                                      │
 │          ‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:74:9
+└───────────────────────────────────────────────────── fuzz_crash_019.md:74:9 ┘
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -508,8 +480,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   expect blaue                                                              │
 │          ‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:78:9
+└───────────────────────────────────────────────────── fuzz_crash_019.md:78:9 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -518,8 +489,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    tag                                                                      │
 │    ‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:80:3
+└───────────────────────────────────────────────────── fuzz_crash_019.md:80:3 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -528,8 +498,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   )crash ke"Unr!" #)                                                        │
 │    ‾‾‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:86:3
+└───────────────────────────────────────────────────── fuzz_crash_019.md:86:3 ┘
 
     For example: crash "Something went wrong"
                                                           ┌────────────────────┐
@@ -538,8 +507,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   i= "H, ${d}"                                                              │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:87:11
+└──────────────────────────────────────────────────── fuzz_crash_019.md:87:11 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -548,8 +516,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   for n in list {                                                           │
 │            ‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:92:11
+└──────────────────────────────────────────────────── fuzz_crash_019.md:92:11 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -558,8 +525,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   line!("Ag ${n} to ${er}")                                                 │
 │   ‾‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:93:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:93:2 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -568,8 +534,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    ber + n                                                                  │
 │    ‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:94:3
+└───────────────────────────────────────────────────── fuzz_crash_019.md:94:3 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -578,8 +543,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
 │                                   ‾‾‾                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:96:34
+└──────────────────────────────────────────────────── fuzz_crash_019.md:96:34 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -588,8 +552,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
 │                                                ‾‾‾‾‾                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:96:47
+└──────────────────────────────────────────────────── fuzz_crash_019.md:96:47 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -598,8 +561,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
 │                                                       ‾‾‾                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:96:54
+└──────────────────────────────────────────────────── fuzz_crash_019.md:96:54 ┘
 
     Is there an import or exposing missing up-top?
                                                         ┌──────────────────────┐
@@ -608,8 +570,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:97:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:97:2 ┘
 
     The redeclaration is here:
 
@@ -625,8 +586,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
 │                      ‾‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:97:21
+└──────────────────────────────────────────────────── fuzz_crash_019.md:97:21 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -635,8 +595,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
 │                               ‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:97:30
+└──────────────────────────────────────────────────── fuzz_crash_019.md:97:30 ┘
 
     Is there an import or exposing missing up-top?
                                                 ┌──────────────────────────────┐
@@ -645,8 +604,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
 │                                   ‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:97:34
+└──────────────────────────────────────────────────── fuzz_crash_019.md:97:34 ┘
 
     Only functions can reference themselves (for recursion). For non-function
     values, the right-hand side must be fully computable without referring to
@@ -657,8 +615,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   m (                                                                       │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:98:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:98:2 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -667,8 +624,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    "World",ag1,                                                             │
 │            ‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:100:11
+└─────────────────────────────────────────────────── fuzz_crash_019.md:100:11 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -677,8 +633,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    (ne, tuple),                                                             │
 │     ‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:102:4
+└──────────────────────────────────────────────────── fuzz_crash_019.md:102:4 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -687,38 +642,34 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    (ne, tuple),                                                             │
 │         ‾‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:102:8
+└──────────────────────────────────────────────────── fuzz_crash_019.md:102:8 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
 ┌─ Nothing is named b in this scope. ─────────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
 │                                                                             │
-│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?│
+│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.n… │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:105:2
+└──────────────────────────────────────────────────── fuzz_crash_019.md:105:2 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
 ┌─ Nothing is named e_fn in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
 │                                                                             │
-│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?│
-│                                                        ‾‾‾‾                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:105:55
+│  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                    │
+│           ‾‾‾‾                                                              │
+└─────────────────────────────────────────────────── fuzz_crash_019.md:105:55 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
 ┌─ Nothing is named arg1 in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
 │                                                                             │
-│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?│
-│                                                             ‾‾‾‾            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:105:60
+│  … 3 e_fn(arg1)?.od()?.ned()?.recd?                                         │
+│           ‾‾‾‾                                                              │
+└─────────────────────────────────────────────────── fuzz_crash_019.md:105:60 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -727,8 +678,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │     r(nu) # xpr                                                             │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:108:4
+└──────────────────────────────────────────────────── fuzz_crash_019.md:108:4 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -737,8 +687,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │     r(nu) # xpr                                                             │
 │       ‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:108:6
+└──────────────────────────────────────────────────── fuzz_crash_019.md:108:6 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -747,8 +696,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   w = "d"                                                                   │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:76:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:76:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _w to
     suppress this warning.
@@ -758,8 +706,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   i= "H, ${d}"                                                              │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:87:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:87:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _i to
     suppress this warning.
@@ -769,8 +716,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:96:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:96:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _rd to
     suppress this warning.
@@ -780,8 +726,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:97:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:97:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _t to
     suppress this warning.
@@ -791,8 +736,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  t : V((a,c))                                                               │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:116:5
+└──────────────────────────────────────────────────── fuzz_crash_019.md:116:5 ┘
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -801,8 +745,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   foo == 1                                                                  │
 │   ‾‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:119:2
+└──────────────────────────────────────────────────── fuzz_crash_019.md:119:2 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -811,8 +754,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  h == foo                                                                   │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:120:1
+└──────────────────────────────────────────────────── fuzz_crash_019.md:120:1 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -821,8 +763,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  h == foo                                                                   │
 │       ‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:120:6
+└──────────────────────────────────────────────────── fuzz_crash_019.md:120:6 ┘
 
     Is there an import or exposing missing up-top?
                                                      ┌─────────────────────────┐
@@ -831,8 +772,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  app [main!] { pf: platform "c" }                                           │
 │       ‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:2:6
+└────────────────────────────────────────────────────── fuzz_crash_019.md:2:6 ┘
 
     You can fix this by either defining main! in this module, or by removing it
     from the list of exposed values.
@@ -842,8 +782,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │    List( #rg                                                                │
 │    ),                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:17:3
+└───────────────────────────────────────────────────── fuzz_crash_019.md:17:3 ┘
 
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
@@ -851,8 +790,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  line : ( # Cm                                                              │
 │  ) # Co                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:22:1
+└───────────────────────────────────────────────────── fuzz_crash_019.md:22:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -862,8 +800,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  one : U6                                                                   │
 │  ‾‾‾‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:37:1
+└───────────────────────────────────────────────────── fuzz_crash_019.md:37:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -873,8 +810,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   1                                                                         │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:39:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:39:2 ┘
 
     The value's type, which does not have a method named from_numeral, is:
 
@@ -885,8 +821,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │     1 "for" => 20[1, ] # t                                                  │
 │       ‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:58:6
+└───────────────────────────────────────────────────── fuzz_crash_019.md:58:6 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -913,8 +848,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │    {  } => 12                                                               │
 │    Ok(123) => 12                                                            │
 │   }                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:52:17
+└──────────────────────────────────────────────────── fuzz_crash_019.md:52:17 ┘
 
     This fifth branch is trying to match:
 
@@ -935,8 +869,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  main! : Listlt({}, _)                                                      │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:74:1
+└───────────────────────────────────────────────────── fuzz_crash_019.md:74:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -947,8 +880,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │   me(                                                                       │
 │    ..., # r                                                                 │
 │   )crash ke"Unr!" #)                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:84:2
+└───────────────────────────────────────────────────── fuzz_crash_019.md:84:2 ┘
 
     The me function has the type:
 
@@ -961,8 +893,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   )crash ke"Unr!" #)                                                        │
 │            ‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:86:11
+└──────────────────────────────────────────────────── fuzz_crash_019.md:86:11 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -978,8 +909,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │    (ne, tuple),                                                             │
 │    [1, 2, 3],                                                               │
 │   )                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:98:4
+└───────────────────────────────────────────────────── fuzz_crash_019.md:98:4 ┘
 
     It has the type:
 
@@ -996,10 +926,9 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 ┌─ This expression produces a value, but it's not being used: ─┤ TYPE MISMATCH │
 │                                                              └──────────────┬┘
 │                                                                             │
-│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?│
+│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.n… │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:105:2
+└──────────────────────────────────────────────────── fuzz_crash_019.md:105:2 ┘
 
     It has the type:
 
@@ -1013,8 +942,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   line!("Ag ${n} to ${er}")                                                 │
 │                       ‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:93:22
+└──────────────────────────────────────────────────── fuzz_crash_019.md:93:22 ┘
 
     It has the type:
 
@@ -1029,8 +957,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  y : {}                                                                     │
 │  ‾‾‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:113:1
+└──────────────────────────────────────────────────── fuzz_crash_019.md:113:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -1040,8 +967,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │  t : V((a,c))                                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:116:1
+└──────────────────────────────────────────────────── fuzz_crash_019.md:116:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -1051,8 +977,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │                                                                             │
 │   foo == 1                                                                  │
 │   ‾‾‾‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:119:2
+└──────────────────────────────────────────────────── fuzz_crash_019.md:119:2 ┘
 
     It has the type:
 
@@ -1065,10 +990,9 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │  unresolved type variable, but unresolved type variables    └───────────────┬┘
 │  have no methods.                                                           │
 │                                                                             │
-│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?│
-│                                                        ‾‾‾‾‾‾‾‾‾‾‾          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:105:55
+│  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                    │
+│           ‾‾‾‾‾‾‾‾‾‾‾                                                       │
+└─────────────────────────────────────────────────── fuzz_crash_019.md:105:55 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by
@@ -1079,10 +1003,9 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 │  unresolved type variable, but unresolved type variables    └───────────────┬┘
 │  have no methods.                                                           │
 │                                                                             │
-│   b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?│
-│                                                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_019.md:105:55
+│  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                    │
+│           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
+└─────────────────────────────────────────────────── fuzz_crash_019.md:105:55 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by

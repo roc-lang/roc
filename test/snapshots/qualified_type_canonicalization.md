@@ -90,8 +90,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │      Try,                                                                   │
 │      ExternalModule,                                                        │
 │  ]                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:1:1
+└───────────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
 
     Type modules (headerless files with a top-level type matching the filename)
     are now the preferred way to define modules.
@@ -104,8 +103,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  import Basics.Try                                                          │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:8:1
+└───────────────────────────────────── qualified_type_canonicalization.md:8:1 ┘
 
     The redeclaration is here:
 
@@ -121,8 +119,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  import Basics.Try                                                          │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:8:1
+└───────────────────────────────────── qualified_type_canonicalization.md:8:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -131,8 +128,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  import Color                                                               │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:9:1
+└───────────────────────────────────── qualified_type_canonicalization.md:9:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -141,8 +137,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  import ModuleA.ModuleB exposing [TypeC]                                    │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:10:1
+└──────────────────────────────────── qualified_type_canonicalization.md:10:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -151,8 +146,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  import ExternalModule as ExtMod                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:11:1
+└──────────────────────────────────── qualified_type_canonicalization.md:11:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -161,8 +155,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  simpleQualified : Color.RGB                                                │
 │                         ‾‾‾‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:14:24
+└─────────────────────────────────── qualified_type_canonicalization.md:14:24 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -171,8 +164,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })                        │
 │                    ‾‾‾‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:15:19
+└─────────────────────────────────── qualified_type_canonicalization.md:15:19 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -182,8 +174,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  aliasedQualified : ExtMod.DataType                                         │
 │                           ‾‾‾‾‾‾‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:18:26
+└─────────────────────────────────── qualified_type_canonicalization.md:18:26 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -193,8 +184,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  aliasedQualified = ExtMod.DataType.Default                                 │
 │                           ‾‾‾‾‾‾‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:19:26
+└─────────────────────────────────── qualified_type_canonicalization.md:19:26 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -204,8 +194,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  multiLevelQualified : ModuleA.ModuleB.TypeC                                │
 │                                       ‾‾‾‾‾‾                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:22:38
+└─────────────────────────────────── qualified_type_canonicalization.md:22:38 ┘
 
     You're attempting to use this type here:
                                                               ┌────────────────┐
@@ -214,8 +203,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  multiLevelQualified = TypeC.new                                            │
 │                        ‾‾‾‾‾‾‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:23:23
+└─────────────────────────────────── qualified_type_canonicalization.md:23:23 ┘
 
                                                          ┌─────────────────────┐
 ┌─ Try is in scope, but it doesn't have a nested type ───┤ MISSING NESTED TYPE │
@@ -223,8 +211,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  resultType : Try.Try(I32, Str)                                             │
 │               ‾‾‾‾‾‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:26:14
+└─────────────────────────────────── qualified_type_canonicalization.md:26:14 ┘
 
     It's referenced here:
                                                             ┌──────────────────┐
@@ -233,8 +220,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  getColor : {} -> Color.RGB                                                 │
 │                        ‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:30:23
+└─────────────────────────────────── qualified_type_canonicalization.md:30:23 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -243,8 +229,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })                           │
 │                 ‾‾‾‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:31:16
+└─────────────────────────────────── qualified_type_canonicalization.md:31:16 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -253,8 +238,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  processColor : Color.RGB -> Str                                            │
 │                      ‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:34:21
+└─────────────────────────────────── qualified_type_canonicalization.md:34:21 ┘
 
     You're attempting to use this type here:
                                                              ┌─────────────────┐
@@ -263,8 +247,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  processColor = |color|                                                     │
 │                  ‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:35:17
+└─────────────────────────────────── qualified_type_canonicalization.md:35:17 ┘
 
     If you don't need this variable, prefix it with an underscore like _color
     to suppress this warning.
@@ -274,8 +257,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC      │
 │              ‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:39:13
+└─────────────────────────────────── qualified_type_canonicalization.md:39:13 ┘
 
     It's referenced here:
                                                             ┌──────────────────┐
@@ -284,8 +266,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC      │
 │                           ‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:39:26
+└─────────────────────────────────── qualified_type_canonicalization.md:39:26 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -295,8 +276,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC      │
 │                                       ‾‾‾‾‾‾                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:39:38
+└─────────────────────────────────── qualified_type_canonicalization.md:39:38 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -306,8 +286,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC      │
 │                                                                 ‾‾‾‾‾‾      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:39:64
+└─────────────────────────────────── qualified_type_canonicalization.md:39:64 ┘
 
     You're attempting to use this type here:
                                                              ┌─────────────────┐
@@ -316,8 +295,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │          Try.Ok(rgb) => TypeC.fromColor(rgb)                                │
 │          ‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:42:9
+└──────────────────────────────────── qualified_type_canonicalization.md:42:9 ┘
 
     This type is referenced here:
                                                               ┌────────────────┐
@@ -326,8 +304,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │          Try.Ok(rgb) => TypeC.fromColor(rgb)                                │
 │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:42:24
+└─────────────────────────────────── qualified_type_canonicalization.md:42:24 ┘
 
                                                              ┌─────────────────┐
 ┌─ The type Try is not declared in this scope. ──────────────┤ UNDECLARED TYPE │
@@ -335,8 +312,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │          Try.Err(err) => TypeC.default                                      │
 │          ‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:43:9
+└──────────────────────────────────── qualified_type_canonicalization.md:43:9 ┘
 
     This type is referenced here:
                                                               ┌────────────────┐
@@ -345,8 +321,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │          Try.Err(err) => TypeC.default                                      │
 │                          ‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:43:25
+└─────────────────────────────────── qualified_type_canonicalization.md:43:25 ┘
 
                                                              ┌─────────────────┐
 ┌─ Variable err is defined here and then never used: ────────┤ UNUSED VARIABLE │
@@ -354,8 +329,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │          Try.Err(err) => TypeC.default                                      │
 │                  ‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:43:17
+└─────────────────────────────────── qualified_type_canonicalization.md:43:17 ┘
 
     If you don't need this variable, prefix it with an underscore like _err to
     suppress this warning.
@@ -365,8 +339,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │      ModuleA.ModuleB.TypeC,                                                 │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:3:5
+└───────────────────────────────────── qualified_type_canonicalization.md:3:5 ┘
 
     You can fix this by either defining .TypeC in this module, or by removing
     it from the list of exposed values.
@@ -376,8 +349,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 │                                                                             │
 │      Try,                                                                   │
 │      ‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    qualified_type_canonicalization.md:4:5
+└───────────────────────────────────── qualified_type_canonicalization.md:4:5 ┘
 
     You can fix this by either defining Try in this module, or by removing it
     from the list of exposed values.

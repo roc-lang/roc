@@ -47,8 +47,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  d = 18446744073709551615                                                   │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:9:1
+└────────────────────────────────────────────────────── fuzz_crash_025.md:9:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -69,8 +68,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  d = 18446744073709551615                                                   │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:9:3
+└────────────────────────────────────────────────────── fuzz_crash_025.md:9:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -79,8 +77,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  d = 18446744073709551615                                                   │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:9:5
+└────────────────────────────────────────────────────── fuzz_crash_025.md:9:5 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -89,8 +86,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  e = 3402823669209384634633746074317682114553.14: I8                        │
 │                                                 ‾                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:12:48
+└──────────────────────────────────────────────────── fuzz_crash_025.md:12:48 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -99,8 +95,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  f =8                                                                       │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:13:1
+└───────────────────────────────────────────────────── fuzz_crash_025.md:13:1 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -121,8 +116,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  f =8                                                                       │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:13:3
+└───────────────────────────────────────────────────── fuzz_crash_025.md:13:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -131,8 +125,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  f =8                                                                       │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:13:4
+└───────────────────────────────────────────────────── fuzz_crash_025.md:13:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                               ┌────────────────┐
@@ -141,8 +134,7 @@ INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 │                                                                             │
 │  e = 3402823669209384634633746074317682114553.14: I8                        │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_025.md:12:5
+└───────────────────────────────────────────────────── fuzz_crash_025.md:12:5 ┘
 
     The inferred type is:
 

@@ -20,8 +20,7 @@ PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 │                                                                             │
 │  platform"                                                                  │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_061.md:1:9
+└────────────────────────────────────────────────────── fuzz_crash_061.md:1:9 ┘
 
                                          ┌─────────────────────────────────────┐
 ┌─ The token 0 is not expected in a ─────┤ UNEXPECTED TOKEN IN TYPE ANNOTATION │
@@ -29,8 +28,7 @@ PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 │                                                                             │
 │  requires{}{n:0[import S exposing[                                          │
 │               ‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_061.md:2:14
+└───────────────────────────────────────────────────── fuzz_crash_061.md:2:14 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                                                  ┌─────────────┐
@@ -39,8 +37,7 @@ PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 │                                                                             │
 │  platform"                                                                  │
 │  ‾‾‾‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_061.md:1:1
+└────────────────────────────────────────────────────── fuzz_crash_061.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -49,8 +46,7 @@ PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 │                                                                             │
 │  requires{}{n:0[import S exposing[                                          │
 │                 ‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_061.md:2:16
+└───────────────────────────────────────────────────── fuzz_crash_061.md:2:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

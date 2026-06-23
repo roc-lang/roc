@@ -21,8 +21,7 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 │                                                                             │
 │  module(a).h:s                                                              │
 │        ‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_055.md:1:7
+└────────────────────────────────────────────────────── fuzz_crash_055.md:1:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -31,8 +30,7 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 │                                                                             │
 │  module(a).h:s                                                              │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_055.md:1:8
+└────────────────────────────────────────────────────── fuzz_crash_055.md:1:8 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -41,8 +39,7 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 │                                                                             │
 │  module(a).h:s                                                              │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_055.md:1:9
+└────────────────────────────────────────────────────── fuzz_crash_055.md:1:9 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -51,8 +48,7 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 │                                                                             │
 │  module(a).h:s                                                              │
 │           ‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_055.md:1:10
+└───────────────────────────────────────────────────── fuzz_crash_055.md:1:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -61,8 +57,7 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 │                                                                             │
 │  module(a).h:s                                                              │
 │             ‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_055.md:1:12
+└───────────────────────────────────────────────────── fuzz_crash_055.md:1:12 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -71,8 +66,7 @@ PARSE ERROR - fuzz_crash_055.md:1:13:1:14
 │                                                                             │
 │  module(a).h:s                                                              │
 │              ‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_055.md:1:13
+└───────────────────────────────────────────────────── fuzz_crash_055.md:1:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

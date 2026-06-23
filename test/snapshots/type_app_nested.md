@@ -21,8 +21,7 @@ UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 │                                                                             │
 │  processNested : List(Try(Str, Err)) -> List(Str)                           │
 │                                ‾‾‾                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    type_app_nested.md:3:31
+└──────────────────────────────────────────────────── type_app_nested.md:3:31 ┘
 
     This type is referenced here:
 # TOKENS

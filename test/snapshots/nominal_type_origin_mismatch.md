@@ -24,8 +24,7 @@ UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 │                                                                             │
 │  expectsPerson : Person -> Str                                              │
 │                  ‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_type_origin_mismatch.md:3:17
+└─────────────────────────────────────── nominal_type_origin_mismatch.md:3:17 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -34,8 +33,7 @@ UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 │                                                                             │
 │  expectsPerson = |p| "Got a person"                                         │
 │                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_type_origin_mismatch.md:4:18
+└─────────────────────────────────────── nominal_type_origin_mismatch.md:4:18 ┘
 
     If you don't need this variable, prefix it with an underscore like _p to
     suppress this warning.

@@ -15,10 +15,9 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 ┌─ The module SomeType was not found in this Roc project. ──┤ MODULE NOT FOUND │
 │                                                           └─────────────────┬┘
 │                                                                             │
-│  package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }│
-│                      ‾‾‾‾‾‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    package_header_nonempty_singleline_1.md:1:21
+│  …ething, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc"…│
+│           ‾‾‾‾‾‾‾‾                                                          │
+└─────────────────────────────── package_header_nonempty_singleline_1.md:1:21 ┘
 
     You're attempting to use this module here:
                                                      ┌─────────────────────────┐
@@ -26,10 +25,9 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 │  exposed, but it is not defined anywhere in this   └────────────────────────┬┘
 │  module.                                                                    │
 │                                                                             │
-│  package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }│
+│  …ackage [something, SomeType] { somePkg: "../main.roc", other: "../../othe…│
 │           ‾‾‾‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    package_header_nonempty_singleline_1.md:1:10
+└─────────────────────────────── package_header_nonempty_singleline_1.md:1:10 ┘
 
     You can fix this by either defining something in this module, or by
     removing it from the list of exposed values.

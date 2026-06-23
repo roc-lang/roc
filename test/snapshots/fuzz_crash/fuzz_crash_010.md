@@ -29,8 +29,7 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │      "on        (string 'onmo %')))                                         │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_010.md:5:5
+└────────────────────────────────────────────────────── fuzz_crash_010.md:5:5 ┘
 
                                                                  ┌─────────────┐
 ┌─ Type applications require parentheses around their type ──────┤ PARSE ERROR │
@@ -38,8 +37,7 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  H{o,                                                                       │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_010.md:1:2
+└────────────────────────────────────────────────────── fuzz_crash_010.md:1:2 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -60,8 +58,7 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  H{o,                                                                       │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_010.md:1:3
+└────────────────────────────────────────────────────── fuzz_crash_010.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -70,8 +67,7 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │  H{o,                                                                       │
 │     ‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_010.md:1:4
+└────────────────────────────────────────────────────── fuzz_crash_010.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -80,8 +76,7 @@ ASCII control characters are not allowed in Roc source code.
 │                                                                             │
 │      ]                                                                     │
 │       ‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_010.md:2:6
+└────────────────────────────────────────────────────── fuzz_crash_010.md:2:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

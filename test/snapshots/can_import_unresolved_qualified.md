@@ -50,8 +50,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  main = Json.NonExistent.method                                             │
 │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:5:8
+└───────────────────────────────────── can_import_unresolved_qualified.md:5:8 ┘
 
     Is there an import or exposing missing up-top?
                                                             ┌──────────────────┐
@@ -61,8 +60,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  parseData : Json.InvalidType -> Str                                        │
 │                  ‾‾‾‾‾‾‾‾‾‾‾‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:8:17
+└──────────────────────────────────── can_import_unresolved_qualified.md:8:17 ┘
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -71,8 +69,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  parseData = |data| Json.stringify(data)                                    │
 │                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:9:20
+└──────────────────────────────────── can_import_unresolved_qualified.md:9:20 ┘
 
     Is there an import or exposing missing up-top?
                                                             ┌──────────────────┐
@@ -82,8 +79,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  processRequest : Http.Server.Request -> Http.Server.Response               │
 │                              ‾‾‾‾‾‾‾‾                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:12:29
+└─────────────────────────────────── can_import_unresolved_qualified.md:12:29 ┘
 
     You're attempting to use this type here:
                                                             ┌──────────────────┐
@@ -93,8 +89,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  processRequest : Http.Server.Request -> Http.Server.Response               │
 │                                                     ‾‾‾‾‾‾‾‾‾               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:12:52
+└─────────────────────────────────── can_import_unresolved_qualified.md:12:52 ┘
 
     You're attempting to use this type here:
                                                           ┌────────────────────┐
@@ -103,8 +98,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  processRequest = |req| Http.Server.defaultResponse                         │
 │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:13:24
+└─────────────────────────────────── can_import_unresolved_qualified.md:13:24 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -113,8 +107,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  processRequest = |req| Http.Server.defaultResponse                         │
 │                    ‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:13:19
+└─────────────────────────────────── can_import_unresolved_qualified.md:13:19 ┘
 
     If you don't need this variable, prefix it with an underscore like _req to
     suppress this warning.
@@ -124,8 +117,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  result = Json.prase("test")                                                │
 │           ‾‾‾‾‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:16:10
+└─────────────────────────────────── can_import_unresolved_qualified.md:16:10 ┘
 
     Is there an import or exposing missing up-top?
                                                               ┌────────────────┐
@@ -134,8 +126,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  config = Unknown.Module.config                                             │
 │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:19:10
+└─────────────────────────────────── can_import_unresolved_qualified.md:19:10 ┘
 
                                                           ┌────────────────────┐
 ┌─ Nothing is named invalidMethod in this scope. ─────────┤ UNDEFINED VARIABLE │
@@ -143,8 +134,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  client = Http.invalidMethod                                                │
 │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:22:10
+└─────────────────────────────────── can_import_unresolved_qualified.md:22:10 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -153,8 +143,7 @@ UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 │                                                                             │
 │  parser = Json.Parser.Advanced.NonExistent.create                           │
 │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_unresolved_qualified.md:25:10
+└─────────────────────────────────── can_import_unresolved_qualified.md:25:10 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

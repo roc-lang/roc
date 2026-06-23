@@ -26,8 +26,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
 │                                                                             │
 │  AliasType(_a) : _a                                                         │
 │            ‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_prefixed_param_in_type_alias.md:2:11
+└──────────────────────────── underscore_prefixed_param_in_type_alias.md:2:11 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -38,8 +37,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
 │                                                                             │
 │  AliasType(_a) : _a                                                         │
 │                  ‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_prefixed_param_in_type_alias.md:2:17
+└──────────────────────────── underscore_prefixed_param_in_type_alias.md:2:17 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -50,8 +48,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
 │                                                                             │
 │  AliasType2(_a, b) : b                                                      │
 │             ‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_prefixed_param_in_type_alias.md:5:12
+└──────────────────────────── underscore_prefixed_param_in_type_alias.md:5:12 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type
@@ -62,8 +59,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
 │                                                                             │
 │  AliasType3(a, _b) : a                                                      │
 │                ‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_prefixed_param_in_type_alias.md:8:15
+└──────────────────────────── underscore_prefixed_param_in_type_alias.md:8:15 ┘
 
     Underscores in type annotations mean "I don't care about this type", which
     doesn't make sense when declaring a type. If you need a placeholder type

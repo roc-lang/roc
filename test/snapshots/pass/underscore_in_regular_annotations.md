@@ -46,8 +46,7 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 │                                                                             │
 │  transform : _a -> _b -> _b                                                 │
 │                       ‾‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_regular_annotations.md:28:22
+└───────────────────────────────── underscore_in_regular_annotations.md:28:22 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -60,8 +59,7 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 │                                                                             │
 │  transform : _a -> _b -> _b                                                 │
 │                          ‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_regular_annotations.md:28:25
+└───────────────────────────────── underscore_in_regular_annotations.md:28:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                              ┌─────────────────┐
@@ -70,8 +68,7 @@ UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 │                                                                             │
 │  process = |list| "processed"                                               │
 │             ‾‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    underscore_in_regular_annotations.md:9:12
+└────────────────────────────────── underscore_in_regular_annotations.md:9:12 ┘
 
     If you don't need this variable, prefix it with an underscore like _list to
     suppress this warning.

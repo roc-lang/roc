@@ -24,8 +24,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 │                                                                             │
 │  var t= ]                                                                   │
 │  ‾‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_024.md:2:1
+└────────────────────────────────────────────────────── fuzz_crash_024.md:2:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -34,8 +33,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 │                                                                             │
 │  var t= ]                                                                   │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_024.md:2:8
+└────────────────────────────────────────────────────── fuzz_crash_024.md:2:8 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                                  ┌─────────────┐
@@ -44,8 +42,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 │                                                                             │
 │  var t= 0                                                                   │
 │  ‾‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_024.md:5:1
+└────────────────────────────────────────────────────── fuzz_crash_024.md:5:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                          ┌─────────────────────┐
@@ -54,8 +51,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 │                                                                             │
 │  var t= ]                                                                   │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_024.md:2:8
+└────────────────────────────────────────────────────── fuzz_crash_024.md:2:8 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
                                                         ┌──────────────────────┐
@@ -64,8 +60,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 │                                                                             │
 │  var t= 0                                                                   │
 │      ‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_024.md:5:5
+└────────────────────────────────────────────────────── fuzz_crash_024.md:5:5 ┘
 
     The redeclaration is here:
 

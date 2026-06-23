@@ -24,8 +24,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                     ‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:20
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -34,8 +33,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                      ‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:21
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:21 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -44,8 +42,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                       ‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:22
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:22 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -54,8 +51,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                        ‾                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:23
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:23 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -64,8 +60,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                         ‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:24
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:24 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -74,8 +69,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                          ‾                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:25
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:25 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -84,8 +78,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:26
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:26 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -94,8 +87,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                            ‾                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:27
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:27 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -104,8 +96,7 @@ PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 │                                                                             │
 │  app[]{f:platform""}|(0,)|||0                                               │
 │                             ‾                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_041.md:1:28
+└───────────────────────────────────────────────────── fuzz_crash_041.md:1:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

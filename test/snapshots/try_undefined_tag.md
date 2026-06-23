@@ -19,8 +19,7 @@ TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 │                                                                             │
 │  A?                                                                         │
 │  ‾‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    try_undefined_tag.md:1:1
+└─────────────────────────────────────────────────── try_undefined_tag.md:1:1 ┘
 
                                                                ┌───────────────┐
 ┌─ The ? operator expects a Try type (a tag union containing ──┤ TYPE MISMATCH │
@@ -28,8 +27,7 @@ TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 │                                                                             │
 │  A?                                                                         │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    try_undefined_tag.md:1:1
+└─────────────────────────────────────────────────── try_undefined_tag.md:1:1 ┘
 
     This expression has type:
 

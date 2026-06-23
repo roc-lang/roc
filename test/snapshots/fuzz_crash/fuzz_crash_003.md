@@ -20,8 +20,7 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 │                                                                             │
 │  = "te                                                                      │
 │    ‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_003.md:1:3
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
 
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: statement_unexpected_token ─────────┤ PARSE ERROR │
@@ -29,8 +28,7 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 │                                                                             │
 │  = "te                                                                      │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_003.md:1:1
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -39,8 +37,7 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 │                                                                             │
 │  = "te                                                                      │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_003.md:1:3
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -49,8 +46,7 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 │                                                                             │
 │  = "te                                                                      │
 │     ‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_003.md:1:4
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:4 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -59,8 +55,7 @@ PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 │                                                                             │
 │  = "te                                                                      │
 │       ‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_003.md:1:6
+└────────────────────────────────────────────────────── fuzz_crash_003.md:1:6 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

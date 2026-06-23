@@ -39,8 +39,7 @@ INVALID NOMINAL TAG - annotations.md:22:24:22:39
 │                                                                             │
 │  failPairDiffTypes = mkPair("1", 2)                                         │
 │                             ‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    annotations.md:16:28
+└─────────────────────────────────────────────────────── annotations.md:16:28 ┘
 
     The type was determined to be:
 
@@ -51,8 +50,7 @@ INVALID NOMINAL TAG - annotations.md:22:24:22:39
 │                                                                             │
 │  failPairDiffTypes2 = Pair.Pair(1, "str")                                   │
 │                                    ‾‾‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    annotations.md:19:35
+└─────────────────────────────────────────────────────── annotations.md:19:35 ┘
 
     The type was determined to be:
 
@@ -63,8 +61,7 @@ INVALID NOMINAL TAG - annotations.md:22:24:22:39
 │                                                                             │
 │  mkPairInvalid = |x, y| Pair.Pair(x, y)                                     │
 │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    annotations.md:22:24
+└─────────────────────────────────────────────────────── annotations.md:22:24 ┘
 
     The tag is:
 

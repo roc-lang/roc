@@ -25,8 +25,7 @@ EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 │                                                                             │
 │  print_msg! = |msg| Stdout.line!(msg)                                       │
 │                     ‾‾‾‾‾‾‾‾‾‾‾‾                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    effectful_with_effectful_annotation.md:7:20
+└──────────────────────────────── effectful_with_effectful_annotation.md:7:20 ┘
 
     Is there an import or exposing missing up-top?
                                                    ┌───────────────────────────┐
@@ -35,8 +34,7 @@ EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 │                                                                             │
 │  main! = print_msg!("Hello, world!")                                        │
 │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    effectful_with_effectful_annotation.md:9:9
+└───────────────────────────────── effectful_with_effectful_annotation.md:9:9 ┘
 
     Move the effect into a function body so it runs when the function is called.
 # TOKENS

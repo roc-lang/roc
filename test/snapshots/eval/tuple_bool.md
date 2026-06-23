@@ -17,10 +17,9 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 ┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
 │                                                                             │
-│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
-│                                       ‾‾‾‾‾                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    tuple_bool.md:1:38
+│  ….False, !True, !False, True and False, !True or !True)                    │
+│           ‾‾‾‾‾                                                             │
+└───────────────────────────────────────────────────────── tuple_bool.md:1:38 ┘
 
     The value's type, which does not have a method named not, is:
 
@@ -29,10 +28,9 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 ┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
 │                                                                             │
-│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
-│                                              ‾‾‾‾‾‾                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    tuple_bool.md:1:45
+│  … !True, !False, True and False, !True or !True)                           │
+│           ‾‾‾‾‾‾                                                            │
+└───────────────────────────────────────────────────────── tuple_bool.md:1:45 ┘
 
     The value's type, which does not have a method named not, is:
 
@@ -41,10 +39,9 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 ┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
 │                                                                             │
-│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
-│                                                                      ‾‾‾‾‾  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    tuple_bool.md:1:69
+│  … False, !True or !True)                                                   │
+│           ‾‾‾‾‾                                                             │
+└───────────────────────────────────────────────────────── tuple_bool.md:1:69 ┘
 
     The value's type, which does not have a method named not, is:
 
@@ -53,10 +50,9 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 ┌─ This not method is being called on a value whose type ─────┤ MISSING METHOD │
 │  doesn't have that method:                                  └───────────────┬┘
 │                                                                             │
-│  (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)│
-│                                                                               ‾‾‾‾‾│
-└─────────────────────────────────────────────────────────────────────────────┘
-    tuple_bool.md:1:78
+│  …True or !True)                                                            │
+│           ‾‾‾‾‾                                                             │
+└───────────────────────────────────────────────────────── tuple_bool.md:1:78 ┘
 
     The value's type, which does not have a method named not, is:
 

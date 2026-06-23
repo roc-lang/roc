@@ -17,8 +17,7 @@ PARSE ERROR - fuzz_hang_001.md:1:3:1:4
 │                                                                             │
 │  0 (                                                                        │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_hang_001.md:1:1
+└─────────────────────────────────────────────────────── fuzz_hang_001.md:1:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -27,8 +26,7 @@ PARSE ERROR - fuzz_hang_001.md:1:3:1:4
 │                                                                             │
 │  0 (                                                                        │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_hang_001.md:1:3
+└─────────────────────────────────────────────────────── fuzz_hang_001.md:1:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

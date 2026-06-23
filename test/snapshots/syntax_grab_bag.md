@@ -285,8 +285,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │     line!, # Comment after exposed item                                     │
 │     write!, # Another after exposed item                                    │
 │    ] # Comment after exposing close                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:6:1
+└───────────────────────────────────────────────────── syntax_grab_bag.md:6:1 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -296,8 +295,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  import BadName as GoodName                                                 │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:16:1
+└──────────────────────────────────────────────────── syntax_grab_bag.md:16:1 ┘
 
     You're attempting to use this module here:
                                                             ┌──────────────────┐
@@ -308,8 +306,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │   BadNameMultiline                                                          │
 │    as                                                                       │
 │    GoodNameMultiline                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:17:1
+└──────────────────────────────────────────────────── syntax_grab_bag.md:17:1 ┘
 
     You're attempting to use this module here:
                                                              ┌─────────────────┐
@@ -318,8 +315,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  Foo : (Bar, Baz)                                                           │
 │         ‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:36:8
+└──────────────────────────────────────────────────── syntax_grab_bag.md:36:8 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -328,8 +324,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  Foo : (Bar, Baz)                                                           │
 │              ‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:36:13
+└─────────────────────────────────────────────────── syntax_grab_bag.md:36:13 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -338,8 +333,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   Bar, # Comment after pattern tuple item                                   │
 │   ‾‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:39:2
+└──────────────────────────────────────────────────── syntax_grab_bag.md:39:2 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -348,8 +342,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   Baz, # Another after pattern tuple item                                   │
 │   ‾‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:40:2
+└──────────────────────────────────────────────────── syntax_grab_bag.md:40:2 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -358,8 +351,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  Some(a) : { foo : Ok(a), bar : Something }                                 │
 │                    ‾‾                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:43:19
+└─────────────────────────────────────────────────── syntax_grab_bag.md:43:19 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -368,8 +360,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  Some(a) : { foo : Ok(a), bar : Something }                                 │
 │                                 ‾‾‾‾‾‾‾‾‾                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:43:32
+└─────────────────────────────────────────────────── syntax_grab_bag.md:43:32 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -378,8 +369,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   foo : Ok(a), # After field                                                │
 │         ‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:45:8
+└──────────────────────────────────────────────────── syntax_grab_bag.md:45:8 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -388,8 +378,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   bar : Something, # After last field                                       │
 │         ‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:46:8
+└──────────────────────────────────────────────────── syntax_grab_bag.md:46:8 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -398,8 +387,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │     Ok(a), # Comment after pattern record field                             │
 │     ‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:52:4
+└──────────────────────────────────────────────────── syntax_grab_bag.md:52:4 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -408,8 +396,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   bar : Something, # Another after pattern record field                     │
 │         ‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:53:8
+└──────────────────────────────────────────────────── syntax_grab_bag.md:53:8 ┘
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -418,8 +405,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │     some_func() # After debug expr                                          │
 │     ‾‾‾‾‾‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:72:4
+└──────────────────────────────────────────────────── syntax_grab_bag.md:72:4 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -428,8 +414,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    lower # After pattern comment                                            │
 │    ‾‾‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:97:3
+└──────────────────────────────────────────────────── syntax_grab_bag.md:97:3 ┘
 
     If you don't need this variable, prefix it with an underscore like _lower
     to suppress this warning.
@@ -439,8 +424,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  # This is a module comment!                                                │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:1:1
+└───────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -450,8 +434,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    [1, 2 | 5, 3, .. as rest] => 123                                         │
 │        ‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:108:7
+└─────────────────────────────────────────────────── syntax_grab_bag.md:108:7 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -461,8 +444,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  # This is a module comment!                                                │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:1:1
+└───────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -472,8 +454,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │     2 | 5,                                                                  │
 │     ‾‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:111:4
+└─────────────────────────────────────────────────── syntax_grab_bag.md:111:4 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -483,8 +464,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  # This is a module comment!                                                │
 │  ‾                                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:1:1
+└───────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -494,8 +474,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    (1, 2 | 5, 3) => 123                                                     │
 │        ‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:120:7
+└─────────────────────────────────────────────────── syntax_grab_bag.md:120:7 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -505,8 +484,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
 │                                      ‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:121:37
+└────────────────────────────────────────────────── syntax_grab_bag.md:121:37 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -515,8 +493,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    { foo: 1, bar: 2, ..rest } => 12->add(34)                                │
 │                      ‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:121:21
+└────────────────────────────────────────────────── syntax_grab_bag.md:121:21 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -526,8 +503,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │     .. # After spread operator                                              │
 │      rest, # After last field                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:127:4
+└─────────────────────────────────────────────────── syntax_grab_bag.md:127:4 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.
@@ -537,8 +513,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    { foo: 1, bar: 2 | 7 } => 12                                             │
 │                   ‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:130:18
+└────────────────────────────────────────────────── syntax_grab_bag.md:130:18 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -548,8 +523,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │     bar: 2 | 7, # After last record field                                   │
 │          ‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:133:9
+└─────────────────────────────────────────────────── syntax_grab_bag.md:133:9 ┘
 
     This error doesn't have a proper diagnostic report yet. Let us know if you
     want to help improve Roc's error messages!
@@ -559,8 +533,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   b,                                                                        │
 │   ‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:82:2
+└──────────────────────────────────────────────────── syntax_grab_bag.md:82:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _b to
     suppress this warning.
@@ -570,8 +543,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   blah == 1 # Comment after expect statement                                │
 │   ‾‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:141:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:141:2 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -580,8 +552,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  main! : List(String) -> Try({}, _)                                         │
 │               ‾‾‾‾‾‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:143:14
+└────────────────────────────────────────────────── syntax_grab_bag.md:143:14 ┘
 
     This type is referenced here:
                                                           ┌────────────────────┐
@@ -590,8 +561,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   expect blah == 1                                                          │
 │          ‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:147:9
+└─────────────────────────────────────────────────── syntax_grab_bag.md:147:9 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -600,8 +570,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   some_func(                                                                │
 │   ‾‾‾‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:158:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:158:2 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -610,8 +579,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    Stdout.line!("Adding ${n} to ${number}")                                 │
 │    ‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:175:3
+└─────────────────────────────────────────────────── syntax_grab_bag.md:175:3 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -620,8 +588,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
 │                                                                ‾‾‾‾‾‾       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:178:63
+└────────────────────────────────────────────────── syntax_grab_bag.md:178:63 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -630,8 +597,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
 │                                           ‾‾‾‾‾‾                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:179:42
+└────────────────────────────────────────────────── syntax_grab_bag.md:179:42 ┘
 
     Is there an import or exposing missing up-top?
                                                 ┌──────────────────────────────┐
@@ -641,8 +607,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
 │                                                   ‾‾‾‾‾                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:179:50
+└────────────────────────────────────────────────── syntax_grab_bag.md:179:50 ┘
 
     Only functions can reference themselves (for recursion). For non-function
     values, the right-hand side must be fully computable without referring to
@@ -653,8 +618,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    tag1,                                                                    │
 │    ‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:183:3
+└─────────────────────────────────────────────────── syntax_grab_bag.md:183:3 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -663,38 +627,34 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    (nested, tuple),                                                         │
 │     ‾‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:185:4
+└─────────────────────────────────────────────────── syntax_grab_bag.md:185:4 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
 ┌─ Nothing is named foo in this scope. ───────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
 │                                                                             │
-│   bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5│
-│                       ‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:188:22
+│  …t = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
+│           ‾‾‾                                                               │
+└────────────────────────────────────────────────── syntax_grab_bag.md:188:22 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
 ┌─ Nothing is named some_fn in this scope. ───────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
 │                                                                             │
-│   static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
-│                           ‾‾‾‾‾‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:189:26
+│  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_met…│
+│           ‾‾‾‾‾‾‾                                                           │
+└────────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
 ┌─ Nothing is named arg1 in this scope. ──────────────────┤ UNDEFINED VARIABLE │
 │                                                         └───────────────────┬┘
 │                                                                             │
-│   static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
-│                                   ‾‾‾‾                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:189:34
+│  …some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.r…│
+│           ‾‾‾‾                                                              │
+└────────────────────────────────────────────────── syntax_grab_bag.md:189:34 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -703,8 +663,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   Stdout.line!(interpolated)?                                               │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:190:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:190:2 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -713,8 +672,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   Stdout.line!(                                                             │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:191:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:191:2 ┘
 
     Is there an import or exposing missing up-top?
                                                               ┌────────────────┐
@@ -723,8 +681,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │     Num.toStr(number) # Comment after string interpolation expr             │
 │     ‾‾‾‾‾‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:193:4
+└─────────────────────────────────────────────────── syntax_grab_bag.md:193:4 ┘
 
                                                              ┌─────────────────┐
 ┌─ Variable tag_with_payload is defined here and then never ─┤ UNUSED VARIABLE │
@@ -732,8 +689,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   tag_with_payload = Ok(number)                                             │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:164:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:164:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _tag_with_payload to suppress this warning.
@@ -743,8 +699,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
 │   ‾‾‾‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:178:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:178:2 ┘
 
     If you don't need this variable, prefix it with an underscore like _record
     to suppress this warning.
@@ -754,8 +709,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   multiline_tuple = (                                                       │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:180:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:180:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _multiline_tuple to suppress this warning.
@@ -763,10 +717,9 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 ┌─ Variable bin_op_result is defined here and then never ────┤ UNUSED VARIABLE │
 │  used:                                                     └────────────────┬┘
 │                                                                             │
-│   bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5│
+│   bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or… │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:188:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:188:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _bin_op_result to suppress this warning.
@@ -774,10 +727,9 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 ┌─ Variable static_dispatch_style is defined here and then ──┤ UNUSED VARIABLE │
 │  never used:                                               └────────────────┬┘
 │                                                                             │
-│   static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
+│   static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_st… │
 │   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:189:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:189:2 ┘
 
     If you don't need this variable, prefix it with an underscore like
     _static_dispatch_style to suppress this warning.
@@ -787,8 +739,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  tuple : Value((a, b, c))                                                   │
 │          ‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:201:9
+└─────────────────────────────────────────────────── syntax_grab_bag.md:201:9 ┘
 
     This type is referenced here:
                                                                ┌───────────────┐
@@ -797,8 +748,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │   if num {                                                                  │
 │      ‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:70:5
+└──────────────────────────────────────────────────── syntax_grab_bag.md:70:5 ┘
 
     It is:
 
@@ -811,8 +761,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    "foo" => # After arrow comment                                           │
 │    ‾‾‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:99:3
+└──────────────────────────────────────────────────── syntax_grab_bag.md:99:3 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -823,8 +772,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    "foo" | "bar" => 200                                                     │
 │    ‾‾‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:101:3
+└─────────────────────────────────────────────────── syntax_grab_bag.md:101:3 ┘
 
     The value's type, which does not have a method named from_quote, is:
 
@@ -888,8 +836,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │    Ok(Some(dude)) => dude                                                   │
 │    TwoArgs("hello", Some("world")) => 1000                                  │
 │   }                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:84:3
+└──────────────────────────────────────────────────── syntax_grab_bag.md:84:3 ┘
 
     This sixth branch is trying to match:
 
@@ -911,8 +858,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │   match_time(                                                               │
 │    ..., # Single args with comment                                          │
 │   )                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:155:2
+└─────────────────────────────────────────────────── syntax_grab_bag.md:155:2 ┘
 
     The match_time function has the type:
 
@@ -927,8 +873,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │     dbg # After dbg in list                                                 │
 │      number, # after dbg expr as arg                                        │
 │    ), # Comment one                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:167:4
+└─────────────────────────────────────────────────── syntax_grab_bag.md:167:4 ┘
 
     This argument has the type:
 
@@ -943,8 +888,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │    tag # Comment after return statement                                     │
 │    ‾‾‾                                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:150:3
+└─────────────────────────────────────────────────── syntax_grab_bag.md:150:3 ┘
 
     It has the type:
 
@@ -962,8 +906,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │                                                                             │
 │  tuple : Value((a, b, c))                                                   │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:201:1
+└─────────────────────────────────────────────────── syntax_grab_bag.md:201:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -972,10 +915,9 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │  static_dispatch_method on an unresolved type variable,     └───────────────┬┘
 │  but unresolved type variables have no methods.                             │
 │                                                                             │
-│   static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
-│                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:189:26
+│  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_met…│
+│           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
+└────────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by
@@ -986,10 +928,9 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │  next_static_dispatch_method on an unresolved type          └───────────────┬┘
 │  variable, but unresolved type variables have no methods.                   │
 │                                                                             │
-│   static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?│
-│                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    syntax_grab_bag.md:189:26
+│  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_met…│
+│           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
+└────────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by

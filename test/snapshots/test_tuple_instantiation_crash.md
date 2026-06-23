@@ -24,8 +24,7 @@ TOO MANY ARGS - test_tuple_instantiation_crash.md:9:8:9:18
 │                                                                             │
 │  main = swap(1, 2)                                                          │
 │         ‾‾‾‾‾‾‾‾‾‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    test_tuple_instantiation_crash.md:9:8
+└────────────────────────────────────── test_tuple_instantiation_crash.md:9:8 ┘
 
     The swap function has the type:
 

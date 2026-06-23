@@ -24,8 +24,7 @@ TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 │                                                                             │
 │      needs_string = |f| f(["hello"])                                        │
 │                           ‾‾‾‾‾‾‾‾‾                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    test_instantiated_return_crash.md:6:26
+└───────────────────────────────────── test_instantiated_return_crash.md:6:26 ┘
 
     This argument has the type:
 

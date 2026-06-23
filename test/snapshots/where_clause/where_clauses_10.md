@@ -23,8 +23,7 @@ DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 │                                                                             │
 │      [a.Decode]                                                             │
 │       ‾‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    where_clauses_10.md:7:6
+└──────────────────────────────────────────────────── where_clauses_10.md:7:6 ┘
 
     This syntax was used for abilities, which have been removed from Roc. Use
     method constraints like where [a.methodName(args) -> ret] instead.
@@ -37,8 +36,7 @@ DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 │    List(List(U8)) -> List(a) # After anno                                   │
 │     where # after where                                                     │
 │      [a.Decode]                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    where_clauses_10.md:3:1
+└──────────────────────────────────────────────────── where_clauses_10.md:3:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

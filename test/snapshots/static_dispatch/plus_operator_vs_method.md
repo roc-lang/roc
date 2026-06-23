@@ -37,8 +37,7 @@ MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 │                                                                             │
 │  result1 = a + b                                                            │
 │            ‾‾‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    plus_operator_vs_method.md:11:11
+└─────────────────────────────────────────── plus_operator_vs_method.md:11:11 ┘
 
     The value's type, which does not have a method named plus, is:
 
@@ -52,8 +51,7 @@ MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 │                                                                             │
 │  result2 = c.plus(d)                                                        │
 │              ‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    plus_operator_vs_method.md:21:13
+└─────────────────────────────────────────── plus_operator_vs_method.md:21:13 ┘
 
     The value's type, which does not have a method named plus, is:
 

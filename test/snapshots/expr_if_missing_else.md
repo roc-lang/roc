@@ -17,8 +17,7 @@ MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 │                                                                             │
 │  foo = if tru 0                                                             │
 │           ‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    expr_if_missing_else.md:1:10
+└─────────────────────────────────────────────── expr_if_missing_else.md:1:10 ┘
 
     Is there an import or exposing missing up-top?
                                                               ┌────────────────┐
@@ -27,8 +26,7 @@ MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 │                                                                             │
 │  foo = if tru 0                                                             │
 │               ‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    expr_if_missing_else.md:1:14
+└─────────────────────────────────────────────── expr_if_missing_else.md:1:14 ┘
 
     The value's type, which does not have a method named from_numeral, is:
 

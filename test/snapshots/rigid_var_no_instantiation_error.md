@@ -42,8 +42,7 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 │                                                                             │
 │      result2 = swap((Bool.true, [1, 2, 3]))                                 │
 │                      ‾‾‾‾‾‾‾‾‾                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    rigid_var_no_instantiation_error.md:17:21
+└────────────────────────────────── rigid_var_no_instantiation_error.md:17:21 ┘
 
     Bool is in scope, but it has no associated true.
 
@@ -54,8 +53,7 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 │                                                                             │
 │      result1 = swap((42, "hello"))                                          │
 │      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    rigid_var_no_instantiation_error.md:13:5
+└─────────────────────────────────── rigid_var_no_instantiation_error.md:13:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _result1
     to suppress this warning.
@@ -65,8 +63,7 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 │                                                                             │
 │      result2 = swap((Bool.true, [1, 2, 3]))                                 │
 │      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    rigid_var_no_instantiation_error.md:17:5
+└─────────────────────────────────── rigid_var_no_instantiation_error.md:17:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _result2
     to suppress this warning.
@@ -76,8 +73,7 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 │                                                                             │
 │      result3 = swap(("foo", "bar"))                                         │
 │      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    rigid_var_no_instantiation_error.md:21:5
+└─────────────────────────────────── rigid_var_no_instantiation_error.md:21:5 ┘
 
     If you don't need this variable, prefix it with an underscore like _result3
     to suppress this warning.

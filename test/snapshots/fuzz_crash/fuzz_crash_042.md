@@ -18,8 +18,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 │                                                                             │
 │  import u.R}g:r->R.a.E                                                      │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_042.md:1:11
+└───────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                             ┌──────────────────┐
@@ -28,8 +27,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 │                                                                             │
 │  import u.R}g:r->R.a.E                                                      │
 │                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_042.md:1:20
+└───────────────────────────────────────────────────── fuzz_crash_042.md:1:20 ┘
 
     You're attempting to use this type here:
                                                     ┌──────────────────────────┐
@@ -38,8 +36,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 │                                                                             │
 │  import u.R}g:r->R.a.E                                                      │
 │             ‾‾‾‾‾‾‾‾‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_042.md:1:12
+└───────────────────────────────────────────────────── fuzz_crash_042.md:1:12 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

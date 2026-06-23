@@ -25,8 +25,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │                                                                             │
 │  { Foo.Bar.baz <-                                                           │
 │                ‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_builder.md:1:15
+└───────────────────────────────────────────────────── record_builder.md:1:15 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                          ┌─────────────────────────────────────┐
@@ -35,8 +34,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │                                                                             │
 │      x: 5,                                                                  │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_builder.md:2:8
+└────────────────────────────────────────────────────── record_builder.md:2:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                               ┌────────────────────────────────┐
@@ -45,8 +43,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │                                                                             │
 │      x: 5,                                                                  │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_builder.md:2:9
+└────────────────────────────────────────────────────── record_builder.md:2:9 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                          ┌─────────────────────────────────────┐
@@ -55,8 +52,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │                                                                             │
 │      y: 0,                                                                  │
 │         ‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_builder.md:3:8
+└────────────────────────────────────────────────────── record_builder.md:3:8 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                               ┌────────────────────────────────┐
@@ -65,8 +61,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │                                                                             │
 │      y: 0,                                                                  │
 │          ‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_builder.md:3:9
+└────────────────────────────────────────────────────── record_builder.md:3:9 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                     ┌──────────────────────────┐
@@ -75,8 +70,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │                                                                             │
 │      x: 5,                                                                  │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_builder.md:2:5
+└────────────────────────────────────────────────────── record_builder.md:2:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -86,8 +80,7 @@ DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 │                                                                             │
 │      y: 0,                                                                  │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    record_builder.md:3:5
+└────────────────────────────────────────────────────── record_builder.md:3:5 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

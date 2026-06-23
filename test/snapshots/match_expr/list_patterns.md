@@ -24,8 +24,7 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
 │                                                                             │
 │      [first, ..rest] => 0 # invalid rest pattern should error               │
 │              ‾‾‾‾‾‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    list_patterns.md:3:13
+└────────────────────────────────────────────────────── list_patterns.md:3:13 ┘
 
     For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
                                                           ┌────────────────────┐
@@ -34,8 +33,7 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
 │                                                                             │
 │  match numbers {                                                            │
 │        ‾‾‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    list_patterns.md:1:7
+└─────────────────────────────────────────────────────── list_patterns.md:1:7 ┘
 
     Is there an import or exposing missing up-top?
                                                           ┌────────────────────┐
@@ -44,8 +42,7 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
 │                                                                             │
 │      [] => acc                                                              │
 │            ‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    list_patterns.md:2:11
+└────────────────────────────────────────────────────── list_patterns.md:2:11 ┘
 
     Is there an import or exposing missing up-top?
                                                              ┌─────────────────┐
@@ -54,8 +51,7 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
 │                                                                             │
 │      [first, ..rest] => 0 # invalid rest pattern should error               │
 │       ‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    list_patterns.md:3:6
+└─────────────────────────────────────────────────────── list_patterns.md:3:6 ┘
 
     If you don't need this variable, prefix it with an underscore like _first
     to suppress this warning.
@@ -65,8 +61,7 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
 │                                                                             │
 │      [first, ..rest] => 0 # invalid rest pattern should error               │
 │                ‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    list_patterns.md:3:15
+└────────────────────────────────────────────────────── list_patterns.md:3:15 ┘
 
     If you don't need this variable, prefix it with an underscore like _rest to
     suppress this warning.

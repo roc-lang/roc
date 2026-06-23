@@ -23,8 +23,7 @@ EXPOSED BUT NOT DEFINED - app.md:2:2:2:5
 │                                                                             │
 │   a2!                                                                       │
 │   ‾‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    app.md:3:2
+└───────────────────────────────────────────────────────────────── app.md:3:2 ┘
 
     You can fix this by either defining a2! in this module, or by removing it
     from the list of exposed values.
@@ -34,8 +33,7 @@ EXPOSED BUT NOT DEFINED - app.md:2:2:2:5
 │                                                                             │
 │   a1!,                                                                      │
 │   ‾‾‾                                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-    app.md:2:2
+└───────────────────────────────────────────────────────────────── app.md:2:2 ┘
 
     You can fix this by either defining a1! in this module, or by removing it
     from the list of exposed values.

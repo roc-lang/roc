@@ -69,8 +69,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u',                                                                  │
 │       ‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:5:6
+└─────────────────────────────────────────────── unicode_single_quotes.md:5:6 ┘
 
                                              ┌─────────────────────────────────┐
 ┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
@@ -78,8 +77,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u)',                                                                 │
 │       ‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:6:6
+└─────────────────────────────────────────────── unicode_single_quotes.md:6:6 ┘
 
                                              ┌─────────────────────────────────┐
 ┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
@@ -87,8 +85,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u(',                                                                 │
 │       ‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:7:6
+└─────────────────────────────────────────────── unicode_single_quotes.md:7:6 ┘
 
                                              ┌─────────────────────────────────┐
 ┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
@@ -96,8 +93,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u()',                                                                │
 │       ‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:8:6
+└─────────────────────────────────────────────── unicode_single_quotes.md:8:6 ┘
 
                                              ┌─────────────────────────────────┐
 ┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
@@ -105,8 +101,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u(EDA0B5)'                                                           │
 │       ‾‾‾‾‾‾‾‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:10:6
+└────────────────────────────────────────────── unicode_single_quotes.md:10:6 ┘
 
                                              ┌─────────────────────────────────┐
 ┌─ This Unicode escape sequence is not ──────┤ INVALID UNICODE ESCAPE SEQUENCE │
@@ -114,8 +109,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u(K)',                                                               │
 │       ‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:11:6
+└────────────────────────────────────────────── unicode_single_quotes.md:11:6 ┘
 
                                                           ┌────────────────────┐
 ┌─ Single-quoted literals must contain exactly one valid ─┤ SINGLE QUOTE EMPTY │
@@ -123,8 +117,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '',                                                                    │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:14:5
+└────────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
 
                                                        ┌───────────────────────┐
 ┌─ Single-quoted literals must contain exactly one ────┤ SINGLE QUOTE TOO LONG │
@@ -132,8 +125,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      'long',                                                                │
 │      ‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:15:5
+└────────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
 
                                                        ┌───────────────────────┐
 ┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
@@ -141,8 +133,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\',                                                                   │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:16:5
+└────────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
 
                                                        ┌───────────────────────┐
 ┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
@@ -150,8 +141,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │  y = 'u                                                                     │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:19:5
+└────────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
 
                                                      ┌─────────────────────────┐
 ┌─ This escape sequence is not recognized. ──────────┤ INVALID ESCAPE SEQUENCE │
@@ -159,8 +149,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │  '\                                                                         │
 │                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:22:2
+└────────────────────────────────────────────── unicode_single_quotes.md:22:2 ┘
 
                                                        ┌───────────────────────┐
 ┌─ This single-quoted literal is missing a closing ────┤ UNCLOSED SINGLE QUOTE │
@@ -168,8 +157,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │  '\                                                                         │
 │  ‾‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:22:1
+└────────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
 
                                               ┌────────────────────────────────┐
 ┌─ The token '\u' is not expected in an ──────┤ UNEXPECTED TOKEN IN EXPRESSION │
@@ -177,8 +165,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u',                                                                  │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:5:5
+└─────────────────────────────────────────────── unicode_single_quotes.md:5:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -187,8 +174,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u)',                                                                 │
 │      ‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:6:5
+└─────────────────────────────────────────────── unicode_single_quotes.md:6:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -197,8 +183,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u(',                                                                 │
 │      ‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:7:5
+└─────────────────────────────────────────────── unicode_single_quotes.md:7:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -207,8 +192,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u()',                                                                │
 │      ‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:8:5
+└─────────────────────────────────────────────── unicode_single_quotes.md:8:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -217,8 +201,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u(EDA0B5)'                                                           │
 │      ‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:10:5
+└────────────────────────────────────────────── unicode_single_quotes.md:10:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -227,8 +210,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\u(K)',                                                               │
 │      ‾‾‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:11:5
+└────────────────────────────────────────────── unicode_single_quotes.md:11:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -237,8 +219,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '',                                                                    │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:14:5
+└────────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -247,8 +228,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      'long',                                                                │
 │      ‾‾‾‾‾‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:15:5
+└────────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -257,8 +237,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │      '\',                                                                   │
 │      ‾‾‾‾                                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:16:5
+└────────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                               ┌────────────────────────────────┐
@@ -267,8 +246,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │  y = 'u                                                                     │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:19:5
+└────────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                                  ┌─────────────┐
@@ -277,8 +255,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 │                                                                             │
 │  '\                                                                         │
 │  ‾‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:22:1
+└────────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 INVALID TUPLE ELEMENT
@@ -323,8 +300,7 @@ This tuple element is malformed or contains invalid syntax.
 │                                                                             │
 │  y = 'u                                                                     │
 │      ‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    unicode_single_quotes.md:19:5
+└────────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

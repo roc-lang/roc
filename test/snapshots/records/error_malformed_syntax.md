@@ -15,20 +15,18 @@ PARSE ERROR - error_malformed_syntax.md:1:20:1:22
 ┌─ A parsing error occurred: expected_expr_record_field_name ────┤ PARSE ERROR │
 │                                                                └────────────┬┘
 │                                                                             │
-│  { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }│
-│                   ‾                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    error_malformed_syntax.md:1:18
+│  …Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number …│
+│           ‾                                                                 │
+└───────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
 ┌─ A parsing error occurred: expected_expr_close_curly_or_comma ─┤ PARSE ERROR │
 │                                                                └────────────┬┘
 │                                                                             │
-│  { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }│
-│                     ‾‾                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-    error_malformed_syntax.md:1:20
+│  …ice", : 30, , email: , active Bool.true, "invalid": value, 42: "number ke…│
+│           ‾‾                                                                │
+└───────────────────────────────────────────── error_malformed_syntax.md:1:20 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS

@@ -245,6 +245,51 @@ fn sepRow(writer: *std.Io.Writer, palette: ColorPalette, rw: usize) error{WriteF
     try closeRow(writer, palette, 1, rw);
 }
 
+/// The byte offset in `line` at display column `target_col`, clamped to a UTF-8
+/// boundary and never overshooting `target_col`. Tabs count as one column.
+fn byteAtDisplayCol(line: []const u8, target_col: usize) usize {
+    var i: usize = 0;
+    var col: usize = 0;
+    while (i < line.len and col < target_col) {
+        const seq = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
+        const next = @min(i + seq, line.len);
+        const w = source_region.displayWidth(line[i..next]);
+        if (col + w > target_col) break;
+        col += w;
+        i = next;
+    }
+    return i;
+}
+
+/// A windowed view of a source line, used when the line is too wide for the box.
+const CodeWindow = struct {
+    start_byte: usize,
+    end_byte: usize,
+    left_ellipsis: bool,
+    right_ellipsis: bool,
+};
+
+/// Choose a slice of `line` to show within `avail` display columns that keeps
+/// the byte offset `focus` (the start of the underlined span) visible, with a
+/// little left context, eliding the rest with `…`.
+fn windowSourceLine(line: []const u8, focus: usize, avail: usize) CodeWindow {
+    if (source_region.displayWidth(line) <= avail) {
+        return .{ .start_byte = 0, .end_byte = line.len, .left_ellipsis = false, .right_ellipsis = false };
+    }
+    const budget = avail -| 2; // leave room for an ellipsis on each side
+    const focus_col = source_region.displayWidth(line[0..focus]);
+    const left_context = @min(@as(usize, 8), budget / 4);
+    const start_byte = byteAtDisplayCol(line, focus_col -| left_context);
+    const start_col = source_region.displayWidth(line[0..start_byte]);
+    const end_byte = byteAtDisplayCol(line, start_col + budget);
+    return .{
+        .start_byte = start_byte,
+        .end_byte = end_byte,
+        .left_ellipsis = start_byte > 0,
+        .right_ellipsis = end_byte < line.len,
+    };
+}
+
 /// Render the report as a box around its source snippet.
 pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     const gpa = report.document.allocator;
@@ -283,12 +328,16 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     const summary = std.mem.trim(u8, summary_buf.items, " ");
 
     const title = report.title;
-    const total: usize = config.getMaxLineWidth();
 
     // The label box is right-aligned: its right edge is the last column, and it
     // pokes one column past the main box's right wall.
     const inner_len = title.len + 2; // " TITLE "
     const tbw = inner_len + 2; // label box width
+    // Grow the box past the configured width if the title is so wide that the
+    // label box plus a minimal summary slot (col 4 start + an 8-column summary)
+    // wouldn't otherwise fit — so the walls stay aligned on narrow terminals
+    // (the whole box just wraps in the terminal) instead of overrunning.
+    const total: usize = @max(config.getMaxLineWidth(), tbw + 12);
     const tb_left = @max((total + 1) -| tbw, 2); // 1-based column of the label box's left edge
     const rw = total -| 1; // main box right wall column
     // Summary starts at column 4 (after "┌─ ") and wraps before the label box.
@@ -367,12 +416,22 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         }
     }
 
-    // Blank separator row, then the source line(s) and underline.
+    // Blank separator row, then the source line(s) and underline. Lines that
+    // would overrun the right wall are windowed around the underlined span.
+    const code_avail = rw -| 4;
     try sepRow(writer, palette, rw);
     {
         var line_no = region.start_line;
         var it = std.mem.splitScalar(u8, region.line_text, '\n');
         while (it.next()) |code_line| {
+            const is_underline_line = region.start_line == region.end_line and line_no == region.start_line;
+            // Underline byte span (meaningful only on the underlined line); also
+            // the window's focus so the span stays visible when the line is long.
+            const start_byte = @min(@as(usize, region.start_column -| 1), code_line.len);
+            const end_byte = @max(@min(@as(usize, region.end_column -| 1), code_line.len), start_byte);
+            const win = windowSourceLine(code_line, if (is_underline_line) start_byte else 0, code_avail);
+            const shown = code_line[win.start_byte..win.end_byte];
+
             var col: usize = 0;
             try writer.writeAll(sec);
             try writer.writeAll("│");
@@ -380,13 +439,21 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
             col += 1;
             try writer.writeAll("  ");
             col += 2;
+            if (win.left_ellipsis) {
+                try writer.writeAll("…");
+                col += 1;
+            }
             // Render tabs as single spaces: a literal tab would otherwise throw
             // off both the right wall and the underline below it.
-            for (code_line) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
-            col += source_region.displayWidth(code_line);
+            for (shown) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
+            col += source_region.displayWidth(shown);
+            if (win.right_ellipsis) {
+                try writer.writeAll("…");
+                col += 1;
+            }
             try closeRow(writer, palette, col, rw);
 
-            if (region.start_line == region.end_line and line_no == region.start_line) {
+            if (is_underline_line) {
                 var ucol: usize = 0;
                 try writer.writeAll(sec);
                 try writer.writeAll("│");
@@ -394,14 +461,16 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
                 ucol += 1;
                 try writer.writeAll("  ");
                 ucol += 2;
-                // Roc reports columns as byte offsets; map them to display
-                // columns so the underline lines up under wide/multi-byte chars.
-                const start_byte = @min(@as(usize, region.start_column -| 1), code_line.len);
-                const end_byte = @max(@min(@as(usize, region.end_column -| 1), code_line.len), start_byte);
-                const lead = source_region.displayWidth(code_line[0..start_byte]);
+                // The underline span clipped to the visible window, mapped from
+                // byte offsets to display columns so it lines up under
+                // wide/multi-byte chars.
+                const vs = @max(start_byte, win.start_byte);
+                const ve = @min(end_byte, win.end_byte);
+                const lead = @as(usize, if (win.left_ellipsis) 1 else 0) +
+                    source_region.displayWidth(code_line[win.start_byte..vs]);
                 try writer.splatByteAll(' ', lead);
                 ucol += lead;
-                const span_width = source_region.displayWidth(code_line[start_byte..end_byte]);
+                const span_width = if (ve > vs) source_region.displayWidth(code_line[vs..ve]) else 0;
                 const ulen = if (span_width > 0) span_width else 1;
                 try writer.writeAll(palette.error_color);
                 try writer.splatBytesAll(box_underline, ulen);
@@ -413,25 +482,38 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         }
     }
 
-    // Bottom edge with the filename tucked into the bottom-right corner.
-    // Bottom edge is a plain rule; the location goes on its own line beneath,
-    // where a long path can't overflow the box.
-    try writer.writeAll(sec);
-    try writer.writeAll("└");
-    try writer.splatBytesAll("─", rw -| 2);
-    try writer.writeAll("┘");
-    try writer.writeAll(rst);
-    try writer.writeByte('\n');
-
+    // Bottom edge with the location tucked into the bottom-right corner
+    // (`└─…─ file:line:col ┘`). If the location is too long to fit inside the
+    // box without overrunning a wall, fall back to a plain rule with the
+    // location on its own line beneath.
     {
         const fname = if (region.filename) |f| sanitisePathForSnapshots(f) else "<source>";
         const loc = try std.fmt.allocPrint(gpa, "{s}:{}:{}", .{ fname, region.start_line, region.start_column });
         defer gpa.free(loc);
-        try writer.writeAll("    ");
+        const loc_w = source_region.displayWidth(loc);
+
         try writer.writeAll(sec);
-        try writer.writeAll(loc);
-        try writer.writeAll(rst);
-        try writer.writeByte('\n');
+        try writer.writeAll("└");
+        if (loc_w + 4 <= rw) {
+            // Fits: └ + dashes + " loc " + ┘, with the location right-aligned.
+            try writer.splatBytesAll("─", (rw -| 4) -| loc_w);
+            try writer.writeAll(" ");
+            try writer.writeAll(loc);
+            try writer.writeAll(" ┘");
+            try writer.writeAll(rst);
+            try writer.writeByte('\n');
+        } else {
+            // Too long: plain rule, location on its own line beneath.
+            try writer.splatBytesAll("─", rw -| 2);
+            try writer.writeAll("┘");
+            try writer.writeAll(rst);
+            try writer.writeByte('\n');
+            try writer.writeAll("    ");
+            try writer.writeAll(sec);
+            try writer.writeAll(loc);
+            try writer.writeAll(rst);
+            try writer.writeByte('\n');
+        }
     }
 
     // Detailed explanation below the box, indented 4 spaces.

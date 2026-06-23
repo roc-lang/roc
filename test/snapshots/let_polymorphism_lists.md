@@ -52,8 +52,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_int_list = int_list ++ my_empty_list                                   │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:12:26
+└──────────────────────────────────────────── let_polymorphism_lists.md:12:26 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                                  ┌─────────────┐
@@ -62,8 +61,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_int_list = int_list ++ my_empty_list                                   │
 │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:12:28
+└──────────────────────────────────────────── let_polymorphism_lists.md:12:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -72,8 +70,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_str_list = str_list ++ my_empty_list                                   │
 │                           ‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:13:26
+└──────────────────────────────────────────── let_polymorphism_lists.md:13:26 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                                  ┌─────────────┐
@@ -82,8 +79,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_str_list = str_list ++ my_empty_list                                   │
 │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:13:28
+└──────────────────────────────────────────── let_polymorphism_lists.md:13:28 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                               ┌────────────────────────────────┐
@@ -92,8 +88,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_float_list = float_list ++ my_empty_list                               │
 │                               ‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:14:30
+└──────────────────────────────────────────── let_polymorphism_lists.md:14:30 ┘
 
     Expressions can be identifiers, literals, function calls, or operators.
                                                                  ┌─────────────┐
@@ -102,8 +97,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_float_list = float_list ++ my_empty_list                               │
 │                                 ‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:14:32
+└──────────────────────────────────────────── let_polymorphism_lists.md:14:32 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                          ┌─────────────────────┐
@@ -112,8 +106,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_int_list = int_list ++ my_empty_list                                   │
 │                 ‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:12:16
+└──────────────────────────────────────────── let_polymorphism_lists.md:12:16 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
                                                          ┌─────────────────────┐
@@ -122,8 +115,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_str_list = str_list ++ my_empty_list                                   │
 │                 ‾‾‾‾‾‾‾‾‾‾‾                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:13:16
+└──────────────────────────────────────────── let_polymorphism_lists.md:13:16 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
                                                          ┌─────────────────────┐
@@ -132,8 +124,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 │                                                                             │
 │  all_float_list = float_list ++ my_empty_list                               │
 │                   ‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    let_polymorphism_lists.md:14:18
+└──────────────────────────────────────────── let_polymorphism_lists.md:14:18 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

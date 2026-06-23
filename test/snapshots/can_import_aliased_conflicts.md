@@ -23,8 +23,7 @@ UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
 │                                                                             │
 │  import http.Client as MyModule                                             │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_aliased_conflicts.md:2:1
+└──────────────────────────────────────── can_import_aliased_conflicts.md:2:1 ┘
 
     The redeclaration is here:
 
@@ -40,8 +39,7 @@ UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
 │                                                                             │
 │      x = MyModule.parse                                                     │
 │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    can_import_aliased_conflicts.md:5:9
+└──────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
 
     Is there an import or exposing missing up-top?
 # TOKENS

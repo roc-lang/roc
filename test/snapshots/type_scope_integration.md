@@ -27,8 +27,7 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 │                                                                             │
 │  Foo : Str                                                                  │
 │  ‾‾‾‾‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    type_scope_integration.md:5:1
+└────────────────────────────────────────────── type_scope_integration.md:5:1 ┘
 
     The redeclaration is here:
 
@@ -44,8 +43,7 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 │                                                                             │
 │  Bar : SomeUndeclaredType                                                   │
 │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-    type_scope_integration.md:8:7
+└────────────────────────────────────────────── type_scope_integration.md:8:7 ┘
 
     This type is referenced here:
 # TOKENS

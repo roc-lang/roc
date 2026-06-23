@@ -28,8 +28,7 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 │                                                                             │
 │  import Color.*                                                             │
 │              ‾‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_import_wildcard.md:1:13
+└──────────────────────────────────────────── nominal_import_wildcard.md:1:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                              ┌─────────────────┐
@@ -38,8 +37,7 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 │                                                                             │
 │  red : Color                                                                │
 │        ‾‾‾‾‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_import_wildcard.md:3:7
+└───────────────────────────────────────────── nominal_import_wildcard.md:3:7 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -48,8 +46,7 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 │                                                                             │
 │  blue : Color                                                               │
 │         ‾‾‾‾‾                                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_import_wildcard.md:6:8
+└───────────────────────────────────────────── nominal_import_wildcard.md:6:8 ┘
 
     This type is referenced here:
                                                              ┌─────────────────┐
@@ -58,8 +55,7 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 │                                                                             │
 │  green : Color                                                              │
 │          ‾‾‾‾‾                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-    nominal_import_wildcard.md:9:9
+└───────────────────────────────────────────── nominal_import_wildcard.md:9:9 ┘
 
     This type is referenced here:
 # TOKENS

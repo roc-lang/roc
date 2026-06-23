@@ -49,8 +49,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │    vides # Cd                                                               │
 │    ‾‾‾‾‾                                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:11:3
+└───────────────────────────────────────────────────── fuzz_crash_029.md:11:3 ┘
 
     For example:     packages { base: "../base/main.roc" }
                                                                  ┌─────────────┐
@@ -59,8 +58,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │    { # pen                                                                  │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:12:3
+└───────────────────────────────────────────────────── fuzz_crash_029.md:12:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                          ┌─────────────────────────────────────┐
@@ -69,8 +67,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │       ‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:6
+└───────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
 
     Type annotations should contain types like Str, Num a, or List U64.
                                                                  ┌─────────────┐
@@ -79,8 +76,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │        ‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:7
+└───────────────────────────────────────────────────── fuzz_crash_029.md:13:7 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -89,8 +85,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │           ‾                                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:10
+└──────────────────────────────────────────────────── fuzz_crash_029.md:13:10 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -99,8 +94,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │            ‾                                                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:11
+└──────────────────────────────────────────────────── fuzz_crash_029.md:13:11 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -109,8 +103,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │              ‾‾‾‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:13
+└──────────────────────────────────────────────────── fuzz_crash_029.md:13:13 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -119,8 +112,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │                    ‾                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:19
+└──────────────────────────────────────────────────── fuzz_crash_029.md:13:19 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -129,8 +121,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │   provides # Cd                                                             │
 │   ‾‾‾‾‾‾‾‾                                                                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:14:2
+└───────────────────────────────────────────────────── fuzz_crash_029.md:14:2 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -139,8 +130,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │    [ Ok(world), (n # pen                                                    │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:15:3
+└───────────────────────────────────────────────────── fuzz_crash_029.md:15:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -149,8 +139,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │    [ Ok(world), (n # pen                                                    │
 │               ‾                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:15:14
+└──────────────────────────────────────────────────── fuzz_crash_029.md:15:14 ┘
 
     I found a type followed by what looks like a type argument, but they need
     to be connected with parentheses.
@@ -171,8 +160,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │    [ Ok(world), (n # pen                                                    │
 │                 ‾                                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:15:16
+└──────────────────────────────────────────────────── fuzz_crash_029.md:15:16 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -181,8 +169,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │    [ Ok(world), (n # pen                                                    │
 │                  ‾                                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:15:17
+└──────────────────────────────────────────────────── fuzz_crash_029.md:15:17 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -191,8 +178,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  ar,                                                                        │
 │  ‾‾                                                                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:16:1
+└───────────────────────────────────────────────────── fuzz_crash_029.md:16:1 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -201,8 +187,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  ar,                                                                        │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:16:3
+└───────────────────────────────────────────────────── fuzz_crash_029.md:16:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                                  ┌─────────────┐
@@ -211,8 +196,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │    ]                                                                        │
 │    ‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:17:3
+└───────────────────────────────────────────────────── fuzz_crash_029.md:17:3 ┘
 
     This is an unexpected parsing error. Please check your syntax.
                                                               ┌────────────────┐
@@ -221,8 +205,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │       ‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:6
+└───────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
 
                                                     ┌──────────────────────────┐
 ┌─ This declaration has a type annotation but no ───┤ DECLARATION HAS NO VALUE │
@@ -230,8 +213,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 │                                                                             │
 │  pkg: "..l", mmen  } # Cose                                                 │
 │  ‾‾‾‾‾‾                                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-    fuzz_crash_029.md:13:1
+└───────────────────────────────────────────────────── fuzz_crash_029.md:13:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

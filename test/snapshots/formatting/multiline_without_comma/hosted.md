@@ -25,8 +25,7 @@ DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
 │                                                                             │
 │   a!,                                                                       │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    hosted.md:2:2
+└────────────────────────────────────────────────────────────── hosted.md:2:2 ┘
 
     You can fix this by either defining a! in this module, or by removing it
     from the list of exposed values.
@@ -36,8 +35,7 @@ DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
 │                                                                             │
 │   b!                                                                        │
 │   ‾‾                                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    hosted.md:3:2
+└────────────────────────────────────────────────────────────── hosted.md:3:2 ┘
 
     You can fix this by either defining b! in this module, or by removing it
     from the list of exposed values.
@@ -47,8 +45,7 @@ DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
 │                                                                             │
 │  a! : Str => Str                                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    hosted.md:6:1
+└────────────────────────────────────────────────────────────── hosted.md:6:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.
@@ -58,8 +55,7 @@ DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
 │                                                                             │
 │  b! : Str => Str                                                            │
 │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-    hosted.md:7:1
+└────────────────────────────────────────────────────────────── hosted.md:7:1 ┘
 
     Add a value body here, or put hosted functions in a platform type module so
     they are published through the host boundary.

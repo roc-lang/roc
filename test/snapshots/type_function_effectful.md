@@ -22,8 +22,7 @@ PARSE ERROR - type_function_effectful.md:3:34:3:36
 │                                                                             │
 │  runEffect! : (_a => _b) -> _a => _b                                        │
 │                                ‾‾                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-    type_function_effectful.md:3:31
+└──────────────────────────────────────────── type_function_effectful.md:3:31 ┘
 
     Instead of writing a -> b -> c, use parentheses to clarify which you mean:
             a -> (b -> c) for a curried function (a function that returns
@@ -36,8 +35,7 @@ PARSE ERROR - type_function_effectful.md:3:34:3:36
 │                                                                             │
 │  runEffect! : (_a => _b) -> _a => _b                                        │
 │                                   ‾‾                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-    type_function_effectful.md:3:34
+└──────────────────────────────────────────── type_function_effectful.md:3:34 ┘
 
     This is an unexpected parsing error. Please check your syntax.
 # TOKENS
