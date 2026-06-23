@@ -229,6 +229,133 @@ with its captured data riding along. Nothing is marshaled across a generic FFI
 door per event, and the host never asks Roc "what should I do?" — it already holds
 the exact function for the job.
 
+## Terminology You Need
+
+The platform uses a few terms that are specific to this architecture:
+
+- **Descriptor tree:** the pure `Elem` value Roc returns at startup. It contains
+  markup, signal expressions, event messages, branch/list sites, and retained
+  Roc functions. The host ingests this tree and assigns ids.
+- **Descriptor stream:** the host's flattened, active form of the descriptor
+  tree. It records the render nodes, signal sinks, event routes, scope sites,
+  and cleanup hooks that are currently mounted.
+- **Retained closure:** a Roc function the host keeps after startup and calls
+  directly later. Reducers, `Signal.map` transforms, equality functions, branch
+  builders, and row builders are all retained closures.
+- **Builder closure:** a retained closure that returns new UI structure. The
+  branch bodies in `Ui.when` and the row renderer in `Ui.each` are builder
+  closures.
+- **Binder / state handle:** the value passed into a `Ui.state` body. Its
+  `.signal` reads the current source value, and its `on_*` helpers build
+  reducer messages for events.
+- **Source node:** a signal node whose value is set by the outside world: local
+  `Ui.state`, an input event, a task result, or an interval tick.
+- **Derived node:** a signal node computed from other signals with `Signal.map`,
+  `Signal.map2`, or `Signal.combine`. `Signal.const` is the same retained graph
+  shape, but has no input edges.
+- **Reducer / message:** the function attached to an event by
+  `state.on_unit`, `state.on_str`, or `state.on_bool`. When the event fires, the
+  host calls the reducer with the current source value and the event payload to
+  produce the next source value.
+- **Event route:** the host's binding from a DOM event id to the source node and
+  reducer message it should run. Apps do not name event ids.
+- **Sink:** a place where a signal leaves the graph and causes observable work.
+  `Html.text_s`, `Html.value`, `Html.checked`, `Html.disabled`, and
+  `Ui.on_change` are sinks.
+- **Dependency graph:** the host-owned graph of source and derived nodes. Your
+  `map`/`map2`/`combine` calls declare its edges; the host does not discover
+  dependencies by watching reads.
+- **Fanout:** the number of downstream nodes or sinks that depend on a signal.
+  High fanout is fine, but it is the amount of downstream changed work that an
+  update can wake.
+- **Dirty:** changed enough to revisit. A source becomes dirty when an event or
+  effect result changes it; dirty derived nodes are recomputed in dependency
+  order.
+- **Topological order / rank:** the host's ordering for recomputing dirty nodes
+  so a node runs only after its inputs have settled.
+- **Pruning / cutoff:** the `is_eq` check after recomputation. If the new value
+  equals the cached value, the host stops propagation at that node.
+- **Scope:** an identity and lifetime boundary. The root, a component, a
+  `Ui.when` branch, and each `Ui.each` row are scopes. State inside a scope is
+  disposed when that scope is disposed.
+- **Scope site:** the construction site of a `Ui.state`, `Ui.component`,
+  `Ui.when`, or `Ui.each` within its parent scope. The host uses these sites,
+  plus typed row keys, to keep identity stable without app-written string ids.
+- **Construction order / ordinal:** the deterministic order of identity-bearing
+  sites inside one scope. Plain markup does not count; state, component, when,
+  and each sites do.
+- **Render patch / command:** an explicit host operation such as `SetText`,
+  `SetValue`, `CreateElement`, `RemoveNode`, or `MoveBefore`. Roc describes UI;
+  the host applies patches.
+- **Opaque host value:** the boxed Roc value the host stores without inspecting
+  its bytes. The platform carries the typed read, equality, hash, and drop
+  thunks that are allowed to touch it.
+
+## Structural Updates, Active Subtrees, and Splicing
+
+Most signal updates are **non-structural**. A non-structural update changes a
+value inside UI that already exists: text, input value, checked state, disabled
+state, or a `Ui.on_change` effect sink. The host updates the source value,
+walks the signal graph, recomputes changed derived signals, and patches only the
+dirty sinks. No row builder runs, no branch is mounted, and no DOM node is
+created or removed.
+
+A **structural update** changes which UI exists, or the order in which it
+exists. `Ui.when` is structural because a boolean signal chooses one branch
+subtree. `Ui.each` is structural because a list signal chooses a keyed set of
+row subtrees. Structural does not mean "large" or "slow"; it means the active
+scope tree may change. The host still starts from the same dirty signal
+propagation path, but the changed signal routes to a scope site instead of to a
+text or attribute sink.
+
+An **active subtree** is the mounted part of the retained UI for one scope: its
+render nodes, signal sinks, event routes, local state, cleanup hooks, and nested
+scopes. The root is active. A mounted `Ui.when` branch is active; the losing
+branch is not. A visible `Ui.each` row is active; a removed row is disposed.
+When a row key survives a reorder or filter, that row's active subtree survives,
+including its row-local `Ui.state`.
+
+A **splice** is the host's local edit to the active tree after a structural
+change. It removes the descriptors and DOM nodes for the old target subtree,
+inserts descriptors for the replacement subtree, updates the retained signal and
+event routes for that target, and emits the required render commands
+(`RemoveNode`, `CreateElement`, `MoveBefore`, `SetText`, event binds, and so
+on). A splice is not a full app rebuild and not a string-key diff. It is a
+targeted replacement at an explicit `Ui.when` or `Ui.each` scope site.
+
+In practice, an event follows one of these shapes:
+
+- **Scalar sink update:** a source changes, derived values update, and a small
+  set of text or attribute patches is emitted.
+- **Branch splice:** a `Ui.when` condition changes, the losing branch scope is
+  disposed, the winning branch scope is mounted, and only that branch subtree is
+  patched.
+- **Keyed row update:** an `Ui.each` list changes, the host matches rows by
+  typed key, reuses surviving row scopes, creates scopes for new keys, disposes
+  removed keys, and moves surviving DOM rows when only order changed.
+
+This gives a few performance rules that matter when designing UI:
+
+- Keep value changes non-structural. Use `Html.text_s`, `Html.value`,
+  `Html.checked`, and `Html.disabled` for changing leaf values instead of
+  rebuilding surrounding structure.
+- Put `Ui.when` around the smallest region whose existence changes. A branch
+  flip splices that region, so a top-level branch is intentionally much larger
+  than a branch around one panel or one row control.
+- Use `Ui.each` for dynamic lists and give it durable typed keys. Reorder and
+  filter are cheap only when row identity comes from item identity, not current
+  position.
+- Put row-local state inside the row renderer. If the key survives, the row
+  scope and its local state survive. If the key disappears, that state is
+  disposed.
+- Treat `is_eq` as part of the performance contract. It is the cutoff that stops
+  unchanged derived values and unchanged row items from propagating work.
+- Remember that `Signal.map`, `map2`, and `combine` declare static edges. If a
+  transform depends on `{condition, a, b}`, a change to `b` can still wake the
+  transform even while the condition selects `a`; equality may prune the output,
+  but the transform still ran. When the dependency set or rendered structure
+  should appear and disappear, model that shape with `Ui.when` or `Ui.each`.
+
 ## Identity Without Keys
 
 Signals apps build their description once. State must survive across updates, but
@@ -380,6 +507,10 @@ choosing a decoder or comparing erased bytes. Built-in types such as `Str`,
 - Use `Ui.when` for conditional regions and `Ui.each` for lists. Use
   `Ui.component` to introduce a named scope when a reusable piece of UI needs its
   own local state.
+- Use the smallest structural scope that matches the UI change. A scalar signal
+  sink should update a leaf; a `Ui.when` should wrap the branch that appears or
+  disappears; a `Ui.each` should own the row scopes whose keys need to survive
+  reorder and filter.
 
 ## Real-World Effects
 
