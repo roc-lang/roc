@@ -683,7 +683,7 @@ else
 /// image. Tries the preferred size first and halves down to
 /// `SHARED_MEMORY_MIN_SIZE` if the OS rejects the reservation; see
 /// `SharedMemoryAllocator.createWithMinSize` for details.
-fn createSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFailed, FtruncateFailed, InvalidHandle, MapViewOfFileFailed, MemfdCreateFailed, MmapFailed, OpenFileMappingFailed, OutOfMemory, ShmOpenFailed, ShmUnlinkFailed, UnsupportedPlatform }!SharedMemoryAllocator {
+fn createSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFailed, FtruncateFailed, InvalidHandle, MapViewOfFileFailed, MemfdCreateFailed, MmapFailed, OpenFileMappingFailed, OutOfMemory, ShmOpenFailed, ShmUnlinkFailed, TempFileOpenFailed, TempFileUnlinkFailed, UnsupportedPlatform }!SharedMemoryAllocator {
     return SharedMemoryAllocator.createWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 

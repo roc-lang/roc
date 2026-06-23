@@ -113,7 +113,7 @@ fn viewRuntimeImage(
 
 fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.fromCoordinationExecutable(gpa, shimIo(), page_size);
+    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);

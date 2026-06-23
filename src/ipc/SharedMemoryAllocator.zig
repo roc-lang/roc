@@ -16,15 +16,18 @@
 //! to the child process. Uses anonymous file mapping objects with handle inheritance.
 //!
 //! **POSIX (Linux/macOS/BSD)**: Creates a coordination file next to the child executable
-//! containing the file descriptor and size.
+//! containing the file descriptor and size. Linux uses `memfd_create`, macOS uses
+//! an unlinked temporary file so generated code pages can be marked executable,
+//! and BSDs use `shm_open`.
 //!
 //! An important detail is that it provides access to the child process via a file
 //! descriptor rather than using named shared memory. As it turns out, macOS has a
 //! security restriction where if a process creates an executable on disk (which Roc's
 //! compiler does), and then runs that executable, the child process is not allowed
-//! to call shm_open(). (If it tries to, shm_open always fails with errno 13.) If the
-//! parent process instead gives a fd to the child for the shared memory, the child
-//! process is allowed to use that to map in the shared memory and access it that way.
+//! to call shm_open(). (If it tries to, shm_open always fails with errno 13.) macOS
+//! POSIX shm objects also cannot back the dev shim's executable code pages. If the
+//! parent process instead gives a regular fd to the child, the child can map the
+//! shared memory and the machine-code shim can mark generated code pages executable.
 //!
 //! The coordination logic is handled by `src/ipc/coordination.zig`, while the
 //! low-level platform operations are abstracted in `src/ipc/platform.zig`.
@@ -240,16 +243,6 @@ pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io, page_size: usize) (c
     return fromFd(handle, fd_info.size, page_size);
 }
 
-/// Creates a SharedMemoryAllocator from coordination info and maps it so pages
-/// can later be marked executable. This is only for the machine-code shim.
-pub fn fromCoordinationExecutable(gpa: std.mem.Allocator, io: std.Io, page_size: usize) (coordination.CoordinationError || platform.SharedMemoryError)!SharedMemoryAllocator {
-    var fd_info = try coordination.readFdInfo(gpa, io);
-    defer fd_info.deinit(gpa);
-
-    const handle = try coordination.parseHandle(fd_info.fd_str);
-    return fromFdExecutable(handle, fd_info.size, page_size);
-}
-
 /// Creates a SharedMemoryAllocator from an existing file descriptor.
 /// This is used by child processes to access shared memory created by the parent.
 pub fn fromFd(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
@@ -257,24 +250,6 @@ pub fn fromFd(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryEr
 
     // Map the memory using the provided handle
     const base_ptr = try platform.mapMemory(fd, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
-    errdefer platform.unmapMemory(base_ptr, aligned_size);
-
-    return SharedMemoryAllocator{
-        .handle = fd,
-        .base_ptr = @ptrCast(@alignCast(base_ptr)),
-        .total_size = aligned_size,
-        .offset = std.atomic.Value(usize).init(@sizeOf(Header)),
-        .is_owner = false,
-        .page_size = page_size,
-    };
-}
-
-/// Creates a SharedMemoryAllocator from an existing file descriptor and maps it
-/// so pages can later be marked executable.
-pub fn fromFdExecutable(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
-    const aligned_size = std.mem.alignForward(usize, size, page_size);
-
-    const base_ptr = try platform.mapMemoryExecutable(fd, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
     errdefer platform.unmapMemory(base_ptr, aligned_size);
 
     return SharedMemoryAllocator{
@@ -643,7 +618,7 @@ test "shared memory allocator cross-process" {
     }
 }
 
-test "fromFdExecutable maps pages that can be marked executable" {
+test "fromFd maps pages that can be marked executable" {
     const page_size = try getSystemPageSize();
     var owner = try SharedMemoryAllocator.create(std.testing.io, page_size * 2, page_size);
     defer owner.deinit(std.testing.allocator);
@@ -655,7 +630,7 @@ test "fromFdExecutable maps pages that can be marked executable" {
         if (duped < 0) return error.DuplicateSharedMemoryHandleFailed;
         break :blk duped;
     };
-    var executable = try SharedMemoryAllocator.fromFdExecutable(executable_handle, page_size * 2, page_size);
+    var executable = try SharedMemoryAllocator.fromFd(executable_handle, page_size * 2, page_size);
     defer executable.deinit(std.testing.allocator);
 
     try platform.protectMappedMemory(executable.base_ptr, page_size, .read_execute);

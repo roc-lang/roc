@@ -58,6 +58,8 @@ pub const TestHelperError = Allocator.Error || std.DynLib.Error || std.Io.File.O
     CreateFileMappingFailed,
     OpenFileMappingFailed,
     MapViewOfFileFailed,
+    TempFileOpenFailed,
+    TempFileUnlinkFailed,
     ShmOpenFailed,
     ShmUnlinkFailed,
     MemfdCreateFailed,

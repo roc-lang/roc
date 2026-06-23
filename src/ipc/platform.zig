@@ -133,7 +133,6 @@ pub const posix = if (!is_windows) struct {
 
     pub const PROT_READ = 0x01;
     pub const PROT_WRITE = 0x02;
-    pub const PROT_EXEC = 0x04;
     pub const MAP_SHARED = 0x0001;
     pub const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
@@ -143,6 +142,8 @@ pub const SharedMemoryError = error{
     CreateFileMappingFailed,
     OpenFileMappingFailed,
     MapViewOfFileFailed,
+    TempFileOpenFailed,
+    TempFileUnlinkFailed,
     ShmOpenFailed,
     ShmUnlinkFailed,
     MemfdCreateFailed,
@@ -236,7 +237,33 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
 
             return fd;
         },
-        .macos, .freebsd, .openbsd, .netbsd => {
+        .macos => {
+            var random_buf: [8]u8 = undefined;
+            io.random(&random_buf);
+            const random_val = std.mem.readInt(u64, &random_buf, .little);
+
+            var file_path_buf: [std.fmt.count("/tmp/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
+            const file_path = std.fmt.bufPrintZ(&file_path_buf, "/tmp/roc_shm_{}", .{random_val}) catch unreachable;
+            const fd = std.c.open(
+                file_path,
+                std.c.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true },
+                @as(std.c.mode_t, 0o600),
+            );
+            if (fd < 0) return error.TempFileOpenFailed;
+
+            if (std.c.unlink(file_path) != 0) {
+                _ = std.c.close(fd);
+                return error.TempFileUnlinkFailed;
+            }
+
+            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
+                _ = std.c.close(fd);
+                return error.FtruncateFailed;
+            }
+
+            return fd;
+        },
+        .freebsd, .openbsd, .netbsd => {
             // Use shm_open with a random name
             var random_buf: [8]u8 = undefined;
             io.random(&random_buf);
@@ -323,17 +350,12 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
 
 /// Map shared memory into the process address space
 pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
-    return mapMemoryWithLogging(handle, size, base_addr, true, false);
+    return mapMemoryWithLogging(handle, size, base_addr, true);
 }
 
 /// Map shared memory without logging failures.
 pub fn mapMemoryNoLog(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
-    return mapMemoryWithLogging(handle, size, base_addr, false, false);
-}
-
-/// Map shared memory so the process can later make pages executable.
-pub fn mapMemoryExecutable(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
-    return mapMemoryWithLogging(handle, size, base_addr, true, true);
+    return mapMemoryWithLogging(handle, size, base_addr, false);
 }
 
 fn mapMemoryWithLogging(
@@ -341,7 +363,6 @@ fn mapMemoryWithLogging(
     size: usize,
     base_addr: ?*anyopaque,
     log_failure: bool,
-    executable_capable: bool,
 ) SharedMemoryError!*anyopaque {
     switch (builtin.os.tag) {
         .windows => {
@@ -374,12 +395,10 @@ fn mapMemoryWithLogging(
             return ptr.?;
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
-            const exec_prot: c_int = if (executable_capable) posix.PROT_EXEC else 0;
-            const prot = posix.PROT_READ | posix.PROT_WRITE | exec_prot;
             const ptr = posix.mmap(
                 base_addr,
                 size,
-                prot,
+                posix.PROT_READ | posix.PROT_WRITE,
                 posix.MAP_SHARED,
                 handle,
                 0,
