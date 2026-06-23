@@ -9861,8 +9861,9 @@ const BodyContext = struct {
         // unresolved until that operand's target resolves. Lowering the
         // dispatcher operand first supplies the receiver's solved type; the
         // lowered expression is reused as the call argument.
+        const owner_is_null = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) == null;
         var pre_lowered: ?PreLoweredOperand = null;
-        if (methodOwnerFromType(&self.builder.program.types, dispatcher_ty) == null) {
+        if (owner_is_null) {
             switch (plan.dispatcher) {
                 .arg => |index| {
                     pre_lowered = .{
@@ -9872,6 +9873,28 @@ const BodyContext = struct {
                 },
                 .type_only => {},
             }
+        }
+        // `dispatchTarget` raises the "dispatch plan had no method owner" invariant
+        // when the receiver never grounded to a concrete owner and the result mode
+        // is not a structural equality/parser/encode dispatch. That is only
+        // reachable inside a bare polymorphic function value never called at a
+        // concrete type — e.g. evaluating `run` itself for
+        // `run : a -> a where [a.go : a -> a]`. The dispatch can never execute
+        // (the function is never invoked), so lower it to a crash rather than
+        // failing the invariant. A genuinely reachable ownerless dispatch is
+        // rejected earlier, at check time. The owner is re-read here because the
+        // pre-lowering above may have supplied the receiver's solved type, and the
+        // structural equality/parser/encode exceptions mirror `dispatchTarget`
+        // exactly so those dispatches keep their dedicated structural lowering below.
+        if (plan.resolution == .unresolved_checked_plan and
+            methodOwnerFromType(&self.builder.program.types, dispatcher_ty) == null and
+            !(plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) and
+            !(plan.result_mode == .parser_for and plan.result_mode.parser_for.structural_allowed) and
+            !(plan.result_mode == .encode_to and plan.result_mode.encode_to.structural_allowed))
+        {
+            const crash_ty = expected_ret_ty orelse plan_ret_ty;
+            try self.constrainTypeToMono(checked_ret_ty, crash_ty);
+            return try self.runtimeCrashExpr(crash_ty, "unresolved `where`-clause method dispatch on a polymorphic value");
         }
         const lookup = self.dispatchTarget(plan, dispatcher_ty);
         if (lookup == null) {
@@ -10009,7 +10032,7 @@ const BodyContext = struct {
     /// Fold a `from_numeral` conversion into a constant at its concrete target
     /// type. Compile-time finalization only registers a constant for literals
     /// whose type is already concrete at Check time; a literal inside a generic
-    /// body (e.g. the `1` in `Iter.exclusive_range`'s `start.add_checked(1)`) is
+    /// body (e.g. the `1` in `Iter.exclusive_range`'s `start.add_try(1)`) is
     /// typed by the abstract `num` var and only gains a concrete type here, after
     /// monomorphization. Rather than emit a runtime `num_from_numeral` low-level
     /// op — which the compiled backends deliberately reject — we evaluate the
