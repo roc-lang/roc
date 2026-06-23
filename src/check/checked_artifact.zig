@@ -13897,10 +13897,10 @@ fn applyPlatformForClauseSubstitutions(
                 checkedArtifactInvariant("platform for-clause substitution missing platform alias checked root", .{});
             };
             const alias_name = module_env.getIdent(alias.alias_name);
-            const app_alias = (try appAliasCheckedRootForName(allocator, app_view, alias_name)) orelse {
-                checkedArtifactInvariant("platform for-clause substitution missing matching app alias", .{});
+            const app_type = (try appTypeDeclCheckedRootForName(allocator, app_view, alias_name)) orelse {
+                checkedArtifactInvariant("platform for-clause substitution missing matching app type declaration", .{});
             };
-            const actual = try projector.project(app_alias);
+            const actual = try projector.project(app_type);
             try appendUniquePlatformForClauseSubstitution(&formals, &actuals, allocator, formal, actual);
         }
     }
@@ -13951,7 +13951,7 @@ fn relationArtifactByKey(
     return null;
 }
 
-fn appAliasCheckedRootForName(
+fn appTypeDeclCheckedRootForName(
     allocator: Allocator,
     app_view: ImportedModuleView,
     alias_name: []const u8,
@@ -13959,11 +13959,15 @@ fn appAliasCheckedRootForName(
     const app_env = app_view.module_env;
     for (app_env.store.sliceStatements(app_env.all_statements)) |statement_idx| {
         const statement = app_env.store.getStatement(statement_idx);
-        const alias = switch (statement) {
-            .s_alias_decl => |alias| alias,
+        // A platform for-clause type (`[Model : model]`) may be satisfied by either a plain
+        // alias (`Model : {}`) or a nominal declaration (`Model := {}`); both publish a checked
+        // root keyed on the statement's var, so resolve the header from either form.
+        const header_idx = switch (statement) {
+            .s_alias_decl => |decl| decl.header,
+            .s_nominal_decl => |decl| decl.header,
             else => continue,
         };
-        const header = app_env.store.getTypeHeader(alias.header);
+        const header = app_env.store.getTypeHeader(header_idx);
         if (!Ident.textEql(app_env.getIdent(header.relative_name), alias_name)) continue;
 
         const key = try canonical_type_keys.fromVar(
@@ -13975,7 +13979,7 @@ fn appAliasCheckedRootForName(
         for (app_view.checked_types.roots) |root| {
             if (canonicalTypeKeyEql(root.key, key)) return root.id;
         }
-        checkedArtifactInvariant("platform for-clause substitution app alias was not published in app checked types", .{});
+        checkedArtifactInvariant("platform for-clause substitution app type was not published in app checked types", .{});
     }
     return null;
 }
@@ -14339,6 +14343,22 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
 
         const expected_payload = self.payload(expected);
         const actual_payload = self.payload(actual);
+
+        // A variable pinned to a literal default (a number literal/expression that
+        // defaults to `Dec`, or a string literal that defaults to `Str`) can never be
+        // a structural aggregate (tag union, record, tuple). Treating it as a free
+        // wildcard would let a literal silently satisfy such a requirement — e.g.
+        // `Err(a1 + a2)` / `Err(1)` satisfying a platform's `[Exit(I8), ..]` error
+        // row, which then reaches monotype lowering as an ownerless dispatcher (issues
+        // 9734, 9735). Reject it so the normal TYPE MISMATCH is reported. This stays
+        // narrow: a literal-default var still matches a concrete scalar requirement
+        // (e.g. `Exit(1)` vs `Exit(I8)`), because a scalar type is not an aggregate.
+        if ((checkedTypePayloadIsLiteralDefaultPinnedVar(expected_payload) and checkedTypePayloadIsStructuralAggregate(actual_payload)) or
+            (checkedTypePayloadIsLiteralDefaultPinnedVar(actual_payload) and checkedTypePayloadIsStructuralAggregate(expected_payload)))
+        {
+            return false;
+        }
+
         if (checkedTypePayloadIsIdentity(expected_payload) or checkedTypePayloadIsIdentity(actual_payload)) {
             return true;
         }
@@ -17105,6 +17125,26 @@ const PlatformAppRelationTypeDigestBuilder = struct {
 fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
     return switch (payload) {
         .flex, .rigid => true,
+        else => false,
+    };
+}
+
+/// A structural aggregate type: a tag union, record, or tuple. A value pinned to a
+/// numeric default can never have one of these shapes.
+fn checkedTypePayloadIsStructuralAggregate(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .empty_record, .record, .record_unbound, .tuple, .empty_tag_union, .tag_union => true,
+        else => false,
+    };
+}
+
+/// A flex/rigid variable pinned to a literal default — a number literal/expression
+/// that defaults to `Dec`, or a string literal that defaults to `Str`. Such a
+/// variable can unify with the corresponding concrete scalar type, but never with a
+/// structural aggregate.
+fn checkedTypePayloadIsLiteralDefaultPinnedVar(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex, .rigid => |v| v.numeric_default_phase != null,
         else => false,
     };
 }
@@ -24279,11 +24319,21 @@ const CheckedTypeStoreImportProjector = struct {
                 .declaration = declaration,
             } },
             .imported_declaration => |imported_decl| .{ .imported_declaration = imported_decl },
-            .local_box_payload_capability => |capability| .{ .imported_box_payload_capability = .{
-                .artifact = self.imported.key,
-                .capability = capability.capability,
-                .opaque_atomic_proof = capability.opaque_atomic_proof,
-            } },
+            .local_box_payload_capability => |capability| blk: {
+                // Project the capability's backing-type root into the target store so
+                // its key is registered there. Lowering resolves an imported
+                // box-payload capability's backing via `checkedTypeInCurrentView` (a
+                // key lookup); without this projection that lookup fails for a
+                // for-clause-substituted nominal app type whose declaration backing
+                // root is distinct from the projected nominal usage backing (issue
+                // 9731). The returned id is unused — the registration is the point.
+                _ = try self.project(self.imported.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty);
+                break :blk .{ .imported_box_payload_capability = .{
+                    .artifact = self.imported.key,
+                    .capability = capability.capability,
+                    .opaque_atomic_proof = capability.opaque_atomic_proof,
+                } };
+            },
             .imported_box_payload_capability => |capability| .{ .imported_box_payload_capability = capability },
             .opaque_without_backing => .opaque_without_backing,
         };
@@ -26344,8 +26394,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x6D, 0x7A, 0x70, 0x53, 0x91, 0x3B, 0x43, 0x69, 0xDC, 0x6B, 0x28, 0x11, 0xB6, 0x7E, 0x46, 0x96,
-        0x94, 0x94, 0xDD, 0xBA, 0x6D, 0xD1, 0xB6, 0xEB, 0x60, 0xE1, 0xC6, 0x9E, 0x85, 0x41, 0x21, 0x9D,
+        0xED, 0xBD, 0xE3, 0x9E, 0xCC, 0x7F, 0xEC, 0x25, 0xD2, 0xF5, 0xE6, 0x14, 0x8F, 0x19, 0x08, 0xC1,
+        0xD7, 0xFB, 0x10, 0xAC, 0xB5, 0xEB, 0x70, 0x3A, 0xB3, 0xD6, 0x41, 0x80, 0x31, 0x28, 0x0B, 0xA8,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
