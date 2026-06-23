@@ -1622,7 +1622,7 @@ pub const BuildEnv = struct {
         name: []const u8,
         kind: PackageKind,
         root_file_abs: []const u8,
-        root_file_state: watch_inputs.State,
+        root_file_state: ?watch_inputs.State,
         url: ?package_source.UrlSourceView,
     ) (Allocator.Error || error{PathOutsideWorkspace})!void {
         if (self.packages.getPtr(name)) |pkg| {
@@ -1833,10 +1833,13 @@ pub const BuildEnv = struct {
                 .url = url.url,
                 .url_id = url.url_id,
             } else null;
-            const root_file_state: watch_inputs.State = if (url_view == null)
-                try self.currentFileWatchState(package.root_file)
+            const root_file_state: ?watch_inputs.State = if (self.track_watch_inputs)
+                if (url_view == null)
+                    try self.currentFileWatchState(package.root_file)
+                else
+                    .{ .hash = package.root_source_hash }
             else
-                .{ .hash = package.root_source_hash };
+                null;
             try self.ensurePackage(names[i], kind, package.root_file, root_file_state, url_view);
         }
 
@@ -1913,7 +1916,11 @@ pub const BuildEnv = struct {
             // Register this module as a package
             // Only allocate if package doesn't exist (ensurePackage makes its own copy)
             if (!self.packages.contains(module_name)) {
-                try self.ensurePackage(module_name, .module, module_path, try self.currentFileWatchState(module_path), null);
+                const root_file_state: ?watch_inputs.State = if (self.track_watch_inputs)
+                    try self.currentFileWatchState(module_path)
+                else
+                    null;
+                try self.ensurePackage(module_name, .module, module_path, root_file_state, null);
             }
 
             const pack = self.packages.getPtr(root_pkg_name) orelse return error.Internal;
