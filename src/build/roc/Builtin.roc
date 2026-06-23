@@ -645,23 +645,31 @@ Builtin :: [].{
 		## ```
 		concat : Iter(item), Iter(item) -> Iter(item)
 		concat = |first, second| {
-			len_if_known: match first.len_if_known {
-				Known(first_len) => match second.len_if_known {
-					Known(second_len) => if second_len > 18446744073709551615 - first_len {
-						Unknown
-					} else {
-						Known(first_len + second_len)
+			make = |remaining_first, remaining_second| {
+				len_if_known: match remaining_first.len_if_known {
+					Known(first_len) => match remaining_second.len_if_known {
+						Known(second_len) => if second_len > 18446744073709551615 - first_len {
+							Unknown
+						} else {
+							Known(first_len + second_len)
+						}
+						Unknown => Unknown
 					}
 					Unknown => Unknown
-				}
-				Unknown => Unknown
-			},
-			step: ||
-				match Iter.next(first) {
-					Done => Iter.next(second)
-					Skip({ rest }) => Skip({ rest: Iter.concat(rest, second) })
-					One({ item, rest }) => One({ item, rest: Iter.concat(rest, second) })
 				},
+				step: ||
+					match Iter.next(remaining_first) {
+						Done => match Iter.next(remaining_second) {
+							Done => Done
+							Skip({ rest }) => Skip({ rest: make(range_done(), rest) })
+							One({ item, rest }) => One({ item, rest: make(range_done(), rest) })
+						}
+						Skip({ rest }) => Skip({ rest: make(rest, remaining_second) })
+						One({ item, rest }) => One({ item, rest: make(rest, remaining_second) })
+					},
+			}
+
+			make(first, second)
 		}
 
 		## Returns an iterator that yields everything from the given iterator,
@@ -671,20 +679,33 @@ Builtin :: [].{
 		## ```
 		append : Iter(item), item -> Iter(item)
 		append = |iterator, last| {
-			len_if_known: match iterator.len_if_known {
-				Known(len) => if len == 18446744073709551615 {
-					Unknown
-				} else {
-					Known(len + 1)
-				}
-				Unknown => Unknown
-			},
-			step: ||
-				match Iter.next(iterator) {
-					Done => One({ item: last, rest: range_done() })
-					Skip({ rest }) => Skip({ rest: Iter.append(rest, last) })
-					One({ item, rest }) => One({ item, rest: Iter.append(rest, last) })
+			make = |remaining, should_append_last| {
+				len_if_known: match remaining.len_if_known {
+					Known(len) => if should_append_last {
+						if len == 18446744073709551615 {
+							Unknown
+						} else {
+							Known(len + 1)
+						}
+					} else {
+						Known(len)
+					}
+					Unknown => Unknown
 				},
+				step: ||
+					match Iter.next(remaining) {
+						Done =>
+							if should_append_last {
+								One({ item: last, rest: make(range_done(), False) })
+							} else {
+								Done
+							}
+						Skip({ rest }) => Skip({ rest: make(rest, should_append_last) })
+						One({ item, rest }) => One({ item, rest: make(rest, should_append_last) })
+					},
+			}
+
+			make(iterator, True)
 		}
 
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
