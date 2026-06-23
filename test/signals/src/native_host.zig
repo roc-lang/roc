@@ -997,15 +997,6 @@ const HostEnv = struct {
         return self.engine.nextDirtySignalGeneration();
     }
 
-    fn eventPayloadKindFromAbi(payload_kind: u64) EventPayloadKind {
-        return switch (payload_kind) {
-            @intFromEnum(EventPayloadKind.unit) => .unit,
-            @intFromEnum(EventPayloadKind.str) => .str,
-            @intFromEnum(EventPayloadKind.bool) => .bool,
-            else => failHost("Roc event descriptor used an unknown payload kind"),
-        };
-    }
-
     fn clearEventDescriptors(self: *HostEnv) void {
         self.engine.clearEventDescriptors();
     }
@@ -1108,34 +1099,6 @@ const HostEnv = struct {
             @intFromEnum(SignalKind.map) => .map,
             @intFromEnum(SignalKind.map2) => .map2,
             else => failHost("Roc signal descriptor used an unknown signal kind"),
-        };
-    }
-
-    fn renderTextFieldFromAbi(field: u64) RenderTextField {
-        return switch (field) {
-            @intFromEnum(RenderTextField.text) => .text,
-            @intFromEnum(RenderTextField.role) => .role,
-            @intFromEnum(RenderTextField.label) => .label,
-            @intFromEnum(RenderTextField.test_id) => .test_id,
-            @intFromEnum(RenderTextField.value) => .value,
-            else => failHost("Roc render text descriptor used an unknown field"),
-        };
-    }
-
-    fn renderBoolFieldFromAbi(field: u64) RenderBoolField {
-        return switch (field) {
-            @intFromEnum(RenderBoolField.checked) => .checked,
-            @intFromEnum(RenderBoolField.disabled) => .disabled,
-            else => failHost("Roc render bool descriptor used an unknown field"),
-        };
-    }
-
-    fn renderEventKindFromAbi(kind: u64) RenderEventKind {
-        return switch (kind) {
-            @intFromEnum(RenderEventKind.click) => .click,
-            @intFromEnum(RenderEventKind.input) => .input,
-            @intFromEnum(RenderEventKind.check) => .check,
-            else => failHost("Roc render event descriptor used an unknown event kind"),
         };
     }
 
@@ -2094,44 +2057,7 @@ const HostEnv = struct {
     }
 
     fn collectNodeAttrDescriptor(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
-        const allocator = self.gpa.allocator();
-        switch (attr.tag) {
-            .StaticText => {
-                const payload = attr.payload.static_text;
-                const field = HostEnv.renderTextFieldFromAbi(payload.field);
-                stream.appendStaticTextAttr(allocator, elem_id, field, payload.value.asSlice());
-            },
-            .SignalText => {
-                const payload = attr.payload.signal_text;
-                const field = HostEnv.renderTextFieldFromAbi(payload.field);
-                const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
-                stream.appendSignalTextAttr(allocator, roc_host, &self.engine.pending_roc_metrics, elem_id, field, signal, payload.read);
-            },
-            .StaticBool => {
-                const payload = attr.payload.static_bool;
-                const field = HostEnv.renderBoolFieldFromAbi(payload.field);
-                stream.appendStaticBoolAttr(allocator, elem_id, field, payload.value);
-            },
-            .SignalBool => {
-                const payload = attr.payload.signal_bool;
-                const field = HostEnv.renderBoolFieldFromAbi(payload.field);
-                const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
-                stream.appendSignalBoolAttr(allocator, roc_host, &self.engine.pending_roc_metrics, elem_id, field, signal, payload.read);
-            },
-            .OnEvent => {
-                const payload = attr.payload.on_event;
-                const msg = payload.msg;
-                const kind = HostEnv.renderEventKindFromAbi(payload.kind);
-                const payload_kind = HostEnv.eventPayloadKindFromAbi(msg.payload_kind);
-                const target_node_id = HostEnv.resolveNodeBinderRef(binder_stack, msg.binder);
-                const payload_tag: HostValueTypeTag = switch (payload_kind) {
-                    .unit => @ptrCast(msg.payload_unit_tag),
-                    .str => @ptrCast(msg.payload_str_tag),
-                    .bool => @ptrCast(msg.payload_bool_tag),
-                };
-                stream.appendEvent(allocator, roc_host, &self.engine.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_tag, msg.payload_drop, msg.transform);
-            },
-        }
+        return self.engine.collectNodeAttrDescriptor(self, roc_host, stream, elem_id, attr, binder_stack);
     }
 
     fn collectElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding)) void {
@@ -2271,31 +2197,7 @@ const HostEnv = struct {
     }
 
     fn collectActiveWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, dirty_source_node_ids: []const u64) u64 {
-        if (site.kind != .when) {
-            failHost("active branch collection requires a when scope site");
-        }
-        if (site.node_id != when.node_id) {
-            failHost("active branch collection received mismatched when descriptors");
-        }
-
-        if (self.activeWhenBranchScopeId(site.scope_id, site.ordinal, active_branch.opposite())) |inactive_scope_id| {
-            self.disposeScopeSubtree(roc_host, inactive_scope_id);
-        }
-
-        const branch_scope_id = self.internWhenBranchScope(site.scope_id, site.ordinal, active_branch);
-        const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-        defer binder_stack.deinit(allocator);
-        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
-
-        const branch_elem = switch (active_branch) {
-            .true_branch => when.when_true,
-            .false_branch => when.when_false,
-        };
-        var ordinal: u64 = 0;
-        var dom_ordinal: u64 = 0;
-        self.collectActiveElemDescriptors(roc_host, stream, branch_elem, branch_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
-        return branch_scope_id;
+        return self.engine.collectActiveWhenBranchDescriptors(self, roc_host, stream, site, when, active_branch, dirty_source_node_ids);
     }
 
     fn collectElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const HostValue) HostKeyedRowDiffResult {
@@ -2337,48 +2239,12 @@ const HostEnv = struct {
         return self.engine.syncActiveEachRowScopes(self, roc_host, site, each);
     }
 
-    fn collectActiveEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, dirty_source_node_ids: []const u64) void {
-        const allocator = self.gpa.allocator();
-        const diff = self.syncActiveEachRowScopes(roc_host, site, each);
-        defer diff.deinit(allocator);
-        self.collectActiveEachRowDescriptorsFromDiff(roc_host, stream, site, each, diff, dirty_source_node_ids);
-    }
-
     fn collectActiveEachRowDescriptorsFromDiff(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) void {
-        const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-        defer binder_stack.deinit(allocator);
-        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
-
-        for (diff.scope_ids, diff.row_items_changed) |row_scope_id, row_item_changed| {
-            if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.engine.active_stream, row_scope_id, dirty_source_node_ids)) {
-                self.copyActiveScopeSubtreeDescriptors(roc_host, stream, row_scope_id);
-                continue;
-            }
-
-            const row_values = self.eachRowScopeValues(row_scope_id);
-            const row_elem = callErasedHostValueHostValueToElem(roc_host, each.row, row_values.key, row_values.item);
-            defer abi.decrefElem(row_elem, roc_host);
-
-            var ordinal: u64 = 0;
-            var dom_ordinal: u64 = 0;
-            self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
-        }
+        return self.engine.collectActiveEachRowDescriptorsFromDiff(self, roc_host, stream, site, each, diff, dirty_source_node_ids);
     }
 
     fn collectActiveEachSingleRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, dirty_source_node_ids: []const u64) void {
-        const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-        defer binder_stack.deinit(allocator);
-        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
-
-        const row_values = self.eachRowScopeValues(row_scope_id);
-        const row_elem = callErasedHostValueHostValueToElem(roc_host, each.row, row_values.key, row_values.item);
-        defer abi.decrefElem(row_elem, roc_host);
-
-        var ordinal: u64 = 0;
-        var dom_ordinal: u64 = 0;
-        self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
+        return self.engine.collectActiveEachSingleRowDescriptors(self, roc_host, stream, site, each, row_scope_id, dirty_source_node_ids);
     }
 
     fn eachSiteRowAncestorScopeId(self: *HostEnv, scope_id: u64, site: HostEachSite) ?u64 {
@@ -3467,155 +3333,8 @@ const HostEnv = struct {
         self.engine.copyActiveScopeSubtreeDescriptors(self, roc_host, stream, root_scope_id);
     }
 
-    fn collectActiveElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), dirty_source_node_ids: []const u64) void {
-        self.validateScopeId(scope_id);
-
-        const allocator = self.gpa.allocator();
-        switch (elem.tag) {
-            .Element => {
-                const payload = elem.payload.element;
-                const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
-                dom_ordinal.* += 1;
-                _ = stream.appendElement(allocator, elem_id, parent_elem_id, scope_id, payload.tag.asSlice());
-                for (payload.attrs.items()) |attr| {
-                    self.collectNodeAttrDescriptor(roc_host, stream, elem_id, attr, binder_stack.items);
-                }
-                for (payload.children.items()) |child| {
-                    self.collectActiveElemDescriptors(roc_host, stream, child, scope_id, elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
-                }
-            },
-            .Text => {
-                const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
-                dom_ordinal.* += 1;
-                stream.appendTextNode(allocator, elem_id, parent_elem_id, scope_id, elem.payload.text.asSlice());
-            },
-            .TextSignal => {
-                const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
-                dom_ordinal.* += 1;
-                const text_signal = elem.payload.text_signal;
-                const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
-                stream.appendSignalTextNode(allocator, roc_host, &self.engine.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
-            },
-            .Cleanup => {
-                stream.appendCleanup(allocator, scope_id, elem.payload.cleanup.cleanup.asSlice());
-            },
-            .OnChange => {
-                const payload = elem.payload.on_change;
-                const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack.items);
-                stream.appendOnChange(allocator, roc_host, &self.engine.pending_roc_metrics, scope_id, signal, payload.to_cmd);
-            },
-            .State => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
-                stream.appendState(allocator, roc_host, &self.engine.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq, elem.payload.state.drop);
-                self.ensureStateFromDesc(roc_host, stream.states.items[stream.states.items.len - 1]);
-                binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
-                self.collectActiveElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
-                _ = binder_stack.pop() orelse unreachable;
-            },
-            .Component => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .component, binder_stack.items);
-                const component_scope_id = self.internComponentScope(scope_id, site_ordinal);
-                var component_ordinal: u64 = 0;
-                var component_dom_ordinal: u64 = 0;
-                self.collectActiveElemDescriptors(roc_host, stream, elem.payload.component.child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack, dirty_source_node_ids);
-            },
-            .When => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
-                const condition_binding = self.bindNodeSignal(allocator, stream, elem.payload.when.condition.*, binder_stack.items);
-                stream.appendWhen(allocator, roc_host, &self.engine.pending_roc_metrics, node_id, condition_binding, elem.payload.when.read, elem.payload.when.when_false.*, elem.payload.when.when_true.*);
-
-                const when_index = stream.whens.items.len - 1;
-                const when_desc = &stream.whens.items[when_index];
-                const condition = evalHostSignalBinding(self, roc_host, &when_desc.condition);
-                const active_branch: HostScopeBranch = if (callErasedHostValueToBool(roc_host, when_desc.read, condition)) .true_branch else .false_branch;
-                when_desc.cached_value.replace(roc_host, &self.engine.pending_roc_metrics, condition, hostSignalBindingEqCallable(self, &when_desc.condition), hostSignalBindingDropCallable(self, &when_desc.condition));
-                if (self.activeWhenBranchScopeId(scope_id, site_ordinal, active_branch.opposite())) |inactive_scope_id| {
-                    self.disposeScopeSubtree(roc_host, inactive_scope_id);
-                }
-                const branch_scope_id = self.internWhenBranchScope(scope_id, site_ordinal, active_branch);
-                var branch_ordinal: u64 = 0;
-                const branch_elem = switch (active_branch) {
-                    .true_branch => elem.payload.when.when_true.*,
-                    .false_branch => elem.payload.when.when_false.*,
-                };
-                var branch_dom_ordinal: u64 = 0;
-                self.collectActiveElemDescriptors(roc_host, stream, branch_elem, branch_scope_id, parent_elem_id, &branch_ordinal, &branch_dom_ordinal, binder_stack, dirty_source_node_ids);
-            },
-            .Each => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .each, binder_stack.items);
-                const items_binding = self.bindNodeSignal(allocator, stream, elem.payload.each.items.*, binder_stack.items);
-                stream.appendEach(
-                    allocator,
-                    roc_host,
-                    &self.engine.pending_roc_metrics,
-                    node_id,
-                    items_binding,
-                    elem.payload.each.items_to_values,
-                    elem.payload.each.key_hash,
-                    elem.payload.each.key_of,
-                    elem.payload.each.key_eq,
-                    elem.payload.each.key_drop,
-                    elem.payload.each.item_eq,
-                    elem.payload.each.item_drop,
-                    elem.payload.each.row,
-                );
-                const each_index = stream.eaches.items.len - 1;
-                const each_desc = stream.eaches.items[stream.eaches.items.len - 1];
-
-                const items_value = evalHostSignalBinding(self, roc_host, &stream.eaches.items[each_index].items);
-                const items = callErasedHostValueToHostValueList(roc_host, each_desc.items_to_values, items_value);
-                defer items.decref(roc_host);
-                stream.eaches.items[each_index].cached_value.replace(roc_host, &self.engine.pending_roc_metrics, items_value, hostSignalBindingEqCallable(self, &stream.eaches.items[each_index].items), hostSignalBindingDropCallable(self, &stream.eaches.items[each_index].items));
-                const item_values = items.items();
-
-                const keys = allocator.alloc(HostValue, item_values.len) catch std.process.exit(1);
-                defer allocator.free(keys);
-
-                for (item_values, 0..) |item, index| {
-                    keys[index] = callErasedHostValueToHostValue(roc_host, each_desc.key_of, item);
-                }
-
-                const diff = self.syncEachRowScopes(roc_host, scope_id, site_ordinal, keys, item_values, each_desc.key_hash, each_desc.key_eq, each_desc.key_drop, each_desc.item_eq, each_desc.item_drop);
-                defer diff.deinit(allocator);
-
-                for (diff.scope_ids, diff.row_items_changed) |row_scope_id, row_item_changed| {
-                    if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.engine.active_stream, row_scope_id, dirty_source_node_ids)) {
-                        self.copyActiveScopeSubtreeDescriptors(roc_host, stream, row_scope_id);
-                        continue;
-                    }
-
-                    const row_values = self.eachRowScopeValues(row_scope_id);
-                    const row_elem = callErasedHostValueHostValueToElem(roc_host, each_desc.row, row_values.key, row_values.item);
-                    defer abi.decrefElem(row_elem, roc_host);
-
-                    var row_ordinal: u64 = 0;
-                    var row_dom_ordinal: u64 = 0;
-                    self.collectActiveElemDescriptors(roc_host, stream, row_elem, row_scope_id, parent_elem_id, &row_ordinal, &row_dom_ordinal, binder_stack, dirty_source_node_ids);
-                }
-            },
-        }
-    }
-
     fn collectActiveElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem, dirty_source_node_ids: []const u64) void {
-        const root_scope_id = self.internRootScope();
-        const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-        defer binder_stack.deinit(allocator);
-        var ordinal: u64 = 0;
-        var dom_ordinal: u64 = 0;
-        self.collectActiveElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
+        return self.engine.collectActiveElemRootDescriptors(self, roc_host, stream, root, dirty_source_node_ids);
     }
 
     fn clearScopes(self: *HostEnv) void {
