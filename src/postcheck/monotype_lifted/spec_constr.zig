@@ -1270,6 +1270,9 @@ const Cloner = struct {
     source_fn: Ast.FnId,
     pattern: CallPattern,
     subst: std.AutoHashMap(Ast.LocalId, Value),
+    /// Same-binder substitutions are valid only inside the function body that
+    /// established them. Inline boundaries clear this map before binding callee
+    /// locals because checked binder ids are not global across lifted modules.
     binder_subst: std.AutoHashMap(check.CheckedModule.PatternBinderId, Value),
     changes: std.ArrayList(BindingChange),
     inline_stack: std.ArrayList(Ast.FnId),
@@ -2621,6 +2624,8 @@ const Cloner = struct {
             prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count, &pending_lets);
         }
 
+        try self.clearBinderSubstitutionsForInline();
+
         try self.inline_stack.append(self.pass.allocator, callable.fn_id);
         defer {
             const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
@@ -2688,6 +2693,8 @@ const Cloner = struct {
         for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
             prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count, &pending_lets);
         }
+
+        try self.clearBinderSubstitutionsForInline();
 
         try self.inline_stack.append(self.pass.allocator, callee);
         defer {
@@ -3090,6 +3097,8 @@ const Cloner = struct {
         const change_start = self.changes.items.len;
         defer self.restore(change_start);
 
+        try self.clearBinderSubstitutionsForInline();
+
         for (source_captures, captures) |source_capture, capture| {
             const local_expr = try self.addExpr(.{
                 .ty = capture.ty,
@@ -3191,6 +3200,17 @@ const Cloner = struct {
             });
             try self.binder_subst.put(binder, value);
         };
+    }
+
+    fn clearBinderSubstitutionsForInline(self: *Cloner) Allocator.Error!void {
+        var iter = self.binder_subst.iterator();
+        while (iter.next()) |entry| {
+            try self.changes.append(self.pass.allocator, .{
+                .key = .{ .binder = entry.key_ptr.* },
+                .previous = entry.value_ptr.*,
+            });
+        }
+        self.binder_subst.clearRetainingCapacity();
     }
 
     fn restore(self: *Cloner, start: usize) void {

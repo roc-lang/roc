@@ -525,19 +525,17 @@ Builtin :: [].{
 			step: ||
 				match advance(seed) {
 					Ok((item, next_seed)) =>
-						One(
-							{
-								item,
-								rest: Iter.custom(
-									next_seed,
-									match len_if_known {
-										Known(l) => Known(l - 1)
-										Unknown => Unknown
-									},
-									advance,
-								),
-							},
-						)
+						One({
+							item,
+							rest: Iter.custom(
+								next_seed,
+								match len_if_known {
+									Known(l) => Known(l - 1)
+									Unknown => Unknown
+								},
+								advance,
+							),
+						})
 					Err(NoMore) => Done
 				},
 		}
@@ -555,19 +553,17 @@ Builtin :: [].{
 			len_if_known: start.steps_between(end),
 			step: ||
 				if start < end {
-					One(
-						{
-							item: start,
-							rest: match start.add_try(1) {
-								Ok(next) => if next < end {
-									Iter.exclusive_range(next, end)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
+					One({
+						item: start,
+						rest: match start.add_try(1) {
+							Ok(next) => if next < end {
+								Iter.exclusive_range(next, end)
+							} else {
+								range_done()
+							}
+							Err(Overflow) => range_done()
 						},
-					)
+					})
 				} else {
 					Done
 				},
@@ -596,19 +592,17 @@ Builtin :: [].{
 			},
 			step: ||
 				if start <= end {
-					One(
-						{
-							item: start,
-							rest: match start.add_try(1) {
-								Ok(next) => if next <= end {
-									Iter.inclusive_range(next, end)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
+					One({
+						item: start,
+						rest: match start.add_try(1) {
+							Ok(next) => if next <= end {
+								Iter.inclusive_range(next, end)
+							} else {
+								range_done()
+							}
+							Err(Overflow) => range_done()
 						},
-					)
+					})
 				} else {
 					Done
 				},
@@ -1238,6 +1232,16 @@ Builtin :: [].{
 			reserved = List.reserve(list, 1)
 			list_append_unsafe(reserved, item)
 		}
+
+		## Add the `Ok` payload to the end of a list, or leave the list unchanged
+		## if the value is `Err`.
+		## ```roc
+		## expect List.append_if_ok([1, 2], Ok(3)) == [1, 2, 3]
+		##
+		## expect List.append_if_ok([1, 2], Err(NotFound)) == [1, 2]
+		## ```
+		append_if_ok : List(a), Try(a, err) -> List(a)
+		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
 
 		## Add a single element to the beginning of a list.
 		## ```roc
@@ -1957,12 +1961,10 @@ Builtin :: [].{
 			where [a.is_eq : a, a -> Bool]
 		split_first = |list, delim|
 			match list->find_first_index(|x| x == delim) {
-				Ok(index) => Ok(
-					{
-						before: list.sublist({ start: 0, len: index }),
-						after: list.drop_first(index + 1),
-					},
-				)
+				Ok(index) => Ok({
+					before: list.sublist({ start: 0, len: index }),
+					after: list.drop_first(index + 1),
+				})
 				Err(NotFound) => Err(NotFound)
 			}
 
@@ -1974,12 +1976,10 @@ Builtin :: [].{
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim|
 			match list->find_last_index(|x| x == delim) {
-				Ok(index) => Ok(
-					{
-						before: list.sublist({ start: 0, len: index }),
-						after: list.drop_first(index + 1),
-					},
-				)
+				Ok(index) => Ok({
+					before: list.sublist({ start: 0, len: index }),
+					after: list.drop_first(index + 1),
+				})
 				Err(NotFound) => Err(NotFound)
 			}
 
@@ -2375,14 +2375,12 @@ Builtin :: [].{
 		with_capacity : U64 -> Dict(_k, _v)
 		with_capacity = |requested| {
 			metadata = dict_allocate_buckets_for_capacity(requested)
-			HashMap(
-				{
-					entries: List.with_capacity(requested),
-					buckets: metadata.buckets,
-					max_entries_before_grow: metadata.max_entries_before_grow,
-					shifts: metadata.shifts,
-				},
-			)
+			HashMap({
+				entries: List.with_capacity(requested),
+				buckets: metadata.buckets,
+				max_entries_before_grow: metadata.max_entries_before_grow,
+				shifts: metadata.shifts,
+			})
 		}
 
 		## Returns the number of entries the dictionary can hold before growing.
@@ -2420,14 +2418,12 @@ Builtin :: [].{
 		clear : Dict(k, v) -> Dict(k, v)
 		clear = |dict| match dict {
 			HashMap(data) => {
-				HashMap(
-					{
-						entries: List.take_first(data.entries, 0),
-						buckets: List.map(data.buckets, |_| dict_empty_bucket),
-						max_entries_before_grow: data.max_entries_before_grow,
-						shifts: data.shifts,
-					},
-				)
+				HashMap({
+					entries: List.take_first(data.entries, 0),
+					buckets: List.map(data.buckets, |_| dict_empty_bucket),
+					max_entries_before_grow: data.max_entries_before_grow,
+					shifts: data.shifts,
+				})
 			}
 		}
 
@@ -3523,19 +3519,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U8.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										U8.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U8.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									U8.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -3560,19 +3554,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U8.add_try(start, 1) {
-									Ok(next) => if next < end {
-										U8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U8.add_try(start, 1) {
+								Ok(next) => if next < end {
+									U8.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -4156,19 +4148,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I8.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										I8.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I8.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									I8.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -4193,19 +4183,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I8.add_try(start, 1) {
-									Ok(next) => if next < end {
-										I8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I8.add_try(start, 1) {
+								Ok(next) => if next < end {
+									I8.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -4810,19 +4798,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U16.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										U16.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U16.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									U16.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -4847,19 +4833,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U16.add_try(start, 1) {
-									Ok(next) => if next < end {
-										U16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U16.add_try(start, 1) {
+								Ok(next) => if next < end {
+									U16.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -5502,19 +5486,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I16.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										I16.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I16.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									I16.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -5539,19 +5521,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I16.add_try(start, 1) {
-									Ok(next) => if next < end {
-										I16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I16.add_try(start, 1) {
+								Ok(next) => if next < end {
+									I16.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -6171,19 +6151,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U32.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										U32.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U32.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									U32.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -6208,19 +6186,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U32.add_try(start, 1) {
-									Ok(next) => if next < end {
-										U32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U32.add_try(start, 1) {
+								Ok(next) => if next < end {
+									U32.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -6895,19 +6871,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I32.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										I32.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I32.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									I32.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -6932,19 +6906,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I32.add_try(start, 1) {
-									Ok(next) => if next < end {
-										I32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I32.add_try(start, 1) {
+								Ok(next) => if next < end {
+									I32.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -7584,19 +7556,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U64.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										U64.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U64.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									U64.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -7621,19 +7591,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U64.add_try(start, 1) {
-									Ok(next) => if next < end {
-										U64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U64.add_try(start, 1) {
+								Ok(next) => if next < end {
+									U64.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -8350,19 +8318,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I64.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										I64.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I64.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									I64.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -8390,19 +8356,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I64.add_try(start, 1) {
-									Ok(next) => if next < end {
-										I64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I64.add_try(start, 1) {
+								Ok(next) => if next < end {
+									I64.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -9061,19 +9025,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U128.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										U128.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U128.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									U128.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -9101,19 +9063,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U128.add_try(start, 1) {
-									Ok(next) => if next < end {
-										U128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match U128.add_try(start, 1) {
+								Ok(next) => if next < end {
+									U128.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -9869,19 +9829,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I128.add_try(start, 1) {
-									Ok(next) => if next <= end {
-										I128.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I128.add_try(start, 1) {
+								Ok(next) => if next <= end {
+									I128.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -9912,19 +9870,17 @@ Builtin :: [].{
 				},
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I128.add_try(start, 1) {
-									Ok(next) => if next < end {
-										I128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match I128.add_try(start, 1) {
+								Ok(next) => if next < end {
+									I128.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -11032,19 +10988,17 @@ Builtin :: [].{
 				len_if_known: Unknown,
 				step: ||
 					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match Dec.add_try(start, 1.0) {
-									Ok(next) => if next <= end {
-										Dec.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match Dec.add_try(start, 1.0) {
+								Ok(next) => if next <= end {
+									Dec.to(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -11067,19 +11021,17 @@ Builtin :: [].{
 				len_if_known: Unknown,
 				step: ||
 					if start < end {
-						One(
-							{
-								item: start,
-								rest: match Dec.add_try(start, 1.0) {
-									Ok(next) => if next < end {
-										Dec.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
+						One({
+							item: start,
+							rest: match Dec.add_try(start, 1.0) {
+								Ok(next) => if next < end {
+									Dec.until(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
 							},
-						)
+						})
 					} else {
 						Done
 					},
@@ -13053,12 +13005,10 @@ Builtin :: [].{
 				Missing({ bucket_index: 0, dist_and_fingerprint: 0 })
 			} else {
 				hash = dict_hash_key(key)
-				Missing(
-					{
-						bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
-						dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
-					},
-				)
+				Missing({
+					bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
+					dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
+				})
 			}
 		} else if List.is_empty(data.buckets) {
 			crash "Dict invariant violated: entries without buckets"
@@ -13932,6 +13882,13 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				Ok(quotient)
 			}
 		}
+
+list_append_if_ok : List(a), Try(a, err) -> List(a)
+list_append_if_ok = |list, maybe_item|
+	match maybe_item {
+		Ok(item) => List.append(list, item)
+		Err(_) => list
+	}
 
 unsigned_minus_saturated : item, item, item -> item
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
