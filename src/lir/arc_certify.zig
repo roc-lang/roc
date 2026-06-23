@@ -503,7 +503,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_literal => |a| a.target == needle,
         .assign_call => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_call_erased => |a| a.target == needle or a.closure == needle or spanHasLocal(store, a.args, needle),
-        .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle),
+        .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle) or (a.reuse != null and a.reuse.? == needle),
         .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
@@ -1197,6 +1197,7 @@ const Certifier = struct {
                 .assign_packed_erased_fn => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.capture) |capture| try self.noteProcLocal(capture);
+                    if (assign.reuse) |reuse| try self.noteProcLocal(reuse);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
@@ -1466,6 +1467,7 @@ const Certifier = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.reuse) |reuse| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, reuse);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -1997,13 +1999,25 @@ const Certifier = struct {
                         try self.requireLive(&state, capture)
                     else
                         no_value;
+                    const reuse_value = if (assign.reuse) |reuse|
+                        try self.requireLive(&state, reuse)
+                    else
+                        no_value;
                     if (self.isRc(assign.target)) {
                         const target_value = try self.bindFresh(&state, assign.target, 1, &.{});
                         if (assign.capture != null) {
                             try self.consumeIntoHolder(&state, capture_value, target_value);
                         }
+                        if (assign.reuse != null) {
+                            try self.consumeUnit(&state, reuse_value, assign.reuse.?);
+                        }
                     } else if (assign.capture != null) {
                         try self.consumeIntoHolder(&state, capture_value, no_value);
+                        if (assign.reuse != null) {
+                            try self.consumeUnit(&state, reuse_value, assign.reuse.?);
+                        }
+                    } else if (assign.reuse != null) {
+                        try self.consumeUnit(&state, reuse_value, assign.reuse.?);
                     }
                     cursor = assign.next;
                 },

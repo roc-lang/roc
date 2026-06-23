@@ -2128,7 +2128,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_packed_erased_fn => |assign| {
-                try self.emitPackedErasedFn(assign.target, assign.proc, assign.capture, assign.capture_layout, assign.on_drop);
+                try self.emitPackedErasedFn(assign.target, assign.proc, assign.capture, assign.capture_layout, assign.on_drop, assign.reuse, assign.reuse_unique);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
@@ -2374,16 +2374,57 @@ pub const MonoLlvmCodeGen = struct {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: lir.LIR.ErasedCallableOnDrop,
+        reuse: ?LocalId,
+        reuse_unique: bool,
     ) Error!void {
         try self.prepareLocalWrite(target);
         if (capture) |capture_local| try self.materializeLocalIfDeferred(capture_local);
+        if (reuse) |reuse_local| try self.materializeLocalIfDeferred(reuse_local);
         const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
         const capture_size = if (capture_layout) |idx| self.layoutByteSize(idx) else 0;
+        const proc_fn = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
+        const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
+        const on_drop_value = switch (on_drop) {
+            .none => null_ptr,
+            .rc_helper => |helper_key| blk: {
+                // `on_drop` is selected here at closure creation, which is not
+                // an RC statement and makes no thread-confinement claim, so it
+                // is always the atomic helper (atomic is always sound).
+                break :blk if (try self.declareRcHelper(helper_key, .atomic)) |helper_fn|
+                    helper_fn.toValue(builder)
+                else
+                    null_ptr;
+            },
+            .interpreter_context_drop => return error.CompilationFailed,
+        };
+
+        if (reuse) |reuse_local| {
+            const update_mode = if (reuse_unique) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+            const capture_src = if (capture != null and capture_size > 0) self.slot(capture.?).ptr else null_ptr;
+            const data_ptr = try self.callBuiltin(
+                "roc_builtins_erased_callable_repack",
+                ptr_ty,
+                &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType(), .i8, ptr_ty },
+                &.{
+                    try self.loadPointer(self.slot(reuse_local).ptr),
+                    proc_fn.toValue(builder),
+                    on_drop_value,
+                    capture_src,
+                    builder.intValue(self.ptrSizedIntType(), capture_size) catch return error.OutOfMemory,
+                    builder.intValue(.i8, @intFromEnum(update_mode)) catch return error.OutOfMemory,
+                    self.rocOps(),
+                },
+            );
+            try self.storePointer(self.slot(target).ptr, data_ptr);
+            return;
+        }
+
         const payload_size: u64 = builtins.erased_callable.payloadSize(capture_size);
         const data_ptr = try self.callBuiltin(
             "roc_builtins_allocate_with_refcount",
-            try self.ptrType(),
-            &.{ self.ptrSizedIntType(), .i32, .i1, try self.ptrType() },
+            ptr_ty,
+            &.{ self.ptrSizedIntType(), .i32, .i1, ptr_ty },
             &.{
                 builder.intValue(self.ptrSizedIntType(), payload_size) catch return error.OutOfMemory,
                 builder.intValue(.i32, builtins.erased_callable.payload_alignment) catch return error.OutOfMemory,
@@ -2391,23 +2432,8 @@ pub const MonoLlvmCodeGen = struct {
                 self.rocOps(),
             },
         );
-        const proc_fn = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
         try self.storePointer(data_ptr, proc_fn.toValue(builder));
-        const on_drop_ptr = try self.offsetPtr(data_ptr, self.targetWordSize());
-        switch (on_drop) {
-            .none => try self.storePointer(on_drop_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory),
-            .rc_helper => |helper_key| {
-                // `on_drop` is selected here at closure creation, which is not
-                // an RC statement and makes no thread-confinement claim, so it
-                // is always the atomic helper (atomic is always sound).
-                const helper_value = if (try self.declareRcHelper(helper_key, .atomic)) |helper_fn|
-                    helper_fn.toValue(builder)
-                else
-                    builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
-                try self.storePointer(on_drop_ptr, helper_value);
-            },
-            .interpreter_context_drop => return error.CompilationFailed,
-        }
+        try self.storePointer(try self.offsetPtr(data_ptr, self.targetWordSize()), on_drop_value);
         if (capture) |capture_local| {
             if (capture_size > 0) {
                 const capture_dst = try self.offsetPtr(data_ptr, builtins.erased_callable.capture_offset);

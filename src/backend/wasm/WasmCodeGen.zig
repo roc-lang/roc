@@ -3304,6 +3304,7 @@ fn collectProcLocals(
             .assign_packed_erased_fn => |assign| {
                 try recordProcLocal(locals, assign.target);
                 if (assign.capture) |capture| try recordProcLocal(locals, capture);
+                if (assign.reuse) |reuse| try recordProcLocal(locals, reuse);
                 try work.append(wa, assign.next);
             },
             .assign_low_level => |assign| {
@@ -7405,6 +7406,8 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .target_layout = self.procLocalLayoutIdx(assign.target),
                 .capture_layout = assign.capture_layout,
                 .on_drop = assign.on_drop,
+                .reuse = assign.reuse,
+                .reuse_unique = assign.reuse_unique,
             });
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -8350,14 +8353,56 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
             }
         }
     }
-    const payload_size = builtins.erased_callable.payloadSize(capture_size);
-    try self.emitHeapAllocWithRefcountConst(
-        @intCast(payload_size),
-        builtins.erased_callable.payload_alignment,
-        builtins.erased_callable.allocation_has_refcounted_children,
-    );
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(payload_ptr);
+    if (c.reuse) |reuse| {
+        try self.emitProcLocal(reuse);
+        const reuse_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalSet(reuse_ptr);
+
+        if (c.reuse_unique) {
+            try self.emitLocalGet(reuse_ptr);
+            try self.emitLocalSet(payload_ptr);
+            try self.emitErasedCallableOnDrop(payload_ptr);
+        } else {
+            const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLoadI32AtPtrOffset(reuse_ptr, -4, rc_val);
+
+            try self.emitLocalGet(rc_val);
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+            try self.emitLocalGet(reuse_ptr);
+            try self.emitLocalSet(payload_ptr);
+            try self.emitErasedCallableOnDrop(payload_ptr);
+
+            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+            const payload_size = builtins.erased_callable.payloadSize(capture_size);
+            try self.emitHeapAllocWithRefcountConst(
+                @intCast(payload_size),
+                builtins.erased_callable.payload_alignment,
+                builtins.erased_callable.allocation_has_refcounted_children,
+            );
+            try self.emitLocalSet(payload_ptr);
+            try self.emitDataPtrDecref(
+                reuse_ptr,
+                builtins.erased_callable.payload_alignment,
+                builtins.erased_callable.allocation_has_refcounted_children,
+            );
+
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        }
+    } else {
+        const payload_size = builtins.erased_callable.payloadSize(capture_size);
+        try self.emitHeapAllocWithRefcountConst(
+            @intCast(payload_size),
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+        );
+        try self.emitLocalSet(payload_ptr);
+    }
 
     const proc_key: u32 = @intFromEnum(c.proc);
     const table_idx = self.proc_table_indices.get(proc_key) orelse {

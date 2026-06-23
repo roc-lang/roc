@@ -121,7 +121,12 @@ const Printer = struct {
                 },
                 .assign_packed_erased_fn => |s| {
                     try self.writeTarget(s.target, indent, writer);
-                    try writer.print("packed_erased_fn p{d}\n", .{@intFromEnum(s.proc)});
+                    try writer.print("packed_erased_fn p{d}", .{@intFromEnum(s.proc)});
+                    if (s.reuse) |reuse| {
+                        try writer.print(" reuse=l{d}", .{@intFromEnum(reuse)});
+                        if (s.reuse_unique) try writer.writeAll(" unique");
+                    }
+                    try writer.writeByte('\n');
                     current = s.next;
                 },
                 .assign_low_level => |s| {

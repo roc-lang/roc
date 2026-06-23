@@ -443,7 +443,10 @@ const Pass = struct {
                 self.noteUse(s.closure);
                 for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
             },
-            .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
+            .assign_packed_erased_fn => |s| {
+                if (s.capture) |capture| self.noteUse(capture);
+                if (s.reuse) |reuse| self.noteUse(reuse);
+            },
             .assign_low_level => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
             .assign_list => |s| for (self.store.getLocalSpan(s.elems)) |elem| self.noteUse(elem),
             .assign_struct => |s| for (self.store.getLocalSpan(s.fields)) |field| self.noteUse(field),

@@ -1175,6 +1175,28 @@ pub fn roc_builtins_erased_callable_decref_single_thread(payload_ptr: ?[*]u8, ro
     );
 }
 
+/// Repack a consumed boxed erased callable allocation for a same-layout
+/// replacement, reusing the old allocation when uniqueness permits.
+pub fn roc_builtins_erased_callable_repack(
+    reuse: ?[*]u8,
+    callable_fn_ptr: erased_callable.CallableFnPtr,
+    on_drop: ?erased_callable.OnDropFn,
+    capture_src: ?[*]const u8,
+    capture_size: usize,
+    update_mode: utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) [*]u8 {
+    return erased_callable.repack(
+        reuse,
+        callable_fn_ptr,
+        on_drop,
+        capture_src,
+        capture_size,
+        update_mode,
+        roc_ops,
+    );
+}
+
 /// Free a boxed erased callable payload pointer, running the payload's
 /// `on_drop` callback unconditionally first.
 pub fn roc_builtins_erased_callable_free(payload_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {

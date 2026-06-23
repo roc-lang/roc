@@ -248,6 +248,7 @@ pub const BuiltinFn = enum {
     erased_callable_incref,
     erased_callable_decref,
     erased_callable_decref_single_thread,
+    erased_callable_repack,
     erased_callable_free,
 
     // Numeric operations
@@ -386,6 +387,7 @@ pub const BuiltinFn = enum {
             .erased_callable_incref => "roc_builtins_erased_callable_incref",
             .erased_callable_decref => "roc_builtins_erased_callable_decref",
             .erased_callable_decref_single_thread => "roc_builtins_erased_callable_decref_single_thread",
+            .erased_callable_repack => "roc_builtins_erased_callable_repack",
             .erased_callable_free => "roc_builtins_erased_callable_free",
 
             // Numeric operations
@@ -5961,6 +5963,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (assign.capture) |capture| {
                             try locals.put(localKey(capture), capture);
                         }
+                        if (assign.reuse) |reuse| {
+                            try locals.put(localKey(reuse), reuse);
+                        }
                         try stack.append(sa, assign.next);
                     },
                     .assign_low_level => |assign| {
@@ -6106,6 +6111,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_packed_erased_fn => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         if (assign.capture) |capture| try locals.put(localKey(capture), capture);
+                        if (assign.reuse) |reuse| try locals.put(localKey(reuse), reuse);
                         try stack.append(sa, assign.next);
                     },
                     .assign_low_level => |assign| {
@@ -10934,6 +10940,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             target_layout: layout.Idx,
             capture_layout: ?layout.Idx,
             on_drop: lir.LIR.ErasedCallableOnDrop,
+            reuse: ?LocalId,
+            reuse_unique: bool,
         ) Allocator.Error!ValueLocation {
             const target_layout_val = self.layout_store.getLayout(target_layout);
             if (builtin.mode == .Debug and target_layout_val.tag != .erased_callable) {
@@ -10958,6 +10966,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
+
+            if (reuse) |reuse_local| {
+                const reuse_loc = try self.emitValueLocal(reuse_local);
+                const reuse_reg = try self.ensureInGeneralReg(reuse_loc);
+                defer self.codegen.freeGeneral(reuse_reg);
+
+                const proc_addr = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(proc_addr);
+                const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
+                if (proc.code_start == unresolved_proc_code_start)
+                    try self.emitPendingProcAddress(proc_id, proc_addr)
+                else
+                    try self.emitInternalCodeAddress(proc.code_start, proc_addr);
+
+                const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
+                defer self.codegen.freeGeneral(on_drop_reg);
+
+                const capture_stack: ?i32 = if (capture) |capture_local| blk: {
+                    const layout_idx = capture_layout orelse unreachable;
+                    const capture_loc = self.requireExactValueLocationToLayout(
+                        try self.emitValueLocal(capture_local),
+                        self.localLayout(capture_local),
+                        layout_idx,
+                        "packed_erased_fn.repack_capture",
+                    );
+                    if (capture_size == 0) break :blk null;
+                    break :blk try self.ensureOnStack(capture_loc, capture_size);
+                } else null;
+
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(reuse_reg);
+                try builder.addRegArg(proc_addr);
+                try builder.addRegArg(on_drop_reg);
+                if (capture_stack) |stack_offset| {
+                    try builder.addLeaArg(frame_ptr, stack_offset);
+                } else {
+                    try builder.addImmArg(0);
+                }
+                try builder.addImmArg(@intCast(capture_size));
+                try builder.addImmArg(if (reuse_unique) @intFromEnum(builtins.utils.UpdateMode.InPlace) else @intFromEnum(builtins.utils.UpdateMode.Immutable));
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_repack), .erased_callable_repack);
+
+                const result_reg = try self.allocTempGeneral();
+                try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg_0);
+                return .{ .general_reg = result_reg };
+            }
+
             const payload_size = builtins.erased_callable.payloadSize(capture_size);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
@@ -14799,6 +14856,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.localLayout(assign.target),
                                 assign.capture_layout,
                                 assign.on_drop,
+                                assign.reuse,
+                                assign.reuse_unique,
                             );
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });

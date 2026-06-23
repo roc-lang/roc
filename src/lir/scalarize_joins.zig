@@ -619,6 +619,7 @@ const Pass = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| try self.noteUse(capture);
+                    if (assign.reuse) |reuse| try self.noteUse(reuse);
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },

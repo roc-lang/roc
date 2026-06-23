@@ -429,6 +429,15 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
+        /// Optional consumed erased callable allocation to repack.
+        ///
+        /// When present, this statement returns a unique erased callable with
+        /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
+        /// consumed allocation is uniquely owned at the statement. Otherwise,
+        /// consumers must runtime-check uniqueness and take the fresh allocate
+        /// path when the old allocation is shared.
+        reuse: ?LocalId = null,
+        reuse_unique: bool = false,
         next: CFStmtId,
     },
     assign_low_level: struct {

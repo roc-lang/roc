@@ -2236,9 +2236,11 @@ pub const Interpreter = struct {
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_packed_erased_fn => |assign| {
-                    debugPrint("    {d}: assign_packed_erased_fn target={d} next={d}\n", .{
+                    debugPrint("    {d}: assign_packed_erased_fn target={d} reuse={?d} unique={} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
+                        if (assign.reuse) |reuse| @intFromEnum(reuse) else null,
+                        assign.reuse_unique,
                         @intFromEnum(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
@@ -2945,7 +2947,27 @@ pub const Interpreter = struct {
             }
         }
         const capture_size = erased_callable_context_capture_offset + capture_value_size;
-        const data_ptr = try self.allocRocDataWithRc(
+        const data_ptr = if (assign.reuse) |reuse_local| blk: {
+            const reuse_value = try self.getLocalChecked(frame, reuse_local);
+            const reuse_ptr = self.readBoxedDataPointer(reuse_value) orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased callable repack reuse had null payload",
+                    .{},
+                );
+            };
+            if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
+                self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
+                break :blk reuse_ptr;
+            }
+
+            const fresh = try self.allocRocDataWithRc(
+                builtins.erased_callable.payloadSize(capture_size),
+                builtins.erased_callable.payload_alignment,
+                builtins.erased_callable.allocation_has_refcounted_children,
+            );
+            builtins.erased_callable.decref(reuse_ptr, &self.roc_ops);
+            break :blk fresh;
+        } else try self.allocRocDataWithRc(
             builtins.erased_callable.payloadSize(capture_size),
             builtins.erased_callable.payload_alignment,
             builtins.erased_callable.allocation_has_refcounted_children,

@@ -697,7 +697,19 @@ const Inserter = struct {
                     if (assign.capture) |capture| {
                         transfer_single = try self.singleTransfer(capture, assign.next, assign.target, &path.owned, path.options.loop_keep);
                     }
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    var reuse_unique = false;
+                    if (assign.reuse) |reuse| {
+                        const preserve_reuse = reuse != assign.target and try self.groupUsedInPath(assign.next, reuse, path.options.loop_keep);
+                        if (preserve_reuse or !self.ownsUnit(&path.owned, reuse)) {
+                            current_start = try self.retainLocalIfRc(reuse, current_start);
+                        } else {
+                            reuse_unique = self.localContainsRefcounted(reuse) and self.isLocalUniqueHere(reuse);
+                            self.unsetOwnedUnit(&path.owned, reuse);
+                        }
+                    }
+                    if (assign.reuse == null or assign.reuse.? != assign.target) {
+                        current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -707,6 +719,7 @@ const Inserter = struct {
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_single = transfer_single,
+                        .unique_args = if (reuse_unique) 1 else 0,
                         .post_release = try self.takePostReleases(&deaths),
                     });
                     path.cursor = assign.next;
@@ -1083,6 +1096,8 @@ const Inserter = struct {
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
+                    .reuse = assign.reuse,
+                    .reuse_unique = (frame.unique_args & 1) != 0,
                     .next = next,
                 } });
             },
@@ -1815,6 +1830,13 @@ const Inserter = struct {
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| {
                         _ = try self.singleTransfer(capture, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
+                    if (assign.reuse) |reuse| {
+                        if (reuse != assign.target and try self.groupUsedInPath(assign.next, reuse, path.loop_keep)) {
+                            // Mirrors the rewrite path's pre-statement retain.
+                        } else if (self.ownsUnit(&path.owned, reuse)) {
+                            self.unsetOwnedUnit(&path.owned, reuse);
+                        }
                     }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.target };
@@ -3083,6 +3105,7 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.reuse) |reuse| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, reuse);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -3326,6 +3349,7 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and assign.capture.? == needle) return true;
+                    if (assign.reuse != null and assign.reuse.? == needle) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -3527,6 +3551,7 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and needles.contains(assign.capture.?)) return true;
+                    if (assign.reuse != null and needles.contains(assign.reuse.?)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
@@ -4079,6 +4104,25 @@ const ArcTest = struct {
             .op = .list_append_unsafe,
             .rc_effect = rc_effect,
             .args = try self.span(args),
+            .next = next,
+        } });
+    }
+
+    fn assignPackedErased(
+        self: *ArcTest,
+        target: LIR.LocalId,
+        capture: LIR.LocalId,
+        capture_layout: layout_mod.Idx,
+        reuse: ?LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+            .target = target,
+            .proc = try self.addBodylessProc(.i64),
+            .capture = capture,
+            .capture_layout = capture_layout,
+            .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = capture_layout } },
+            .reuse = reuse,
             .next = next,
         } });
     }
@@ -5415,6 +5459,77 @@ test "uniqueness: freshly built list consumed by a checked op elides the check" 
     // The list is born unique and its single unit moves into the op, so the
     // op's runtime count check on argument 0 is redundant.
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: freshly packed erased callable repack elides the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_capture = try f.local(f.list_i64);
+    const new_capture = try f.local(f.list_i64);
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+
+    const ret = try f.ret(new_callable);
+    const new_pack = try f.assignPackedErased(new_callable, new_capture, f.list_i64, old_callable, ret);
+    const new_capture_assign = try f.assignList(new_capture, &.{}, new_pack);
+    const old_pack = try f.assignPackedErased(old_callable, old_capture, f.list_i64, null, new_capture_assign);
+    const old_capture_assign = try f.assignList(old_capture, &.{}, old_pack);
+    _ = try f.addProc(&.{}, old_capture_assign, erased_callable);
+
+    try f.run();
+
+    var saw_repack = false;
+    var saw_unique = false;
+    for (f.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_packed_erased_fn => |assign| {
+                if (assign.target == new_callable and assign.reuse == old_callable) {
+                    saw_repack = true;
+                    saw_unique = saw_unique or assign.reuse_unique;
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expect(saw_repack);
+    try testing.expect(saw_unique);
+}
+
+test "uniqueness: erased callable repack keeps the check when old value is used later" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_capture = try f.local(f.list_i64);
+    const new_capture = try f.local(f.list_i64);
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+
+    const ret = try f.ret(new_callable);
+    const use_old = try f.expectStmt(old_callable, ret);
+    const new_pack = try f.assignPackedErased(new_callable, new_capture, f.list_i64, old_callable, use_old);
+    const new_capture_assign = try f.assignList(new_capture, &.{}, new_pack);
+    const old_pack = try f.assignPackedErased(old_callable, old_capture, f.list_i64, null, new_capture_assign);
+    const old_capture_assign = try f.assignList(old_capture, &.{}, old_pack);
+    _ = try f.addProc(&.{}, old_capture_assign, erased_callable);
+
+    try f.run();
+
+    var saw_repack = false;
+    var saw_unique = false;
+    for (f.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_packed_erased_fn => |assign| {
+                if (assign.target == new_callable and assign.reuse == old_callable) {
+                    saw_repack = true;
+                    saw_unique = saw_unique or assign.reuse_unique;
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expect(saw_repack);
+    try testing.expect(!saw_unique);
 }
 
 test "uniqueness: list held by a struct keeps its runtime check" {

@@ -1,4 +1,5 @@
-//! Rewrites direct boxed update wrappers to reuse the incoming box allocation.
+//! Rewrites direct allocation-replacement wrappers to reuse an existing
+//! allocation when the LIR shape carries enough explicit information.
 //!
 //! This runs after SolvedLirLower/TRMC and before ARC insertion. It only
 //! accepts an adjacent, straight-line shape:
@@ -78,6 +79,11 @@ const Transform = struct {
     new_locals: std.ArrayList(LocalId),
 
     fn rewriteAt(self: *Transform, unbox_stmt_id: CFStmtId) ResourceError!bool {
+        if (try self.rewritePackedErasedAt(unbox_stmt_id)) return true;
+        return try self.rewriteBoxAt(unbox_stmt_id);
+    }
+
+    fn rewriteBoxAt(self: *Transform, unbox_stmt_id: CFStmtId) ResourceError!bool {
         const unbox_stmt = switch (self.store.getCFStmt(unbox_stmt_id)) {
             .assign_low_level => |s| s,
             else => return false,
@@ -162,6 +168,56 @@ const Transform = struct {
         } };
 
         return true;
+    }
+
+    fn rewritePackedErasedAt(self: *Transform, old_stmt_id: CFStmtId) ResourceError!bool {
+        const old_stmt = switch (self.store.getCFStmt(old_stmt_id)) {
+            .assign_packed_erased_fn => |s| s,
+            else => return false,
+        };
+        if (old_stmt.reuse != null) return false;
+
+        const new_stmt_id = old_stmt.next;
+        const new_stmt = switch (self.store.getCFStmt(new_stmt_id)) {
+            .assign_packed_erased_fn => |s| s,
+            else => return false,
+        };
+        if (new_stmt.reuse != null) return false;
+        if (old_stmt.target == new_stmt.target) return false;
+        if (new_stmt.capture != null and new_stmt.capture.? == old_stmt.target) return false;
+
+        const ret_stmt = switch (self.store.getCFStmt(new_stmt.next)) {
+            .ret => |s| s,
+            else => return false,
+        };
+        if (ret_stmt.value != new_stmt.target) return false;
+
+        const erased_layout = self.store.getLocal(old_stmt.target).layout_idx;
+        if (self.store.getLocal(new_stmt.target).layout_idx != erased_layout) return false;
+        if (self.store.getProcSpec(self.proc_id).ret_layout != erased_layout) return false;
+        if (self.layouts.getLayout(erased_layout).tag != .erased_callable) return false;
+
+        if (!self.samePackedErasedPayloadShape(old_stmt.capture_layout, new_stmt.capture_layout)) return false;
+
+        self.store.getCFStmtPtr(new_stmt_id).* = .{ .assign_packed_erased_fn = .{
+            .target = new_stmt.target,
+            .proc = new_stmt.proc,
+            .capture = new_stmt.capture,
+            .capture_layout = new_stmt.capture_layout,
+            .on_drop = new_stmt.on_drop,
+            .reuse = old_stmt.target,
+            .next = new_stmt.next,
+        } };
+
+        return true;
+    }
+
+    fn samePackedErasedPayloadShape(self: *const Transform, old_layout: ?layout_mod.Idx, new_layout: ?layout_mod.Idx) bool {
+        if (old_layout == null or new_layout == null) return old_layout == null and new_layout == null;
+        const old_size_align = self.layouts.layoutSizeAlign(self.layouts.getLayout(old_layout.?));
+        const new_size_align = self.layouts.layoutSizeAlign(self.layouts.getLayout(new_layout.?));
+        return old_size_align.size == new_size_align.size and
+            old_size_align.alignment.toByteUnits() == new_size_align.alignment.toByteUnits();
     }
 
     const ForwardedAlias = struct {
@@ -306,4 +362,66 @@ test "box reuse rewrites the direct unbox call rebox return chain" {
 
     const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 6);
+}
+
+test "erased callable reuse rewrites adjacent same-shape repack" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+
+    const erased_callable = try layouts.insertErasedCallable();
+    const old_capture = try testLocal(&store, .u64);
+    const new_capture = try testLocal(&store, .u64);
+    const old_callable = try testLocal(&store, erased_callable);
+    const new_callable = try testLocal(&store, erased_callable);
+    const callee_arg = try testLocal(&store, .u64);
+
+    const old_proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{callee_arg}),
+        .frame_locals = try store.addLocalSpan(&.{callee_arg}),
+        .ret_layout = .u64,
+    });
+    const new_proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{callee_arg}),
+        .frame_locals = try store.addLocalSpan(&.{callee_arg}),
+        .ret_layout = .u64,
+    });
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } });
+    const new_pack = try store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = new_callable,
+        .proc = new_proc,
+        .capture = new_capture,
+        .capture_layout = .u64,
+        .on_drop = .none,
+        .next = ret,
+    } });
+    const old_pack = try store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = old_callable,
+        .proc = old_proc,
+        .capture = old_capture,
+        .capture_layout = .u64,
+        .on_drop = .none,
+        .next = new_pack,
+    } });
+    const caller = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{}),
+        .frame_locals = try store.addLocalSpan(&.{ old_capture, new_capture, old_callable, new_callable }),
+        .body = old_pack,
+        .ret_layout = erased_callable,
+    });
+
+    try run(&store, &layouts);
+
+    const rewritten = store.getCFStmt(new_pack).assign_packed_erased_fn;
+    try std.testing.expectEqual(old_callable, rewritten.reuse.?);
+    try std.testing.expect(!rewritten.reuse_unique);
+
+    const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
+    try std.testing.expectEqual(@as(usize, 4), frame_locals.len);
 }

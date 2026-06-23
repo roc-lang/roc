@@ -905,6 +905,7 @@ fn collectStmt(
         .assign_packed_erased_fn => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             if (assign.capture) |capture| noteDemand(solver, capture);
+            if (assign.reuse) |reuse| noteDemand(solver, reuse);
             try solver.stack.append(allocator, assign.next);
         },
         .assign_low_level => |assign| {
@@ -1651,8 +1652,9 @@ pub fn computeUniqueness(
             },
             .assign_packed_erased_fn => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
+                marks.noteBirth(&born, assign.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
+                if (assign.reuse) |reuse| marks.consume(&consumed_once, &destroyed, reuse);
             },
             .str_match => |str_match| {
                 marks.noteUse(&borrow_used, str_match.source);
