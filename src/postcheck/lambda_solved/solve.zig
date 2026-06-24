@@ -385,6 +385,9 @@ const Solver = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
+            .static_data_candidate => |candidate| {
+                _ = try self.expectExpr(candidate.fallback, expected);
+            },
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
                 for (self.program.lifted.exprSpan(items)) |child| {

@@ -718,7 +718,7 @@ zig build -Doptimize=ReleaseSmall
 - [x] Unreachable successful evaluated constants do not emit target static data.
 - [x] Maximal root subsumption is tested for callable-containing aggregates.
 - [x] Finite callable static data materializes a captured static list.
-- [ ] Static-data selection consumes explicit value and type/layout data.
+- [x] Static-data selection consumes explicit value and type/layout data.
 - [x] Erased callable static data is covered by tests.
 - [x] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
 - [x] Reachability marks callable static-data procedures and capture plans.

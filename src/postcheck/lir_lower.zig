@@ -426,6 +426,97 @@ const Lowerer = struct {
         return lir_id;
     }
 
+    fn lowerStaticDataCandidateInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        candidate: LambdaMono.StaticDataCandidate,
+        ty: Type.TypeId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const layout_idx = self.result.store.getLocal(target).layout_idx;
+        if (self.result.layouts.layoutSize(self.result.layouts.getLayout(layout_idx)) != 0) {
+            const plan = try self.constPlanOfType(ty);
+            if (self.constPlanNeedsStaticData(plan, layout_idx)) {
+                return try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .static_data = try self.lirStaticDataFor(candidate.static_data, ty, layout_idx) },
+                    .next = next,
+                } });
+            }
+        }
+        return try self.lowerExprInto(target, candidate.fallback, next);
+    }
+
+    fn constPlanNeedsStaticData(self: *Lowerer, plan_id: LirProgram.ConstPlanId, layout_idx: layout.Idx) bool {
+        const layout_value = self.result.layouts.getLayout(layout_idx);
+        if (self.result.layouts.layoutSize(layout_value) == 0) return false;
+
+        return switch (self.result.const_plans.items[@intFromEnum(plan_id)]) {
+            .pending => Common.invariant("pending const plan reached static data candidate selection"),
+            .zst,
+            .scalar,
+            => false,
+            .str,
+            .list,
+            .box,
+            .fn_value,
+            .erased_fn,
+            => true,
+            .tuple => |items| self.aggregatePlanNeedsStaticData(items, layout_idx),
+            .record => |fields| self.aggregatePlanNeedsStaticData(fields, layout_idx),
+            .tag_union => |variants| self.tagPlanNeedsStaticData(variants, layout_idx),
+            .named => |named| self.constPlanNeedsStaticData(named.backing, layout_idx),
+        };
+    }
+
+    fn aggregatePlanNeedsStaticData(self: *Lowerer, children: []const LirProgram.ConstPlanId, layout_idx: layout.Idx) bool {
+        if (children.len == 0) return false;
+        const aggregate_layout = self.result.layouts.getLayout(layout_idx);
+        if (aggregate_layout.tag != .struct_) {
+            if (children.len != 1) Common.invariant("non-struct aggregate static-data candidate had multiple children");
+            return self.constPlanNeedsStaticData(children[0], layout_idx);
+        }
+        for (children, 0..) |child, index| {
+            const field_layout_idx = self.result.layouts.getStructFieldLayoutByOriginalIndex(aggregate_layout.getStruct().idx, @intCast(index));
+            if (self.constPlanNeedsStaticData(child, field_layout_idx)) return true;
+        }
+        return false;
+    }
+
+    fn tagPlanNeedsStaticData(self: *Lowerer, variants: []const LirProgram.ConstTagVariant, layout_idx: layout.Idx) bool {
+        const tag_layout = self.result.layouts.getLayout(layout_idx);
+        switch (tag_layout.tag) {
+            .zst, .scalar => return false,
+            .tag_union => {},
+            else => Common.invariant("tag-union static-data candidate had non-tag-union layout"),
+        }
+        const tag_data = self.result.layouts.getTagUnionData(tag_layout.getTagUnion().idx);
+        const layout_variants = self.result.layouts.getTagUnionVariants(tag_data);
+        for (variants) |variant| {
+            if (variant.payloads.len == 0) continue;
+            if (variant.discriminant >= layout_variants.len) Common.invariant("tag static-data candidate discriminant exceeded committed layout variants");
+            const payload_layout_idx = layout_variants.get(@intCast(variant.discriminant)).payload_layout;
+            for (variant.payloads, 0..) |payload_plan, payload_index| {
+                const child_layout_idx = self.tagPayloadArgLayout(payload_layout_idx, variant.payloads.len, @intCast(payload_index));
+                if (self.constPlanNeedsStaticData(payload_plan, child_layout_idx)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn tagPayloadArgLayout(self: *Lowerer, payload_layout_idx: layout.Idx, payload_count: usize, payload_index: u32) layout.Idx {
+        if (payload_count == 0) return .zst;
+        const payload_layout = self.result.layouts.getLayout(payload_layout_idx);
+        if (payload_count == 1) {
+            if (payload_layout.tag == .struct_ and self.result.layouts.getStructInfo(payload_layout).fields.len == 1) {
+                return self.result.layouts.getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, 0);
+            }
+            return payload_layout_idx;
+        }
+        if (payload_layout.tag != .struct_) Common.invariant("multi-payload tag static-data candidate did not use a struct payload layout");
+        return self.result.layouts.getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, @intCast(payload_index));
+    }
+
     fn buildConstPlan(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LirProgram.ConstPlan {
         return switch (self.program.types.get(ty)) {
             .primitive => |primitive| switch (primitive) {
@@ -801,6 +892,7 @@ const Lowerer = struct {
                 .value = .{ .static_data = try self.lirStaticDataFor(id, expr_data.ty, self.result.store.getLocal(target).layout_idx) },
                 .next = next,
             } }),
+            .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, expr_data.ty, next),
             .uninitialized, .uninitialized_payload => next,
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),

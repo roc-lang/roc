@@ -346,6 +346,13 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// A restored compile-time value that may lower to static data once the final
+/// LIR const plan and target layout are known.
+pub const StaticDataCandidate = struct {
+    static_data: Common.StaticDataId,
+    fallback: ExprId,
+};
+
 /// Monotype expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
@@ -356,6 +363,7 @@ pub const ExprData = union(enum) {
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
     static_data: Common.StaticDataId,
+    static_data_candidate: StaticDataCandidate,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

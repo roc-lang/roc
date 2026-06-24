@@ -486,6 +486,10 @@ const Lowerer = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
             .static_data => |value| .{ .static_data = value },
+            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
+                .static_data = candidate.static_data,
+                .fallback = try self.lowerExpr(candidate.fallback),
+            } },
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
                 .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys.items[@intFromEnum(payload.condition)])),

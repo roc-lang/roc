@@ -35,6 +35,7 @@ pub const Options = struct {
     /// Restore stored constants as readonly static-data values when their
     /// ConstStore shape requires runtime storage.
     static_data_literals: bool = false,
+    target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
 };
 
 /// Lower checked modules and explicit roots into Monotype IR.
@@ -367,6 +368,7 @@ const Builder = struct {
     program: *Ast.Program,
     proc_debug_names: bool,
     static_data_literals: bool,
+    target_usize: base.target.TargetUsize,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Monotypes owned by the builder-global type cache. They are lowered
@@ -400,6 +402,7 @@ const Builder = struct {
             .program = program,
             .proc_debug_names = options.proc_debug_names,
             .static_data_literals = options.static_data_literals,
+            .target_usize = options.target_usize,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
@@ -1950,34 +1953,54 @@ const Builder = struct {
         return gop.value_ptr.*;
     }
 
-    fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNodeId) bool {
-        const value = view.const_store.get(node);
-        return constValueNeedsStaticData(view, value);
+    fn staticDataCandidateExpr(
+        self: *Builder,
+        ty: Type.TypeId,
+        static_data: Common.StaticDataId,
+        fallback: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .static_data_candidate = .{
+                .static_data = static_data,
+                .fallback = fallback,
+            } },
+        });
     }
 
-    fn constValueNeedsStaticData(view: ModuleView, value: checked.ConstValue) bool {
+    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId, bare_fn: BareFnCandidate) bool {
+        const value = view.const_store.get(node);
+        return self.constValueMayUseStaticDataCandidate(view, value, bare_fn);
+    }
+
+    const BareFnCandidate = enum {
+        disallow,
+        allow,
+    };
+
+    fn constValueMayUseStaticDataCandidate(self: *Builder, view: ModuleView, value: checked.ConstValue, bare_fn: BareFnCandidate) bool {
         return switch (value) {
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
-            .str,
             .crash,
-            .fn_value,
             => false,
+            .str => |str| self.constStrNeedsStaticData(view, str),
+            .fn_value => bare_fn == .allow,
             .list => |items| items.len != 0,
             .box => true,
-            .tuple => |items| constNodeSliceNeedsStaticData(view, items),
-            .record => |fields| constNodeSliceNeedsStaticData(view, fields),
-            .tag => |tag| constNodeSliceNeedsStaticData(view, tag.payloads),
-            .nominal => |nominal| constValueNeedsStaticData(view, view.const_store.get(nominal.backing)),
+            .tuple => true,
+            .record => true,
+            .tag => true,
+            .nominal => |nominal| self.constValueMayUseStaticDataCandidate(view, view.const_store.get(nominal.backing), .allow),
         };
     }
 
-    fn constNodeSliceNeedsStaticData(view: ModuleView, nodes: []const checked.ConstNodeId) bool {
-        for (nodes) |child| {
-            if (constValueNeedsStaticData(view, view.const_store.get(child))) return true;
-        }
-        return false;
+    fn constStrNeedsStaticData(self: *Builder, view: ModuleView, str: check.ConstStore.ConstStr) bool {
+        const str_bytes = view.const_store.strBytes(str);
+        const backing = view.const_store.strData(str.data);
+        const roc_str_size = self.target_usize.size() * 3;
+        return backing.len >= roc_str_size or str_bytes.len >= roc_str_size;
     }
 
     fn lookupMethodTarget(
@@ -2442,14 +2465,12 @@ const Builder = struct {
                 if (!moduleBytesEqual(checked.constModuleId(const_ref).bytes, store_view.key.bytes)) {
                     Common.invariant("static-data const context referenced a different ConstStore module");
                 }
-                if (self.static_data_literals and self.constNodeNeedsStaticData(store_view, capture.value)) {
+                const fallback = try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, fn_view, capture.value, lowered_ty, const_ref);
+                if (self.static_data_literals and self.constNodeMayUseStaticDataCandidate(store_view, capture.value, .allow)) {
                     const id = try self.staticDataValue(const_ref, capture.value, capture_ty);
-                    break :value_expr try self.program.addExpr(.{
-                        .ty = lowered_ty,
-                        .data = .{ .static_data = id },
-                    });
+                    break :value_expr try self.staticDataCandidateExpr(lowered_ty, id, fallback);
                 }
-                break :value_expr try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, fn_view, capture.value, lowered_ty, const_ref);
+                break :value_expr fallback;
             } else try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, lowered_ty);
             const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
             try bindLocalName(self.program, fn_view, local, binder);
@@ -4222,16 +4243,14 @@ const BodyContext = struct {
         const template = self.view.const_templates.get(entry.const_ref);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                const fallback = try self.restoreConstNodeAtTypeWithStaticRoot(self.view, self.view, stored.node, ty, entry.const_ref);
                 if (self.builder.static_data_literals and
-                    self.builder.constNodeNeedsStaticData(self.view, stored.node))
+                    self.builder.constNodeMayUseStaticDataCandidate(self.view, stored.node, .disallow))
                 {
                     const id = try self.builder.staticDataValue(entry.const_ref, null, entry.checked_type);
-                    break :blk try self.builder.program.addExpr(.{
-                        .ty = ty,
-                        .data = .{ .static_data = id },
-                    });
+                    break :blk try self.builder.staticDataCandidateExpr(ty, id, fallback);
                 }
-                break :blk try self.restoreConstNodeAtTypeWithStaticRoot(self.view, self.view, stored.node, ty, entry.const_ref);
+                break :blk fallback;
             },
             .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, self.hoistedConstSourceRegion(entry)),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
@@ -9104,16 +9123,14 @@ const BodyContext = struct {
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                const fallback = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, self.view, stored.node, ty, const_use.const_ref);
                 if (self.builder.static_data_literals and
-                    self.builder.constNodeNeedsStaticData(store_view, stored.node))
+                    self.builder.constNodeMayUseStaticDataCandidate(store_view, stored.node, .disallow))
                 {
                     const id = try self.builder.staticDataValue(const_use.const_ref, null, requested_ty);
-                    break :blk try self.builder.program.addExpr(.{
-                        .ty = ty,
-                        .data = .{ .static_data = id },
-                    });
+                    break :blk try self.builder.staticDataCandidateExpr(ty, id, fallback);
                 }
-                break :blk try self.restoreConstNodeAtTypeWithStaticRoot(store_view, self.view, stored.node, ty, const_use.const_ref);
+                break :blk fallback;
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null),

@@ -845,6 +845,162 @@ test "reachable function-valued constant restores without static data literal" {
     try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
 }
 
+test "reachable scalar aggregate constant restores without static data literal" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\point = { x: 11.I64, y: 22.I64 }
+        \\
+        \\main! = |args| {
+        \\    runtime_point = point
+        \\    total = runtime_point.x + runtime_point.y + List.len(args).to_i64_wrap()
+        \\    _ = total
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), lowered.lir_result.static_data_values.items.len);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
+}
+
+test "large string constant uses static data while small string stays direct" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\small_text = "small direct"
+        \\large_text = "abcdefghijklmnopqrstuvwxyzabcdef"
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!(small_text)
+        \\    Echo.line!(large_text)
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(countStaticDataValuesContainingStr(root_view, imports, &lowered, "abcdefghijklmnopqrstuvwxyzabcdef") >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataValuesContainingStr(root_view, imports, &lowered, "small direct"));
+    try std.testing.expect(countStaticDataLiteralAssignmentsToStr(root_view, imports, &lowered, "abcdefghijklmnopqrstuvwxyzabcdef") >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignmentsToStr(root_view, imports, &lowered, "small direct"));
+}
+
 test "provided boxed erased callable captures static list data" {
     const gpa = std.testing.allocator;
 
@@ -3708,6 +3864,20 @@ fn countStaticDataValuesContainingListU8(
     return count;
 }
 
+fn countStaticDataValuesContainingStr(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    text: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.static_data_values.items) |static_data| {
+        const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
+        if (constNodeContainsStr(node.module, node.id, text)) count += 1;
+    }
+    return count;
+}
+
 fn countStaticDataLiteralAssignmentsToListU8(
     root: check.CheckedArtifact.LoweringModuleView,
     imports: []const check.CheckedArtifact.ImportedModuleView,
@@ -3722,6 +3892,29 @@ fn countStaticDataLiteralAssignmentsToListU8(
                     const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
                     const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
                     if (constNodeContainsListU8(node.module, node.id, bytes)) count += 1;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countStaticDataLiteralAssignmentsToStr(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    text: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => |id| {
+                    const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
+                    if (constNodeContainsStr(node.module, node.id, text)) count += 1;
                 },
                 else => {},
             },
@@ -3855,6 +4048,46 @@ fn constNodeContainsListU8(module: StaticConstModule, node: check.CheckedArtifac
             const fn_value = module.store.getFn(fn_id);
             for (fn_value.captures) |capture| {
                 if (constNodeContainsListU8(module, capture.value, bytes)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn constNodeContainsStr(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, text: []const u8) bool {
+    return switch (module.store.get(node)) {
+        .str => |str| std.mem.eql(u8, module.store.strBytes(str), text),
+        .list => |items| {
+            for (items) |item| {
+                if (constNodeContainsStr(module, item, text)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsStr(module, payload, text),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsStr(module, item, text)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsStr(module, item, text)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsStr(module, payload, text)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsStr(module, nominal.backing, text),
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsStr(module, capture.value, text)) return true;
             }
             return false;
         },
