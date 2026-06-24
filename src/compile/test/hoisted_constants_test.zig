@@ -428,9 +428,13 @@ test "reachable top-level data lowers to internal static data exports" {
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
+    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    try std.testing.expect(countStoredHoistedListLength(app_view, 2) >= 1);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
@@ -718,6 +722,126 @@ test "inline sub_or_crash cells inside runtime record become shared static data"
     try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
     try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
     try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 2);
+}
+
+test "inline imported opaque cells through boxed model become static data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeBoxedSpritePlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Sprite
+        \\
+        \\Model : [Running({ frame_count : U64, anim : Animation })]
+        \\
+        \\main = { init!, update! }
+        \\
+        \\init! : () => Model
+        \\init! = || Running({ frame_count: 0, anim: make_anim(0) })
+        \\
+        \\update! : Model => Model
+        \\update! = |model|
+        \\    match model {
+        \\        Running(state) =>
+        \\            Running({
+        \\                frame_count: state.frame_count + 1,
+        \\                anim: make_anim(state.frame_count),
+        \\            })
+        \\    }
+        \\
+        \\AnimationState : [Completed, RunOnce, Loop]
+        \\
+        \\Animation : {
+        \\    last_updated : U64,
+        \\    index : U64,
+        \\    cells : List(Cell),
+        \\    state : AnimationState,
+        \\}
+        \\
+        \\Cell : { frames : U64, sprite : Sprite }
+        \\
+        \\sheet : Sprite
+        \\sheet =
+        \\    Sprite.new({
+        \\        data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\        bpp: BPP2,
+        \\        width: 2,
+        \\        height: 2,
+        \\    })
+        \\
+        \\make_anim : U64 -> Animation
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    index: 0,
+        \\    state: Loop,
+        \\    cells: [
+        \\        { frames: 5.U64, sprite: Sprite.sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 6.U64, sprite: Sprite.sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\    ],
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+    const root_list_count = countStoredHoistedListLength(check.CheckedArtifact.importedView(root_view.module), 2);
+    const relation_list_count = countStoredHoistedListLengthInModules(root_view.relation_modules, 2);
+    const import_list_count = countStoredHoistedListLengthInModules(imports, 2);
+    try std.testing.expect(root_list_count >= 1 or relation_list_count >= 1 or import_list_count >= 1);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(countStaticDataLiteralAssignmentsToListLength(root_view, imports, &lowered, 2) >= 1);
 }
 
 test "hoisted constant crash reports original source region" {
@@ -2081,6 +2205,88 @@ fn writeEchoPlatform(dir: anytype) anyerror!void {
     });
 }
 
+fn writeBoxedSpritePlatform(dir: anytype) anyerror!void {
+    try dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {
+        \\        [Model : model] for main : { init! : () => model, update! : model => model }
+        \\    }
+        \\    exposes [Sprite]
+        \\    packages {}
+        \\    provides { "init_for_host": init_for_host!, "update_for_host": update_for_host! }
+        \\    hosted {}
+        \\
+        \\import Sprite
+        \\
+        \\init_for_host! : () => Box(Model)
+        \\init_for_host! = || {
+        \\    init_fn! = main.init!
+        \\    Box.box(init_fn!())
+        \\}
+        \\
+        \\update_for_host! : Box(Model) => Box(Model)
+        \\update_for_host! = |boxed| {
+        \\    update_fn! = main.update!
+        \\    Box.box(update_fn!(Box.unbox(boxed)))
+        \\}
+        ,
+    });
+    try dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Sprite.roc",
+        .data =
+        \\Sprite := {
+        \\    data : List(U8),
+        \\    bpp : [BPP1, BPP2],
+        \\    stride : U32,
+        \\    region : { src_x : U32, src_y : U32, width : U32, height : U32 },
+        \\}.{
+        \\    SubRegion : { src_x : U32, src_y : U32, width : U32, height : U32 }
+        \\
+        \\    new : { data : List(U8), bpp : [BPP1, BPP2], width : U32, height : U32 } -> Sprite
+        \\    new = |{ data, bpp, width, height }| {
+        \\        data,
+        \\        bpp,
+        \\        stride: width,
+        \\        region: { src_x: 0, src_y: 0, width, height },
+        \\    }
+        \\
+        \\    sub : Sprite, SubRegion -> Try(Sprite, [OutOfBounds])
+        \\    sub = |sprite, sub_region| {
+        \\        current_region = sprite.region
+        \\        out_of_bound_x = sub_region.src_x + sub_region.width > current_region.width
+        \\        out_of_bound_y = sub_region.src_y + sub_region.height > current_region.height
+        \\
+        \\        if out_of_bound_x or out_of_bound_y {
+        \\            Err(OutOfBounds)
+        \\        } else {
+        \\            Ok({
+        \\                ..sprite,
+        \\                region: {
+        \\                    src_x: current_region.src_x + sub_region.src_x,
+        \\                    src_y: current_region.src_y + sub_region.src_y,
+        \\                    width: sub_region.width,
+        \\                    height: sub_region.height,
+        \\                },
+        \\            })
+        \\        }
+        \\    }
+        \\
+        \\    sub_or_crash : Sprite, SubRegion -> Sprite
+        \\    sub_or_crash = |sprite, sub_region|
+        \\        match Sprite.sub(sprite, sub_region) {
+        \\            Ok(sub_sprite) => sub_sprite
+        \\            Err(OutOfBounds) => {
+        \\                crash "bad sprite"
+        \\            }
+        \\        }
+        \\}
+        ,
+    });
+}
+
 fn expectReportDoesNotContain(
     allocator: std.mem.Allocator,
     report: *const @import("reporting").Report,
@@ -2132,6 +2338,114 @@ fn countStaticDataLiteralAssignments(store: *const lir.LirStore) usize {
         }
     }
     return count;
+}
+
+fn countStaticDataLiteralAssignmentsToListLength(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    len: usize,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => |id| {
+                    const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref);
+                    if (constNodeContainsListLength(node.module, node.id, len)) count += 1;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+const StaticConstModule = struct {
+    templates: *const check.CheckedArtifact.ConstTemplateTable,
+    store: *const check.CheckedArtifact.ConstStore,
+};
+
+const StaticConstNode = struct {
+    module: StaticConstModule,
+    id: check.CheckedArtifact.ConstNodeId,
+};
+
+fn constNodeForStaticData(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    const_ref: check.CheckedArtifact.ConstId,
+) StaticConstNode {
+    const module = constModuleForStaticData(root, imports, const_ref);
+    const template = module.templates.get(const_ref);
+    return switch (template.state) {
+        .stored_const => |stored| .{ .module = module, .id = stored.node },
+        .reserved,
+        .eval_template,
+        => @panic("static data literal referenced an unstored const"),
+    };
+}
+
+fn constModuleForStaticData(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    const_ref: check.CheckedArtifact.ConstId,
+) StaticConstModule {
+    if (moduleKeyEqual(root.module.key, const_ref.artifact)) return .{
+        .templates = &root.module.const_templates,
+        .store = &root.module.const_store,
+    };
+    for (root.relation_modules) |relation| {
+        if (moduleKeyEqual(relation.key, const_ref.artifact)) return .{
+            .templates = relation.const_templates,
+            .store = relation.const_store,
+        };
+    }
+    for (imports) |imported| {
+        if (moduleKeyEqual(imported.key, const_ref.artifact)) return .{
+            .templates = imported.const_templates,
+            .store = imported.const_store,
+        };
+    }
+    @panic("static data literal referenced a const outside the lowering module set");
+}
+
+fn constNodeContainsListLength(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, len: usize) bool {
+    return switch (module.store.get(node)) {
+        .list => |items| {
+            if (items.len == len) return true;
+            for (items) |item| {
+                if (constNodeContainsListLength(module, item, len)) return true;
+            }
+            return false;
+        },
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsListLength(module, item, len)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsListLength(module, item, len)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsListLength(module, payload, len)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsListLength(module, nominal.backing, len),
+        else => false,
+    };
+}
+
+fn moduleKeyEqual(a: check.CheckedArtifact.CheckedModuleArtifactKey, b: check.CheckedArtifact.CheckedModuleArtifactKey) bool {
+    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
 fn countInternalStaticValueExports(exports: []const @import("backend").StaticDataExport) usize {
@@ -2247,6 +2561,32 @@ fn countStoredHoistedI64(
         if (storedI64(artifact, entry)) |actual| {
             if (actual == expected) count += 1;
         } else |_| {}
+    }
+    return count;
+}
+
+fn countStoredHoistedListLength(artifact: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        if (constNodeContainsListLength(.{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        }, node, len)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredHoistedListLengthInModules(artifacts: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedListLength(artifact, len);
     }
     return count;
 }

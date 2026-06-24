@@ -154,9 +154,6 @@ function_effect_slots_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Effe
 active_effect_slots: std.ArrayListUnmanaged(EffectSlotId),
 /// Static-dispatch function variables watched by active effect slots.
 dispatch_effect_watches: std.ArrayListUnmanaged(DispatchEffectWatch),
-/// Resolved static-dispatch function variables whose selected implementation
-/// contains runtime-source-only work such as dictionary pseudo-seeding.
-dispatch_runtime_source_fn_vars: std.AutoHashMapUnmanaged(Var, void),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// Final expression summaries for checked top-level values.
@@ -920,14 +917,6 @@ const HoistSelectionTransaction = struct {
             .e_call => |call| {
                 try self.stageExprDependenciesInternal(call.func, context, root_metadata);
                 try self.stageExprSpanDependencies(call.args, context, root_metadata);
-                if (self.checker.callableRuntimeDependencyForExpr(self.checker.cir, call.func)) |callee_runtime_source| {
-                    switch (callee_runtime_source) {
-                        .runtime_dependent,
-                        .poisoned,
-                        => root_metadata.has_runtime_source = true,
-                        .compile_time_known => {},
-                    }
-                }
             },
             .e_method_call => |call| {
                 try self.stageExprDependenciesInternal(call.receiver, context, root_metadata);
@@ -936,9 +925,6 @@ const HoistSelectionTransaction = struct {
             .e_dispatch_call => |call| {
                 try self.stageExprDependenciesInternal(call.receiver, context, root_metadata);
                 try self.stageExprSpanDependencies(call.args, context, root_metadata);
-                if (self.checker.dispatchHasRuntimeSource(call.constraint_fn_var)) {
-                    root_metadata.has_runtime_source = true;
-                }
             },
             .e_record => |record| try self.stageRecordDependencies(record.fields, record.ext, context, root_metadata),
             .e_tag => |tag| try self.stageExprSpanDependencies(tag.args, context, root_metadata),
@@ -954,11 +940,6 @@ const HoistSelectionTransaction = struct {
             .e_interpolation => |interpolation| {
                 try self.stageExprDependenciesInternal(interpolation.first, context, root_metadata);
                 try self.stageExprSpanDependencies(interpolation.parts, context, root_metadata);
-                if (interpolation.constraint_fn_var) |fn_var| {
-                    if (self.checker.dispatchHasRuntimeSource(fn_var)) {
-                        root_metadata.has_runtime_source = true;
-                    }
-                }
             },
             .e_structural_eq => |eq| {
                 try self.stageExprDependenciesInternal(eq.lhs, context, root_metadata);
@@ -971,16 +952,10 @@ const HoistSelectionTransaction = struct {
             .e_method_eq => |eq| {
                 try self.stageExprDependenciesInternal(eq.lhs, context, root_metadata);
                 try self.stageExprDependenciesInternal(eq.rhs, context, root_metadata);
-                if (self.checker.dispatchHasRuntimeSource(eq.constraint_fn_var)) {
-                    root_metadata.has_runtime_source = true;
-                }
             },
             .e_type_method_call => |call| try self.stageExprSpanDependencies(call.args, context, root_metadata),
             .e_type_dispatch_call => |call| {
                 try self.stageExprSpanDependencies(call.args, context, root_metadata);
-                if (self.checker.dispatchHasRuntimeSource(call.constraint_fn_var)) {
-                    root_metadata.has_runtime_source = true;
-                }
             },
             .e_tuple_access => |access| try self.stageExprDependenciesInternal(access.tuple, context, root_metadata),
         }
@@ -1444,7 +1419,6 @@ fn initAssumePrepared(
         .function_effect_slots_by_pattern = .{},
         .active_effect_slots = .empty,
         .dispatch_effect_watches = .empty,
-        .dispatch_runtime_source_fn_vars = .{},
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .top_level_check_summaries = .{},
         .function_body_check_summaries = .{},
@@ -1601,7 +1575,6 @@ pub fn deinit(self: *Self) void {
     self.function_effect_slots_by_pattern.deinit(self.gpa);
     self.active_effect_slots.deinit(self.gpa);
     self.dispatch_effect_watches.deinit(self.gpa);
-    self.dispatch_runtime_source_fn_vars.deinit(self.gpa);
     self.top_level_ptrns.deinit();
     self.top_level_check_summaries.deinit(self.gpa);
     self.function_body_check_summaries.deinit(self.gpa);
@@ -1855,82 +1828,6 @@ fn recordDirectCalleeEffectDependency(self: *Self, callee: CIR.Expr.Idx) Allocat
         },
         else => {},
     }
-}
-
-fn runtimeDependencyFromModule(dep: ModuleEnv.RuntimeDependency) RuntimeDep {
-    return switch (dep) {
-        .compile_time_known => .compile_time_known,
-        .runtime_dependent => .runtime_dependent,
-        .poisoned => .poisoned,
-    };
-}
-
-fn moduleRuntimeDependencySummary(
-    module: *const ModuleEnv,
-    node_idx: CIR.Node.Idx,
-) ?RuntimeDep {
-    const dep = module.runtimeDependencySummaryForNode(node_idx) orelse return null;
-    return runtimeDependencyFromModule(dep);
-}
-
-fn callableRuntimeDependencyForExpr(
-    self: *Self,
-    module: *const ModuleEnv,
-    callee: CIR.Expr.Idx,
-) ?RuntimeDep {
-    const callable_def = self.hoistedCallableDefForExpr(module, callee) orelse return null;
-    const def = callable_def.module.store.getDef(callable_def.def);
-    const def_expr = callable_def.module.store.getExpr(def.expr);
-    const body_expr = switch (def_expr) {
-        .e_lambda => |lambda| lambda.body,
-        .e_closure => |closure| switch (callable_def.module.store.getExpr(closure.lambda_idx)) {
-            .e_lambda => |lambda| lambda.body,
-            else => return null,
-        },
-        else => return moduleRuntimeDependencySummary(callable_def.module, ModuleEnv.nodeIdxFrom(def.expr)) orelse
-            moduleRuntimeDependencySummary(callable_def.module, ModuleEnv.nodeIdxFrom(def.pattern)),
-    };
-    return moduleRuntimeDependencySummary(callable_def.module, ModuleEnv.nodeIdxFrom(body_expr)) orelse
-        moduleRuntimeDependencySummary(callable_def.module, ModuleEnv.nodeIdxFrom(def.expr)) orelse
-        moduleRuntimeDependencySummary(callable_def.module, ModuleEnv.nodeIdxFrom(def.pattern));
-}
-
-fn defRuntimeDependency(module: *const ModuleEnv, def_idx: CIR.Def.Idx) ?RuntimeDep {
-    const def = module.store.getDef(def_idx);
-    const def_expr = module.store.getExpr(def.expr);
-    const body_expr = switch (def_expr) {
-        .e_lambda => |lambda| lambda.body,
-        .e_closure => |closure| switch (module.store.getExpr(closure.lambda_idx)) {
-            .e_lambda => |lambda| lambda.body,
-            else => return null,
-        },
-        else => return moduleRuntimeDependencySummary(module, ModuleEnv.nodeIdxFrom(def.expr)) orelse
-            moduleRuntimeDependencySummary(module, ModuleEnv.nodeIdxFrom(def.pattern)),
-    };
-    return moduleRuntimeDependencySummary(module, ModuleEnv.nodeIdxFrom(body_expr)) orelse
-        moduleRuntimeDependencySummary(module, ModuleEnv.nodeIdxFrom(def.expr)) orelse
-        moduleRuntimeDependencySummary(module, ModuleEnv.nodeIdxFrom(def.pattern));
-}
-
-fn recordDispatchRuntimeSourceIfNeeded(
-    self: *Self,
-    constraint_fn_var: Var,
-    method_module: *const ModuleEnv,
-    method_def: CIR.Def.Idx,
-) Allocator.Error!void {
-    switch (defRuntimeDependency(method_module, method_def) orelse .compile_time_known) {
-        .runtime_dependent,
-        .poisoned,
-        => try self.dispatch_runtime_source_fn_vars.put(self.gpa, constraint_fn_var, {}),
-        .compile_time_known => {},
-    }
-}
-
-fn dispatchHasRuntimeSource(self: *Self, fn_var: Var) bool {
-    if (self.dispatch_runtime_source_fn_vars.count() == 0) return false;
-    if (self.dispatch_runtime_source_fn_vars.contains(fn_var)) return true;
-    const resolved = self.types.resolveVar(fn_var).var_;
-    return resolved != fn_var and self.dispatch_runtime_source_fn_vars.contains(resolved);
 }
 
 fn recordDispatchEffectWatch(self: *Self, fn_var: Var) Allocator.Error!void {
@@ -2860,7 +2757,6 @@ const HoistSelectionTestState = struct {
         checker.effect_slots = .empty;
         checker.effect_edges = .empty;
         checker.dispatch_effect_watches = .empty;
-        checker.dispatch_runtime_source_fn_vars = .{};
         checker.top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(allocator);
         checker.hoist_frames = .empty;
         checker.hoist_expr_candidates = .empty;
@@ -2890,7 +2786,6 @@ const HoistSelectionTestState = struct {
         self.checker.effect_slots.deinit(self.allocator);
         self.checker.effect_edges.deinit(self.allocator);
         self.checker.dispatch_effect_watches.deinit(self.allocator);
-        self.checker.dispatch_runtime_source_fn_vars.deinit(self.allocator);
         self.checker.top_level_ptrns.deinit();
         self.checker.hoist_frames.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
@@ -5924,110 +5819,6 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
-const HoistedCallableDef = struct {
-    module: *const ModuleEnv,
-    def: CIR.Def.Idx,
-};
-
-fn hoistedCallableDefForExpr(
-    self: *Self,
-    module: *const ModuleEnv,
-    expr: CIR.Expr.Idx,
-) ?HoistedCallableDef {
-    return switch (module.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
-        .e_lookup_external => |external| blk: {
-            const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
-        },
-        .e_str,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_lookup_required,
-        .e_list,
-        .e_tuple,
-        .e_record,
-        .e_block,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_closure,
-        .e_lambda,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
-        .e_hosted_lambda,
-        .e_run_low_level,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_crash,
-        .e_return,
-        .e_break,
-        => null,
-    };
-}
-
-fn hoistedImportedModule(
-    self: *Self,
-    module: *const ModuleEnv,
-    import_idx: CIR.Import.Idx,
-) ?*const ModuleEnv {
-    const module_idx = module.imports.getResolvedModule(import_idx) orelse return null;
-    if (module_idx >= self.imported_modules.len) return null;
-    return self.imported_modules[module_idx];
-}
-
-fn hoistedTopLevelDefForPattern(
-    module: *const ModuleEnv,
-    pattern: CIR.Pattern.Idx,
-) ?HoistedCallableDef {
-    const pattern_node = ModuleEnv.nodeIdxFrom(pattern);
-    return hoistedTopLevelDefForNode(module, pattern_node);
-}
-
-fn hoistedTopLevelDefForNode(
-    module: *const ModuleEnv,
-    node: CIR.Node.Idx,
-) ?HoistedCallableDef {
-    for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
-        const def = module.store.getDef(def_idx);
-        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.pattern) == node or ModuleEnv.nodeIdxFrom(def.expr) == node) {
-            return .{ .module = module, .def = def_idx };
-        }
-    }
-    return null;
-}
-
 fn appendHoistedDependencyPatternBinders(
     self: *Self,
     pattern: CIR.Pattern.Idx,
@@ -7553,19 +7344,53 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
 // defs //
 
-fn defIsGlobalValueDef(self: *const Self, def_idx: CIR.Def.Idx) bool {
-    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |global_def_idx| {
-        if (global_def_idx == def_idx) return true;
-    }
-    return false;
-}
-
 /// Check the types for a single definition
 fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const def = self.cir.store.getDef(def_idx);
+    const is_module_level_def = self.top_level_ptrns.contains(def.pattern);
+    const detach_hoist_frames = is_module_level_def and self.hoist_frames.items.len != 0;
+
+    const saved_hoist_frames = self.hoist_frames;
+    const saved_hoist_expr_candidates = self.hoist_expr_candidates;
+    const saved_hoist_deferred_binding_dependencies = self.hoist_deferred_binding_dependencies;
+    const saved_last_hoist_result = self.last_hoist_result;
+    if (detach_hoist_frames) {
+        self.hoist_frames = .empty;
+        self.hoist_expr_candidates = .empty;
+        self.hoist_deferred_binding_dependencies = .empty;
+        self.last_hoist_result = null;
+    }
+    defer {
+        if (detach_hoist_frames) {
+            if (self.hoist_frames.items.len != 0 or
+                self.hoist_expr_candidates.items.len != 0 or
+                self.hoist_deferred_binding_dependencies.items.len != 0)
+            {
+                hoistSelectionInvariant("detached top-level def left hoist frame state behind");
+            }
+            self.hoist_frames.deinit(self.gpa);
+            self.hoist_expr_candidates.deinit(self.gpa);
+            self.hoist_deferred_binding_dependencies.deinit(self.gpa);
+            self.hoist_frames = saved_hoist_frames;
+            self.hoist_expr_candidates = saved_hoist_expr_candidates;
+            self.hoist_deferred_binding_dependencies = saved_hoist_deferred_binding_dependencies;
+            self.last_hoist_result = saved_last_hoist_result;
+        }
+    }
+
+    const saved_hoist_suppressed_depth = self.hoist_suppressed_depth;
+    const saved_hoist_selection_suppressed_depth = self.hoist_selection_suppressed_depth;
+    if (is_module_level_def) {
+        self.hoist_suppressed_depth = 0;
+        self.hoist_selection_suppressed_depth = 0;
+    }
+    defer {
+        self.hoist_suppressed_depth = saved_hoist_suppressed_depth;
+        self.hoist_selection_suppressed_depth = saved_hoist_selection_suppressed_depth;
+    }
 
     if (self.top_level_ptrns.get(def.pattern)) |processing_def| {
         if (processing_def.status == .processed) {
@@ -7625,11 +7450,10 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Ordinary top-level constants are already compile-time roots, so nested
     // hoisted roots inside them would duplicate compile-time work. Top-level
     // functions are not evaluated as data constants, so their bodies may still
-    // contain top-level-equivalent local values. Non-global defs are checked for
-    // diagnostics and types, but only canonical global value defs may publish
-    // sparse hoisted constants.
-    const is_global_value_def = self.defIsGlobalValueDef(def_idx);
-    const suppress_nested_hoists = !is_global_value_def or
+    // contain top-level-equivalent local values. Local definitions are checked for
+    // diagnostics and types, but only independent module-level definitions may
+    // publish sparse hoisted constants.
+    const suppress_nested_hoists = !is_module_level_def or
         !isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr));
     if (suppress_nested_hoists) self.hoist_suppressed_depth += 1;
     defer {
@@ -10506,10 +10330,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (local_summary) |summary| {
                 check_result.include(summary);
             }
-            if (self.top_level_check_summaries.get(lookup.pattern_idx)) |summary| {
-                check_result.include(summary);
-            }
-
             const summary_says_compile_time_known = if (local_summary) |summary| known_summary: {
                 if (summary.runtime_dep) |dep| {
                     break :known_summary dep == .compile_time_known;
@@ -10912,14 +10732,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         const mb_func = if (mb_func_info) |info| info.func else null;
 
                         try self.recordDirectCalleeEffectDependency(call.func);
-                        if (self.callableRuntimeDependencyForExpr(self.cir, call.func)) |callee_runtime_source| {
-                            switch (callee_runtime_source) {
-                                .runtime_dependent,
-                                .poisoned,
-                                => check_result.markRuntimeSource(),
-                                .compile_time_known => {},
-                            }
-                        }
 
                         // If the function being called is effectful, mark this expression as effectful
                         if (mb_func_info) |info| {
@@ -16462,7 +16274,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatch(constraint, method_var);
-                        try self.recordDispatchRuntimeSourceIfNeeded(constraint.fn_var, original_env, def_idx);
                     }
                 }
                 break :dispatch_resolution;
@@ -16706,7 +16517,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatch(constraint, method_var);
-                        try self.recordDispatchRuntimeSourceIfNeeded(constraint.fn_var, original_env, def_idx);
                     }
                 }
                 break :dispatch_resolution;

@@ -53,6 +53,14 @@ rebuild those values inside `update`.
 - Runtime-controlled branch bodies, match guards, and match branch values do
   not publish independent candidates. They contribute summaries to the
   enclosing control expression.
+- Module-level lookup expressions are compile-time-known references to checked
+  module-level bindings. They do not inherit the initializer's transient
+  expression summary at each use site.
+- Checking a module-level definition as a dependency while another expression
+  frame is active must detach the transient hoist-frame and candidate stacks.
+  The dependency definition still writes shared checked outputs, selected
+  roots, delayed roots, effect slots, and known bindings, but it must not bubble
+  runtime dependency or child candidates into the lookup that forced it.
 - `return` and `break` are not standalone stored-value roots without an
   explicit checked continuation representation. Their payloads may still
   contribute through checked control data.
@@ -235,6 +243,10 @@ Tasks:
   checked summaries say otherwise.
 - [ ] Treat imported checked value lookups as compile-time-known unless their
   imported summaries say otherwise.
+- [x] Treat module-level lookups as checked binding identities instead of
+  including the initializer's transient expression summary at each use site.
+- [x] Detach hoist-frame and candidate stacks when a forward module-level
+  lookup checks another module-level definition as a dependency.
 - [ ] Remove old expression-level `does_fx` as a root eligibility input.
 
 Tests:
@@ -251,6 +263,10 @@ Tests:
 - [ ] reassignment blocks a containing parent root
 - [ ] top-level checked value lookup stays compile-time-known
 - [ ] imported checked value lookup stays compile-time-known
+- [x] forward top-level constant lookup does not poison the forcing expression
+  with the initializer's transient runtime dependency
+- [x] order of first and later top-level constant lookups does not change
+  compile-time root selection
 - [ ] erroneous child result poisons the parent without duplicate diagnostics
 
 ## Phase 3: Maximal Root Selection
@@ -311,6 +327,9 @@ Tests:
   roots
 - [x] inline `sub_or_crash` animation cells inside a runtime-dependent record
   select the cells list as a compile-time root
+- [x] inline imported opaque `sub_or_crash` cells through a boxed hosted model
+  select static cells data even when the first use forces a forward top-level
+  sprite-sheet definition
 - [ ] record destructure extracts necessary compile-time root
 - [ ] tuple destructure extracts necessary compile-time root
 - [ ] tag payload destructure extracts necessary compile-time root
@@ -376,6 +395,8 @@ Tests:
 - [ ] repeated sprite sheets share bytes
 - [ ] sub-sprite records point at sprite sheet bytes
 - [x] inline `sub_or_crash` animation cells point at shared sprite sheet bytes
+- [x] inline imported opaque animation cells through a boxed hosted model are
+  emitted as reachable static data
 - [ ] inline animation cells and named animation cells emit equivalent data
 - [ ] child roots removed by parent root do not emit duplicate data
 - [ ] effectful parent does not prevent independent static child data

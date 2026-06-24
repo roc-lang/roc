@@ -243,6 +243,36 @@ test "hoist roots select rocci-shaped sub_or_crash cells inside runtime record" 
     try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
 }
 
+test "hoist roots selected inside effectful function body" {
+    var test_env = try TestEnv.init("Test",
+        \\main! : () => U64
+        \\main! = || {
+        \\    x = [1.U64, 2.U64]
+        \\    List.len(x)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
+}
+
+test "hoist suppression does not leak from top-level constant into referenced top-level function" {
+    var test_env = try TestEnv.init("Test",
+        \\main = { run: run! }
+        \\
+        \\run! : () => U64
+        \\run! = || {
+        \\    x = [1.U64, 2.U64]
+        \\    List.len(x)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_block));
+}
+
 test "hoist roots selected for closed pure static dispatch call binding RHS" {
     var test_env = try TestEnv.init("Test",
         \\DispatchBox := [Val(I64)].{

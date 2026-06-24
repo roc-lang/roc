@@ -223,9 +223,12 @@ Runtime dependency is computed bottom-up from checked CIR identity. Lambda
 arguments, match-bound values, loop-bound values, mutable variables, and
 reassignments are runtime-dependent. Immutable local definitions store the
 summary of their right-hand side; later local lookups consume that stored
-summary. Top-level checked values and imported checked values are
-compile-time-known unless their own checked summaries say otherwise. Parent
-expressions combine child summaries directly.
+summary. Top-level checked values and imported checked values are checked
+binding identities at the use site. Looking up a module-level binding is
+compile-time-known as a reference to that checked binding; the initializer's
+own evaluation, diagnostics, reachability, and static storage are handled by
+the module-level checked outputs, not by replaying the initializer summary into
+each lookup expression. Parent expressions combine child summaries directly.
 
 The expression summary is not a second effect system. Effect slots remain the
 owner of effectfulness. The expression summary only says whether the expression
@@ -278,6 +281,17 @@ explicit checked data. Canonicalization may produce stable identities and source
 structure, but it must not select compile-time roots or decide final
 effectfulness. Post-check stages may consume checked roots and evaluated
 constants, but they must not repair or reinterpret root eligibility.
+
+Checking a module-level definition as a dependency is not a child expression of
+the lookup that forced it. If a forward reference causes a different
+module-level definition to be checked while an expression frame is active, the
+checker detaches the root-frame and candidate stacks for that definition. The
+definition still writes to the module's shared selected-root, delayed-root,
+known-binding, effect-slot, and checked-output state, but its transient
+expression frames must not bubble runtime dependency, child candidates, or
+last-expression metadata into the forcing lookup. This keeps the result
+independent of whether an equivalent top-level constant was checked before or
+after the use site.
 
 Each expression frame records the current root-candidate stack length when the
 frame begins. The frame receives child expression summaries as checking

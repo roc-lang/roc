@@ -934,7 +934,7 @@ const Builder = struct {
         const template = view.callable_eval_templates.templates[raw];
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
-            .fn_value => |fn_id| try self.restoreConstFnExpr(view, view, fn_id, mono_fn_ty),
+            .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
             else => Common.invariant("callable eval binding root did not output a callable value"),
         };
@@ -2338,7 +2338,6 @@ const Builder = struct {
     fn restoreConstFnExpr(
         self: *Builder,
         store_view: ModuleView,
-        type_view: ModuleView,
         fn_id: checked.ConstFnId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
@@ -2353,7 +2352,8 @@ const Builder = struct {
         }
         const template = try self.constFnTemplateToMono(fn_value, ty);
         if (fn_value.captures.len == 0) {
-            const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
+            const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
+            const mono_fn_id = try self.lowerRestoredConstFnTemplate(fn_view, template);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
                 .data = .{ .fn_def = mono_fn_id },
@@ -2693,7 +2693,7 @@ const Builder = struct {
         const value = store_view.const_store.get(node);
         switch (value) {
             .fn_value => |fn_id| {
-                const expr = try self.restoreConstFnExpr(store_view, type_view, fn_id, ty);
+                const expr = try self.restoreConstFnExpr(store_view, fn_id, ty);
                 try self.const_expr_cache.put(address, expr);
                 return expr;
             },
@@ -9110,7 +9110,7 @@ const BodyContext = struct {
         const value = store_view.const_store.get(node);
         switch (value) {
             .fn_value => |fn_id| {
-                const expr = try self.restoreConstFn(store_view, type_view, fn_id, ty);
+                const expr = try self.restoreConstFn(store_view, fn_id, ty);
                 try self.builder.const_expr_cache.put(address, expr);
                 return expr;
             },
@@ -9260,11 +9260,10 @@ const BodyContext = struct {
     fn restoreConstFn(
         self: *BodyContext,
         store_view: ModuleView,
-        type_view: ModuleView,
         fn_id: checked.ConstFnId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        return self.builder.restoreConstFnExpr(store_view, type_view, fn_id, ty);
+        return self.builder.restoreConstFnExpr(store_view, fn_id, ty);
     }
 
     fn lowerExprSpan(self: *BodyContext, checked_exprs: []const checked.CheckedExprId) Allocator.Error!Ast.Span(Ast.ExprId) {
