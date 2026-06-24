@@ -627,6 +627,12 @@ test "inline sub_or_crash cells inside runtime record become shared static data"
         \\    region: { src_x: 0, src_y: 0, width: 2, height: 2 },
         \\}
         \\
+        \\other_sheet : Sprite
+        \\other_sheet = {
+        \\    data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\    region: { src_x: 0, src_y: 0, width: 2, height: 2 },
+        \\}
+        \\
         \\sub : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Try(Sprite, {})
         \\sub = |sprite, region| Ok({ ..sprite, region })
         \\
@@ -644,6 +650,7 @@ test "inline sub_or_crash cells inside runtime record become shared static data"
         \\    cells: [
         \\        { frames: 5.U64, sprite: sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
         \\        { frames: 6.U64, sprite: sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 7.U64, sprite: sub_or_crash(other_sheet, { src_x: 0, src_y: 1, width: 1, height: 1 }) },
         \\    ],
         \\}
         \\
@@ -723,7 +730,7 @@ test "inline sub_or_crash cells inside runtime record become shared static data"
     const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.SharedStaticPayloadNotFound;
     try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
     try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
-    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 2);
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 3);
 }
 
 test "inline imported opaque cells through boxed model become static data" {

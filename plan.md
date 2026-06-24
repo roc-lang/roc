@@ -392,8 +392,8 @@ Tests:
 - [x] tag payload containing list points at static list bytes
 - [ ] opaque backed by static-storable data emits only through allowed checked
   output
-- [ ] repeated sprite sheets share bytes
-- [ ] sub-sprite records point at sprite sheet bytes
+- [x] repeated sprite sheets share bytes
+- [x] sub-sprite records point at sprite sheet bytes
 - [x] inline `sub_or_crash` animation cells point at shared sprite sheet bytes
 - [x] inline imported opaque animation cells through a boxed hosted model are
   emitted as reachable static data
