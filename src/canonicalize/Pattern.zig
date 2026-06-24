@@ -209,6 +209,13 @@ pub const Pattern = union(enum) {
     str_literal: struct {
         literal: StringLiteral.Idx,
     },
+    /// Pattern that matches a string using literal delimiters and captures
+    /// slices between them, e.g. `"foo${bar}baz${_}"`.
+    str_interpolation: struct {
+        prefix: StringLiteral.Idx,
+        steps: StrPatternStep.Span,
+        end: StrPatternEnd,
+    },
 
     /// Wildcard pattern that matches anything without binding to a variable.
     /// Used when you need to match a value but don't care about its contents.
@@ -227,6 +234,19 @@ pub const Pattern = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
+
+    pub const StrPatternEnd = enum(u32) {
+        exact,
+        tail,
+    };
+
+    pub const StrPatternStep = struct {
+        capture: ?Pattern.Idx,
+        delimiter: StringLiteral.Idx,
+
+        pub const Idx = enum(u32) { _ };
+        pub const Span = extern struct { span: base.DataSpan };
+    };
 
     /// Represents the destructuring of a single field within a record pattern.
     /// Each record destructure specifies how to extract a field from a record.
@@ -503,6 +523,32 @@ pub const Pattern = union(enum) {
                 try tree.pushStringPair("text", text);
 
                 const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .str_interpolation => |p| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-str-interpolation");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                try tree.pushStringPair("prefix", ir.getString(p.prefix));
+                try tree.pushStringPair("end", @tagName(p.end));
+
+                const attrs = tree.beginNode();
+                var step_offset: u32 = 0;
+                while (step_offset < p.steps.span.len) : (step_offset += 1) {
+                    const step = ir.store.getStrPatternStep(p.steps, step_offset);
+                    const step_begin = tree.beginNode();
+                    try tree.pushStaticAtom("step");
+                    try tree.pushStringPair("delimiter", ir.getString(step.delimiter));
+
+                    const step_attrs = tree.beginNode();
+                    if (step.capture) |capture_idx| {
+                        try ir.store.getPattern(capture_idx).pushToSExprTree(ir, tree, capture_idx);
+                    } else {
+                        try tree.pushStaticAtom("discard");
+                    }
+                    try tree.endNode(step_begin, step_attrs);
+                }
                 try tree.endNode(begin, attrs);
             },
             .underscore => {

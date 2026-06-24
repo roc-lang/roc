@@ -11,7 +11,10 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const Trmc = @import("trmc.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
+const TagReachability = @import("tag_reachability.zig");
+const ReachableProcs = @import("reachable_procs.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
@@ -33,6 +36,7 @@ pub const CheckedModuleSet = struct {
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
+    include_static_data_exports: bool = false,
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
@@ -40,11 +44,18 @@ pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    debug_effects: DebugEffectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation when the
     /// input and output element layouts are interchangeable. Optimized builds
     /// enable this; dev builds and compile-time evaluation leave it off so
     /// the in-place branch is dropped during lowering.
     list_in_place_map: bool = false,
+    /// Preserve source-level procedure names in LIR for runtime diagnostics.
+    proc_debug_names: bool = false,
+    /// Delete LIR switch edges whose tag discriminants are unreachable. This
+    /// is enabled for optimized builds and kept off for dev and compile-time
+    /// evaluation.
+    tag_reachability: bool = false,
 };
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -58,6 +69,7 @@ pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
+pub const DebugEffectMode = postcheck.SolvedLirLower.DebugEffectMode;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -181,10 +193,13 @@ pub fn lowerCheckedModulesToLir(
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
 
-    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests);
+    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_static_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = switch (target.checked_module_state) {
-        .complete => try collectStaticDataRequests(allocator, modules.root.module),
+        .complete => if (roots.include_static_data_exports)
+            try collectStaticDataRequests(allocator, modules.root.module)
+        else
+            try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
         .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
     };
     defer allocator.free(static_data_requests);
@@ -193,6 +208,7 @@ pub fn lowerCheckedModulesToLir(
         allocator,
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
+        .{ .proc_debug_names = target.proc_debug_names },
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -218,13 +234,23 @@ pub fn lowerCheckedModulesToLir(
 
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
         .inline_plan = inline_plan.view(),
+        .debug_effects = target.debug_effects,
         .list_in_place_map = target.list_in_place_map,
+        .proc_debug_names = target.proc_debug_names,
     });
     solved_owned = false;
     solved = undefined;
     errdefer lowered.deinit();
 
+    // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
+    // calls and changes allocation sites, and ARC panics on pre-existing RC
+    // statements (see src/lir/trmc.zig).
+    try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    if (target.tag_reachability) {
+        try TagReachability.run(&lowered.lir_result);
+    }
+    try ReachableProcs.run(&lowered.lir_result);
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
@@ -285,11 +311,14 @@ fn collectLayoutRequests(
     allocator: Allocator,
     root: *const checked.Module,
     explicit: []const checked.CheckedTypeId,
+    include_static_data_exports: bool,
 ) Allocator.Error![]checked.CheckedTypeId {
     var requests = std.ArrayList(checked.CheckedTypeId).empty;
     errdefer requests.deinit(allocator);
 
     try requests.appendSlice(allocator, explicit);
+    if (!include_static_data_exports) return try requests.toOwnedSlice(allocator);
+
     const types = root.checked_types.view();
     for (root.provided_exports.exports) |provided| {
         switch (provided) {
@@ -302,6 +331,42 @@ fn collectLayoutRequests(
         }
     }
     return try requests.toOwnedSlice(allocator);
+}
+
+/// Select ABI roots for native object/archive/shared-library outputs.
+pub fn selectPlatformExportRoots(
+    allocator: Allocator,
+    requests: []const checked.RootRequest,
+) Allocator.Error![]checked.RootRequest {
+    var selected = std.ArrayList(checked.RootRequest).empty;
+    errdefer selected.deinit(allocator);
+
+    for (requests) |request| {
+        if (request.kind != .provided_export) continue;
+        try selected.append(allocator, request);
+    }
+
+    return try selected.toOwnedSlice(allocator);
+}
+
+/// Select platform roots for LIR images consumed by host shims/interpreters.
+pub fn selectPlatformEntrypointRoots(
+    allocator: Allocator,
+    requests: []const checked.RootRequest,
+) Allocator.Error![]checked.RootRequest {
+    var selected = std.ArrayList(checked.RootRequest).empty;
+    errdefer selected.deinit(allocator);
+
+    for (requests) |request| {
+        switch (request.kind) {
+            .provided_export,
+            .platform_required_binding,
+            => try selected.append(allocator, request),
+            else => {},
+        }
+    }
+
+    return try selected.toOwnedSlice(allocator);
 }
 
 fn collectStaticDataRequests(
@@ -345,8 +410,8 @@ fn checkedTypeContainsFunctionInner(
     defer _ = active.remove(root);
 
     const index: usize = @intFromEnum(root);
-    if (index >= types.payloads.len) checkedPipelineInvariant("checked type function scan referenced a missing type");
-    return switch (types.payloads[index]) {
+    if (index >= types.payloadCount()) checkedPipelineInvariant("checked type function scan referenced a missing type");
+    return switch (types.payload(root)) {
         .pending => checkedPipelineInvariant("checked type function scan reached a pending type"),
         .function => true,
         .alias => |alias| (try checkedTypeContainsFunctionInner(types, alias.backing, active)) or
@@ -395,7 +460,7 @@ fn checkedTagsContainFunction(
     active: *std.AutoHashMap(checked.CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
-        if (try checkedTypeSliceContainsFunction(types, tag.args, active)) return true;
+        if (try checkedTypeSliceContainsFunction(types, tag.argsSlice(types), active)) return true;
     }
     return false;
 }

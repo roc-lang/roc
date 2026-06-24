@@ -138,6 +138,14 @@ pub const ModuleKind = enum {
     }
 };
 
+/// Orders modules by (package name, module name) so docs output is
+/// deterministic regardless of the hash-map order modules are collected in.
+pub fn moduleDocsLessThan(_: void, a: ModuleDocs, b: ModuleDocs) bool {
+    const package_order = std.mem.order(u8, a.package_name, b.package_name);
+    if (package_order != .eq) return package_order == .lt;
+    return std.mem.order(u8, a.name, b.name) == .lt;
+}
+
 /// Documentation for a single module.
 pub const ModuleDocs = struct {
     name: []const u8,

@@ -283,6 +283,7 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_str_contains", {} },
     .{ "roc_builtins_str_count_utf8_bytes", {} },
     .{ "roc_builtins_str_drop_prefix", {} },
+    .{ "roc_builtins_str_drop_prefix_caseless_ascii", {} },
     .{ "roc_builtins_str_drop_suffix", {} },
     .{ "roc_builtins_str_ends_with", {} },
     .{ "roc_builtins_str_equal", {} },
@@ -681,8 +682,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     coverage_options.CoverageType = .ZigLLVMCoverageType_None;
 
     const emit_options = ZigLLVMEmitOptions{
-        // Auto-enable debug when roc is built in debug mode, OR when explicitly requested via --debug
-        .is_debug = (builtin.mode == .Debug) or config.debug,
+        // App object debug output is controlled by the user's --debug flag.
+        .is_debug = config.debug,
         .ir_opt_level = config.optimization.toLLVMIRLevel(),
         .time_report_out = null,
         .tsan = false,

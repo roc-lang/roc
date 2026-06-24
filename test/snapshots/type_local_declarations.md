@@ -349,7 +349,7 @@ multipleTypes = |_| {
 		(patt (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(patt (type "c -> c"))
 		(patt (type "c -> c"))
-		(patt (type "_arg -> Str")))
+		(patt (type "_arg -> c where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]")))
 	(type_decls
 		(alias (type "MyNum")
 			(ty-header (name "MyNum")))
@@ -374,5 +374,5 @@ multipleTypes = |_| {
 		(expr (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "c -> c"))
 		(expr (type "c -> c"))
-		(expr (type "_arg -> Str"))))
+		(expr (type "_arg -> c where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))))
 ~~~

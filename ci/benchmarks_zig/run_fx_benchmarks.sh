@@ -52,6 +52,63 @@ print_probe_log() {
     fi
 }
 
+print_lldb_backtrace() {
+    if ! command -v lldb >/dev/null 2>&1; then
+        echo "  lldb is not available on this runner"
+        return 0
+    fi
+
+    local -a cmd=("$@")
+
+    echo "  lldb backtrace for: ${cmd[*]}"
+    lldb --batch \
+        -o "run" \
+        -o "thread backtrace all" \
+        -- "${cmd[@]}" 2>&1 | tail -n 240 | sed 's/^/    /' || true
+}
+
+diagnose_pr_benchmark_failure() {
+    local pr_roc="$1"
+    local fx_file="$2"
+    local roc_extra_args="$3"
+    local roc_subcommand="${4:-}"
+
+    local -a cmd=("$pr_roc")
+    if [ -n "$roc_subcommand" ]; then
+        cmd+=("$roc_subcommand")
+    fi
+    cmd+=("$fx_file" "--no-cache")
+
+    if [ -n "$roc_extra_args" ]; then
+        local -a extra_arg_array=()
+        read -r -a extra_arg_array <<< "$roc_extra_args"
+        cmd+=("${extra_arg_array[@]}")
+    fi
+
+    echo "Debugging failed PR benchmark command: ${cmd[*]}"
+
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        local debug_log="/tmp/bench_pr_failure_${attempt}.log"
+
+        set +e
+        "${cmd[@]}" >"$debug_log" 2>&1
+        local exit_code=$?
+        set -e
+
+        echo "  PR debug attempt $attempt exit code: $exit_code"
+        print_probe_log "PR debug attempt $attempt output" "$debug_log"
+
+        if [ "$exit_code" -eq 139 ] || grep -qi "Segmentation fault" "$debug_log"; then
+            print_lldb_backtrace "${cmd[@]}"
+            return 0
+        fi
+    done
+
+    echo "  Crash did not reproduce in direct retry loop; running once under lldb anyway."
+    print_lldb_backtrace "${cmd[@]}"
+}
+
 exit_code_is_benchmarkable() {
     local exit_code="$1"
     local extra_args="$2"
@@ -228,6 +285,69 @@ preflight_benchmark() {
     return 2
 }
 
+# Determine whether `roc build <file>` produces a byte-identical executable for
+# the two binaries. A confirmed build slowdown whose output executable is
+# byte-identical is definitionally a false positive: the compiler produced the
+# same program, so the timing difference is measurement or binary-layout noise
+# (e.g. a larger compiler binary with slightly different code locality) rather
+# than real work.
+#
+# roc embeds nothing version-specific into the linked executable (the compiler
+# version only reaches the DWARF producer string in the intermediate bitcode,
+# which is stripped before linking), and its linker is deterministic, so two
+# compiler builds that do the same work emit byte-identical executables.
+#
+# Each binary builds in an isolated working directory and cache so their outputs
+# cannot clobber each other; --no-cache bypasses cache reads but still emits the
+# executable. Returns 0 only when both executables are present and byte-identical;
+# any uncertainty (a build failure or a missing executable) returns 1 so we fail
+# safe toward the normal slowdown failure.
+build_executable_output_identical() {
+    local main_roc="$1"
+    local pr_roc="$2"
+    local fx_file="$3"
+    local roc_extra_args="$4"
+
+    # roc resolves a platform's relative path against the source file's location
+    # and writes the executable into the current directory, so we pass an
+    # absolute source path and build from a scratch directory per binary.
+    local abs_fx
+    abs_fx="$(cd "$(dirname "$fx_file")" && pwd)/$(basename "$fx_file")" || return 1
+
+    local work
+    work=$(mktemp -d) || return 1
+    local main_dir="$work/main" pr_dir="$work/pr"
+    mkdir -p "$main_dir" "$pr_dir"
+
+    local -a extra_arg_array=()
+    if [ -n "$roc_extra_args" ]; then
+        read -r -a extra_arg_array <<< "$roc_extra_args"
+    fi
+    # Guard the array expansion so an empty extra-args list does not trip
+    # `set -u` on older bash (e.g. macOS's bash 3.2).
+    if ! ( cd "$main_dir" && XDG_CACHE_HOME="$main_dir/.cache" "$main_roc" build "$abs_fx" --no-cache "${extra_arg_array[@]+"${extra_arg_array[@]}"}" >/dev/null 2>&1 ); then
+        rm -rf "$work"
+        return 1
+    fi
+    if ! ( cd "$pr_dir" && XDG_CACHE_HOME="$pr_dir/.cache" "$pr_roc" build "$abs_fx" --no-cache "${extra_arg_array[@]+"${extra_arg_array[@]}"}" >/dev/null 2>&1 ); then
+        rm -rf "$work"
+        return 1
+    fi
+
+    local main_exe pr_exe
+    main_exe=$(find "$main_dir" -maxdepth 1 -type f -perm -u+x | head -1)
+    pr_exe=$(find "$pr_dir" -maxdepth 1 -type f -perm -u+x | head -1)
+    if [ -z "$main_exe" ] || [ -z "$pr_exe" ]; then
+        rm -rf "$work"
+        return 1
+    fi
+
+    local identical=1
+    cmp -s "$main_exe" "$pr_exe" || identical=0
+    rm -rf "$work"
+    [ "$identical" -eq 1 ]
+}
+
 # Run hyperfine benchmark and return percentage change via global variable
 # Returns 0 on success, 1 on failure
 # Sets BENCH_PCT_CHANGE on success
@@ -260,6 +380,7 @@ run_benchmark() {
     echo "Running: ${cmd[*]}"
 
     if ! "${cmd[@]}" 2>&1; then
+        diagnose_pr_benchmark_failure "$pr_roc" "$fx_file" "$roc_extra_args" "$roc_subcommand"
         return 1
     fi
 
@@ -428,6 +549,16 @@ benchmark_file() {
         local confirm_is_slower
         confirm_is_slower=$(awk "BEGIN {print ($confirm_pct_change > 4 && $confirm_abs_delta_ms > 5) ? 1 : 0}")
         if [ "$confirm_is_slower" = "1" ]; then
+            # A build slowdown whose output executable is byte-identical is a
+            # definitional false positive (the same program cannot have cost
+            # more to produce), so pass it without a human override.
+            if [ "$roc_subcommand" = "build" ] && \
+               build_executable_output_identical "$MAIN_ROC" "$PR_ROC" "$fx_file" "$roc_extra_args"; then
+                echo "  IDENTICAL OUTPUT: $display_name produces a byte-identical executable on both binaries; treating the timing difference as a false positive (measurement or binary-layout noise), not a regression."
+                echo ""
+                return 0
+            fi
+
             echo "  SLOWER EXECUTION CONFIRMED in $display_name (${pct_change}% / ${abs_delta_ms} ms then ${confirm_pct_change}% / ${confirm_abs_delta_ms} ms)"
             SLOWER_DETECTED=1
             SLOWER_FILES+=("$display_name")

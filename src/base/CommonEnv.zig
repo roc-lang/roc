@@ -197,14 +197,29 @@ pub fn addExposedById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident
     return try self.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 }
 
-/// Retrieves the node index associated with an exposed identifier.
-pub fn getNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u32 {
-    return self.exposed_items.getNodeIndexById(allocator, @bitCast(ident_idx));
+/// Retrieves the explicit target associated with an exposed identifier.
+pub fn getExposedTargetById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?collections.ExposedItemTarget {
+    return self.exposed_items.getTargetById(allocator, @bitCast(ident_idx));
 }
 
-/// Associates a node index with an exposed identifier.
-pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
-    return try self.exposed_items.setNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
+/// Retrieves the value definition node associated with an exposed identifier.
+pub fn getValueNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u32 {
+    return self.exposed_items.getValueNodeIndexById(allocator, @bitCast(ident_idx));
+}
+
+/// Retrieves the type declaration node associated with an exposed identifier.
+pub fn getTypeNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u32 {
+    return self.exposed_items.getTypeNodeIndexById(allocator, @bitCast(ident_idx));
+}
+
+/// Associates a value definition node index with an exposed identifier.
+pub fn setValueNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.exposed_items.setValueNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
+}
+
+/// Associates a type declaration node index with an exposed identifier.
+pub fn setTypeNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.exposed_items.setTypeNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
 }
 
 /// Get region info for a given region

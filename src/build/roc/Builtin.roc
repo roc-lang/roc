@@ -1,5 +1,27 @@
 Builtin :: [].{
 	Str :: [ProvidedByCompiler].{
+		# Compiler-generated structural record field-name metadata used by derived
+		# parsers. The phantom _shape ties a FieldName handle to the exact
+		# FieldNames value that produced it, so generated parsers can dispatch
+		# without user-visible slots. Users can only observe a FieldName through
+		# FieldName.name. Compiler-generated code supplies a hidden backing value
+		# with the record-slot index and metadata.
+		FieldName(_shape) :: { index : U64, name : Str, name_len : U64 }.{
+			FieldNames(_shape) :: {}.{
+				rename_fields : FieldNames(_shape), (Str -> Str) -> FieldNames(_shape)
+				shortest_name : FieldNames(_shape) -> U64
+				longest_name : FieldNames(_shape) -> U64
+				iter : FieldNames(_shape) -> Iter(FieldName(_shape))
+				for_size : FieldNames(_shape), U64 -> Iter(FieldName(_shape))
+			}
+
+			name : FieldName(_shape) -> Str
+		}
+
+		ParseTagUnionSpec(_shape) :: {}.{
+			parse : ParseTagUnionSpec(_shape), { tag : Str, encoding : _encoding, state : _state, missing : _err } -> Try({ value : _shape, rest : _state }, _err)
+		}
+
 		Utf8Problem := [
 			InvalidStartByte,
 			UnexpectedEndOfSequence,
@@ -174,6 +196,28 @@ Builtin :: [].{
 		## ```
 		drop_prefix : Str, Str -> Str
 
+		## Drops the given prefix from the start of a [Str], comparing ASCII
+		## letters without regard to capitalization. Non-ASCII bytes must match
+		## exactly.
+		##
+		## The returned [Str] is a slice of the original string. If the prefix is
+		## not found, returns `Err(NotFound)`.
+		##
+		## ```roc
+		## expect "Cache-Control: max-age=0".drop_prefix_caseless_ascii("cache-control") == Ok(": max-age=0")
+		## expect "X-Api-Key".drop_prefix_caseless_ascii("x_api_key") == Err(NotFound)
+		## ```
+		drop_prefix_caseless_ascii : Str, Str -> Try(Str, [NotFound])
+		drop_prefix_caseless_ascii = |source, prefix| {
+			split = str_drop_prefix_caseless_ascii_raw(source, prefix)
+
+			if split.found {
+				Ok(split.after)
+			} else {
+				Err(NotFound)
+			}
+		}
+
 		## Drops the given suffix [Str] from the end of a [Str]
 		## If the suffix is not found, returns the original string.
 		##
@@ -182,6 +226,25 @@ Builtin :: [].{
 		## expect "barfoo".drop_suffix("foo") == "bar"
 		## ```
 		drop_suffix : Str, Str -> Str
+
+		## Finds the first occurrence of a delimiter in a string.
+		##
+		## The returned strings are slices of the original string.
+		##
+		## ```roc
+		## expect "foo: bar".find_first(":") == Ok({ before: "foo", after: " bar" })
+		## expect "foo".find_first(":") == Err(NotFound)
+		## ```
+		find_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		find_first = |source, delimiter| {
+			split = str_find_first_raw(source, delimiter)
+
+			if split.found {
+				Ok({ before: split.before, after: split.after })
+			} else {
+				Err(NotFound)
+			}
+		}
 
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
@@ -333,20 +396,15 @@ Builtin :: [].{
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 
-		## Converts the UTF-8 bytes of a string literal to a [Str].
+		## Converts a string literal to a [Str].
 		##
 		## The compiler calls this when a string literal's type is [Str], passing
-		## the literal's bytes after escape processing. It can also be called
-		## directly, in which case invalid UTF-8 returns `Err`.
+		## the literal's contents after escape processing.
 		## ```roc
-		## expect Str.from_quote([82, 111, 99]) == Ok("Roc")
-		## expect Str.from_quote([255]).is_err()
+		## expect Str.from_quote("Roc") == Ok("Roc")
 		## ```
-		from_quote : List(U8) -> Try(Str, [BadQuotedBytes(Str)])
-		from_quote = |bytes| match Str.from_utf8(bytes) {
-			Ok(str) => Ok(str)
-			Err(_) => Err(BadQuotedBytes("the bytes were not valid UTF-8"))
-		}
+		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
+		from_quote = |str| Ok(str)
 
 		## Assembles an interpolated string literal.
 		##
@@ -379,6 +437,10 @@ Builtin :: [].{
 		## Returns `True` if the two strings are exactly the same.
 		is_eq : Str, Str -> Bool
 
+		## Feed a string into a [Hasher].
+		to_hash : Str, Hasher -> Hasher
+		to_hash = |str, hasher| Hasher.write_str(hasher, str)
+
 		## Returns a human-readable representation of a value, useful for debugging.
 		inspect : _val -> Str
 
@@ -396,6 +458,57 @@ Builtin :: [].{
 			Fmt : fmt
 			Fmt.decode_str(format, source)
 		}
+	}
+
+	Hasher :: { state : U64 }.{
+
+		## Feed a [Bool] into the hasher.
+		write_bool : Hasher, Bool -> Hasher
+
+		## Feed a [U8] into the hasher.
+		write_u8 : Hasher, U8 -> Hasher
+
+		## Feed a [U16] into the hasher.
+		write_u16 : Hasher, U16 -> Hasher
+
+		## Feed a [U32] into the hasher.
+		write_u32 : Hasher, U32 -> Hasher
+
+		## Feed a [U64] into the hasher.
+		write_u64 : Hasher, U64 -> Hasher
+
+		## Feed a [U128] into the hasher.
+		write_u128 : Hasher, U128 -> Hasher
+
+		## Feed an [I8] into the hasher.
+		write_i8 : Hasher, I8 -> Hasher
+
+		## Feed an [I16] into the hasher.
+		write_i16 : Hasher, I16 -> Hasher
+
+		## Feed an [I32] into the hasher.
+		write_i32 : Hasher, I32 -> Hasher
+
+		## Feed an [I64] into the hasher.
+		write_i64 : Hasher, I64 -> Hasher
+
+		## Feed an [I128] into the hasher.
+		write_i128 : Hasher, I128 -> Hasher
+
+		## Feed an [F32] into the hasher.
+		write_f32 : Hasher, F32 -> Hasher
+
+		## Feed an [F64] into the hasher.
+		write_f64 : Hasher, F64 -> Hasher
+
+		## Feed a [Dec] into the hasher.
+		write_dec : Hasher, Dec -> Hasher
+
+		## Feed bytes into the hasher.
+		write_bytes : Hasher, List(U8) -> Hasher
+
+		## Feed a string into the hasher.
+		write_str : Hasher, Str -> Hasher
 	}
 
 	Iter(item) :: {
@@ -429,15 +542,96 @@ Builtin :: [].{
 				},
 		}
 
+		## Iterator over `num` values from `start` up to but not including `end`.
+		## Returns an empty iterator if `start >= end`. This is what `start..<end` desugars to.
+		exclusive_range : num, num -> Iter(num)
+			where [
+				num.is_lt : num, num -> Bool,
+				num.add_try : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+				num.steps_between : num, num -> [Known(U64), Unknown],
+			]
+		exclusive_range = |start, end| {
+			len_if_known: start.steps_between(end),
+			step: ||
+				if start < end {
+					One(
+						{
+							item: start,
+							rest: match start.add_try(1) {
+								Ok(next) => if next < end {
+									Iter.exclusive_range(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						},
+					)
+				} else {
+					Done
+				},
+		}
+
+		## Iterator over `num` values from `start` up to and including `end`.
+		## Returns an empty iterator if `start > end`. This is what `start..=end` desugars to.
+		inclusive_range : num, num -> Iter(num)
+			where [
+				num.is_lte : num, num -> Bool,
+				num.add_try : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+				num.steps_between : num, num -> [Known(U64), Unknown],
+			]
+		inclusive_range = |start, end| {
+			len_if_known: if start <= end {
+				match start.steps_between(end) {
+					Known(n) => match n.add_try(1) {
+						Ok(len) => Known(len)
+						Err(Overflow) => Unknown
+					}
+					Unknown => Unknown
+				}
+			} else {
+				Known(0)
+			},
+			step: ||
+				if start <= end {
+					One(
+						{
+							item: start,
+							rest: match start.add_try(1) {
+								Ok(next) => if next <= end {
+									Iter.inclusive_range(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						},
+					)
+				} else {
+					Done
+				},
+		}
+
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
+
+		## Returns an iterator that yields exactly one item.
+		## ```roc
+		## expect Iter.fold(Iter.single(42.I64), [], |acc, item| acc.append(item)) == [42]
+		## ```
+		single : item -> Iter(item)
+		single = |item| {
+			len_if_known: Known(1),
+			step: || One({ item, rest: range_done() }),
+		}
 
 		## Returns an iterator that yields the given item first, followed by
 		## everything the given iterator yields.
 		##
-		## The compiler uses this to assemble the iterator it passes to a type's
-		## `from_interpolation` method when an interpolated string literal
-		## targets that type.
+		## The compiler uses this to assemble the iterator it passes to
+		## `from_interpolation` when checking an interpolated string literal.
 		## ```roc
 		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
@@ -448,6 +642,55 @@ Builtin :: [].{
 				Unknown => Unknown
 			},
 			step: || One({ item, rest }),
+		}
+
+		## Returns an iterator that yields all items from the first iterator,
+		## then all items from the second iterator.
+		## ```roc
+		## expect Iter.fold([1.I64, 2].iter().concat([3, 4].iter()), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
+		## ```
+		concat : Iter(item), Iter(item) -> Iter(item)
+		concat = |first, second| {
+			len_if_known: match first.len_if_known {
+				Known(first_len) => match second.len_if_known {
+					Known(second_len) => if second_len > 18446744073709551615 - first_len {
+						Unknown
+					} else {
+						Known(first_len + second_len)
+					}
+					Unknown => Unknown
+				}
+				Unknown => Unknown
+			},
+			step: ||
+				match Iter.next(first) {
+					Done => Iter.next(second)
+					Skip({ rest }) => Skip({ rest: Iter.concat(rest, second) })
+					One({ item, rest }) => One({ item, rest: Iter.concat(rest, second) })
+				},
+		}
+
+		## Returns an iterator that yields everything from the given iterator,
+		## followed by the given item.
+		## ```roc
+		## expect Iter.fold([1.I64, 2].iter().append(3), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		append : Iter(item), item -> Iter(item)
+		append = |iterator, last| {
+			len_if_known: match iterator.len_if_known {
+				Known(len) => if len == 18446744073709551615 {
+					Unknown
+				} else {
+					Known(len + 1)
+				}
+				Unknown => Unknown
+			},
+			step: ||
+				match Iter.next(iterator) {
+					Done => One({ item: last, rest: range_done() })
+					Skip({ rest }) => Skip({ rest: Iter.append(rest, last) })
+					One({ item, rest }) => One({ item, rest: Iter.append(rest, last) })
+				},
 		}
 
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
@@ -650,6 +893,56 @@ Builtin :: [].{
 				Unknown =>
 					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
 				}
+
+		## Returns an iterator that yields the first item and then every `n`th item
+		## after it, skipping the `n - 1` items in between. A step of `0` yields an
+		## empty iterator.
+		## ```roc
+		## expect Iter.fold(Iter.step_by(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [1, 3, 5]
+		##
+		## expect Iter.fold(Iter.step_by(List.iter([1, 2, 3]), 0), [], |acc, item| acc.append(item)) == []
+		## ```
+		step_by : Iter(item), U64 -> Iter(item)
+		step_by = |iterator, n|
+			if n == 0 {
+				range_done()
+			} else {
+				match iterator {
+					{ len_if_known, step } => {
+						len_if_known: match len_if_known {
+							Known(len) => Known(
+								if len == 0 {
+									0
+								} else {
+									(len - 1) / n + 1
+								},
+							)
+							Unknown => Unknown
+						},
+						step: ||
+							match step() {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Iter.step_by(rest, n) })
+								One({ item, rest }) => One({ item, rest: Iter.step_by(Iter.drop_first(rest, n - 1), n) })
+							},
+					}
+				}
+			}
+
+		## Returns an iterator that yields this iterator's items in reverse order.
+		##
+		## Because an [Iter] only moves forward, this materializes the source into a
+		## list to reverse it. The result always has a known length, so collecting it
+		## is efficient. Avoid calling this on iterators whose length is unknown and
+		## might be huge.
+		## ```roc
+		## expect Iter.fold(Iter.rev(List.iter([1, 2, 3])), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		##
+		## expect Iter.fold(Iter.rev(List.iter([])), [], |acc, item| acc.append(item)) == []
+		## ```
+		rev : Iter(item) -> Iter(item)
+		rev = |iterator|
+			List.iter(List.rev(Iter.fold(iterator, [], |acc, item| acc.append(item))))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
@@ -723,7 +1016,12 @@ Builtin :: [].{
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |stream| {
-			cap = match Stream.size_hint(stream) {
+			# `Known(n)` guarantees exactly n items (count-changing combinators
+			# report `Unknown`), so reserve up front and use the unchecked append.
+			# When the length is unknown, start empty and grow with the reserving
+			# append — the unchecked append would corrupt a zero-capacity list.
+			length = Stream.size_hint(stream)
+			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
@@ -738,7 +1036,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = list_append_unsafe($list, item)
+						$list = match length {
+							Known(_) => list_append_unsafe($list, item)
+							Unknown => List.append($list, item)
+						}
 						$rest = rest
 					}
 				}
@@ -789,12 +1090,20 @@ Builtin :: [].{
 		## that [Iter.collect] dispatches to.
 		from_iter : Iter(item) -> List(item)
 		from_iter = |iterator| {
-			cap = match Iter.size_hint(iterator) {
+			# `Known(n)` guarantees the iterator yields exactly n items: every
+			# combinator that can change the count (e.g. keep_if) reports `Unknown`.
+			# So when the length is known we reserve the whole allocation up front
+			# and write each item with the unchecked append; when it is unknown we
+			# start empty and grow with the reserving append instead.
+			length = iterator.len_if_known
+			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
+
 			var $list = List.with_capacity(cap)
 			var $rest = iterator
+
 			while Bool.True {
 				match Iter.next($rest) {
 					Done => {
@@ -804,11 +1113,15 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = list_append_unsafe($list, item)
+						$list = match length {
+							Known(_) => list_append_unsafe($list, item)
+							Unknown => List.append($list, item)
+						}
 						$rest = rest
 					}
 				}
 			}
+
 			$list
 		}
 
@@ -900,6 +1213,18 @@ Builtin :: [].{
 			}
 
 			True
+		}
+
+		## Feed a list into a [Hasher].
+		to_hash : List(item), Hasher -> Hasher
+			where [item.to_hash : item, Hasher -> Hasher]
+		to_hash = |list, hasher| {
+			Item : item
+			var $next = Hasher.write_u64(hasher, List.len(list))
+			for item in list {
+				$next = Item.to_hash(item, $next)
+			}
+			$next
 		}
 
 		## Add a single element to the end of a list.
@@ -1779,6 +2104,10 @@ Builtin :: [].{
 			}
 		}
 
+		## Feed a boolean into a [Hasher].
+		to_hash : Bool, Hasher -> Hasher
+		to_hash = |bool, hasher| Hasher.write_bool(hasher, bool)
+
 		## Encode a bool using a format that provides encode_bool
 		encode : Bool, fmt -> Try(encoded, err)
 			where [fmt.encode_bool : fmt, Bool -> Try(encoded, err)]
@@ -1826,6 +2155,18 @@ Builtin :: [].{
 		is_err = |try| match try {
 			Ok(_) => False
 			Err(_) => True
+		}
+
+		## Forwards interpolated string literal assembly through an inner type
+		## whose `from_interpolation` method returns the same [Try].
+		from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err)
+			where [
+				ok.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err),
+			]
+		from_interpolation = |first, rest| {
+			OkType : ok
+
+			OkType.from_interpolation(first, rest)
 		}
 
 		## If the result is `Ok`, returns the value it holds. Otherwise, returns
@@ -1936,15 +2277,45 @@ Builtin :: [].{
 				}
 			}
 		}
+
+		## Feed a [Try] into a [Hasher].
+		to_hash : Try(ok, err), Hasher -> Hasher
+			where [
+				ok.to_hash : ok, Hasher -> Hasher,
+				err.to_hash : err, Hasher -> Hasher,
+			]
+		to_hash = |try, hasher| match try {
+			Ok(ok) => ok.to_hash(Hasher.write_u64(hasher, 0))
+			Err(err) => err.to_hash(Hasher.write_u64(hasher, 1))
+		}
 	}
 
-	# TODO use hashing for better performance
-	Dict(k, v) :: [Pairs(List((k, v)))].{
+	Dict(k, v) :: [
+		HashMap({ entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }),
+	].{
+		DictBucket : { dist_and_fingerprint : U32, entry_index : U32 }
+
+		DictData(k, v) : {
+			entries : List((k, v)),
+			buckets : List(DictBucket),
+			max_entries_before_grow : U64,
+			shifts : U8,
+		}
+
+		DictMetadata : {
+			buckets : List(DictBucket),
+			max_entries_before_grow : U64,
+			shifts : U8,
+		}
 
 		## Returns `Bool.True` if the two dictionaries contain the same key-value
 		## pairs, and `Bool.False` otherwise.
 		is_eq : Dict(k, v), Dict(k, v) -> Bool
-			where [k.is_eq : k, k -> Bool, v.is_eq : v, v -> Bool]
+			where [
+				k.is_eq : k, k -> Bool,
+				k.to_hash : k, Hasher -> Hasher,
+				v.is_eq : v, v -> Bool,
+			]
 		is_eq = |dict_a, dict_b| {
 			if Dict.len(dict_a) != Dict.len(dict_b) {
 				return False
@@ -1971,19 +2342,101 @@ Builtin :: [].{
 			True
 		}
 
+		## Feed a [Dict] into a [Hasher]. The hash is independent of insertion order.
+		to_hash : Dict(k, v), Hasher -> Hasher
+			where [
+				k.to_hash : k, Hasher -> Hasher,
+				v.to_hash : v, Hasher -> Hasher,
+			]
+		to_hash = |dict, hasher| match dict {
+			HashMap(data) => {
+				Key : k
+				Value : v
+				var $entry_hashes = 0
+
+				for (key, value) in data.entries {
+					entry_hash = hasher_finish(Value.to_hash(value, Key.to_hash(key, hasher_start(dict_seed()))))
+					$entry_hashes = dict_combine_entry_hashes($entry_hashes, entry_hash)
+				}
+
+				Hasher.write_u64(Hasher.write_u64(hasher, List.len(data.entries)), $entry_hashes)
+			}
+		}
+
 		## Returns an empty `Dict`.
 		## ```roc
 		## empty_dict = Dict.empty()
 		## ```
 		empty : () -> Dict(_k, _v)
-		empty = || Pairs([])
+		empty = || HashMap({ entries: [], buckets: [], max_entries_before_grow: 0, shifts: dict_initial_shifts })
+
+		## Returns an empty `Dict` with room for at least the requested number of entries.
+		with_capacity : U64 -> Dict(_k, _v)
+		with_capacity = |requested| {
+			metadata = dict_allocate_buckets_for_capacity(requested)
+			HashMap(
+				{
+					entries: List.with_capacity(requested),
+					buckets: metadata.buckets,
+					max_entries_before_grow: metadata.max_entries_before_grow,
+					shifts: metadata.shifts,
+				},
+			)
+		}
+
+		## Returns the number of entries the dictionary can hold before growing.
+		capacity : Dict(_k, _v) -> U64
+		capacity = |dict| match dict {
+			HashMap(data) => data.max_entries_before_grow
+		}
+
+		## Ensure this dictionary has room for at least this many additional entries.
+		reserve : Dict(k, v), U64 -> Dict(k, v)
+			where [k.to_hash : k, Hasher -> Hasher]
+		reserve = |dict, additional| match dict {
+			HashMap(data) => {
+				len = List.len(data.entries)
+				desired = dict_add_capacity(len, additional)
+				prepared = dict_ensure_capacity(data, desired)
+				entries = List.reserve(prepared.entries, additional)
+				HashMap({ entries, buckets: prepared.buckets, max_entries_before_grow: prepared.max_entries_before_grow, shifts: prepared.shifts })
+			}
+		}
+
+		## Reduce unused dictionary capacity.
+		release_excess_capacity : Dict(k, v) -> Dict(k, v)
+			where [k.to_hash : k, Hasher -> Hasher]
+		release_excess_capacity = |dict| match dict {
+			HashMap(data) => {
+				entries = List.release_excess_capacity(data.entries)
+				metadata = dict_allocate_buckets_for_capacity(List.len(entries))
+				buckets = dict_fill_buckets_from_entries(metadata.buckets, entries, metadata.shifts)
+				HashMap({ entries, buckets, max_entries_before_grow: metadata.max_entries_before_grow, shifts: metadata.shifts })
+			}
+		}
+
+		## Remove every entry while preserving the current capacity.
+		clear : Dict(k, v) -> Dict(k, v)
+		clear = |dict| match dict {
+			HashMap(data) => {
+				HashMap(
+					{
+						entries: List.take_first(data.entries, 0),
+						buckets: List.map(data.buckets, |_| dict_empty_bucket),
+						max_entries_before_grow: data.max_entries_before_grow,
+						shifts: data.shifts,
+					},
+				)
+			}
+		}
 
 		## Returns a `Dict` containing the key and value provided as input.
 		## ```roc
 		## expect Dict.single("A", "B") == Dict.empty().insert("A", "B")
 		## ```
 		single : k, v -> Dict(k, v)
-		single = |key, value| Pairs([(key, value)])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		single = |key, value| Dict.insert(Dict.empty(), key, value)
 
 		## Returns the number of key-value pairs in the dictionary.
 		## ```roc
@@ -1995,7 +2448,7 @@ Builtin :: [].{
 		## ```
 		len : Dict(_k, _v) -> U64
 		len = |dict| match dict {
-			Pairs(list) => List.len(list)
+			HashMap(data) => List.len(data.entries)
 		}
 
 		## Check if the dictionary is empty.
@@ -2005,9 +2458,7 @@ Builtin :: [].{
 		## expect Dict.empty().is_empty()
 		## ```
 		is_empty : Dict(_k, _v) -> Bool
-		is_empty = |dict| match dict {
-			Pairs(list) => List.is_empty(list)
-		}
+		is_empty = |dict| Dict.len(dict) == 0
 
 		## Get the value for a given key. If there is a value for the specified
 		## key it will return `Ok(value)`, otherwise return `Err(KeyNotFound)`.
@@ -2020,15 +2471,11 @@ Builtin :: [].{
 		## expect dictionary.get(2000) == Err(KeyNotFound)
 		## ```
 		get : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		get = |dict, key| match dict {
-			Pairs(list) => {
-				for (item_key, item_value) in list {
-					if item_key == key {
-						return Try.Ok(item_value)
-					}
-				}
-				Try.Err(KeyNotFound)
+			HashMap(data) => match dict_find(data, key) {
+				Found(found) => Try.Ok(found.value)
+				Missing(_) => Try.Err(KeyNotFound)
 			}
 		}
 
@@ -2037,12 +2484,12 @@ Builtin :: [].{
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
 		## ```
 		contains : Dict(k, _v), k -> Bool
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		contains = |dict, key| match dict {
-			Pairs(list) => List.any(
-				list,
-				|(item_key, _)| item_key == key,
-			)
+			HashMap(data) => match dict_find(data, key) {
+				Found(_) => True
+				Missing(_) => False
+			}
 		}
 
 		## Insert a value into the dictionary at a specified key. If the key
@@ -2053,16 +2500,28 @@ Builtin :: [].{
 		##            .get("Apples") == Ok(12)
 		## ```
 		insert : Dict(k, v), k, v -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		insert = |dict, key, value| match dict {
-			Pairs(list) => {
-				var $new_list = List.with_capacity(List.len(list))
-				for (item_key, item_value) in list {
-					if item_key != key {
-						$new_list = List.append($new_list, (item_key, item_value))
+			HashMap(data) => {
+				match dict_find(data, key) {
+					Found(found) => {
+						entries = list_set_unsafe(data.entries, found.entry_index, (key, value))
+						HashMap({ entries, buckets: data.buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts })
+					}
+					Missing(missing) => {
+						if List.len(data.entries) < data.max_entries_before_grow {
+							HashMap(dict_insert_new_data(data, missing.bucket_index, missing.dist_and_fingerprint, key, value))
+						} else {
+							prepared = dict_ensure_capacity(data, dict_add_capacity(List.len(data.entries), 1))
+							match dict_find(prepared, key) {
+								Found(_) => {
+									crash "Dict invariant violated: found duplicate after growth"
+								}
+								Missing(grown_missing) => HashMap(dict_insert_new_data(prepared, grown_missing.bucket_index, grown_missing.dist_and_fingerprint, key, value))
+							}
+						}
 					}
 				}
-				Pairs(List.append($new_list, (key, value)))
 			}
 		}
 
@@ -2074,16 +2533,11 @@ Builtin :: [].{
 		##            .len() == 0
 		## ```
 		remove : Dict(k, v), k -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		remove = |dict, key| match dict {
-			Pairs(list) => {
-				var $new_list = List.with_capacity(List.len(list))
-				for (item_key, item_value) in list {
-					if item_key != key {
-						$new_list = List.append($new_list, (item_key, item_value))
-					}
-				}
-				Pairs($new_list)
+			HashMap(data) => match dict_find(data, key) {
+				Found(found) => HashMap(dict_remove_bucket_data(data, found.bucket_index))
+				Missing(_) => dict
 			}
 		}
 
@@ -2095,7 +2549,7 @@ Builtin :: [].{
 		## ```
 		to_list : Dict(k, v) -> List((k, v))
 		to_list = |dict| match dict {
-			Pairs(list) => list
+			HashMap(data) => data.entries
 		}
 
 		## Create a `Dict` from a `List` of key-value pairs. If the list
@@ -2105,9 +2559,9 @@ Builtin :: [].{
 		## 	Dict.single(1, "One").insert(2, "Two")
 		## ```
 		from_list : List((k, v)) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		from_list = |list|
-			List.fold(list, Pairs([]), |dict, (k, v)| Dict.insert(dict, k, v))
+			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
 
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
@@ -2117,10 +2571,13 @@ Builtin :: [].{
 		## ```
 		keys : Dict(k, _v) -> List(k)
 		keys = |dict| match dict {
-			Pairs(list) => List.map(
-				list,
-				|(k, _)| k,
-			)
+			HashMap(data) => {
+				var $keys = List.with_capacity(List.len(data.entries))
+				for (key, _) in data.entries {
+					$keys = List.append($keys, key)
+				}
+				$keys
+			}
 		}
 
 		## Returns the values of a dictionary as a `List`.
@@ -2131,10 +2588,13 @@ Builtin :: [].{
 		## ```
 		values : Dict(_k, v) -> List(v)
 		values = |dict| match dict {
-			Pairs(list) => List.map(
-				list,
-				|(_, v)| v,
-			)
+			HashMap(data) => {
+				var $values = List.with_capacity(List.len(data.entries))
+				for (_, value) in data.entries {
+					$values = List.append($values, value)
+				}
+				$values
+			}
 		}
 
 		## Build a value by folding through each key-value pair in the
@@ -2148,8 +2608,15 @@ Builtin :: [].{
 		##            .fold(0, |count, _key, qty| count + qty) == 36
 		## ```
 		fold : Dict(k, v), state, (state, k, v -> state) -> state
-		fold = |dict, init, step|
-			List.fold(Dict.to_list(dict), init, |st, (k, v)| step(st, k, v))
+		fold = |dict, init, step| match dict {
+			HashMap(data) => {
+				var $state = init
+				for (key, value) in data.entries {
+					$state = step($state, key, value)
+				}
+				$state
+			}
+		}
 
 		## Run the given function on each key-value pair of a dictionary, and
 		## return a dictionary with just the pairs for which the function
@@ -2163,8 +2630,19 @@ Builtin :: [].{
 		##            .len() == 2
 		## ```
 		keep_if : Dict(k, v), ((k, v) -> Bool) -> Dict(k, v)
+			where [k.to_hash : k, Hasher -> Hasher]
 		keep_if = |dict, predicate| match dict {
-			Pairs(list) => Pairs(List.keep_if(list, predicate))
+			HashMap(data) => {
+				var $entries = List.with_capacity(List.len(data.entries))
+				for (key, value) in data.entries {
+					if predicate((key, value)) {
+						$entries = List.append($entries, (key, value))
+					}
+				}
+				empty_buckets = List.map(data.buckets, |_| dict_empty_bucket)
+				buckets = dict_fill_buckets_from_entries(empty_buckets, $entries, data.shifts)
+				HashMap({ entries: $entries, buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts })
+			}
 		}
 
 		## Run the given function on each key-value pair of a dictionary, and
@@ -2179,9 +2657,8 @@ Builtin :: [].{
 		##            .len() == 1
 		## ```
 		drop_if : Dict(k, v), ((k, v) -> Bool) -> Dict(k, v)
-		drop_if = |dict, predicate| match dict {
-			Pairs(list) => Pairs(List.drop_if(list, predicate))
-		}
+			where [k.to_hash : k, Hasher -> Hasher]
+		drop_if = |dict, predicate| Dict.keep_if(dict, |pair| !predicate(pair))
 
 		## Convert each value in the dictionary to something new, by calling a
 		## conversion function on each of them which receives both the key
@@ -2198,14 +2675,14 @@ Builtin :: [].{
 		## ```
 		map : Dict(k, a), (k, a -> b) -> Dict(k, b)
 		map = |dict, transform| match dict {
-			Pairs(list) =>
-				Pairs(
-					List.map(
-						list,
-						|(k, v)| (k, transform(k, v)),
-					),
-				)
+			HashMap(data) => {
+				var $entries = List.with_capacity(List.len(data.entries))
+				for (key, value) in data.entries {
+					$entries = List.append($entries, (key, transform(key, value)))
+				}
+				HashMap({ entries: $entries, buckets: data.buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts })
 			}
+		}
 
 		## Like [Dict.map], except the transformation function returns a
 		## dictionary. At the end, all the dictionaries are joined together
@@ -2213,7 +2690,7 @@ Builtin :: [].{
 		##
 		## You may know a similar function named `concat_map` in other languages.
 		join_map : Dict(a, b), (a, b -> Dict(x, y)) -> Dict(x, y)
-			where [x.is_eq : x, x -> Bool]
+			where [x.is_eq : x, x -> Bool, x.to_hash : x, Hasher -> Hasher]
 		join_map = |dict, transform| {
 			var $acc = Dict.empty()
 			for (k, v) in Dict.to_list(dict) {
@@ -2235,9 +2712,9 @@ Builtin :: [].{
 		## }
 		## ```
 		insert_all : Dict(k, v), Dict(k, v) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		insert_all = |xs, ys| {
-			var $acc = xs
+			var $acc = Dict.reserve(xs, Dict.len(ys))
 			for (k, v) in Dict.to_list(ys) {
 				$acc = Dict.insert($acc, k, v)
 			}
@@ -2258,19 +2735,19 @@ Builtin :: [].{
 		## }
 		## ```
 		keep_shared : Dict(k, v), Dict(k, v) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool, v.is_eq : v, v -> Bool]
+			where [
+				k.is_eq : k, k -> Bool,
+				k.to_hash : k, Hasher -> Hasher,
+				v.is_eq : v, v -> Bool,
+			]
 		keep_shared = |xs, ys| {
-			ys_list = Dict.to_list(ys)
-			var $acc = Dict.empty()
+			var $acc = Dict.with_capacity(Dict.len(xs))
 			for (k, v) in Dict.to_list(xs) {
-				var $found_match = False
-				for (yk, yv) in ys_list {
-					if yk == k and yv == v {
-						$found_match = True
+				match Dict.get(ys, k) {
+					Try.Ok(yv) => if yv == v {
+						$acc = Dict.insert($acc, k, v)
 					}
-				}
-				if $found_match {
-					$acc = Dict.insert($acc, k, v)
+					Try.Err(_) => {}
 				}
 			}
 			$acc
@@ -2289,7 +2766,7 @@ Builtin :: [].{
 		## }
 		## ```
 		remove_all : Dict(k, v), Dict(k, _w) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		remove_all = |xs, ys| {
 			var $acc = xs
 			for (k, _) in Dict.to_list(ys) {
@@ -2320,20 +2797,29 @@ Builtin :: [].{
 		## )
 		## ```
 		update : Dict(k, v), k, (Try(v, [Missing]) -> Try(v, [Missing])) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
-		update = |dict, key, alter|
-			match Dict.get(dict, key) {
-				Try.Ok(value) =>
-					match alter(Try.Ok(value)) {
-						Try.Ok(new_value) => Dict.insert(dict, key, new_value)
-						Try.Err(Missing) => Dict.remove(dict, key)
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		update = |dict, key, alter| match dict {
+			HashMap(data) => match dict_find(data, key) {
+				Found(found) =>
+					match alter(Try.Ok(found.value)) {
+						Try.Ok(new_value) => {
+							entries = list_set_unsafe(data.entries, found.entry_index, (key, new_value))
+							HashMap({ entries, buckets: data.buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts })
+						}
+						Try.Err(Missing) => HashMap(dict_remove_bucket_data(data, found.bucket_index))
 					}
-				Try.Err(_) =>
+				Missing(missing) =>
 					match alter(Try.Err(Missing)) {
-						Try.Ok(new_value) => Dict.insert(dict, key, new_value)
+						Try.Ok(new_value) =>
+							if List.len(data.entries) < data.max_entries_before_grow {
+								HashMap(dict_insert_new_data(data, missing.bucket_index, missing.dist_and_fingerprint, key, new_value))
+							} else {
+								Dict.insert(dict, key, new_value)
+							}
 						Try.Err(Missing) => dict
 					}
 				}
+		}
 	}
 
 	Set(item) :: [Items(List(item))].{
@@ -2561,7 +3047,7 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
-		Numeral := [
+		Numeral :: [
 			Literal(
 				{ # TODO get rid of this wrapper once we have nominal records"
 					# True iff there was a minus sign in front of the literal
@@ -2587,6 +3073,21 @@ Builtin :: [].{
 			is_negative = |self| match self {
 				# TODO make this a nominal record once we have those
 				Literal({ is_negative: neg, digits_before_pt: _, digits_after_pt: _, digits_after_pt_count: _ }) => neg
+			}
+
+			digits_before_pt : Numeral -> List(U8)
+			digits_before_pt = |self| match self {
+				Literal({ is_negative: _, digits_before_pt: digits, digits_after_pt: _, digits_after_pt_count: _ }) => digits
+			}
+
+			digits_after_pt : Numeral -> List(U8)
+			digits_after_pt = |self| match self {
+				Literal({ is_negative: _, digits_before_pt: _, digits_after_pt: digits, digits_after_pt_count: _ }) => digits
+			}
+
+			digits_after_pt_count : Numeral -> U64
+			digits_after_pt_count = |self| match self {
+				Literal({ is_negative: _, digits_before_pt: _, digits_after_pt: _, digits_after_pt_count: count }) => count
 			}
 		}
 
@@ -2637,6 +3138,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U8, U8 -> Bool
 
+			## Feed a [U8] into a [Hasher].
+			to_hash : U8, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u8(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U8.is_gt(5, 3)
@@ -2670,6 +3175,47 @@ Builtin :: [].{
 			## ```
 			is_lte : U8, U8 -> Bool
 
+			## Compare two [U8] values and return their ordering.
+			## ```roc
+			## expect U8.compare(1, 2) == LT
+			##
+			## expect U8.compare(2, 2) == EQ
+			##
+			## expect U8.compare(3, 2) == GT
+			## ```
+			compare : U8, U8 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U8.is_even(4)
+			##
+			## expect !U8.is_even(5)
+			## ```
+			is_even : U8 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U8.is_odd(5)
+			##
+			## expect !U8.is_odd(4)
+			## ```
+			is_odd : U8 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U8.is_multiple_of(12, 3)
+			##
+			## expect U8.is_multiple_of(0, 0)
+			##
+			## expect !U8.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U8, U8 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U8] values.
 			## ```roc
 			## expect U8.max(5, 3) == 5
@@ -2698,8 +3244,17 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
-			add_checked : U8, U8 -> Try(U8, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U8.highest, a, b)
+			## Add two [U8] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U8].
+			add_try : U8, U8 -> Try(U8, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U8.highest, a, b)
+
+			steps_between : U8, U8 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -2720,8 +3275,19 @@ Builtin :: [].{
 			## ```
 			minus : U8, U8 -> U8
 
-			sub_checked : U8, U8 -> Try(U8, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			## Subtract the second [U8] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U8].
+			sub_try : U8, U8 -> Try(U8, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
+
+			## Subtract the second [U8] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U8.minus_saturated(0, 1) == 0
+			##
+			## expect U8.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U8, U8 -> U8
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
 
 			## Multiply two [U8] values.
 			## ```roc
@@ -2729,8 +3295,45 @@ Builtin :: [].{
 			## ```
 			times : U8, U8 -> U8
 
-			mul_checked : U8, U8 -> Try(U8, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U8.highest, 0, a, b)
+			## Multiply two [U8] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U8].
+			mul_try : U8, U8 -> Try(U8, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U8.highest, 0, a, b)
+
+			## Multiply two [U8] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U8.times_saturated(U8.highest, 2) == U8.highest
+			##
+			## expect U8.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U8, U8 -> U8
+			times_saturated = |a, b| unsigned_times_saturated(U8.highest, 0, a, b)
+
+			## Raise the first [U8] value to the power of the second.
+			## Crashes if the exact result does not fit in [U8].
+			## ```roc
+			## expect U8.pow(2, 3) == 8
+			##
+			## expect U8.pow(5, 0) == 1
+			## ```
+			pow : U8, U8 -> U8
+			pow = |base, exponent|
+				match U8.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U8] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U8.pow_try(2, 3) == Ok(8)
+			##
+			## expect U8.pow_try(U8.highest, 2) == Err(Overflow)
+			## ```
+			pow_try : U8, U8 -> Try(U8, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U8.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U8] by the second, discarding any remainder. Crashes if the second [U8] is zero.
 			## ```roc
@@ -2740,8 +3343,36 @@ Builtin :: [].{
 			## ```
 			div_by : U8, U8 -> U8
 
-			div_checked : U8, U8 -> Try(U8, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			## Divide the first [U8] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
+			div_try : U8, U8 -> Try(U8, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
+
+			## Divide the first [U8] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U8].
+			## ```roc
+			## expect U8.div_ceil_by(7, 2) == 4
+			##
+			## expect U8.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U8, U8 -> U8
+			div_ceil_by = |a, b|
+				match U8.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U8] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U8.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect U8.div_ceil_try(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_try : U8, U8 -> Try(U8, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U8] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U8.div_by].
@@ -2834,6 +3465,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : U8 -> U8
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U8.count_leading_zero_bits(1) == 7
+			##
+			## expect U8.count_leading_zero_bits(0) == 8
+			## ```
+			count_leading_zero_bits : U8 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(8, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U8.count_trailing_zero_bits(8) == 3
+			##
+			## expect U8.count_trailing_zero_bits(0) == 8
+			## ```
+			count_trailing_zero_bits : U8 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U8.count_one_bits(0b1011) == 3
+			##
+			## expect U8.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U8 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
+
 			## Build a [U8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
@@ -2844,7 +3502,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_int_digits = |digits| u8_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into a [U8]. This is the hook the
+			## compiler uses when a literal is given type [U8]; most code should
+			## parse user text with [U8.from_str] instead.
+			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| u8_from_str(str))
 
 			## Parse a [U8] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -2878,7 +3540,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U8.add_checked(start, 1) {
+								rest: match U8.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U8.to(next, end)
 									} else {
@@ -2915,7 +3577,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U8.add_checked(start, 1) {
+								rest: match U8.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U8.until(next, end)
 									} else {
@@ -2951,20 +3613,51 @@ Builtin :: [].{
 			## expect U8.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U8 -> Try(I8, [OutOfRange, ..])
+
+			## Convert a [U8] to an [I16]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i16 : U8 -> I16
+
+			## Convert a [U8] to an [I32]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i32 : U8 -> I32
+
+			## Convert a [U8] to an [I64]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i64 : U8 -> I64
+
+			## Convert a [U8] to an [I128]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i128 : U8 -> I128
 
 			# Conversions to unsigned integers (all safe widening)
+			## Convert a [U8] to a [U16]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u16 : U8 -> U16
+
+			## Convert a [U8] to a [U32]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u32 : U8 -> U32
+
+			## Convert a [U8] to a [U64]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u64 : U8 -> U64
+
+			## Convert a [U8] to a [U128]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u128 : U8 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U8] to an [F32]. Every [U8] value is exactly
+			## representable as an [F32].
 			to_f32 : U8 -> F32
+
+			## Convert a [U8] to an [F64]. Every [U8] value is exactly
+			## representable as an [F64].
 			to_f64 : U8 -> F64
+
+			## Convert a [U8] to a [Dec]. Every [U8] value is exactly
+			## representable as a [Dec].
 			to_dec : U8 -> Dec
 
 			## Encode a U8 using a format that provides encode_u8
@@ -3050,6 +3743,10 @@ Builtin :: [].{
 			## ```
 			is_eq : I8, I8 -> Bool
 
+			## Feed an [I8] into a [Hasher].
+			to_hash : I8, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i8(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect I8.is_gt(5, 3)
@@ -3081,6 +3778,49 @@ Builtin :: [].{
 			## expect !I8.is_lte(5, 3)
 			## ```
 			is_lte : I8, I8 -> Bool
+
+			## Compare two [I8] values and return their ordering.
+			## ```roc
+			## expect I8.compare(1, 2) == LT
+			##
+			## expect I8.compare(2, 2) == EQ
+			##
+			## expect I8.compare(3, 2) == GT
+			## ```
+			compare : I8, I8 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I8.is_even(4)
+			##
+			## expect !I8.is_even(5)
+			## ```
+			is_even : I8 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I8.is_odd(5)
+			##
+			## expect !I8.is_odd(4)
+			## ```
+			is_odd : I8 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I8.is_multiple_of(12, 3)
+			##
+			## expect I8.is_multiple_of(0, 0)
+			##
+			## expect !I8.is_multiple_of(5, 0)
+			##
+			## expect I8.is_multiple_of(I8.lowest, -1)
+			## ```
+			is_multiple_of : I8, I8 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I8] values.
 			## ```roc
@@ -3131,8 +3871,17 @@ Builtin :: [].{
 			## ```
 			plus : I8, I8 -> I8
 
-			add_checked : I8, I8 -> Try(I8, [Overflow])
-			add_checked = |a, b| signed_add_checked(I8.lowest, I8.highest, 0, a, b)
+			## Add two [I8] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I8].
+			add_try : I8, I8 -> Try(I8, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I8.lowest, I8.highest, 0, a, b)
+
+			steps_between : I8, I8 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -3157,8 +3906,21 @@ Builtin :: [].{
 			## ```
 			minus : I8, I8 -> I8
 
-			sub_checked : I8, I8 -> Try(I8, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I8.lowest, I8.highest, 0, a, b)
+			## Subtract the second [I8] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I8].
+			sub_try : I8, I8 -> Try(I8, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I8.lowest, I8.highest, 0, a, b)
+
+			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I8.minus_saturated(I8.lowest, 1) == I8.lowest
+			##
+			## expect I8.minus_saturated(I8.highest, -1) == I8.highest
+			##
+			## expect I8.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I8, I8 -> I8
+			minus_saturated = |a, b| signed_minus_saturated(I8.lowest, I8.highest, 0, a, b)
 
 			## Multiply two [I8] values.
 			## ```roc
@@ -3166,8 +3928,54 @@ Builtin :: [].{
 			## ```
 			times : I8, I8 -> I8
 
-			mul_checked : I8, I8 -> Try(I8, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I8.lowest, I8.highest, 0, -1, a, b)
+			## Multiply two [I8] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I8].
+			mul_try : I8, I8 -> Try(I8, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I8.lowest, I8.highest, 0, -1, a, b)
+
+			## Multiply two [I8] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I8.times_saturated(I8.highest, 2) == I8.highest
+			##
+			## expect I8.times_saturated(I8.lowest, 2) == I8.lowest
+			##
+			## expect I8.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I8, I8 -> I8
+			times_saturated = |a, b| signed_times_saturated(I8.lowest, I8.highest, 0, -1, a, b)
+
+			## Raise the first [I8] value to the power of the second.
+			## Crashes if the exact result does not fit in [I8].
+			## ```roc
+			## expect I8.pow(2, 3) == 8
+			##
+			## expect I8.pow(5, 0) == 1
+			## ```
+			pow : I8, I8 -> I8
+			pow = |base, exponent|
+				match I8.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I8] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I8.pow_try(2, 3) == Ok(8)
+			##
+			## expect I8.pow_try(I8.highest, 2) == Err(Overflow)
+			##
+			## expect I8.pow_try(2, -1) == Err(Underflow)
+			##
+			## expect I8.pow_try(-1, -3) == Ok(-1)
+			## ```
+			pow_try : I8, I8 -> Try(I8, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I8.lowest, I8.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I8] by the second, discarding any remainder. Crashes if the second [I8] is zero.
 			## ```roc
@@ -3177,8 +3985,45 @@ Builtin :: [].{
 			## ```
 			div_by : I8, I8 -> I8
 
-			div_checked : I8, I8 -> Try(I8, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I8.lowest, 0, -1, a, b)
+			## Divide the first [I8] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I8.lowest / -1`.
+			div_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I8.lowest, 0, -1, a, b)
+
+			## Divide the first [I8] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I8].
+			## ```roc
+			## expect I8.div_ceil_by(7, 2) == 4
+			##
+			## expect I8.div_ceil_by(8, 2) == 4
+			##
+			## expect I8.div_ceil_by(-7, 2) == -3
+			##
+			## expect I8.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I8, I8 -> I8
+			div_ceil_by = |a, b|
+				match I8.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I8] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I8.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect I8.div_ceil_try(1, 0) == Err(DivByZero)
+			##
+			## expect I8.div_ceil_try(I8.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I8.lowest, I8.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I8] by the second, truncating toward zero.
 			## ```roc
@@ -3279,6 +4124,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : I8 -> I8
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I8.count_leading_zero_bits(-1) == 0
+			##
+			## expect I8.count_leading_zero_bits(0) == 8
+			## ```
+			count_leading_zero_bits : I8 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(8, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I8.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I8.count_trailing_zero_bits(0) == 8
+			## ```
+			count_trailing_zero_bits : I8 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I8.count_one_bits(-1) == 8
+			##
+			## expect I8.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I8 -> U8
+			count_one_bits = |value| signed_count_one_bits(8, 0, 2, value)
+
 			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
 			## (Use [I8.until] instead to end with the other `I8` minus one.)
 			## Returns an empty iterator if this `I8` is greater than the other.
@@ -3301,7 +4173,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I8.add_checked(start, 1) {
+								rest: match I8.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I8.to(next, end)
 									} else {
@@ -3338,7 +4210,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I8.add_checked(start, 1) {
+								rest: match I8.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I8.until(next, end)
 									} else {
@@ -3365,7 +4237,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_int_digits = |digits| i8_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into an [I8]. This is the hook the
+			## compiler uses when a literal is given type [I8]; most code should
+			## parse user text with [I8.from_str] instead.
+			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| i8_from_str(str))
 
 			## Parse an [I8] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -3380,9 +4256,20 @@ Builtin :: [].{
 			from_str : Str -> Try(I8, [BadNumStr, ..])
 
 			# Conversions to signed integers (all safe widening)
+			## Convert an [I8] to an [I16]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i16 : I8 -> I16
+
+			## Convert an [I8] to an [I32]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i32 : I8 -> I32
+
+			## Convert an [I8] to an [I64]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i64 : I8 -> I64
+
+			## Convert an [I8] to an [I128]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i128 : I8 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -3490,8 +4377,16 @@ Builtin :: [].{
 			to_u128_try : I8 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I8] to an [F32]. Every [I8] value is exactly
+			## representable as an [F32].
 			to_f32 : I8 -> F32
+
+			## Convert an [I8] to an [F64]. Every [I8] value is exactly
+			## representable as an [F64].
 			to_f64 : I8 -> F64
+
+			## Convert an [I8] to a [Dec]. Every [I8] value is exactly
+			## representable as a [Dec].
 			to_dec : I8 -> Dec
 
 			## Encode an I8 using a format that provides encode_i8
@@ -3557,6 +4452,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U16, U16 -> Bool
 
+			## Feed a [U16] into a [Hasher].
+			to_hash : U16, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u16(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U16.is_gt(5, 3)
@@ -3589,6 +4488,47 @@ Builtin :: [].{
 			## ```
 			is_lte : U16, U16 -> Bool
 
+			## Compare two [U16] values and return their ordering.
+			## ```roc
+			## expect U16.compare(1, 2) == LT
+			##
+			## expect U16.compare(2, 2) == EQ
+			##
+			## expect U16.compare(3, 2) == GT
+			## ```
+			compare : U16, U16 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U16.is_even(4)
+			##
+			## expect !U16.is_even(5)
+			## ```
+			is_even : U16 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U16.is_odd(5)
+			##
+			## expect !U16.is_odd(4)
+			## ```
+			is_odd : U16 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U16.is_multiple_of(12, 3)
+			##
+			## expect U16.is_multiple_of(0, 0)
+			##
+			## expect !U16.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U16, U16 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U16] values.
 			## ```roc
 			## expect U16.max(5, 3) == 5
@@ -3617,8 +4557,17 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
-			add_checked : U16, U16 -> Try(U16, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U16.highest, a, b)
+			## Add two [U16] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U16].
+			add_try : U16, U16 -> Try(U16, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U16.highest, a, b)
+
+			steps_between : U16, U16 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -3639,8 +4588,19 @@ Builtin :: [].{
 			## ```
 			minus : U16, U16 -> U16
 
-			sub_checked : U16, U16 -> Try(U16, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			## Subtract the second [U16] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U16].
+			sub_try : U16, U16 -> Try(U16, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
+
+			## Subtract the second [U16] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U16.minus_saturated(0, 1) == 0
+			##
+			## expect U16.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U16, U16 -> U16
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
 
 			## Multiply two [U16] values.
 			## ```roc
@@ -3648,8 +4608,45 @@ Builtin :: [].{
 			## ```
 			times : U16, U16 -> U16
 
-			mul_checked : U16, U16 -> Try(U16, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U16.highest, 0, a, b)
+			## Multiply two [U16] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U16].
+			mul_try : U16, U16 -> Try(U16, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U16.highest, 0, a, b)
+
+			## Multiply two [U16] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U16.times_saturated(U16.highest, 2) == U16.highest
+			##
+			## expect U16.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U16, U16 -> U16
+			times_saturated = |a, b| unsigned_times_saturated(U16.highest, 0, a, b)
+
+			## Raise the first [U16] value to the power of the second.
+			## Crashes if the exact result does not fit in [U16].
+			## ```roc
+			## expect U16.pow(2, 3) == 8
+			##
+			## expect U16.pow(5, 0) == 1
+			## ```
+			pow : U16, U16 -> U16
+			pow = |base, exponent|
+				match U16.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U16] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U16.pow_try(2, 3) == Ok(8)
+			##
+			## expect U16.pow_try(U16.highest, 2) == Err(Overflow)
+			## ```
+			pow_try : U16, U16 -> Try(U16, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U16.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U16] by the second, discarding any remainder. Crashes if the second [U16] is zero.
 			## ```roc
@@ -3659,8 +4656,36 @@ Builtin :: [].{
 			## ```
 			div_by : U16, U16 -> U16
 
-			div_checked : U16, U16 -> Try(U16, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			## Divide the first [U16] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
+			div_try : U16, U16 -> Try(U16, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
+
+			## Divide the first [U16] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U16].
+			## ```roc
+			## expect U16.div_ceil_by(7, 2) == 4
+			##
+			## expect U16.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U16, U16 -> U16
+			div_ceil_by = |a, b|
+				match U16.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U16] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U16.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect U16.div_ceil_try(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_try : U16, U16 -> Try(U16, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U16] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U16.div_by].
@@ -3753,6 +4778,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : U16 -> U16
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U16.count_leading_zero_bits(1) == 15
+			##
+			## expect U16.count_leading_zero_bits(0) == 16
+			## ```
+			count_leading_zero_bits : U16 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(16, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U16.count_trailing_zero_bits(8) == 3
+			##
+			## expect U16.count_trailing_zero_bits(0) == 16
+			## ```
+			count_trailing_zero_bits : U16 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U16.count_one_bits(0b1011) == 3
+			##
+			## expect U16.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U16 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
+
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
 			## Returns an empty iterator if this `U16` is greater than the other.
@@ -3775,7 +4827,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U16.add_checked(start, 1) {
+								rest: match U16.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U16.to(next, end)
 									} else {
@@ -3812,7 +4864,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U16.add_checked(start, 1) {
+								rest: match U16.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U16.until(next, end)
 									} else {
@@ -3837,7 +4889,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_int_digits = |digits| u16_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into a [U16]. This is the hook the
+			## compiler uses when a literal is given type [U16]; most code should
+			## parse user text with [U16.from_str] instead.
+			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| u16_from_str(str))
 
 			## Parse a [U16] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -3891,8 +4947,17 @@ Builtin :: [].{
 			## expect U16.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U16 -> Try(I16, [OutOfRange, ..])
+
+			## Convert a [U16] to an [I32]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_i32 : U16 -> I32
+
+			## Convert a [U16] to an [I64]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_i64 : U16 -> I64
+
+			## Convert a [U16] to an [I128]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_i128 : U16 -> I128
 
 			# Conversions to unsigned integers
@@ -3916,13 +4981,30 @@ Builtin :: [].{
 			## expect U16.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U16 -> Try(U8, [OutOfRange, ..])
+
+			## Convert a [U16] to a [U32]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_u32 : U16 -> U32
+
+			## Convert a [U16] to a [U64]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_u64 : U16 -> U64
+
+			## Convert a [U16] to a [U128]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_u128 : U16 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U16] to an [F32]. Every [U16] value is exactly
+			## representable as an [F32].
 			to_f32 : U16 -> F32
+
+			## Convert a [U16] to an [F64]. Every [U16] value is exactly
+			## representable as an [F64].
 			to_f64 : U16 -> F64
+
+			## Convert a [U16] to a [Dec]. Every [U16] value is exactly
+			## representable as a [Dec].
 			to_dec : U16 -> Dec
 
 			# Encode a U16 using a format that provides encode_u16
@@ -4007,6 +5089,10 @@ Builtin :: [].{
 			## ```
 			is_eq : I16, I16 -> Bool
 
+			## Feed an [I16] into a [Hasher].
+			to_hash : I16, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i16(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect I16.is_gt(5, 3)
@@ -4038,6 +5124,49 @@ Builtin :: [].{
 			## expect !I16.is_lte(5, 3)
 			## ```
 			is_lte : I16, I16 -> Bool
+
+			## Compare two [I16] values and return their ordering.
+			## ```roc
+			## expect I16.compare(1, 2) == LT
+			##
+			## expect I16.compare(2, 2) == EQ
+			##
+			## expect I16.compare(3, 2) == GT
+			## ```
+			compare : I16, I16 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I16.is_even(4)
+			##
+			## expect !I16.is_even(5)
+			## ```
+			is_even : I16 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I16.is_odd(5)
+			##
+			## expect !I16.is_odd(4)
+			## ```
+			is_odd : I16 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I16.is_multiple_of(12, 3)
+			##
+			## expect I16.is_multiple_of(0, 0)
+			##
+			## expect !I16.is_multiple_of(5, 0)
+			##
+			## expect I16.is_multiple_of(I16.lowest, -1)
+			## ```
+			is_multiple_of : I16, I16 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I16] values.
 			## ```roc
@@ -4088,8 +5217,17 @@ Builtin :: [].{
 			## ```
 			plus : I16, I16 -> I16
 
-			add_checked : I16, I16 -> Try(I16, [Overflow])
-			add_checked = |a, b| signed_add_checked(I16.lowest, I16.highest, 0, a, b)
+			## Add two [I16] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I16].
+			add_try : I16, I16 -> Try(I16, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I16.lowest, I16.highest, 0, a, b)
+
+			steps_between : I16, I16 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -4114,8 +5252,21 @@ Builtin :: [].{
 			## ```
 			minus : I16, I16 -> I16
 
-			sub_checked : I16, I16 -> Try(I16, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I16.lowest, I16.highest, 0, a, b)
+			## Subtract the second [I16] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I16].
+			sub_try : I16, I16 -> Try(I16, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I16.lowest, I16.highest, 0, a, b)
+
+			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I16.minus_saturated(I16.lowest, 1) == I16.lowest
+			##
+			## expect I16.minus_saturated(I16.highest, -1) == I16.highest
+			##
+			## expect I16.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I16, I16 -> I16
+			minus_saturated = |a, b| signed_minus_saturated(I16.lowest, I16.highest, 0, a, b)
 
 			## Multiply two [I16] values.
 			## ```roc
@@ -4123,8 +5274,54 @@ Builtin :: [].{
 			## ```
 			times : I16, I16 -> I16
 
-			mul_checked : I16, I16 -> Try(I16, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I16.lowest, I16.highest, 0, -1, a, b)
+			## Multiply two [I16] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I16].
+			mul_try : I16, I16 -> Try(I16, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I16.lowest, I16.highest, 0, -1, a, b)
+
+			## Multiply two [I16] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I16.times_saturated(I16.highest, 2) == I16.highest
+			##
+			## expect I16.times_saturated(I16.lowest, 2) == I16.lowest
+			##
+			## expect I16.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I16, I16 -> I16
+			times_saturated = |a, b| signed_times_saturated(I16.lowest, I16.highest, 0, -1, a, b)
+
+			## Raise the first [I16] value to the power of the second.
+			## Crashes if the exact result does not fit in [I16].
+			## ```roc
+			## expect I16.pow(2, 3) == 8
+			##
+			## expect I16.pow(5, 0) == 1
+			## ```
+			pow : I16, I16 -> I16
+			pow = |base, exponent|
+				match I16.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I16] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I16.pow_try(2, 3) == Ok(8)
+			##
+			## expect I16.pow_try(I16.highest, 2) == Err(Overflow)
+			##
+			## expect I16.pow_try(2, -1) == Err(Underflow)
+			##
+			## expect I16.pow_try(-1, -3) == Ok(-1)
+			## ```
+			pow_try : I16, I16 -> Try(I16, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I16.lowest, I16.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I16] by the second, discarding any remainder. Crashes if the second [I16] is zero.
 			## ```roc
@@ -4134,8 +5331,45 @@ Builtin :: [].{
 			## ```
 			div_by : I16, I16 -> I16
 
-			div_checked : I16, I16 -> Try(I16, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I16.lowest, 0, -1, a, b)
+			## Divide the first [I16] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I16.lowest / -1`.
+			div_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I16.lowest, 0, -1, a, b)
+
+			## Divide the first [I16] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I16].
+			## ```roc
+			## expect I16.div_ceil_by(7, 2) == 4
+			##
+			## expect I16.div_ceil_by(8, 2) == 4
+			##
+			## expect I16.div_ceil_by(-7, 2) == -3
+			##
+			## expect I16.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I16, I16 -> I16
+			div_ceil_by = |a, b|
+				match I16.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I16] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I16.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect I16.div_ceil_try(1, 0) == Err(DivByZero)
+			##
+			## expect I16.div_ceil_try(I16.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I16.lowest, I16.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I16] by the second, truncating toward zero.
 			## ```roc
@@ -4236,6 +5470,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : I16 -> I16
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I16.count_leading_zero_bits(-1) == 0
+			##
+			## expect I16.count_leading_zero_bits(0) == 16
+			## ```
+			count_leading_zero_bits : I16 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(16, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I16.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I16.count_trailing_zero_bits(0) == 16
+			## ```
+			count_trailing_zero_bits : I16 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I16.count_one_bits(-1) == 16
+			##
+			## expect I16.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I16 -> U8
+			count_one_bits = |value| signed_count_one_bits(16, 0, 2, value)
+
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
 			## Returns an empty iterator if this `I16` is greater than the other.
@@ -4258,7 +5519,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I16.add_checked(start, 1) {
+								rest: match I16.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I16.to(next, end)
 									} else {
@@ -4295,7 +5556,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I16.add_checked(start, 1) {
+								rest: match I16.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I16.until(next, end)
 									} else {
@@ -4322,7 +5583,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_int_digits = |digits| i16_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into an [I16]. This is the hook the
+			## compiler uses when a literal is given type [I16]; most code should
+			## parse user text with [I16.from_str] instead.
+			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| i16_from_str(str))
 
 			## Parse an [I16] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -4357,8 +5622,17 @@ Builtin :: [].{
 			## expect I16.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I16 -> Try(I8, [OutOfRange, ..])
+
+			## Convert an [I16] to an [I32]. This widening conversion preserves
+			## every [I16] value exactly.
 			to_i32 : I16 -> I32
+
+			## Convert an [I16] to an [I64]. This widening conversion preserves
+			## every [I16] value exactly.
 			to_i64 : I16 -> I64
+
+			## Convert an [I16] to an [I128]. This widening conversion preserves
+			## every [I16] value exactly.
 			to_i128 : I16 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -4465,8 +5739,16 @@ Builtin :: [].{
 			to_u128_try : I16 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I16] to an [F32]. Every [I16] value is exactly
+			## representable as an [F32].
 			to_f32 : I16 -> F32
+
+			## Convert an [I16] to an [F64]. Every [I16] value is exactly
+			## representable as an [F64].
 			to_f64 : I16 -> F64
+
+			## Convert an [I16] to a [Dec]. Every [I16] value is exactly
+			## representable as a [Dec].
 			to_dec : I16 -> Dec
 
 			# Encode an I16 using a format that provides encode_i16
@@ -4531,6 +5813,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U32, U32 -> Bool
 
+			## Feed a [U32] into a [Hasher].
+			to_hash : U32, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u32(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U32.is_gt(5, 3)
@@ -4563,6 +5849,47 @@ Builtin :: [].{
 			## ```
 			is_lte : U32, U32 -> Bool
 
+			## Compare two [U32] values and return their ordering.
+			## ```roc
+			## expect U32.compare(1, 2) == LT
+			##
+			## expect U32.compare(2, 2) == EQ
+			##
+			## expect U32.compare(3, 2) == GT
+			## ```
+			compare : U32, U32 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U32.is_even(4)
+			##
+			## expect !U32.is_even(5)
+			## ```
+			is_even : U32 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U32.is_odd(5)
+			##
+			## expect !U32.is_odd(4)
+			## ```
+			is_odd : U32 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U32.is_multiple_of(12, 3)
+			##
+			## expect U32.is_multiple_of(0, 0)
+			##
+			## expect !U32.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U32, U32 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U32] values.
 			## ```roc
 			## expect U32.max(5, 3) == 5
@@ -4591,8 +5918,17 @@ Builtin :: [].{
 			## ```
 			plus : U32, U32 -> U32
 
-			add_checked : U32, U32 -> Try(U32, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U32.highest, a, b)
+			## Add two [U32] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U32].
+			add_try : U32, U32 -> Try(U32, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U32.highest, a, b)
+
+			steps_between : U32, U32 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -4613,8 +5949,19 @@ Builtin :: [].{
 			## ```
 			minus : U32, U32 -> U32
 
-			sub_checked : U32, U32 -> Try(U32, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			## Subtract the second [U32] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U32].
+			sub_try : U32, U32 -> Try(U32, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
+
+			## Subtract the second [U32] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U32.minus_saturated(0, 1) == 0
+			##
+			## expect U32.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U32, U32 -> U32
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
 
 			## Multiply two [U32] values.
 			## ```roc
@@ -4622,8 +5969,45 @@ Builtin :: [].{
 			## ```
 			times : U32, U32 -> U32
 
-			mul_checked : U32, U32 -> Try(U32, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U32.highest, 0, a, b)
+			## Multiply two [U32] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U32].
+			mul_try : U32, U32 -> Try(U32, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U32.highest, 0, a, b)
+
+			## Multiply two [U32] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U32.times_saturated(U32.highest, 2) == U32.highest
+			##
+			## expect U32.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U32, U32 -> U32
+			times_saturated = |a, b| unsigned_times_saturated(U32.highest, 0, a, b)
+
+			## Raise the first [U32] value to the power of the second.
+			## Crashes if the exact result does not fit in [U32].
+			## ```roc
+			## expect U32.pow(2, 3) == 8
+			##
+			## expect U32.pow(5, 0) == 1
+			## ```
+			pow : U32, U32 -> U32
+			pow = |base, exponent|
+				match U32.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U32] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U32.pow_try(2, 3) == Ok(8)
+			##
+			## expect U32.pow_try(U32.highest, 2) == Err(Overflow)
+			## ```
+			pow_try : U32, U32 -> Try(U32, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U32.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U32] by the second, discarding any remainder. Crashes if the second [U32] is zero.
 			## ```roc
@@ -4633,8 +6017,36 @@ Builtin :: [].{
 			## ```
 			div_by : U32, U32 -> U32
 
-			div_checked : U32, U32 -> Try(U32, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			## Divide the first [U32] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
+			div_try : U32, U32 -> Try(U32, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
+
+			## Divide the first [U32] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U32].
+			## ```roc
+			## expect U32.div_ceil_by(7, 2) == 4
+			##
+			## expect U32.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U32, U32 -> U32
+			div_ceil_by = |a, b|
+				match U32.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U32] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U32.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect U32.div_ceil_try(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_try : U32, U32 -> Try(U32, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U32] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U32.div_by].
@@ -4727,6 +6139,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : U32 -> U32
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U32.count_leading_zero_bits(1) == 31
+			##
+			## expect U32.count_leading_zero_bits(0) == 32
+			## ```
+			count_leading_zero_bits : U32 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(32, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U32.count_trailing_zero_bits(8) == 3
+			##
+			## expect U32.count_trailing_zero_bits(0) == 32
+			## ```
+			count_trailing_zero_bits : U32 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U32.count_one_bits(0b1011) == 3
+			##
+			## expect U32.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U32 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
+
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
 			## Returns an empty iterator if this `U32` is greater than the other.
@@ -4749,7 +6188,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U32.add_checked(start, 1) {
+								rest: match U32.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U32.to(next, end)
 									} else {
@@ -4786,7 +6225,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U32.add_checked(start, 1) {
+								rest: match U32.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U32.until(next, end)
 									} else {
@@ -4811,7 +6250,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_int_digits = |digits| u32_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into a [U32]. This is the hook the
+			## compiler uses when a literal is given type [U32]; most code should
+			## parse user text with [U32.from_str] instead.
+			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| u32_from_str(str))
 
 			## Parse a [U32] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -4885,7 +6328,13 @@ Builtin :: [].{
 			## expect U32.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U32 -> Try(I32, [OutOfRange, ..])
+
+			## Convert a [U32] to an [I64]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_i64 : U32 -> I64
+
+			## Convert a [U32] to an [I128]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_i128 : U32 -> I128
 
 			# Conversions to unsigned integers
@@ -4929,12 +6378,26 @@ Builtin :: [].{
 			## expect U32.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U32 -> Try(U16, [OutOfRange, ..])
+
+			## Convert a [U32] to a [U64]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_u64 : U32 -> U64
+
+			## Convert a [U32] to a [U128]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_u128 : U32 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U32] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [U32].
 			to_f32 : U32 -> F32
+
+			## Convert a [U32] to an [F64]. Every [U32] value is exactly
+			## representable as an [F64].
 			to_f64 : U32 -> F64
+
+			## Convert a [U32] to a [Dec]. Every [U32] value is exactly
+			## representable as a [Dec].
 			to_dec : U32 -> Dec
 
 			# Encode a U32 using a format that provides encode_u32
@@ -5019,6 +6482,10 @@ Builtin :: [].{
 			## ```
 			is_eq : I32, I32 -> Bool
 
+			## Feed an [I32] into a [Hasher].
+			to_hash : I32, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i32(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect I32.is_gt(5, 3)
@@ -5050,6 +6517,49 @@ Builtin :: [].{
 			## expect !I32.is_lte(5, 3)
 			## ```
 			is_lte : I32, I32 -> Bool
+
+			## Compare two [I32] values and return their ordering.
+			## ```roc
+			## expect I32.compare(1, 2) == LT
+			##
+			## expect I32.compare(2, 2) == EQ
+			##
+			## expect I32.compare(3, 2) == GT
+			## ```
+			compare : I32, I32 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I32.is_even(4)
+			##
+			## expect !I32.is_even(5)
+			## ```
+			is_even : I32 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I32.is_odd(5)
+			##
+			## expect !I32.is_odd(4)
+			## ```
+			is_odd : I32 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I32.is_multiple_of(12, 3)
+			##
+			## expect I32.is_multiple_of(0, 0)
+			##
+			## expect !I32.is_multiple_of(5, 0)
+			##
+			## expect I32.is_multiple_of(I32.lowest, -1)
+			## ```
+			is_multiple_of : I32, I32 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I32] values.
 			## ```roc
@@ -5100,8 +6610,17 @@ Builtin :: [].{
 			## ```
 			plus : I32, I32 -> I32
 
-			add_checked : I32, I32 -> Try(I32, [Overflow])
-			add_checked = |a, b| signed_add_checked(I32.lowest, I32.highest, 0, a, b)
+			## Add two [I32] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I32].
+			add_try : I32, I32 -> Try(I32, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I32.lowest, I32.highest, 0, a, b)
+
+			steps_between : I32, I32 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -5126,8 +6645,21 @@ Builtin :: [].{
 			## ```
 			minus : I32, I32 -> I32
 
-			sub_checked : I32, I32 -> Try(I32, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I32.lowest, I32.highest, 0, a, b)
+			## Subtract the second [I32] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I32].
+			sub_try : I32, I32 -> Try(I32, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I32.lowest, I32.highest, 0, a, b)
+
+			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I32.minus_saturated(I32.lowest, 1) == I32.lowest
+			##
+			## expect I32.minus_saturated(I32.highest, -1) == I32.highest
+			##
+			## expect I32.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I32, I32 -> I32
+			minus_saturated = |a, b| signed_minus_saturated(I32.lowest, I32.highest, 0, a, b)
 
 			## Multiply two [I32] values.
 			## ```roc
@@ -5135,8 +6667,54 @@ Builtin :: [].{
 			## ```
 			times : I32, I32 -> I32
 
-			mul_checked : I32, I32 -> Try(I32, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I32.lowest, I32.highest, 0, -1, a, b)
+			## Multiply two [I32] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I32].
+			mul_try : I32, I32 -> Try(I32, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I32.lowest, I32.highest, 0, -1, a, b)
+
+			## Multiply two [I32] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I32.times_saturated(I32.highest, 2) == I32.highest
+			##
+			## expect I32.times_saturated(I32.lowest, 2) == I32.lowest
+			##
+			## expect I32.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I32, I32 -> I32
+			times_saturated = |a, b| signed_times_saturated(I32.lowest, I32.highest, 0, -1, a, b)
+
+			## Raise the first [I32] value to the power of the second.
+			## Crashes if the exact result does not fit in [I32].
+			## ```roc
+			## expect I32.pow(2, 3) == 8
+			##
+			## expect I32.pow(5, 0) == 1
+			## ```
+			pow : I32, I32 -> I32
+			pow = |base, exponent|
+				match I32.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I32] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I32.pow_try(2, 3) == Ok(8)
+			##
+			## expect I32.pow_try(I32.highest, 2) == Err(Overflow)
+			##
+			## expect I32.pow_try(2, -1) == Err(Underflow)
+			##
+			## expect I32.pow_try(-1, -3) == Ok(-1)
+			## ```
+			pow_try : I32, I32 -> Try(I32, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I32.lowest, I32.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I32] by the second, discarding any remainder. Crashes if the second [I32] is zero.
 			## ```roc
@@ -5146,8 +6724,45 @@ Builtin :: [].{
 			## ```
 			div_by : I32, I32 -> I32
 
-			div_checked : I32, I32 -> Try(I32, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I32.lowest, 0, -1, a, b)
+			## Divide the first [I32] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I32.lowest / -1`.
+			div_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I32.lowest, 0, -1, a, b)
+
+			## Divide the first [I32] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I32].
+			## ```roc
+			## expect I32.div_ceil_by(7, 2) == 4
+			##
+			## expect I32.div_ceil_by(8, 2) == 4
+			##
+			## expect I32.div_ceil_by(-7, 2) == -3
+			##
+			## expect I32.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I32, I32 -> I32
+			div_ceil_by = |a, b|
+				match I32.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I32] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I32.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect I32.div_ceil_try(1, 0) == Err(DivByZero)
+			##
+			## expect I32.div_ceil_try(I32.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I32.lowest, I32.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I32] by the second, truncating toward zero.
 			## ```roc
@@ -5248,6 +6863,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : I32 -> I32
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I32.count_leading_zero_bits(-1) == 0
+			##
+			## expect I32.count_leading_zero_bits(0) == 32
+			## ```
+			count_leading_zero_bits : I32 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(32, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I32.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I32.count_trailing_zero_bits(0) == 32
+			## ```
+			count_trailing_zero_bits : I32 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I32.count_one_bits(-1) == 32
+			##
+			## expect I32.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I32 -> U8
+			count_one_bits = |value| signed_count_one_bits(32, 0, 2, value)
+
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
 			## Returns an empty iterator if this `I32` is greater than the other.
@@ -5270,7 +6912,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I32.add_checked(start, 1) {
+								rest: match I32.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I32.to(next, end)
 									} else {
@@ -5307,7 +6949,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I32.add_checked(start, 1) {
+								rest: match I32.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I32.until(next, end)
 									} else {
@@ -5334,7 +6976,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_int_digits = |digits| i32_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into an [I32]. This is the hook the
+			## compiler uses when a literal is given type [I32]; most code should
+			## parse user text with [I32.from_str] instead.
+			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| i32_from_str(str))
 
 			## Parse an [I32] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -5389,7 +7035,13 @@ Builtin :: [].{
 			## expect I32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I32 -> Try(I16, [OutOfRange, ..])
+
+			## Convert an [I32] to an [I64]. This widening conversion preserves
+			## every [I32] value exactly.
 			to_i64 : I32 -> I64
+
+			## Convert an [I32] to an [I128]. This widening conversion preserves
+			## every [I32] value exactly.
 			to_i128 : I32 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -5495,8 +7147,16 @@ Builtin :: [].{
 			to_u128_try : I32 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I32] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [I32].
 			to_f32 : I32 -> F32
+
+			## Convert an [I32] to an [F64]. Every [I32] value is exactly
+			## representable as an [F64].
 			to_f64 : I32 -> F64
+
+			## Convert an [I32] to a [Dec]. Every [I32] value is exactly
+			## representable as a [Dec].
 			to_dec : I32 -> Dec
 
 			# Encode an I32 using a format that provides encode_i32
@@ -5563,6 +7223,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U64, U64 -> Bool
 
+			## Feed a [U64] into a [Hasher].
+			to_hash : U64, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u64(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U64.is_gt(5, 3)
@@ -5595,6 +7259,47 @@ Builtin :: [].{
 			## ```
 			is_lte : U64, U64 -> Bool
 
+			## Compare two [U64] values and return their ordering.
+			## ```roc
+			## expect U64.compare(1, 2) == LT
+			##
+			## expect U64.compare(2, 2) == EQ
+			##
+			## expect U64.compare(3, 2) == GT
+			## ```
+			compare : U64, U64 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U64.is_even(4)
+			##
+			## expect !U64.is_even(5)
+			## ```
+			is_even : U64 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U64.is_odd(5)
+			##
+			## expect !U64.is_odd(4)
+			## ```
+			is_odd : U64 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U64.is_multiple_of(12, 3)
+			##
+			## expect U64.is_multiple_of(0, 0)
+			##
+			## expect !U64.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U64, U64 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U64] values.
 			## ```roc
 			## expect U64.max(5, 3) == 5
@@ -5623,8 +7328,17 @@ Builtin :: [].{
 			## ```
 			plus : U64, U64 -> U64
 
-			add_checked : U64, U64 -> Try(U64, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U64.highest, a, b)
+			## Add two [U64] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U64].
+			add_try : U64, U64 -> Try(U64, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U64.highest, a, b)
+
+			steps_between : U64, U64 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end))
+				else
+					Known(0)
 
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -5645,8 +7359,19 @@ Builtin :: [].{
 			## ```
 			minus : U64, U64 -> U64
 
-			sub_checked : U64, U64 -> Try(U64, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			## Subtract the second [U64] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U64].
+			sub_try : U64, U64 -> Try(U64, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
+
+			## Subtract the second [U64] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U64.minus_saturated(0, 1) == 0
+			##
+			## expect U64.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U64, U64 -> U64
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
 
 			## Multiply two [U64] values.
 			## ```roc
@@ -5654,8 +7379,45 @@ Builtin :: [].{
 			## ```
 			times : U64, U64 -> U64
 
-			mul_checked : U64, U64 -> Try(U64, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U64.highest, 0, a, b)
+			## Multiply two [U64] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U64].
+			mul_try : U64, U64 -> Try(U64, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U64.highest, 0, a, b)
+
+			## Multiply two [U64] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U64.times_saturated(U64.highest, 2) == U64.highest
+			##
+			## expect U64.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U64, U64 -> U64
+			times_saturated = |a, b| unsigned_times_saturated(U64.highest, 0, a, b)
+
+			## Raise the first [U64] value to the power of the second.
+			## Crashes if the exact result does not fit in [U64].
+			## ```roc
+			## expect U64.pow(2, 3) == 8
+			##
+			## expect U64.pow(5, 0) == 1
+			## ```
+			pow : U64, U64 -> U64
+			pow = |base, exponent|
+				match U64.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U64] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U64.pow_try(2, 3) == Ok(8)
+			##
+			## expect U64.pow_try(U64.highest, 2) == Err(Overflow)
+			## ```
+			pow_try : U64, U64 -> Try(U64, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U64.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U64] by the second, discarding any remainder. Crashes if the second [U64] is zero.
 			## ```roc
@@ -5665,8 +7427,36 @@ Builtin :: [].{
 			## ```
 			div_by : U64, U64 -> U64
 
-			div_checked : U64, U64 -> Try(U64, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			## Divide the first [U64] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
+			div_try : U64, U64 -> Try(U64, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
+
+			## Divide the first [U64] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U64].
+			## ```roc
+			## expect U64.div_ceil_by(7, 2) == 4
+			##
+			## expect U64.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U64, U64 -> U64
+			div_ceil_by = |a, b|
+				match U64.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U64] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U64.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect U64.div_ceil_try(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_try : U64, U64 -> Try(U64, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U64] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U64.div_by].
@@ -5759,6 +7549,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : U64 -> U64
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U64.count_leading_zero_bits(1) == 63
+			##
+			## expect U64.count_leading_zero_bits(0) == 64
+			## ```
+			count_leading_zero_bits : U64 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(64, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U64.count_trailing_zero_bits(8) == 3
+			##
+			## expect U64.count_trailing_zero_bits(0) == 64
+			## ```
+			count_trailing_zero_bits : U64 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U64.count_one_bits(0b1011) == 3
+			##
+			## expect U64.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U64 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
+
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
 			## Returns an empty iterator if this `U64` is greater than the other.
@@ -5774,7 +7591,7 @@ Builtin :: [].{
 				len_if_known: if start > end {
 					Known(0)
 				} else {
-					match U64.add_checked(end - start, 1) {
+					match U64.add_try(end - start, 1) {
 						Ok(len) => Known(len)
 						Err(Overflow) => Unknown
 					}
@@ -5784,7 +7601,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U64.add_checked(start, 1) {
+								rest: match U64.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U64.to(next, end)
 									} else {
@@ -5821,7 +7638,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U64.add_checked(start, 1) {
+								rest: match U64.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U64.until(next, end)
 									} else {
@@ -5846,7 +7663,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_int_digits = |digits| u64_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into a [U64]. This is the hook the
+			## compiler uses when a literal is given type [U64]; most code should
+			## parse user text with [U64.from_str] instead.
+			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| u64_from_str(str))
 
 			## Parse a [U64] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -5941,6 +7762,9 @@ Builtin :: [].{
 			## expect U64.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i64_try : U64 -> Try(I64, [OutOfRange, ..])
+
+			## Convert a [U64] to an [I128]. This widening conversion preserves
+			## every [U64] value exactly.
 			to_i128 : U64 -> I128
 
 			# Conversions to unsigned integers
@@ -6004,11 +7828,22 @@ Builtin :: [].{
 			## expect U64.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
 			to_u32_try : U64 -> Try(U32, [OutOfRange, ..])
+
+			## Convert a [U64] to a [U128]. This widening conversion preserves
+			## every [U64] value exactly.
 			to_u128 : U64 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U64] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [U64].
 			to_f32 : U64 -> F32
+
+			## Convert a [U64] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [U64].
 			to_f64 : U64 -> F64
+
+			## Convert a [U64] to a [Dec]. Every [U64] value is exactly
+			## representable as a [Dec].
 			to_dec : U64 -> Dec
 
 			# Encode a U64 using a format that provides encode_u64
@@ -6095,6 +7930,10 @@ Builtin :: [].{
 			## ```
 			is_eq : I64, I64 -> Bool
 
+			## Feed an [I64] into a [Hasher].
+			to_hash : I64, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i64(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect I64.is_gt(5, 3)
@@ -6126,6 +7965,49 @@ Builtin :: [].{
 			## expect !I64.is_lte(5, 3)
 			## ```
 			is_lte : I64, I64 -> Bool
+
+			## Compare two [I64] values and return their ordering.
+			## ```roc
+			## expect I64.compare(1, 2) == LT
+			##
+			## expect I64.compare(2, 2) == EQ
+			##
+			## expect I64.compare(3, 2) == GT
+			## ```
+			compare : I64, I64 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I64.is_even(4)
+			##
+			## expect !I64.is_even(5)
+			## ```
+			is_even : I64 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I64.is_odd(5)
+			##
+			## expect !I64.is_odd(4)
+			## ```
+			is_odd : I64 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I64.is_multiple_of(12, 3)
+			##
+			## expect I64.is_multiple_of(0, 0)
+			##
+			## expect !I64.is_multiple_of(5, 0)
+			##
+			## expect I64.is_multiple_of(I64.lowest, -1)
+			## ```
+			is_multiple_of : I64, I64 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I64] values.
 			## ```roc
@@ -6177,8 +8059,17 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
-			add_checked : I64, I64 -> Try(I64, [Overflow])
-			add_checked = |a, b| signed_add_checked(I64.lowest, I64.highest, 0, a, b)
+			## Add two [I64] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I64].
+			add_try : I64, I64 -> Try(I64, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I64.lowest, I64.highest, 0, a, b)
+
+			steps_between : I64, I64 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end))
+				else
+					Known(0)
 
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -6203,8 +8094,21 @@ Builtin :: [].{
 			## ```
 			minus : I64, I64 -> I64
 
-			sub_checked : I64, I64 -> Try(I64, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I64.lowest, I64.highest, 0, a, b)
+			## Subtract the second [I64] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I64].
+			sub_try : I64, I64 -> Try(I64, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I64.lowest, I64.highest, 0, a, b)
+
+			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I64.minus_saturated(I64.lowest, 1) == I64.lowest
+			##
+			## expect I64.minus_saturated(I64.highest, -1) == I64.highest
+			##
+			## expect I64.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I64, I64 -> I64
+			minus_saturated = |a, b| signed_minus_saturated(I64.lowest, I64.highest, 0, a, b)
 
 			## Multiply two [I64] values.
 			## ```roc
@@ -6212,8 +8116,54 @@ Builtin :: [].{
 			## ```
 			times : I64, I64 -> I64
 
-			mul_checked : I64, I64 -> Try(I64, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I64.lowest, I64.highest, 0, -1, a, b)
+			## Multiply two [I64] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I64].
+			mul_try : I64, I64 -> Try(I64, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I64.lowest, I64.highest, 0, -1, a, b)
+
+			## Multiply two [I64] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I64.times_saturated(I64.highest, 2) == I64.highest
+			##
+			## expect I64.times_saturated(I64.lowest, 2) == I64.lowest
+			##
+			## expect I64.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I64, I64 -> I64
+			times_saturated = |a, b| signed_times_saturated(I64.lowest, I64.highest, 0, -1, a, b)
+
+			## Raise the first [I64] value to the power of the second.
+			## Crashes if the exact result does not fit in [I64].
+			## ```roc
+			## expect I64.pow(2, 3) == 8
+			##
+			## expect I64.pow(5, 0) == 1
+			## ```
+			pow : I64, I64 -> I64
+			pow = |base, exponent|
+				match I64.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I64] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I64.pow_try(2, 3) == Ok(8)
+			##
+			## expect I64.pow_try(I64.highest, 2) == Err(Overflow)
+			##
+			## expect I64.pow_try(2, -1) == Err(Underflow)
+			##
+			## expect I64.pow_try(-1, -3) == Ok(-1)
+			## ```
+			pow_try : I64, I64 -> Try(I64, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I64.lowest, I64.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I64] by the second, discarding any remainder. Crashes if the second [I64] is zero.
 			## ```roc
@@ -6223,8 +8173,45 @@ Builtin :: [].{
 			## ```
 			div_by : I64, I64 -> I64
 
-			div_checked : I64, I64 -> Try(I64, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I64.lowest, 0, -1, a, b)
+			## Divide the first [I64] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I64.lowest / -1`.
+			div_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I64.lowest, 0, -1, a, b)
+
+			## Divide the first [I64] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I64].
+			## ```roc
+			## expect I64.div_ceil_by(7, 2) == 4
+			##
+			## expect I64.div_ceil_by(8, 2) == 4
+			##
+			## expect I64.div_ceil_by(-7, 2) == -3
+			##
+			## expect I64.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I64, I64 -> I64
+			div_ceil_by = |a, b|
+				match I64.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I64] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I64.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect I64.div_ceil_try(1, 0) == Err(DivByZero)
+			##
+			## expect I64.div_ceil_try(I64.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I64.lowest, I64.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I64] by the second, truncating toward zero.
 			## ```roc
@@ -6325,6 +8312,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : I64 -> I64
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I64.count_leading_zero_bits(-1) == 0
+			##
+			## expect I64.count_leading_zero_bits(0) == 64
+			## ```
+			count_leading_zero_bits : I64 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(64, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I64.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I64.count_trailing_zero_bits(0) == 64
+			## ```
+			count_trailing_zero_bits : I64 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I64.count_one_bits(-1) == 64
+			##
+			## expect I64.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I64 -> U8
+			count_one_bits = |value| signed_count_one_bits(64, 0, 2, value)
+
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
 			## Returns an empty iterator if this `I64` is greater than the other.
@@ -6340,8 +8354,8 @@ Builtin :: [].{
 				len_if_known: if start > end {
 					Known(0)
 				} else {
-					match I64.sub_checked(end, start) {
-						Ok(diff) => match I64.add_checked(diff, 1) {
+					match I64.sub_try(end, start) {
+						Ok(diff) => match I64.add_try(diff, 1) {
 							Ok(d1) => Known(I64.to_u64_wrap(d1))
 							Err(Overflow) => Unknown
 						}
@@ -6353,7 +8367,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I64.add_checked(start, 1) {
+								rest: match I64.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I64.to(next, end)
 									} else {
@@ -6383,7 +8397,7 @@ Builtin :: [].{
 				len_if_known: if start >= end {
 					Known(0)
 				} else {
-					match I64.sub_checked(end, start) {
+					match I64.sub_try(end, start) {
 						Ok(diff) => Known(I64.to_u64_wrap(diff))
 						Err(Overflow) => Unknown
 					}
@@ -6393,7 +8407,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I64.add_checked(start, 1) {
+								rest: match I64.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I64.until(next, end)
 									} else {
@@ -6420,7 +8434,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_int_digits = |digits| i64_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into an [I64]. This is the hook the
+			## compiler uses when a literal is given type [I64]; most code should
+			## parse user text with [I64.from_str] instead.
+			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| i64_from_str(str))
 
 			## Parse an [I64] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -6494,6 +8512,9 @@ Builtin :: [].{
 			## expect I64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : I64 -> Try(I32, [OutOfRange, ..])
+
+			## Convert an [I64] to an [I128]. This widening conversion preserves
+			## every [I64] value exactly.
 			to_i128 : I64 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -6598,8 +8619,16 @@ Builtin :: [].{
 			to_u128_try : I64 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I64] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [I64].
 			to_f32 : I64 -> F32
+
+			## Convert an [I64] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [I64].
 			to_f64 : I64 -> F64
+
+			## Convert an [I64] to a [Dec]. Every [I64] value is exactly
+			## representable as a [Dec].
 			to_dec : I64 -> Dec
 
 			# Encode an I64 using a format that provides encode_i64
@@ -6665,6 +8694,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U128, U128 -> Bool
 
+			## Feed a [U128] into a [Hasher].
+			to_hash : U128, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u128(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U128.is_gt(5, 3)
@@ -6697,6 +8730,47 @@ Builtin :: [].{
 			## ```
 			is_lte : U128, U128 -> Bool
 
+			## Compare two [U128] values and return their ordering.
+			## ```roc
+			## expect U128.compare(1, 2) == LT
+			##
+			## expect U128.compare(2, 2) == EQ
+			##
+			## expect U128.compare(3, 2) == GT
+			## ```
+			compare : U128, U128 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U128.is_even(4)
+			##
+			## expect !U128.is_even(5)
+			## ```
+			is_even : U128 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U128.is_odd(5)
+			##
+			## expect !U128.is_odd(4)
+			## ```
+			is_odd : U128 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U128.is_multiple_of(12, 3)
+			##
+			## expect U128.is_multiple_of(0, 0)
+			##
+			## expect !U128.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U128, U128 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U128] values.
 			## ```roc
 			## expect U128.max(5, 3) == 5
@@ -6725,8 +8799,20 @@ Builtin :: [].{
 			## ```
 			plus : U128, U128 -> U128
 
-			add_checked : U128, U128 -> Try(U128, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U128.highest, a, b)
+			## Add two [U128] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U128].
+			add_try : U128, U128 -> Try(U128, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U128.highest, a, b)
+
+			steps_between : U128, U128 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					match start.abs_diff(end).to_u64_try() {
+						Ok(n) => Known(n)
+						Err(OutOfRange) => Unknown
+					}
+				else
+					Known(0)
 
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -6747,8 +8833,19 @@ Builtin :: [].{
 			## ```
 			minus : U128, U128 -> U128
 
-			sub_checked : U128, U128 -> Try(U128, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			## Subtract the second [U128] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U128].
+			sub_try : U128, U128 -> Try(U128, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
+
+			## Subtract the second [U128] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U128.minus_saturated(0, 1) == 0
+			##
+			## expect U128.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U128, U128 -> U128
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
 
 			## Multiply two [U128] values.
 			## ```roc
@@ -6756,8 +8853,45 @@ Builtin :: [].{
 			## ```
 			times : U128, U128 -> U128
 
-			mul_checked : U128, U128 -> Try(U128, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U128.highest, 0, a, b)
+			## Multiply two [U128] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U128].
+			mul_try : U128, U128 -> Try(U128, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U128.highest, 0, a, b)
+
+			## Multiply two [U128] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U128.times_saturated(U128.highest, 2) == U128.highest
+			##
+			## expect U128.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U128, U128 -> U128
+			times_saturated = |a, b| unsigned_times_saturated(U128.highest, 0, a, b)
+
+			## Raise the first [U128] value to the power of the second.
+			## Crashes if the exact result does not fit in [U128].
+			## ```roc
+			## expect U128.pow(2, 3) == 8
+			##
+			## expect U128.pow(5, 0) == 1
+			## ```
+			pow : U128, U128 -> U128
+			pow = |base, exponent|
+				match U128.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U128] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U128.pow_try(2, 3) == Ok(8)
+			##
+			## expect U128.pow_try(U128.highest, 2) == Err(Overflow)
+			## ```
+			pow_try : U128, U128 -> Try(U128, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U128.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U128] by the second, discarding any remainder. Crashes if the second [U128] is zero.
 			## ```roc
@@ -6767,8 +8901,36 @@ Builtin :: [].{
 			## ```
 			div_by : U128, U128 -> U128
 
-			div_checked : U128, U128 -> Try(U128, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			## Divide the first [U128] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
+			div_try : U128, U128 -> Try(U128, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
+
+			## Divide the first [U128] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U128].
+			## ```roc
+			## expect U128.div_ceil_by(7, 2) == 4
+			##
+			## expect U128.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U128, U128 -> U128
+			div_ceil_by = |a, b|
+				match U128.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U128] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U128.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect U128.div_ceil_try(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_try : U128, U128 -> Try(U128, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U128] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U128.div_by].
@@ -6861,6 +9023,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : U128 -> U128
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U128.count_leading_zero_bits(1) == 127
+			##
+			## expect U128.count_leading_zero_bits(0) == 128
+			## ```
+			count_leading_zero_bits : U128 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(128, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U128.count_trailing_zero_bits(8) == 3
+			##
+			## expect U128.count_trailing_zero_bits(0) == 128
+			## ```
+			count_trailing_zero_bits : U128 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U128.count_one_bits(0b1011) == 3
+			##
+			## expect U128.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U128 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
+
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
 			## Returns an empty iterator if this `U128` is greater than the other.
@@ -6877,7 +9066,7 @@ Builtin :: [].{
 					Known(0)
 				} else {
 					match U128.to_u64_try(end - start) {
-						Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
+						Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -6889,7 +9078,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U128.add_checked(start, 1) {
+								rest: match U128.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U128.to(next, end)
 									} else {
@@ -6929,7 +9118,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U128.add_checked(start, 1) {
+								rest: match U128.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U128.until(next, end)
 									} else {
@@ -6955,7 +9144,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_int_digits = |digits| u128_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into a [U128]. This is the hook the
+			## compiler uses when a literal is given type [U128]; most code should
+			## parse user text with [U128.from_str] instead.
+			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| u128_from_str(str))
 
 			## Parse a [U128] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -7150,10 +9343,17 @@ Builtin :: [].{
 			to_u64_try : U128 -> Try(U64, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert a [U128] to an [F32]. This conversion may round, and the
+			## largest [U128] values may become `inf`.
 			to_f32 : U128 -> F32
+
+			## Convert a [U128] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [U128].
 			to_f64 : U128 -> F64
 
 			# Conversion to Dec (can overflow)
+			## Convert a [U128] to a [Dec], returning `Err(OutOfRange)` if the
+			## integer value does not fit in [Dec]'s fixed-point range.
 			to_dec_try : U128 -> Try(Dec, [OutOfRange])
 			to_dec_try = |num| out_of_range_try(u128_to_dec_try_unsafe(num))
 
@@ -7241,6 +9441,10 @@ Builtin :: [].{
 			## ```
 			is_eq : I128, I128 -> Bool
 
+			## Feed an [I128] into a [Hasher].
+			to_hash : I128, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i128(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect I128.is_gt(5, 3)
@@ -7272,6 +9476,49 @@ Builtin :: [].{
 			## expect !I128.is_lte(5, 3)
 			## ```
 			is_lte : I128, I128 -> Bool
+
+			## Compare two [I128] values and return their ordering.
+			## ```roc
+			## expect I128.compare(1, 2) == LT
+			##
+			## expect I128.compare(2, 2) == EQ
+			##
+			## expect I128.compare(3, 2) == GT
+			## ```
+			compare : I128, I128 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I128.is_even(4)
+			##
+			## expect !I128.is_even(5)
+			## ```
+			is_even : I128 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I128.is_odd(5)
+			##
+			## expect !I128.is_odd(4)
+			## ```
+			is_odd : I128 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I128.is_multiple_of(12, 3)
+			##
+			## expect I128.is_multiple_of(0, 0)
+			##
+			## expect !I128.is_multiple_of(5, 0)
+			##
+			## expect I128.is_multiple_of(I128.lowest, -1)
+			## ```
+			is_multiple_of : I128, I128 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I128] values.
 			## ```roc
@@ -7324,8 +9571,20 @@ Builtin :: [].{
 			## ```
 			plus : I128, I128 -> I128
 
-			add_checked : I128, I128 -> Try(I128, [Overflow])
-			add_checked = |a, b| signed_add_checked(I128.lowest, I128.highest, 0, a, b)
+			## Add two [I128] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I128].
+			add_try : I128, I128 -> Try(I128, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I128.lowest, I128.highest, 0, a, b)
+
+			steps_between : I128, I128 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					match start.abs_diff(end).to_u64_try() {
+						Ok(n) => Known(n)
+						Err(OutOfRange) => Unknown
+					}
+				else
+					Known(0)
 
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -7350,8 +9609,21 @@ Builtin :: [].{
 			## ```
 			minus : I128, I128 -> I128
 
-			sub_checked : I128, I128 -> Try(I128, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I128.lowest, I128.highest, 0, a, b)
+			## Subtract the second [I128] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I128].
+			sub_try : I128, I128 -> Try(I128, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I128.lowest, I128.highest, 0, a, b)
+
+			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I128.minus_saturated(I128.lowest, 1) == I128.lowest
+			##
+			## expect I128.minus_saturated(I128.highest, -1) == I128.highest
+			##
+			## expect I128.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I128, I128 -> I128
+			minus_saturated = |a, b| signed_minus_saturated(I128.lowest, I128.highest, 0, a, b)
 
 			## Multiply two [I128] values.
 			## ```roc
@@ -7359,8 +9631,54 @@ Builtin :: [].{
 			## ```
 			times : I128, I128 -> I128
 
-			mul_checked : I128, I128 -> Try(I128, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I128.lowest, I128.highest, 0, -1, a, b)
+			## Multiply two [I128] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I128].
+			mul_try : I128, I128 -> Try(I128, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I128.lowest, I128.highest, 0, -1, a, b)
+
+			## Multiply two [I128] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I128.times_saturated(I128.highest, 2) == I128.highest
+			##
+			## expect I128.times_saturated(I128.lowest, 2) == I128.lowest
+			##
+			## expect I128.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I128, I128 -> I128
+			times_saturated = |a, b| signed_times_saturated(I128.lowest, I128.highest, 0, -1, a, b)
+
+			## Raise the first [I128] value to the power of the second.
+			## Crashes if the exact result does not fit in [I128].
+			## ```roc
+			## expect I128.pow(2, 3) == 8
+			##
+			## expect I128.pow(5, 0) == 1
+			## ```
+			pow : I128, I128 -> I128
+			pow = |base, exponent|
+				match I128.pow_try(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I128] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I128.pow_try(2, 3) == Ok(8)
+			##
+			## expect I128.pow_try(I128.highest, 2) == Err(Overflow)
+			##
+			## expect I128.pow_try(2, -1) == Err(Underflow)
+			##
+			## expect I128.pow_try(-1, -3) == Ok(-1)
+			## ```
+			pow_try : I128, I128 -> Try(I128, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I128.lowest, I128.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I128] by the second, discarding any remainder. Crashes if the second [I128] is zero.
 			## ```roc
@@ -7370,8 +9688,45 @@ Builtin :: [].{
 			## ```
 			div_by : I128, I128 -> I128
 
-			div_checked : I128, I128 -> Try(I128, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I128.lowest, 0, -1, a, b)
+			## Divide the first [I128] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I128.lowest / -1`.
+			div_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I128.lowest, 0, -1, a, b)
+
+			## Divide the first [I128] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I128].
+			## ```roc
+			## expect I128.div_ceil_by(7, 2) == 4
+			##
+			## expect I128.div_ceil_by(8, 2) == 4
+			##
+			## expect I128.div_ceil_by(-7, 2) == -3
+			##
+			## expect I128.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I128, I128 -> I128
+			div_ceil_by = |a, b|
+				match I128.div_ceil_try(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I128] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I128.div_ceil_try(7, 2) == Ok(4)
+			##
+			## expect I128.div_ceil_try(1, 0) == Err(DivByZero)
+			##
+			## expect I128.div_ceil_try(I128.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I128.lowest, I128.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I128] by the second, truncating toward zero.
 			## ```roc
@@ -7473,6 +9828,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : I128 -> I128
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I128.count_leading_zero_bits(-1) == 0
+			##
+			## expect I128.count_leading_zero_bits(0) == 128
+			## ```
+			count_leading_zero_bits : I128 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(128, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I128.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I128.count_trailing_zero_bits(0) == 128
+			## ```
+			count_trailing_zero_bits : I128 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I128.count_one_bits(-1) == 128
+			##
+			## expect I128.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I128 -> U8
+			count_one_bits = |value| signed_count_one_bits(128, 0, 2, value)
+
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
 			## Returns an empty iterator if this `I128` is greater than the other.
@@ -7488,9 +9870,9 @@ Builtin :: [].{
 				len_if_known: if start > end {
 					Known(0)
 				} else {
-					match I128.sub_checked(end, start) {
+					match I128.sub_try(end, start) {
 						Ok(diff) => match I128.to_u64_try(diff) {
-							Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
+							Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
 								Ok(len) => Known(len)
 								Err(Overflow) => Unknown
 							}
@@ -7504,7 +9886,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I128.add_checked(start, 1) {
+								rest: match I128.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I128.to(next, end)
 									} else {
@@ -7534,7 +9916,7 @@ Builtin :: [].{
 				len_if_known: if start >= end {
 					Known(0)
 				} else {
-					match I128.sub_checked(end, start) {
+					match I128.sub_try(end, start) {
 						Ok(diff) => match I128.to_u64_try(diff) {
 							Ok(len) => Known(len)
 							Err(OutOfRange) => Unknown
@@ -7547,7 +9929,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I128.add_checked(start, 1) {
+								rest: match I128.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I128.until(next, end)
 									} else {
@@ -7575,7 +9957,11 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_int_digits = |digits| i128_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into an [I128]. This is the hook the
+			## compiler uses when a literal is given type [I128]; most code should
+			## parse user text with [I128.from_str] instead.
+			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| i128_from_str(str))
 
 			## Parse an [I128] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -7772,11 +10158,16 @@ Builtin :: [].{
 			to_u128_try : I128 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I128] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [I128].
 			to_f32 : I128 -> F32
+
+			## Convert an [I128] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [I128].
 			to_f64 : I128 -> F64
 
 			## Convert an [I128] to a [Dec], returning `Err(OutOfRange)` if the
-			## value does not fit in a [Dec].
+			## integer value does not fit in [Dec]'s fixed-point range.
 			to_dec_try : I128 -> Try(Dec, [OutOfRange])
 			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
@@ -7807,7 +10198,8 @@ Builtin :: [].{
 			default : () -> Dec
 			default = || 0.0
 
-			## The highest value representable by a [Dec], which is
+			## The highest value representable by a [Dec]. Dec values have 18
+			## fixed fractional decimal places, so this is
 			## `170141183460469231731.687303715884105727`.
 			## ```roc
 			## expect Dec.highest == 170141183460469231731.687303715884105727
@@ -7815,13 +10207,29 @@ Builtin :: [].{
 			highest : Dec
 			highest = 170141183460469231731.687303715884105727
 
-			## The lowest value representable by a [Dec], which is
+			## The lowest value representable by a [Dec]. Dec values have 18
+			## fixed fractional decimal places, so this is
 			## `-170141183460469231731.687303715884105728`.
 			## ```roc
 			## expect Dec.lowest == -170141183460469231731.687303715884105728
 			## ```
 			lowest : Dec
 			lowest = -170141183460469231731.687303715884105728
+
+			## Euler's number as a [Dec], truncated to 18 fractional decimal
+			## places.
+			e : Dec
+			e = 2.718281828459045235
+
+			## The circle constant pi as a [Dec], truncated to 18 fractional
+			## decimal places.
+			pi : Dec
+			pi = 3.141592653589793238
+
+			## The circle constant tau as a [Dec], truncated to 18 fractional
+			## decimal places.
+			tau : Dec
+			tau = 6.283185307179586476
 
 			## Convert a [Dec] to its decimal string representation.
 			## ```roc
@@ -7866,6 +10274,10 @@ Builtin :: [].{
 			## ```
 			is_eq : Dec, Dec -> Bool
 
+			## Feed a [Dec] into a [Hasher].
+			to_hash : Dec, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_dec(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect Dec.is_gt(5.0, 3.0)
@@ -7897,6 +10309,17 @@ Builtin :: [].{
 			## expect !Dec.is_lte(5.0, 3.0)
 			## ```
 			is_lte : Dec, Dec -> Bool
+
+			## Compare two [Dec] values and return their ordering.
+			## ```roc
+			## expect Dec.compare(1.0, 2.0) == LT
+			##
+			## expect Dec.compare(2.0, 2.0) == EQ
+			##
+			## expect Dec.compare(3.0, 2.0) == GT
+			## ```
+			compare : Dec, Dec -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -7946,8 +10369,17 @@ Builtin :: [].{
 			## ```
 			plus : Dec, Dec -> Dec
 
-			add_checked : Dec, Dec -> Try(Dec, [Overflow])
-			add_checked = |a, b| signed_add_checked(Dec.lowest, Dec.highest, 0.0, a, b)
+			## Add two [Dec] values, returning `Err(Overflow)` instead of wrapping
+			## if the result is outside [Dec.lowest] through [Dec.highest].
+			add_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			add_try = |a, b| signed_add_try(Dec.lowest, Dec.highest, 0.0, a, b)
+
+			## Conservative placeholder: always returns `Unknown`. Counting the steps
+			## in a fractional `[start, end)` range advancing by `1` would require
+			## `ceil(end - start)`; until that is implemented, `Unknown` is always a
+			## correct (if imprecise) length hint.
+			steps_between : Dec, Dec -> [Known(U64), Unknown]
+			steps_between = |_start, _end| Unknown
 
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -7972,17 +10404,106 @@ Builtin :: [].{
 			## ```
 			minus : Dec, Dec -> Dec
 
-			sub_checked : Dec, Dec -> Try(Dec, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(Dec.lowest, Dec.highest, 0.0, a, b)
+			## Subtract the second [Dec] from the first, returning
+			## `Err(Overflow)` instead of wrapping if the result is outside
+			## [Dec.lowest] through [Dec.highest].
+			sub_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
-			## Multiply two [Dec] values.
+			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect Dec.minus_saturated(Dec.lowest, 1.0) == Dec.lowest
+			##
+			## expect Dec.minus_saturated(Dec.highest, -1.0) == Dec.highest
+			##
+			## expect Dec.minus_saturated(5.0, 3.5) == 1.5
+			## ```
+			minus_saturated : Dec, Dec -> Dec
+			minus_saturated = |a, b| signed_minus_saturated(Dec.lowest, Dec.highest, 0.0, a, b)
+
+			## Multiply two [Dec] values. The result is limited to [Dec]'s fixed
+			## 18 fractional decimal places and crashes if it overflows.
 			## ```roc
 			## expect Dec.times(2.5, 4.0) == 10.0
 			## ```
 			times : Dec, Dec -> Dec
 
+			## Multiply two [Dec] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect Dec.times_saturated(Dec.highest, 2.0) == Dec.highest
+			##
+			## expect Dec.times_saturated(Dec.lowest, 2.0) == Dec.lowest
+			##
+			## expect Dec.times_saturated(2.5, 4.0) == 10.0
+			## ```
+			times_saturated : Dec, Dec -> Dec
+			times_saturated = |a, b| signed_times_saturated(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
+
+			## Raise a [Dec] to a [Dec] power. Results are limited to [Dec]'s
+			## fixed 18 fractional decimal places. Fractional exponents require a
+			## positive base; non-positive bases with fractional exponents crash.
+			## Negative integer exponents divide by the positive power and crash
+			## when that division is undefined, such as `0.0` to a negative power.
+			pow : Dec, Dec -> Dec
+			pow = |base, exponent| dec_pow_unsafe(base, exponent)
+
+			## Return the square root of a [Dec]. Crashes if the input is negative.
+			## The result is truncated to [Dec]'s fixed 18 fractional decimal
+			## places.
+			sqrt : Dec -> Dec
+			sqrt = |self|
+				match Dec.sqrt_try(self) {
+					Ok(value) => value
+					Err(SqrtOfNegative) => {
+						crash "Dec.sqrt of negative number"
+					}
+				}
+
+			## Return the square root of a [Dec], or `Err(SqrtOfNegative)` if the
+			## input is negative. The result is truncated to [Dec]'s fixed 18
+			## fractional decimal places.
+			sqrt_try : Dec -> Try(Dec, [SqrtOfNegative, ..])
+			sqrt_try = |self|
+				if self < 0 {
+					Err(SqrtOfNegative)
+				} else {
+					Ok(dec_sqrt_unsafe(self))
+				}
+
+			## Return the sine of a [Dec] angle in radians. This is a fixed-point
+			## approximation limited to 18 fractional decimal places.
+			sin : Dec -> Dec
+			sin = |self| dec_sin_unsafe(self)
+
+			## Return the cosine of a [Dec] angle in radians. This is a
+			## fixed-point approximation limited to 18 fractional decimal places.
+			cos : Dec -> Dec
+			cos = |self| dec_cos_unsafe(self)
+
+			## Return the tangent of a [Dec] angle in radians. This is computed as
+			## sine divided by cosine, so it can crash if the fixed-point cosine
+			## result is zero or the division overflows.
+			tan : Dec -> Dec
+			tan = |self| dec_tan_unsafe(self)
+
+			## Return the arcsine of a [Dec] value in radians. Crashes if the
+			## input is outside `-1.0` through `1.0`.
+			asin : Dec -> Dec
+			asin = |self| dec_asin_unsafe(self)
+
+			## Return the arccosine of a [Dec] value in radians. Crashes if the
+			## input is outside `-1.0` through `1.0`.
+			acos : Dec -> Dec
+			acos = |self| dec_acos_unsafe(self)
+
+			## Return the arctangent of a [Dec] value in radians. This is a
+			## fixed-point approximation limited to 18 fractional decimal places.
+			atan : Dec -> Dec
+			atan = |self| dec_atan_unsafe(self)
+
 			## Divide the first [Dec] by the second. Crashes if the second [Dec]
-			## is zero.
+			## is zero or the result overflows. Results with more than 18
+			## fractional decimal places are truncated to [Dec] precision.
 			## ```roc
 			## expect Dec.div_by(10.0, 4.0) == 2.5
 			## ```
@@ -8014,6 +10535,216 @@ Builtin :: [].{
 			## ```
 			abs_diff : Dec, Dec -> Dec
 
+			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i8(3.4) == 3
+			## ```
+			round_to_i8 : Dec -> I8
+			round_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i16(3.4) == 3
+			## ```
+			round_to_i16 : Dec -> I16
+			round_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i32(-3.6) == -4
+			## ```
+			round_to_i32 : Dec -> I32
+			round_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i64(7.2) == 7
+			## ```
+			round_to_i64 : Dec -> I64
+			round_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i128(7.2) == 7
+			## ```
+			round_to_i128 : Dec -> I128
+			round_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u8(3.4) == 3
+			## ```
+			round_to_u8 : Dec -> U8
+			round_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u16(3.4) == 3
+			## ```
+			round_to_u16 : Dec -> U16
+			round_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u32(7.2) == 7
+			## ```
+			round_to_u32 : Dec -> U32
+			round_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u64(7.2) == 7
+			## ```
+			round_to_u64 : Dec -> U64
+			round_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u128(7.2) == 7
+			## ```
+			round_to_u128 : Dec -> U128
+			round_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] down to an [I8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i8(-3.2) == -4
+			## ```
+			floor_to_i8 : Dec -> I8
+			floor_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i16(-3.2) == -4
+			## ```
+			floor_to_i16 : Dec -> I16
+			floor_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i32(3.8) == 3
+			## ```
+			floor_to_i32 : Dec -> I32
+			floor_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i64(3.8) == 3
+			## ```
+			floor_to_i64 : Dec -> I64
+			floor_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i128(3.8) == 3
+			## ```
+			floor_to_i128 : Dec -> I128
+			floor_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u8(3.8) == 3
+			## ```
+			floor_to_u8 : Dec -> U8
+			floor_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u16(3.8) == 3
+			## ```
+			floor_to_u16 : Dec -> U16
+			floor_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u32(3.8) == 3
+			## ```
+			floor_to_u32 : Dec -> U32
+			floor_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u64(3.8) == 3
+			## ```
+			floor_to_u64 : Dec -> U64
+			floor_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u128(3.8) == 3
+			## ```
+			floor_to_u128 : Dec -> U128
+			floor_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] up to an [I8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i8(-3.2) == -3
+			## ```
+			ceiling_to_i8 : Dec -> I8
+			ceiling_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i16(-3.2) == -3
+			## ```
+			ceiling_to_i16 : Dec -> I16
+			ceiling_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i32(3.2) == 4
+			## ```
+			ceiling_to_i32 : Dec -> I32
+			ceiling_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i64(3.2) == 4
+			## ```
+			ceiling_to_i64 : Dec -> I64
+			ceiling_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i128(3.2) == 4
+			## ```
+			ceiling_to_i128 : Dec -> I128
+			ceiling_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u8(3.2) == 4
+			## ```
+			ceiling_to_u8 : Dec -> U8
+			ceiling_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u16(3.2) == 4
+			## ```
+			ceiling_to_u16 : Dec -> U16
+			ceiling_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u32(3.2) == 4
+			## ```
+			ceiling_to_u32 : Dec -> U32
+			ceiling_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u64(3.2) == 4
+			## ```
+			ceiling_to_u64 : Dec -> U64
+			ceiling_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u128(3.2) == 4
+			## ```
+			ceiling_to_u128 : Dec -> U128
+			ceiling_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_ceiling_to_whole(self)))
+
 			## Build a [Dec] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
@@ -8038,7 +10769,11 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 			from_dec_digits = |digits| dec_from_dec_digits(digits)
 
-			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into a [Dec]. This is the hook the
+			## compiler uses when a literal is given type [Dec]; most code should
+			## parse user text with [Dec.from_str] instead.
+			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| dec_from_str(str))
 
 			## Parse a [Dec] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -8281,20 +11016,18 @@ Builtin :: [].{
 			# Conversions to floating point (lossy - Dec has more precision)
 
 			## Convert a [Dec] to an [F32]. This conversion is lossy because
-			## [Dec] has more precision than [F32] in its fractional range.
-			## Values outside the finite [F32] range wrap to `Infinity` or
-			## `-Infinity`.
+			## [Dec] has more decimal precision than [F32].
 			to_f32_wrap : Dec -> F32
 
 			## Convert a [Dec] to an [F32], returning `Err(OutOfRange)` if the
-			## value does not fit in the finite [F32] range. This conversion is
-			## lossy because [Dec] has more precision than [F32] in its
-			## fractional range.
+			## value does not fit in the finite [F32] range. All current [Dec]
+			## values fit in that range, though precision may still be lost.
 			to_f32_try : Dec -> Try(F32, [OutOfRange])
 			to_f32_try = |num| out_of_range_try(dec_to_f32_try_unsafe(num))
 
 			## Convert a [Dec] to an [F64]. This conversion is lossy because
-			## [Dec] has more precision than [F64] in its fractional range.
+			## [Dec] can have more decimal fractional precision than [F64] can
+			## represent exactly.
 			to_f64 : Dec -> F64
 
 			## Iterator of decimals beginning with this `Dec` and ending with the
@@ -8316,7 +11049,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match Dec.add_checked(start, 1.0) {
+								rest: match Dec.add_try(start, 1.0) {
 									Ok(next) => if next <= end {
 										Dec.to(next, end)
 									} else {
@@ -8351,7 +11084,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match Dec.add_checked(start, 1.0) {
+								rest: match Dec.add_try(start, 1.0) {
 									Ok(next) => if next < end {
 										Dec.until(next, end)
 									} else {
@@ -8396,7 +11129,7 @@ Builtin :: [].{
 			## The highest finite value representable by an [F32], which is
 			## `3.40282347e38`.
 			## ```roc
-			## expect F32.highest == 3.40282347e38
+			## expect F32.to_bits(F32.highest) == 2139095039
 			## ```
 			highest : F32
 			highest = 3.40282347e38
@@ -8404,10 +11137,47 @@ Builtin :: [].{
 			## The lowest finite value representable by an [F32], which is
 			## `-3.40282347e38`.
 			## ```roc
-			## expect F32.lowest == -3.40282347e38
+			## expect F32.to_bits(F32.lowest) == 4286578687
 			## ```
 			lowest : F32
 			lowest = -3.40282347e38
+
+			## A quiet NaN [F32] value.
+			## ```roc
+			## expect F32.is_nan(F32.nan)
+			## ```
+			nan : F32
+			nan = F32.from_bits(2143289344)
+
+			## Positive infinity as an [F32].
+			## ```roc
+			## expect F32.is_infinite(F32.infinity)
+			##
+			## expect F32.infinity > F32.highest
+			## ```
+			infinity : F32
+			infinity = F32.from_bits(2139095040)
+
+			## Euler's number as an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.e) == 1076754516
+			## ```
+			e : F32
+			e = F32.from_bits(1076754516)
+
+			## The circle constant pi as an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.pi) == 1078530011
+			## ```
+			pi : F32
+			pi = F32.from_bits(1078530011)
+
+			## The circle constant tau as an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.tau) == 1086918619
+			## ```
+			tau : F32
+			tau = F32.from_bits(1086918619)
 
 			## Convert an [F32] to its decimal string representation.
 			## ```roc
@@ -8416,6 +11186,63 @@ Builtin :: [].{
 			## expect F32.to_str(-42.5) == "-42.5"
 			## ```
 			to_str : F32 -> Str
+
+			## Return the raw IEEE 754 bit pattern of an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.from_bits(1069547520)) == 1069547520
+			##
+			## expect F32.from_bits(F32.to_bits(1.5)).to_str() == "1.5"
+			## ```
+			to_bits : F32 -> U32
+
+			## Build an [F32] from a raw IEEE 754 bit pattern.
+			## ```roc
+			## expect F32.from_bits(F32.to_bits(-0.0)).to_bits() == F32.to_bits(-0.0)
+			##
+			## expect F32.from_bits(0).to_bits() == 0
+			## ```
+			from_bits : U32 -> F32
+
+			## Returns `Bool.True` if the value is `NaN`.
+			## ```roc
+			## expect F32.is_nan(F32.nan)
+			##
+			## expect !F32.is_nan(1.0)
+			## ```
+			is_nan : F32 -> Bool
+			is_nan = |self| !F32.is_float_eq(self, self)
+
+			## Returns `Bool.True` if the value is positive or negative infinity.
+			## ```roc
+			## expect F32.is_infinite(F32.infinity)
+			##
+			## expect F32.is_infinite(F32.negate(F32.infinity))
+			##
+			## expect !F32.is_infinite(1.0)
+			## ```
+			is_infinite : F32 -> Bool
+			is_infinite = |self|
+				if F32.is_float_eq(self, F32.infinity) {
+					True
+				} else {
+					F32.is_float_eq(self, F32.negate(F32.infinity))
+				}
+
+			## Returns `Bool.True` if the value is neither `NaN` nor infinity.
+			## ```roc
+			## expect F32.is_finite(1.0)
+			##
+			## expect !F32.is_finite(F32.infinity)
+			##
+			## expect !F32.is_finite(F32.nan)
+			## ```
+			is_finite : F32 -> Bool
+			is_finite = |self|
+				if F32.is_nan(self) {
+					False
+				} else {
+					!F32.is_infinite(self)
+				}
 
 			## Returns `Bool.True` if the value is `0.0`. Both positive and
 			## negative zero return `Bool.True`.
@@ -8431,7 +11258,18 @@ Builtin :: [].{
 				False
 			}
 
-			is_eq : F32, F32 -> Bool
+			## Returns `Bool.True` if two [F32] values compare equal using the
+			## IEEE 754 `==` operation. `NaN` does not compare equal to itself.
+			## ```roc
+			## expect F32.is_float_eq(1.5, 1.5)
+			##
+			## expect !F32.is_float_eq(F32.nan, F32.nan)
+			## ```
+			is_float_eq : F32, F32 -> Bool
+
+			## Feed an [F32] into a [Hasher].
+			to_hash : F32, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_f32(hasher, num)
 
 			## Returns `Bool.True` if the value is less than `0.0`.
 			## ```roc
@@ -8489,9 +11327,9 @@ Builtin :: [].{
 
 			## Returns the greater of two [F32] values.
 			## ```roc
-			## expect F32.max(5, 3) == 5
+			## expect F32.is_float_eq(F32.max(5, 3), 5)
 			##
-			## expect F32.max(-3, -1) == -1
+			## expect F32.is_float_eq(F32.max(-3, -1), -1)
 			## ```
 			max : F32, F32 -> F32
 			max = |a, b|
@@ -8502,9 +11340,9 @@ Builtin :: [].{
 
 			## Returns the smaller of two [F32] values.
 			## ```roc
-			## expect F32.min(5, 3) == 3
+			## expect F32.is_float_eq(F32.min(5, 3), 3)
 			##
-			## expect F32.min(-3, -1) == -3
+			## expect F32.is_float_eq(F32.min(-3, -1), -3)
 			## ```
 			min : F32, F32 -> F32
 			min = |a, b|
@@ -8530,6 +11368,106 @@ Builtin :: [].{
 			## expect F32.abs(-3.5).to_str() == "3.5"
 			## ```
 			abs : F32 -> F32
+
+			## Return the square root of an [F32]. Crashes if the input is
+			## negative. `NaN` and positive infinity follow IEEE 754 behavior:
+			## `NaN` returns `NaN`, and positive infinity returns positive
+			## infinity.
+			## ```roc
+			## expect F32.to_str(F32.sqrt(9.0)) == "3"
+			##
+			## expect F32.to_str(F32.sqrt(2.25)) == "1.5"
+			## ```
+			sqrt : F32 -> F32
+			sqrt = |self|
+				match F32.sqrt_try(self) {
+					Ok(value) => value
+					Err(SqrtOfNegative) => {
+						crash "F32.sqrt of negative number"
+					}
+				}
+
+			## Return the square root of an [F32], or `Err(SqrtOfNegative)` if
+			## the input is negative. `NaN` and positive infinity return `Ok`
+			## with the IEEE 754 result.
+			## ```roc
+			## expect match F32.sqrt_try(9.0) {
+			##     Ok(value) => F32.is_float_eq(value, 3.0)
+			##     Err(_) => False
+			## }
+			##
+			## expect match F32.sqrt_try(-1.0) {
+			##     Ok(_) => False
+			##     Err(SqrtOfNegative) => True
+			## }
+			## ```
+			sqrt_try : F32 -> Try(F32, [SqrtOfNegative, ..])
+			sqrt_try = |self|
+				if self < 0 {
+					Err(SqrtOfNegative)
+				} else {
+					Ok(f32_sqrt_unsafe(self))
+				}
+
+			## Raise an [F32] to an [F32] power. The result follows IEEE 754
+			## behavior and may be `inf`, `-inf`, or `NaN`, such as when a
+			## negative base has a non-integer exponent.
+			## ```roc
+			## expect F32.pow(2.0, 3.0).to_str() == "8"
+			##
+			## expect F32.pow(9.0, 0.5).to_str() == "3"
+			## ```
+			pow : F32, F32 -> F32
+			pow = |base, exponent| f32_pow_unsafe(base, exponent)
+
+			## Return the sine of an [F32] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
+			## ```roc
+			## expect F32.sin(0.0).to_str() == "0"
+			## ```
+			sin : F32 -> F32
+			sin = |self| f32_sin_unsafe(self)
+
+			## Return the cosine of an [F32] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
+			## ```roc
+			## expect F32.cos(0.0).to_str() == "1"
+			## ```
+			cos : F32 -> F32
+			cos = |self| f32_cos_unsafe(self)
+
+			## Return the tangent of an [F32] angle in radians. The result follows
+			## IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`; `NaN` and
+			## infinite inputs return `NaN`.
+			## ```roc
+			## expect F32.tan(0.0).to_str() == "0"
+			## ```
+			tan : F32 -> F32
+			tan = |self| f32_tan_unsafe(self)
+
+			## Return the arcsine of an [F32] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
+			## ```roc
+			## expect F32.asin(0.0).to_str() == "0"
+			## ```
+			asin : F32 -> F32
+			asin = |self| f32_asin_unsafe(self)
+
+			## Return the arccosine of an [F32] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
+			## ```roc
+			## expect F32.acos(1.0).to_str() == "0"
+			## ```
+			acos : F32 -> F32
+			acos = |self| f32_acos_unsafe(self)
+
+			## Return the arctangent of an [F32] value in radians. `NaN` returns
+			## `NaN`; infinities follow IEEE 754 behavior.
+			## ```roc
+			## expect F32.atan(0.0).to_str() == "0"
+			## ```
+			atan : F32 -> F32
+			atan = |self| f32_atan_unsafe(self)
 
 			## Add two [F32] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
@@ -8586,6 +11524,216 @@ Builtin :: [].{
 			## ```
 			abs_diff : F32, F32 -> F32
 
+			## Round an [F32] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i8(3.4) == 3
+			## ```
+			round_to_i8 : F32 -> I8
+			round_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i16(3.4) == 3
+			## ```
+			round_to_i16 : F32 -> I16
+			round_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i32(-3.6) == -4
+			## ```
+			round_to_i32 : F32 -> I32
+			round_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i64(7.2) == 7
+			## ```
+			round_to_i64 : F32 -> I64
+			round_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i128(7.2) == 7
+			## ```
+			round_to_i128 : F32 -> I128
+			round_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u8(3.4) == 3
+			## ```
+			round_to_u8 : F32 -> U8
+			round_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u16(3.4) == 3
+			## ```
+			round_to_u16 : F32 -> U16
+			round_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u32(7.2) == 7
+			## ```
+			round_to_u32 : F32 -> U32
+			round_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u64(7.2) == 7
+			## ```
+			round_to_u64 : F32 -> U64
+			round_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u128(7.2) == 7
+			## ```
+			round_to_u128 : F32 -> U128
+			round_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_round_to_whole(self)))
+
+			## Round an [F32] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i8(-3.2) == -4
+			## ```
+			floor_to_i8 : F32 -> I8
+			floor_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i16(-3.2) == -4
+			## ```
+			floor_to_i16 : F32 -> I16
+			floor_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i32(3.8) == 3
+			## ```
+			floor_to_i32 : F32 -> I32
+			floor_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i64(3.8) == 3
+			## ```
+			floor_to_i64 : F32 -> I64
+			floor_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i128(3.8) == 3
+			## ```
+			floor_to_i128 : F32 -> I128
+			floor_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u8(3.8) == 3
+			## ```
+			floor_to_u8 : F32 -> U8
+			floor_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u16(3.8) == 3
+			## ```
+			floor_to_u16 : F32 -> U16
+			floor_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u32(3.8) == 3
+			## ```
+			floor_to_u32 : F32 -> U32
+			floor_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u64(3.8) == 3
+			## ```
+			floor_to_u64 : F32 -> U64
+			floor_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u128(3.8) == 3
+			## ```
+			floor_to_u128 : F32 -> U128
+			floor_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i8(-3.2) == -3
+			## ```
+			ceiling_to_i8 : F32 -> I8
+			ceiling_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i16(-3.2) == -3
+			## ```
+			ceiling_to_i16 : F32 -> I16
+			ceiling_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i32(3.2) == 4
+			## ```
+			ceiling_to_i32 : F32 -> I32
+			ceiling_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i64(3.2) == 4
+			## ```
+			ceiling_to_i64 : F32 -> I64
+			ceiling_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i128(3.2) == 4
+			## ```
+			ceiling_to_i128 : F32 -> I128
+			ceiling_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u8(3.2) == 4
+			## ```
+			ceiling_to_u8 : F32 -> U8
+			ceiling_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u16(3.2) == 4
+			## ```
+			ceiling_to_u16 : F32 -> U16
+			ceiling_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u32(3.2) == 4
+			## ```
+			ceiling_to_u32 : F32 -> U32
+			ceiling_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u64(3.2) == 4
+			## ```
+			ceiling_to_u64 : F32 -> U64
+			ceiling_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u128(3.2) == 4
+			## ```
+			ceiling_to_u128 : F32 -> U128
+			ceiling_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_ceiling_unsafe(self)))
+
 			## Build an [F32] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
@@ -8617,7 +11765,11 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_dec_digits = |digits| f32_from_dec_digits(digits)
 
-			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into an [F32]. This is the hook the
+			## compiler uses when a literal is given type [F32]; most code should
+			## parse user text with [F32.from_str] instead.
+			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| f32_from_str(str))
 
 			## Parse an [F32] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -8875,7 +12027,7 @@ Builtin :: [].{
 			## The highest finite value representable by an [F64], which is
 			## `1.7976931348623157e308`.
 			## ```roc
-			## expect F64.highest == 1.7976931348623157e308
+			## expect F64.to_bits(F64.highest) == 9218868437227405311
 			## ```
 			highest : F64
 			highest = 1.7976931348623157e308
@@ -8883,10 +12035,47 @@ Builtin :: [].{
 			## The lowest finite value representable by an [F64], which is
 			## `-1.7976931348623157e308`.
 			## ```roc
-			## expect F64.lowest == -1.7976931348623157e308
+			## expect F64.to_bits(F64.lowest) == 18442240474082181119
 			## ```
 			lowest : F64
 			lowest = -1.7976931348623157e308
+
+			## A quiet NaN [F64] value.
+			## ```roc
+			## expect F64.is_nan(F64.nan)
+			## ```
+			nan : F64
+			nan = F64.from_bits(9221120237041090560)
+
+			## Positive infinity as an [F64].
+			## ```roc
+			## expect F64.is_infinite(F64.infinity)
+			##
+			## expect F64.infinity > F64.highest
+			## ```
+			infinity : F64
+			infinity = F64.from_bits(9218868437227405312)
+
+			## Euler's number as an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.e) == 4613303445314885481
+			## ```
+			e : F64
+			e = F64.from_bits(4613303445314885481)
+
+			## The circle constant pi as an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.pi) == 4614256656552045848
+			## ```
+			pi : F64
+			pi = F64.from_bits(4614256656552045848)
+
+			## The circle constant tau as an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.tau) == 4618760256179416344
+			## ```
+			tau : F64
+			tau = F64.from_bits(4618760256179416344)
 
 			## Convert an [F64] to its decimal string representation.
 			## ```roc
@@ -8895,6 +12084,63 @@ Builtin :: [].{
 			## expect F64.to_str(-42.5) == "-42.5"
 			## ```
 			to_str : F64 -> Str
+
+			## Return the raw IEEE 754 bit pattern of an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.from_bits(4609434218613702656)) == 4609434218613702656
+			##
+			## expect F64.from_bits(F64.to_bits(1.5)).to_str() == "1.5"
+			## ```
+			to_bits : F64 -> U64
+
+			## Build an [F64] from a raw IEEE 754 bit pattern.
+			## ```roc
+			## expect F64.from_bits(F64.to_bits(-0.0)).to_bits() == F64.to_bits(-0.0)
+			##
+			## expect F64.from_bits(0).to_bits() == 0
+			## ```
+			from_bits : U64 -> F64
+
+			## Returns `Bool.True` if the value is `NaN`.
+			## ```roc
+			## expect F64.is_nan(F64.nan)
+			##
+			## expect !F64.is_nan(1.0)
+			## ```
+			is_nan : F64 -> Bool
+			is_nan = |self| !F64.is_float_eq(self, self)
+
+			## Returns `Bool.True` if the value is positive or negative infinity.
+			## ```roc
+			## expect F64.is_infinite(F64.infinity)
+			##
+			## expect F64.is_infinite(F64.negate(F64.infinity))
+			##
+			## expect !F64.is_infinite(1.0)
+			## ```
+			is_infinite : F64 -> Bool
+			is_infinite = |self|
+				if F64.is_float_eq(self, F64.infinity) {
+					True
+				} else {
+					F64.is_float_eq(self, F64.negate(F64.infinity))
+				}
+
+			## Returns `Bool.True` if the value is neither `NaN` nor infinity.
+			## ```roc
+			## expect F64.is_finite(1.0)
+			##
+			## expect !F64.is_finite(F64.infinity)
+			##
+			## expect !F64.is_finite(F64.nan)
+			## ```
+			is_finite : F64 -> Bool
+			is_finite = |self|
+				if F64.is_nan(self) {
+					False
+				} else {
+					!F64.is_infinite(self)
+				}
 
 			## Returns `Bool.True` if the value is `0.0`. Both positive and
 			## negative zero return `Bool.True`.
@@ -8910,7 +12156,18 @@ Builtin :: [].{
 				False
 			}
 
-			is_eq : F64, F64 -> Bool
+			## Returns `Bool.True` if two [F64] values compare equal using the
+			## IEEE 754 `==` operation. `NaN` does not compare equal to itself.
+			## ```roc
+			## expect F64.is_float_eq(1.5, 1.5)
+			##
+			## expect !F64.is_float_eq(F64.nan, F64.nan)
+			## ```
+			is_float_eq : F64, F64 -> Bool
+
+			## Feed an [F64] into a [Hasher].
+			to_hash : F64, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_f64(hasher, num)
 
 			## Returns `Bool.True` if the value is less than `0.0`.
 			## ```roc
@@ -8968,9 +12225,9 @@ Builtin :: [].{
 
 			## Returns the greater of two [F64] values.
 			## ```roc
-			## expect F64.max(5, 3) == 5
+			## expect F64.is_float_eq(F64.max(5, 3), 5)
 			##
-			## expect F64.max(-3, -1) == -1
+			## expect F64.is_float_eq(F64.max(-3, -1), -1)
 			## ```
 			max : F64, F64 -> F64
 			max = |a, b|
@@ -8981,9 +12238,9 @@ Builtin :: [].{
 
 			## Returns the smaller of two [F64] values.
 			## ```roc
-			## expect F64.min(5, 3) == 3
+			## expect F64.is_float_eq(F64.min(5, 3), 3)
 			##
-			## expect F64.min(-3, -1) == -3
+			## expect F64.is_float_eq(F64.min(-3, -1), -3)
 			## ```
 			min : F64, F64 -> F64
 			min = |a, b|
@@ -9009,6 +12266,106 @@ Builtin :: [].{
 			## expect F64.abs(-3.5).to_str() == "3.5"
 			## ```
 			abs : F64 -> F64
+
+			## Return the square root of an [F64]. Crashes if the input is
+			## negative. `NaN` and positive infinity follow IEEE 754 behavior:
+			## `NaN` returns `NaN`, and positive infinity returns positive
+			## infinity.
+			## ```roc
+			## expect F64.to_str(F64.sqrt(9.0)) == "3"
+			##
+			## expect F64.to_str(F64.sqrt(2.25)) == "1.5"
+			## ```
+			sqrt : F64 -> F64
+			sqrt = |self|
+				match F64.sqrt_try(self) {
+					Ok(value) => value
+					Err(SqrtOfNegative) => {
+						crash "F64.sqrt of negative number"
+					}
+				}
+
+			## Return the square root of an [F64], or `Err(SqrtOfNegative)` if
+			## the input is negative. `NaN` and positive infinity return `Ok`
+			## with the IEEE 754 result.
+			## ```roc
+			## expect match F64.sqrt_try(9.0) {
+			##     Ok(value) => F64.is_float_eq(value, 3.0)
+			##     Err(_) => False
+			## }
+			##
+			## expect match F64.sqrt_try(-1.0) {
+			##     Ok(_) => False
+			##     Err(SqrtOfNegative) => True
+			## }
+			## ```
+			sqrt_try : F64 -> Try(F64, [SqrtOfNegative, ..])
+			sqrt_try = |self|
+				if self < 0 {
+					Err(SqrtOfNegative)
+				} else {
+					Ok(f64_sqrt_unsafe(self))
+				}
+
+			## Raise an [F64] to an [F64] power. The result follows IEEE 754
+			## behavior and may be `inf`, `-inf`, or `NaN`, such as when a
+			## negative base has a non-integer exponent.
+			## ```roc
+			## expect F64.pow(2.0, 3.0).to_str() == "8"
+			##
+			## expect F64.pow(9.0, 0.5).to_str() == "3"
+			## ```
+			pow : F64, F64 -> F64
+			pow = |base, exponent| f64_pow_unsafe(base, exponent)
+
+			## Return the sine of an [F64] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
+			## ```roc
+			## expect F64.sin(0.0).to_str() == "0"
+			## ```
+			sin : F64 -> F64
+			sin = |self| f64_sin_unsafe(self)
+
+			## Return the cosine of an [F64] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
+			## ```roc
+			## expect F64.cos(0.0).to_str() == "1"
+			## ```
+			cos : F64 -> F64
+			cos = |self| f64_cos_unsafe(self)
+
+			## Return the tangent of an [F64] angle in radians. The result follows
+			## IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`; `NaN` and
+			## infinite inputs return `NaN`.
+			## ```roc
+			## expect F64.tan(0.0).to_str() == "0"
+			## ```
+			tan : F64 -> F64
+			tan = |self| f64_tan_unsafe(self)
+
+			## Return the arcsine of an [F64] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
+			## ```roc
+			## expect F64.asin(0.0).to_str() == "0"
+			## ```
+			asin : F64 -> F64
+			asin = |self| f64_asin_unsafe(self)
+
+			## Return the arccosine of an [F64] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
+			## ```roc
+			## expect F64.acos(1.0).to_str() == "0"
+			## ```
+			acos : F64 -> F64
+			acos = |self| f64_acos_unsafe(self)
+
+			## Return the arctangent of an [F64] value in radians. `NaN` returns
+			## `NaN`; infinities follow IEEE 754 behavior.
+			## ```roc
+			## expect F64.atan(0.0).to_str() == "0"
+			## ```
+			atan : F64 -> F64
+			atan = |self| f64_atan_unsafe(self)
 
 			## Add two [F64] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
@@ -9065,6 +12422,216 @@ Builtin :: [].{
 			## ```
 			abs_diff : F64, F64 -> F64
 
+			## Round an [F64] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i8(3.4) == 3
+			## ```
+			round_to_i8 : F64 -> I8
+			round_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i16(3.4) == 3
+			## ```
+			round_to_i16 : F64 -> I16
+			round_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i32(-3.6) == -4
+			## ```
+			round_to_i32 : F64 -> I32
+			round_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i64(7.2) == 7
+			## ```
+			round_to_i64 : F64 -> I64
+			round_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i128(7.2) == 7
+			## ```
+			round_to_i128 : F64 -> I128
+			round_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u8(3.4) == 3
+			## ```
+			round_to_u8 : F64 -> U8
+			round_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u16(3.4) == 3
+			## ```
+			round_to_u16 : F64 -> U16
+			round_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u32(7.2) == 7
+			## ```
+			round_to_u32 : F64 -> U32
+			round_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u64(7.2) == 7
+			## ```
+			round_to_u64 : F64 -> U64
+			round_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u128(7.2) == 7
+			## ```
+			round_to_u128 : F64 -> U128
+			round_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_round_to_whole(self)))
+
+			## Round an [F64] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i8(-3.2) == -4
+			## ```
+			floor_to_i8 : F64 -> I8
+			floor_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i16(-3.2) == -4
+			## ```
+			floor_to_i16 : F64 -> I16
+			floor_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i32(3.8) == 3
+			## ```
+			floor_to_i32 : F64 -> I32
+			floor_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i64(3.8) == 3
+			## ```
+			floor_to_i64 : F64 -> I64
+			floor_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i128(3.8) == 3
+			## ```
+			floor_to_i128 : F64 -> I128
+			floor_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u8(3.8) == 3
+			## ```
+			floor_to_u8 : F64 -> U8
+			floor_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u16(3.8) == 3
+			## ```
+			floor_to_u16 : F64 -> U16
+			floor_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u32(3.8) == 3
+			## ```
+			floor_to_u32 : F64 -> U32
+			floor_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u64(3.8) == 3
+			## ```
+			floor_to_u64 : F64 -> U64
+			floor_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u128(3.8) == 3
+			## ```
+			floor_to_u128 : F64 -> U128
+			floor_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i8(-3.2) == -3
+			## ```
+			ceiling_to_i8 : F64 -> I8
+			ceiling_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i16(-3.2) == -3
+			## ```
+			ceiling_to_i16 : F64 -> I16
+			ceiling_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i32(3.2) == 4
+			## ```
+			ceiling_to_i32 : F64 -> I32
+			ceiling_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i64(3.2) == 4
+			## ```
+			ceiling_to_i64 : F64 -> I64
+			ceiling_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i128(3.2) == 4
+			## ```
+			ceiling_to_i128 : F64 -> I128
+			ceiling_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u8(3.2) == 4
+			## ```
+			ceiling_to_u8 : F64 -> U8
+			ceiling_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u16(3.2) == 4
+			## ```
+			ceiling_to_u16 : F64 -> U16
+			ceiling_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u32(3.2) == 4
+			## ```
+			ceiling_to_u32 : F64 -> U32
+			ceiling_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u64(3.2) == 4
+			## ```
+			ceiling_to_u64 : F64 -> U64
+			ceiling_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u128(3.2) == 4
+			## ```
+			ceiling_to_u128 : F64 -> U128
+			ceiling_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_ceiling_unsafe(self)))
+
 			## Build an [F64] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
@@ -9096,7 +12663,11 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_dec_digits = |digits| f64_from_dec_digits(digits)
 
-			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
+			## Convert a numeric literal into an [F64]. This is the hook the
+			## compiler uses when a literal is given type [F64]; most code should
+			## parse user text with [F64.from_str] instead.
+			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| f64_from_str(str))
 
 			## Parse an [F64] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -9356,69 +12927,590 @@ Builtin :: [].{
 		}
 	}
 
-	u8_from_str : Str -> Try(U8, [BadNumStr])
-	i8_from_str : Str -> Try(I8, [BadNumStr])
-	u16_from_str : Str -> Try(U16, [BadNumStr])
-	i16_from_str : Str -> Try(I16, [BadNumStr])
-	u32_from_str : Str -> Try(U32, [BadNumStr])
-	i32_from_str : Str -> Try(I32, [BadNumStr])
-	u64_from_str : Str -> Try(U64, [BadNumStr])
-	i64_from_str : Str -> Try(I64, [BadNumStr])
-	u128_from_str : Str -> Try(U128, [BadNumStr])
-	i128_from_str : Str -> Try(I128, [BadNumStr])
-	dec_from_str : Str -> Try(Dec, [BadNumStr])
-	f32_from_str : Str -> Try(F32, [BadNumStr])
-	f64_from_str : Str -> Try(F64, [BadNumStr])
-
 }
 
+hasher_start : U64 -> Hasher
+hasher_start = |seed| { state: seed }
+
+hasher_finish : Hasher -> U64
+
+dict_pseudo_seed : () -> U64
+
+dict_seed : () -> U64
+dict_seed = || dict_pseudo_seed()
+
+dict_combine_entry_hashes : U64, U64 -> U64
+dict_combine_entry_hashes = |a, b| U64.bitwise_xor(a, b)
+
+dict_empty_bucket : Dict.DictBucket
+dict_empty_bucket = { dist_and_fingerprint: 0, entry_index: 0 }
+
+dict_dist_inc : U32
+dict_dist_inc = U32.shift_left_by(1, 8)
+
+dict_fingerprint_mask : U32
+dict_fingerprint_mask = dict_dist_inc - 1
+
+dict_initial_shifts : U8
+dict_initial_shifts = 61
+
+dict_min_shifts : U8
+dict_min_shifts = 32
+
+dict_max_bucket_count : U64
+dict_max_bucket_count = 4294967296
+
+dict_max_entry_count : U64
+dict_max_entry_count = 4294967296
+
+dict_bucket_count_for_shifts : U8 -> U64
+dict_bucket_count_for_shifts = |shifts| U64.shift_left_by(1, 64 - shifts)
+
+dict_max_entries_for_bucket_count : U64 -> U64
+dict_max_entries_for_bucket_count = |bucket_count|
+	if bucket_count == 0 {
+		0
+	} else if bucket_count == dict_max_bucket_count {
+		dict_max_entry_count
+	} else {
+		(bucket_count * 4) / 5
+	}
+
+dict_shifts_for_capacity : U64 -> U8
+dict_shifts_for_capacity = |requested| {
+	if requested > dict_max_entry_count {
+		crash "Dict capacity overflow"
+	}
+
+	var $shifts = dict_initial_shifts
+	while $shifts > dict_min_shifts and dict_max_entries_for_bucket_count(dict_bucket_count_for_shifts($shifts)) < requested {
+		$shifts = $shifts - 1
+	}
+
+	$shifts
+}
+
+dict_allocate_buckets_for_capacity : U64 -> Dict.DictMetadata
+dict_allocate_buckets_for_capacity = |requested| {
+	if requested == 0 {
+		{ buckets: [], max_entries_before_grow: 0, shifts: dict_initial_shifts }
+	} else {
+		shifts = dict_shifts_for_capacity(requested)
+		bucket_count = dict_bucket_count_for_shifts(shifts)
+		{
+			buckets: List.repeat(dict_empty_bucket, bucket_count),
+			max_entries_before_grow: dict_max_entries_for_bucket_count(bucket_count),
+			shifts,
+		}
+	}
+}
+
+dict_add_capacity : U64, U64 -> U64
+dict_add_capacity = |a, b|
+	if b > U64.highest - a {
+		crash "Dict capacity overflow"
+	} else {
+		a + b
+	}
+
+dict_hash_key : k -> U64
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_hash_key = |key| hasher_finish(key.to_hash(hasher_start(dict_seed())))
+
+dict_entry_index_from_u64 : U64 -> U32
+dict_entry_index_from_u64 = |index|
+	if index > U32.to_u64(U32.highest) {
+		crash "Dict entry index overflow"
+	} else {
+		U64.to_u32_wrap(index)
+	}
+
+dict_bucket_index_from_hash : U64, U8 -> U64
+dict_bucket_index_from_hash = |hash, shifts| U64.shift_right_zf_by(hash, shifts)
+
+dict_dist_and_fingerprint_from_hash : U64 -> U32
+dict_dist_and_fingerprint_from_hash = |hash| {
+	fingerprint = U32.bitwise_and(U64.to_u32_wrap(hash), dict_fingerprint_mask)
+	U32.bitwise_or(fingerprint, dict_dist_inc)
+}
+
+dict_increment_dist : U32 -> U32
+dict_increment_dist = |dist_and_fingerprint| dist_and_fingerprint + dict_dist_inc
+
+dict_decrement_dist : U32 -> U32
+dict_decrement_dist = |dist_and_fingerprint| dist_and_fingerprint - dict_dist_inc
+
+dict_next_bucket_index : U64, U64 -> U64
+dict_next_bucket_index = |bucket_index, bucket_count|
+	if bucket_index + 1 == bucket_count {
+		0
+	} else {
+		bucket_index + 1
+	}
+
+dict_ensure_capacity : Dict.DictData(k, v), U64 -> Dict.DictData(k, v)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_ensure_capacity = |data, desired| {
+	if desired <= data.max_entries_before_grow {
+		data
+	} else {
+		metadata = dict_allocate_buckets_for_capacity(desired)
+		entries = List.reserve(data.entries, desired - List.len(data.entries))
+		buckets = dict_fill_buckets_from_entries(metadata.buckets, entries, metadata.shifts)
+		{ entries, buckets, max_entries_before_grow: metadata.max_entries_before_grow, shifts: metadata.shifts }
+	}
+}
+
+dict_find : Dict.DictData(k, v), k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+dict_find = |data, key| {
+	if List.is_empty(data.entries) {
+		if List.is_empty(data.buckets) {
+			Missing({ bucket_index: 0, dist_and_fingerprint: 0 })
+		} else {
+			hash = dict_hash_key(key)
+			Missing(
+				{
+					bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
+					dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
+				},
+			)
+		}
+	} else if List.is_empty(data.buckets) {
+		crash "Dict invariant violated: entries without buckets"
+	} else {
+		hash = dict_hash_key(key)
+		dict_find_from(
+			data.buckets,
+			data.entries,
+			dict_bucket_index_from_hash(hash, data.shifts),
+			dict_dist_and_fingerprint_from_hash(hash),
+			key,
+		)
+	}
+}
+
+dict_find_from : List(Dict.DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	where [k.is_eq : k, k -> Bool]
+dict_find_from = |buckets, entries, bucket_index, dist_and_fingerprint, key| {
+	bucket = list_get_unsafe(buckets, bucket_index)
+	if dist_and_fingerprint == bucket.dist_and_fingerprint {
+		entry_index = U32.to_u64(bucket.entry_index)
+		(found_key, found_value) = list_get_unsafe(entries, entry_index)
+		if found_key == key {
+			Found({ bucket_index, entry_index, value: found_value })
+		} else {
+			dict_find_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
+		}
+	} else if dist_and_fingerprint > bucket.dist_and_fingerprint {
+		Missing({ bucket_index, dist_and_fingerprint })
+	} else {
+		dict_find_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
+	}
+}
+
+dict_insert_new_data : Dict.DictData(k, v), U64, U32, k, v -> Dict.DictData(k, v)
+dict_insert_new_data = |data, bucket_index, dist_and_fingerprint, key, value| {
+	if List.is_empty(data.buckets) {
+		crash "Dict invariant violated: insert into empty bucket table"
+	}
+
+	entry_index = List.len(data.entries)
+	entry_index_u32 = dict_entry_index_from_u64(entry_index)
+	entries = List.append(data.entries, (key, value))
+	buckets = dict_place_and_shift_up(data.buckets, { dist_and_fingerprint, entry_index: entry_index_u32 }, bucket_index)
+	{ entries, buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts }
+}
+
+dict_remove_bucket_data : Dict.DictData(k, v), U64 -> Dict.DictData(k, v)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_remove_bucket_data = |data, bucket_index| {
+	removed_bucket = list_get_unsafe(data.buckets, bucket_index)
+	removed_entry_index = removed_bucket.entry_index
+	removed_entry_index_u64 = U32.to_u64(removed_entry_index)
+
+	removed = dict_remove_bucket_from_probe(data.buckets, bucket_index)
+	buckets_without_removed = list_set_unsafe(removed.buckets, removed.empty_bucket_index, dict_empty_bucket)
+
+	last_entry_index = List.len(data.entries) - 1
+	if removed_entry_index_u64 == last_entry_index {
+		{
+			entries: List.drop_last(data.entries, 1),
+			buckets: buckets_without_removed,
+			max_entries_before_grow: data.max_entries_before_grow,
+			shifts: data.shifts,
+		}
+	} else {
+		entries_swapped = list_swap_unsafe(data.entries, removed_entry_index_u64, last_entry_index)
+		(moved_key, _) = list_get_unsafe(entries_swapped, removed_entry_index_u64)
+		moved_hash = dict_hash_key(moved_key)
+		moved_base_bucket_index = dict_bucket_index_from_hash(moved_hash, data.shifts)
+		moved_entry_index = dict_entry_index_from_u64(last_entry_index)
+		moved_bucket_index = dict_scan_for_entry_index(buckets_without_removed, moved_base_bucket_index, moved_entry_index)
+		moved_bucket = list_get_unsafe(buckets_without_removed, moved_bucket_index)
+		buckets = list_set_unsafe(
+			buckets_without_removed,
+			moved_bucket_index,
+			{ dist_and_fingerprint: moved_bucket.dist_and_fingerprint, entry_index: removed_entry_index },
+		)
+
+		{
+			entries: List.drop_last(entries_swapped, 1),
+			buckets,
+			max_entries_before_grow: data.max_entries_before_grow,
+			shifts: data.shifts,
+		}
+	}
+}
+
+dict_remove_bucket_from_probe : List(Dict.DictBucket), U64 -> { buckets : List(Dict.DictBucket), empty_bucket_index : U64 }
+dict_remove_bucket_from_probe = |buckets, bucket_index| {
+	next_index = dict_next_bucket_index(bucket_index, List.len(buckets))
+	next_bucket = list_get_unsafe(buckets, next_index)
+	if next_bucket.dist_and_fingerprint >= dict_dist_inc + dict_dist_inc {
+		shifted = {
+			dist_and_fingerprint: dict_decrement_dist(next_bucket.dist_and_fingerprint),
+			entry_index: next_bucket.entry_index,
+		}
+		dict_remove_bucket_from_probe(list_set_unsafe(buckets, bucket_index, shifted), next_index)
+	} else {
+		{ buckets, empty_bucket_index: bucket_index }
+	}
+}
+
+dict_scan_for_entry_index : List(Dict.DictBucket), U64, U32 -> U64
+dict_scan_for_entry_index = |buckets, bucket_index, entry_index| {
+	bucket = list_get_unsafe(buckets, bucket_index)
+	if bucket.dist_and_fingerprint == 0 {
+		crash "Dict invariant violated: moved entry bucket not found"
+	} else if bucket.entry_index == entry_index {
+		bucket_index
+	} else {
+		dict_scan_for_entry_index(buckets, dict_next_bucket_index(bucket_index, List.len(buckets)), entry_index)
+	}
+}
+
+dict_fill_buckets_from_entries : List(Dict.DictBucket), List((k, v)), U8 -> List(Dict.DictBucket)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_fill_buckets_from_entries = |buckets, entries, shifts| {
+	var $buckets = buckets
+	var $index = 0
+	while $index < List.len(entries) {
+		(key, _) = list_get_unsafe(entries, $index)
+		(bucket_index, dist_and_fingerprint) = dict_next_while_less($buckets, key, shifts)
+		$buckets = dict_place_and_shift_up($buckets, { dist_and_fingerprint, entry_index: dict_entry_index_from_u64($index) }, bucket_index)
+		$index = $index + 1
+	}
+	$buckets
+}
+
+dict_next_while_less : List(Dict.DictBucket), k, U8 -> (U64, U32)
+	where [k.to_hash : k, Hasher -> Hasher]
+dict_next_while_less = |buckets, key, shifts| {
+	hash = dict_hash_key(key)
+	dict_next_while_less_from(buckets, dict_bucket_index_from_hash(hash, shifts), dict_dist_and_fingerprint_from_hash(hash))
+}
+
+dict_next_while_less_from : List(Dict.DictBucket), U64, U32 -> (U64, U32)
+dict_next_while_less_from = |buckets, bucket_index, dist_and_fingerprint| {
+	loaded = list_get_unsafe(buckets, bucket_index)
+	if dist_and_fingerprint < loaded.dist_and_fingerprint {
+		dict_next_while_less_from(buckets, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint))
+	} else {
+		(bucket_index, dist_and_fingerprint)
+	}
+}
+
+dict_place_and_shift_up : List(Dict.DictBucket), Dict.DictBucket, U64 -> List(Dict.DictBucket)
+dict_place_and_shift_up = |buckets, bucket, bucket_index| {
+	loaded = list_get_unsafe(buckets, bucket_index)
+	if loaded.dist_and_fingerprint == 0 {
+		list_set_unsafe(buckets, bucket_index, bucket)
+	} else {
+		next_bucket = {
+			dist_and_fingerprint: dict_increment_dist(loaded.dist_and_fingerprint),
+			entry_index: loaded.entry_index,
+		}
+		dict_place_and_shift_up(list_set_unsafe(buckets, bucket_index, bucket), next_bucket, dict_next_bucket_index(bucket_index, List.len(buckets)))
+	}
+}
+
+u8_from_str : Str -> Try(U8, [BadNumStr])
+
+i8_from_str : Str -> Try(I8, [BadNumStr])
+
+u16_from_str : Str -> Try(U16, [BadNumStr])
+
+i16_from_str : Str -> Try(I16, [BadNumStr])
+
+u32_from_str : Str -> Try(U32, [BadNumStr])
+
+i32_from_str : Str -> Try(I32, [BadNumStr])
+
+u64_from_str : Str -> Try(U64, [BadNumStr])
+
+i64_from_str : Str -> Try(I64, [BadNumStr])
+
+u128_from_str : Str -> Try(U128, [BadNumStr])
+
+i128_from_str : Str -> Try(I128, [BadNumStr])
+
+dec_from_str : Str -> Try(Dec, [BadNumStr])
+
+f32_from_str : Str -> Try(F32, [BadNumStr])
+
+f64_from_str : Str -> Try(F64, [BadNumStr])
+
 u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange])
-u8_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u8_from_str(str))
+u8_from_int_digits = |digits| int_from_digits(digits, |str| u8_from_str(str))
 
 i8_from_int_digits : List(U8) -> Try(I8, [OutOfRange])
-i8_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i8_from_str(str))
+i8_from_int_digits = |digits| int_from_digits(digits, |str| i8_from_str(str))
 
 u16_from_int_digits : List(U8) -> Try(U16, [OutOfRange])
-u16_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u16_from_str(str))
+u16_from_int_digits = |digits| int_from_digits(digits, |str| u16_from_str(str))
 
 i16_from_int_digits : List(U8) -> Try(I16, [OutOfRange])
-i16_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i16_from_str(str))
+i16_from_int_digits = |digits| int_from_digits(digits, |str| i16_from_str(str))
 
 u32_from_int_digits : List(U8) -> Try(U32, [OutOfRange])
-u32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u32_from_str(str))
+u32_from_int_digits = |digits| int_from_digits(digits, |str| u32_from_str(str))
 
 i32_from_int_digits : List(U8) -> Try(I32, [OutOfRange])
-i32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i32_from_str(str))
+i32_from_int_digits = |digits| int_from_digits(digits, |str| i32_from_str(str))
 
 u64_from_int_digits : List(U8) -> Try(U64, [OutOfRange])
-u64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u64_from_str(str))
+u64_from_int_digits = |digits| int_from_digits(digits, |str| u64_from_str(str))
 
 i64_from_int_digits : List(U8) -> Try(I64, [OutOfRange])
-i64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i64_from_str(str))
+i64_from_int_digits = |digits| int_from_digits(digits, |str| i64_from_str(str))
 
 u128_from_int_digits : List(U8) -> Try(U128, [OutOfRange])
-u128_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u128_from_str(str))
+u128_from_int_digits = |digits| int_from_digits(digits, |str| u128_from_str(str))
 
 i128_from_int_digits : List(U8) -> Try(I128, [OutOfRange])
-i128_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i128_from_str(str))
+i128_from_int_digits = |digits| int_from_digits(digits, |str| i128_from_str(str))
 
 dec_from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
-dec_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.dec_from_str(str))
+dec_from_int_digits = |digits| int_from_digits(digits, |str| dec_from_str(str))
 
 dec_from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
-dec_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.dec_from_str(str))
+dec_from_dec_digits = |digits| dec_from_digits(digits, |str| dec_from_str(str))
 
 f32_from_int_digits : List(U8) -> Try(F32, [OutOfRange])
-f32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.f32_from_str(str))
+f32_from_int_digits = |digits| int_from_digits(digits, |str| f32_from_str(str))
 
 f32_from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
-f32_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.f32_from_str(str))
+f32_from_dec_digits = |digits| dec_from_digits(digits, |str| f32_from_str(str))
 
 f64_from_int_digits : List(U8) -> Try(F64, [OutOfRange])
-f64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.f64_from_str(str))
+f64_from_int_digits = |digits| int_from_digits(digits, |str| f64_from_str(str))
 
 f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
-f64_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.f64_from_str(str))
+f64_from_dec_digits = |digits| dec_from_digits(digits, |str| f64_from_str(str))
+
+from_numeral_with : Num.Numeral, (Str -> Try(item, err)) -> Try(item, [InvalidNumeral(Str)])
+from_numeral_with = |numeral, parse|
+	match numeral_to_str(numeral) {
+		Err(err) => Err(err)
+		Ok(str) =>
+			match parse(str) {
+				Ok(num) => Ok(num)
+				Err(_) => Err(InvalidNumeral("invalid numeric literal"))
+			}
+		}
+
+numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str)])
+numeral_to_str = |numeral|
+	match numeral {
+		Literal({ is_negative, digits_before_pt, digits_after_pt, digits_after_pt_count }) => {
+			int_digits = base256_to_decimal_digits(digits_before_pt)
+			int_bytes = decimal_digits_to_bytes(int_digits)
+
+			frac_bytes = if digits_after_pt_count == 0 {
+				u8_list_with_capacity(0)
+			} else {
+				frac_digits = base256_to_decimal_digits(digits_after_pt)
+				frac_len = u8_list_len(frac_digits)
+				padded_frac_digits = if frac_len < digits_after_pt_count {
+					u8_concat(u8_repeat(0, digits_after_pt_count - frac_len), frac_digits)
+				} else {
+					frac_digits
+				}
+
+				u8_concat(u8_single(46), decimal_digits_to_bytes(padded_frac_digits))
+			}
+
+			sign_bytes = if is_negative {
+				u8_single(45)
+			} else {
+				u8_list_with_capacity(0)
+			}
+
+			bytes = u8_concat(sign_bytes, u8_concat(int_bytes, frac_bytes))
+			match bytes_to_str(bytes) {
+				Ok(str) => Ok(str)
+				Err(_) => Err(InvalidNumeral("invalid numeric literal"))
+			}
+		}
+	}
+
+base256_to_decimal_digits : List(U8) -> List(U8)
+base256_to_decimal_digits = |base256_digits| {
+	var $decimal_digits = u8_single(0)
+	var $index = 0
+	len = u8_list_len(base256_digits)
+
+	while $index < len {
+		$decimal_digits = decimal_digits_mul_add($decimal_digits, 256, U8.to_u16(u8_list_get_unsafe(base256_digits, $index)))
+		$index = $index + 1
+	}
+
+	trim_leading_zero_digits($decimal_digits)
+}
+
+decimal_digits_mul_add : List(U8), U16, U16 -> List(U8)
+decimal_digits_mul_add = |digits, multiplier, addend| {
+	var $carry = addend
+	var $reversed = u8_list_with_capacity(u8_list_len(digits) + 4)
+	var $index = u8_list_len(digits)
+
+	while $index > 0 {
+		$index = $index - 1
+		digit = u8_list_get_unsafe(digits, $index)
+		total = U8.to_u16(digit) * multiplier + $carry
+		$carry = total / 10
+		$reversed = u8_append($reversed, U16.to_u8_wrap(total % 10))
+	}
+
+	u8_rev(decimal_append_carry_reversed($reversed, $carry))
+}
+
+decimal_append_carry_reversed : List(U8), U16 -> List(U8)
+decimal_append_carry_reversed = |reversed, carry| {
+	var $digits = reversed
+	var $carry = carry
+
+	while $carry > 0 {
+		$digits = u8_append($digits, U16.to_u8_wrap($carry % 10))
+		$carry = $carry / 10
+	}
+
+	$digits
+}
+
+trim_leading_zero_digits : List(U8) -> List(U8)
+trim_leading_zero_digits = |digits| {
+	len = u8_list_len(digits)
+	var $index = 0
+
+	while $index + 1 < len and u8_list_get_unsafe(digits, $index) == 0 {
+		$index = $index + 1
+	}
+
+	u8_drop_first(digits, $index)
+}
+
+decimal_digits_to_bytes : List(U8) -> List(U8)
+decimal_digits_to_bytes = |digits| {
+	len = u8_list_len(digits)
+	var $bytes = u8_list_with_capacity(len)
+	var $index = 0
+
+	while $index < len {
+		$bytes = u8_append($bytes, u8_list_get_unsafe(digits, $index) + 48)
+		$index = $index + 1
+	}
+
+	$bytes
+}
+
+u8_single : U8 -> List(U8)
+u8_single = |byte| u8_append(u8_list_with_capacity(1), byte)
+
+u8_repeat : U8, U64 -> List(U8)
+u8_repeat = |byte, count| {
+	var $list = u8_list_with_capacity(count)
+	var $index = 0
+
+	while $index < count {
+		$list = u8_append($list, byte)
+		$index = $index + 1
+	}
+
+	$list
+}
+
+u8_append : List(U8), U8 -> List(U8)
+u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve(list, 1), byte)
+
+u8_concat : List(U8), List(U8) -> List(U8)
+u8_concat = |left, right| {
+	len = u8_list_len(right)
+	var $out = u8_list_reserve(left, len)
+	var $index = 0
+
+	while $index < len {
+		$out = u8_list_append_unsafe($out, u8_list_get_unsafe(right, $index))
+		$index = $index + 1
+	}
+
+	$out
+}
+
+u8_rev : List(U8) -> List(U8)
+u8_rev = |list| {
+	len = u8_list_len(list)
+	var $out = u8_list_with_capacity(len)
+	var $remaining = len
+
+	while $remaining > 0 {
+		$remaining = $remaining - 1
+		$out = u8_append($out, u8_list_get_unsafe(list, $remaining))
+	}
+
+	$out
+}
+
+u8_drop_first : List(U8), U64 -> List(U8)
+u8_drop_first = |list, count| {
+	len = u8_list_len(list)
+	var $out = u8_list_with_capacity(len - count)
+	var $index = count
+
+	while $index < len {
+		$out = u8_append($out, u8_list_get_unsafe(list, $index))
+		$index = $index + 1
+	}
+
+	$out
+}
+
+u8_list_len : List(U8) -> U64
+
+u8_list_with_capacity : U64 -> List(U8)
+
+u8_list_get_unsafe : List(U8), U64 -> U8
+
+u8_list_append_unsafe : List(U8), U8 -> List(U8)
+
+u8_list_reserve : List(U8), U64 -> List(U8)
+
+dec_sqrt_unsafe : Dec -> Dec
+
+dec_pow_unsafe : Dec, Dec -> Dec
+
+dec_sin_unsafe : Dec -> Dec
+
+dec_cos_unsafe : Dec -> Dec
+
+dec_tan_unsafe : Dec -> Dec
+
+dec_asin_unsafe : Dec -> Dec
+
+dec_acos_unsafe : Dec -> Dec
+
+dec_atan_unsafe : Dec -> Dec
 
 out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange])
 out_of_range_try = |answer|
@@ -9427,6 +13519,66 @@ out_of_range_try = |answer|
 	} else {
 		Err(OutOfRange)
 	}
+
+out_of_range_or_crash : Try(item, [OutOfRange]) -> item
+out_of_range_or_crash = |answer|
+	match answer {
+		Ok(value) => value
+		Err(OutOfRange) => {
+			crash "number is out of range"
+		}
+	}
+
+dec_round_to_whole : Dec -> Dec
+dec_round_to_whole = |self| {
+	truncated = Dec.div_trunc_by(self, 1.0)
+	remainder = self - truncated
+	if remainder >= 0.5 {
+		truncated + 1.0
+	} else if remainder <= -0.5 {
+		truncated - 1.0
+	} else {
+		truncated
+	}
+}
+
+dec_floor_to_whole : Dec -> Dec
+dec_floor_to_whole = |self| {
+	truncated = Dec.div_trunc_by(self, 1.0)
+	if self < truncated {
+		truncated - 1.0
+	} else {
+		truncated
+	}
+}
+
+dec_ceiling_to_whole : Dec -> Dec
+dec_ceiling_to_whole = |self| {
+	truncated = Dec.div_trunc_by(self, 1.0)
+	if self > truncated {
+		truncated + 1.0
+	} else {
+		truncated
+	}
+}
+
+f32_round_to_whole : F32 -> F32
+f32_round_to_whole = |self| {
+	if self >= 0 {
+		f32_floor_unsafe(self + 0.5)
+	} else {
+		f32_ceiling_unsafe(self - 0.5)
+	}
+}
+
+f64_round_to_whole : F64 -> F64
+f64_round_to_whole = |self| {
+	if self >= 0 {
+		f64_floor_unsafe(self + 0.5)
+	} else {
+		f64_ceiling_unsafe(self - 0.5)
+	}
+}
 
 digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange])
 digits_to_bytes = |digits|
@@ -9494,27 +13646,27 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
-unsigned_add_checked : item, item, item -> Try(item, [Overflow])
+unsigned_add_try : item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
-unsigned_add_checked = |highest, a, b|
+unsigned_add_try = |highest, a, b|
 	if a > highest - b {
 		Err(Overflow)
 	} else {
 		Ok(a + b)
 	}
 
-unsigned_sub_checked : item, item -> Try(item, [Overflow])
+unsigned_sub_try : item, item -> Try(item, [Overflow, ..])
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
-unsigned_sub_checked = |a, b|
+unsigned_sub_try = |a, b|
 	if a < b {
 		Err(Overflow)
 	} else {
 		Ok(a - b)
 	}
 
-unsigned_mul_checked : item, item, item, item -> Try(item, [Overflow])
+unsigned_mul_try : item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_mul_checked = |highest, zero, a, b|
+unsigned_mul_try = |highest, zero, a, b|
 	if b == zero {
 		Ok(zero)
 	} else if a > highest / b {
@@ -9523,18 +13675,18 @@ unsigned_mul_checked = |highest, zero, a, b|
 		Ok(a * b)
 	}
 
-unsigned_div_checked : item, item, item -> Try(item, [DivByZero])
+unsigned_div_try : item, item, item -> Try(item, [DivByZero, ..])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-unsigned_div_checked = |zero, a, b|
+unsigned_div_try = |zero, a, b|
 	if b == zero {
 		Err(DivByZero)
 	} else {
 		Ok(a / b)
 	}
 
-signed_add_checked : item, item, item, item, item -> Try(item, [Overflow])
+signed_add_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_add_checked = |lowest, highest, zero, a, b|
+signed_add_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a > highest - b {
 			Err(Overflow)
@@ -9551,9 +13703,9 @@ signed_add_checked = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_sub_checked : item, item, item, item, item -> Try(item, [Overflow])
+signed_sub_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_sub_checked = |lowest, highest, zero, a, b|
+signed_sub_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a < lowest + b {
 			Err(Overflow)
@@ -9570,7 +13722,7 @@ signed_sub_checked = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_mul_checked : item, item, item, item, item, item -> Try(item, [Overflow])
+signed_mul_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -9579,7 +13731,7 @@ signed_mul_checked : item, item, item, item, item, item -> Try(item, [Overflow])
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_mul_checked = |lowest, highest, zero, neg_one, a, b|
+signed_mul_try = |lowest, highest, zero, neg_one, a, b|
 	if a == zero {
 		Ok(zero)
 	} else if b == zero {
@@ -9620,9 +13772,9 @@ signed_mul_checked = |lowest, highest, zero, neg_one, a, b|
 		Ok(a * b)
 	}
 
-signed_div_checked : item, item, item, item, item -> Try(item, [DivByZero, Overflow])
+signed_div_try : item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-signed_div_checked = |lowest, zero, neg_one, a, b|
+signed_div_try = |lowest, zero, neg_one, a, b|
 	if b == zero {
 		Err(DivByZero)
 	} else if a == lowest {
@@ -9634,6 +13786,337 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 	} else {
 		Ok(a / b)
 	}
+
+unsigned_pow_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.times : item, item -> item,
+	]
+unsigned_pow_try = |highest, zero, one, two, base, exponent|
+	unsigned_pow_try_step(highest, zero, one, two, one, base, exponent)
+
+unsigned_pow_try_step : item, item, item, item, item, item, item -> Try(item, [Overflow, ..])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.times : item, item -> item,
+	]
+unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
+	if exponent == zero {
+		Ok(acc)
+	} else {
+		next_acc = if exponent.rem_by(two) == zero {
+			Ok(acc)
+		} else {
+			unsigned_mul_try(highest, zero, acc, base)
+		}
+
+		match next_acc {
+			Err(Overflow) => Err(Overflow)
+			Ok(updated_acc) => {
+				next_exponent = exponent / two
+				if next_exponent == zero {
+					Ok(updated_acc)
+				} else {
+					match unsigned_mul_try(highest, zero, base, base) {
+						Err(Overflow) => Err(Overflow)
+						Ok(updated_base) => unsigned_pow_try_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
+					}
+				}
+			}
+		}
+	}
+
+signed_pow_try : item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow, ..])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_trunc_by : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+	]
+signed_pow_try = |lowest, highest, zero, one, two, neg_one, base, exponent|
+	if exponent < zero {
+		if base == one {
+			Ok(one)
+		} else if base == neg_one {
+			if exponent.rem_by(two) == zero {
+				Ok(one)
+			} else {
+				Ok(neg_one)
+			}
+		} else {
+			Err(Underflow)
+		}
+	} else {
+		signed_pow_try_step(lowest, highest, zero, one, two, neg_one, one, base, exponent)
+	}
+
+signed_pow_try_step : item, item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow, ..])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_trunc_by : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+	]
+signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, exponent|
+	if exponent == zero {
+		Ok(acc)
+	} else {
+		next_acc = if exponent.rem_by(two) == zero {
+			Ok(acc)
+		} else {
+			match signed_mul_try(lowest, highest, zero, neg_one, acc, base) {
+				Ok(result) => Ok(result)
+				Err(Overflow) => Err(Overflow)
+			}
+		}
+
+		match next_acc {
+			Err(Overflow) => Err(Overflow)
+			Err(Underflow) => Err(Underflow)
+			Ok(updated_acc) => {
+				next_exponent = exponent / two
+				if next_exponent == zero {
+					Ok(updated_acc)
+				} else {
+					match signed_mul_try(lowest, highest, zero, neg_one, base, base) {
+						Err(Overflow) => Err(Overflow)
+						Ok(updated_base) => signed_pow_try_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
+					}
+				}
+			}
+		}
+	}
+
+unsigned_div_ceil_try : item, item, item, item -> Try(item, [DivByZero, ..])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.plus : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+	]
+unsigned_div_ceil_try = |zero, one, a, b|
+	match unsigned_div_try(zero, a, b) {
+		Err(DivByZero) => Err(DivByZero)
+		Ok(quotient) =>
+			if a.rem_by(b) == zero {
+				Ok(quotient)
+			} else {
+				Ok(quotient + one)
+			}
+		}
+
+signed_div_ceil_try : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.plus : item, item -> item,
+		item.minus : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+	]
+signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
+	match signed_div_try(lowest, zero, neg_one, a, b) {
+		Err(DivByZero) => Err(DivByZero)
+		Err(Overflow) => Err(Overflow)
+		Ok(quotient) =>
+			if a.rem_by(b) == zero {
+				Ok(quotient)
+			} else if a > zero {
+				if b > zero {
+					match signed_add_try(lowest, highest, zero, quotient, one) {
+						Ok(result) => Ok(result)
+						Err(Overflow) => Err(Overflow)
+					}
+				} else {
+					Ok(quotient)
+				}
+			} else if a < zero {
+				if b < zero {
+					match signed_add_try(lowest, highest, zero, quotient, one) {
+						Ok(result) => Ok(result)
+						Err(Overflow) => Err(Overflow)
+					}
+				} else {
+					Ok(quotient)
+				}
+			} else {
+				Ok(quotient)
+			}
+		}
+
+unsigned_minus_saturated : item, item, item -> item
+	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+unsigned_minus_saturated = |zero, a, b|
+	if a < b {
+		zero
+	} else {
+		a - b
+	}
+
+signed_minus_saturated : item, item, item, item, item -> item
+	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+signed_minus_saturated = |lowest, highest, zero, a, b|
+	match signed_sub_try(lowest, highest, zero, a, b) {
+		Ok(result) => result
+		Err(Overflow) =>
+			if b > zero {
+				lowest
+			} else {
+				highest
+			}
+		}
+
+unsigned_times_saturated : item, item, item, item -> item
+	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
+unsigned_times_saturated = |highest, zero, a, b|
+	match unsigned_mul_try(highest, zero, a, b) {
+		Ok(result) => result
+		Err(Overflow) => highest
+	}
+
+signed_times_saturated : item, item, item, item, item, item -> item
+	where [
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.is_eq : item, item -> Bool,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+		item.div_trunc_by : item, item -> item,
+	]
+signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
+	match signed_mul_try(lowest, highest, zero, neg_one, a, b) {
+		Ok(result) => result
+		Err(Overflow) =>
+			if a < zero {
+				if b > zero {
+					lowest
+				} else {
+					highest
+				}
+			} else if b < zero {
+				lowest
+			} else {
+				highest
+			}
+		}
+
+unsigned_count_leading_zero_bits : U8, item, item, item -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+unsigned_count_leading_zero_bits = |width, zero, two, value| width - unsigned_bit_length(zero, two, value, 0)
+
+unsigned_bit_length : item, item, item, U8 -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+unsigned_bit_length = |zero, two, value, count|
+	if value == zero {
+		count
+	} else {
+		unsigned_bit_length(zero, two, value / two, count + 1)
+	}
+
+signed_count_leading_zero_bits : U8, item, item, item -> U8
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_by : item, item -> item,
+	]
+signed_count_leading_zero_bits = |width, zero, two, value|
+	if value < zero {
+		0
+	} else {
+		unsigned_count_leading_zero_bits(width, zero, two, value)
+	}
+
+integer_count_trailing_zero_bits : U8, item, item, item -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
+integer_count_trailing_zero_bits = |width, zero, two, value|
+	if value == zero {
+		width
+	} else {
+		integer_count_trailing_zero_bits_step(zero, two, value, 0)
+	}
+
+integer_count_trailing_zero_bits_step : item, item, item, U8 -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
+integer_count_trailing_zero_bits_step = |zero, two, value, count|
+	if value.rem_by(two) != zero {
+		count
+	} else {
+		integer_count_trailing_zero_bits_step(zero, two, value / two, count + 1)
+	}
+
+unsigned_count_one_bits : item, item, item -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
+unsigned_count_one_bits = |zero, two, value|
+	if value == zero {
+		0
+	} else {
+		bit = if value.rem_by(two) == zero {
+			0
+		} else {
+			1
+		}
+		bit + unsigned_count_one_bits(zero, two, value / two)
+	}
+
+signed_count_one_bits : U8, item, item, item -> U8
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.bitwise_not : item -> item,
+	]
+signed_count_one_bits = |width, zero, two, value|
+	if value < zero {
+		width - unsigned_count_one_bits(zero, two, value.bitwise_not())
+	} else {
+		unsigned_count_one_bits(zero, two, value)
+	}
+
+integer_is_even : item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+integer_is_even = |zero, two, value| value.rem_by(two) == zero
+
+integer_is_odd : item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+integer_is_odd = |zero, two, value| value.rem_by(two) != zero
+
+unsigned_is_multiple_of : item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+unsigned_is_multiple_of = |zero, value, divisor|
+	if divisor == zero {
+		value == zero
+	} else {
+		value.rem_by(divisor) == zero
+	}
+
+signed_is_multiple_of : item, item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+signed_is_multiple_of = |zero, neg_one, value, divisor|
+	if divisor == zero {
+		value == zero
+	} else if divisor == neg_one {
+		True
+	} else {
+		value.rem_by(divisor) == zero
+	}
+
+numeric_compare : item, item -> [LT, EQ, GT]
 
 range_done : () -> Iter(item)
 range_done = || {
@@ -9656,6 +14139,13 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 
 # Implemented by the compiler, does not perform bounds checks
 list_swap_unsafe : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Returns string slices into the source string.
+str_find_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
+
+# Implemented by the compiler. Returns a string slice after the prefix when the
+# source starts with the prefix using ASCII-caseless comparison.
+str_drop_prefix_caseless_ascii_raw : Str, Str -> { after : Str, found : Bool }
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element
@@ -9735,6 +14225,26 @@ f32_to_u64_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U64 }
 
 f32_to_u128_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U128 }
 
+f32_floor_unsafe : F32 -> F32
+
+f32_ceiling_unsafe : F32 -> F32
+
+f32_sqrt_unsafe : F32 -> F32
+
+f32_pow_unsafe : F32, F32 -> F32
+
+f32_sin_unsafe : F32 -> F32
+
+f32_cos_unsafe : F32 -> F32
+
+f32_tan_unsafe : F32 -> F32
+
+f32_asin_unsafe : F32 -> F32
+
+f32_acos_unsafe : F32 -> F32
+
+f32_atan_unsafe : F32 -> F32
+
 f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
 
 f64_to_i16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I16 }
@@ -9756,3 +14266,23 @@ f64_to_u64_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U64 }
 f64_to_u128_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U128 }
 
 f64_to_f32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : F32 }
+
+f64_floor_unsafe : F64 -> F64
+
+f64_ceiling_unsafe : F64 -> F64
+
+f64_sqrt_unsafe : F64 -> F64
+
+f64_pow_unsafe : F64, F64 -> F64
+
+f64_sin_unsafe : F64 -> F64
+
+f64_cos_unsafe : F64 -> F64
+
+f64_tan_unsafe : F64 -> F64
+
+f64_asin_unsafe : F64 -> F64
+
+f64_acos_unsafe : F64 -> F64
+
+f64_atan_unsafe : F64 -> F64

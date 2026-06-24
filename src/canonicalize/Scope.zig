@@ -3,6 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const collections = @import("collections");
 
 const CIR = @import("CIR.zig");
 
@@ -170,6 +171,7 @@ pub const ModuleAliasLookupResult = union(enum) {
 pub const ExposedItemInfo = struct {
     module_name: Ident.Idx,
     original_name: Ident.Idx,
+    target: ?collections.ExposedItemTarget = null,
 };
 
 /// Result of looking up an exposed item

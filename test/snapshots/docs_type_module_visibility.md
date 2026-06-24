@@ -47,7 +47,7 @@ platform ""
     packages {}
     provides { "roc_main": main_for_host }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64glibc: { inputs: [app] },
     }
 
@@ -58,16 +58,6 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
-    (name "app")
-    (package "app")
-    (kind app)
-    (entry
-      (name "main")
-      (kind value)
-      (type (type-ref (name "Str")))
-    )
-  )
   (module
     (name "Color")
     (package "app")
@@ -90,6 +80,16 @@ main_for_host = main
         (type (fn (type-ref (module "app.Color") (name "Color")) (type-ref (name "Str"))))
         (doc "Convert a color to a string.")
       )
+    )
+  )
+  (module
+    (name "app")
+    (package "app")
+    (kind app)
+    (entry
+      (name "main")
+      (kind value)
+      (type (type-ref (name "Str")))
     )
   )
   (module

@@ -78,6 +78,20 @@ pub const Tag = struct {
     payloads: Span,
 };
 
+/// One entry of a nominal record's declared layout order. The backing row is
+/// always lexicographic (for name resolution and digests); a nominal type
+/// additionally carries this declared order, which the layout commit consumes to
+/// place fields in source order with no internal padding. See design.md
+/// "Nominal Record Field Order".
+pub const DeclaredField = union(enum) {
+    /// A named backing field, matched against the lexicographic backing row by
+    /// name at layout time.
+    named: names.RecordFieldNameId,
+    /// An unnamed padding field reserving `sizeof(ty)` bytes at alignment 1. Its
+    /// bytes are uninitialized and it is not accessible.
+    padding: TypeId,
+};
+
 /// Monomorphic type content.
 pub const Content = union(enum) {
     primitive: Primitive,
@@ -88,6 +102,9 @@ pub const Content = union(enum) {
         builtin_owner: ?static_dispatch.BuiltinOwner = null,
         args: Span,
         backing: ?NamedBacking = null,
+        /// Declared field order for a nominal/opaque record backing; empty for
+        /// every other named type (consumed only by layout).
+        declared_order: Span = Span.empty(),
     },
     record: Span,
     tuple: Span,
@@ -109,6 +126,7 @@ pub const Store = struct {
     spans: std.ArrayList(TypeId),
     fields: std.ArrayList(Field),
     tags: std.ArrayList(Tag),
+    declared_fields: std.ArrayList(DeclaredField),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -117,10 +135,12 @@ pub const Store = struct {
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
+            .declared_fields = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.declared_fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
@@ -170,6 +190,17 @@ pub const Store = struct {
         return self.tags.items[span_.start..][0..span_.len];
     }
 
+    pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
+        const start: u32 = @intCast(self.declared_fields.items.len);
+        try self.declared_fields.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
+        return self.declared_fields.items[span_.start..][0..span_.len];
+    }
+
     pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {
         return switch (self.get(ty)) {
             .primitive => |primitive| .{ .builtin = builtinOwner(primitive) },
@@ -177,6 +208,17 @@ pub const Store = struct {
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
                 .{ .builtin = owner }
+            else if (named.kind == .alias)
+                // Aliases are transparent for static dispatch: the owner is the
+                // backing's owner, mirroring the alias-transparent digest path
+                // above. This unwraps alias-over-alias and alias-over-nominal
+                // uniformly (the backing of an alias-over-nominal is itself a
+                // `named` node carrying the nominal's owner). The recursion
+                // terminates because alias chains in checked output are finite.
+                (if (named.backing) |backing|
+                    self.ownerHead(backing.ty)
+                else
+                    .none)
             else
                 .{ .named_type = named.def },
             else => .none,
@@ -185,22 +227,61 @@ pub const Store = struct {
 
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        self.writeTypeDigest(name_store, &hasher, ty);
+        var visiting = DigestVisiting{};
+        self.writeTypeDigest(name_store, &hasher, ty, &visiting);
         return .{ .bytes = hasher.finalResult() };
     }
+
+    /// Stack of types currently being digested. Recursive types reference a
+    /// type already on this stack; the digest encodes such a back reference by
+    /// stack position so cyclic content digests deterministically.
+    const DigestVisiting = struct {
+        items: [digest_visiting_max]TypeId = undefined,
+        len: usize = 0,
+    };
+
+    const digest_visiting_max = 256;
 
     fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
         hasher: *std.crypto.hash.sha2.Sha256,
         ty: TypeId,
+        visiting: *DigestVisiting,
     ) void {
+        for (visiting.items[0..visiting.len], 0..) |open_ty, position| {
+            if (open_ty == ty) {
+                writeBytes(hasher, "cycle");
+                writeU32(hasher, @intCast(position));
+                return;
+            }
+        }
+        if (visiting.len == digest_visiting_max) {
+            // Deeper nesting than the stack tracks cannot contain an
+            // unrecorded cycle shorter than the stack, so digest the type's
+            // identity instead of recursing further.
+            writeBytes(hasher, "deep");
+            writeU32(hasher, @intFromEnum(ty));
+            return;
+        }
+        visiting.items[visiting.len] = ty;
+        visiting.len += 1;
+        defer visiting.len -= 1;
         switch (self.get(ty)) {
             .primitive => |primitive| {
                 writeBytes(hasher, "primitive");
                 writeBytes(hasher, @tagName(primitive));
             },
             .named => |named| {
+                // Aliases are transparent: their digest is their backing's.
+                if (named.kind == .alias) {
+                    const backing = named.backing orelse {
+                        writeBytes(hasher, "alias-without-backing");
+                        return;
+                    };
+                    self.writeTypeDigest(name_store, hasher, backing.ty, visiting);
+                    return;
+                }
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
                 writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
@@ -212,10 +293,18 @@ pub const Store = struct {
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
                     writeBytes(hasher, @tagName(owner));
+                    if (owner == .fields) {
+                        writeBytes(hasher, "fields-backing");
+                        if (named.backing) |backing| {
+                            self.writeTypeDigest(name_store, hasher, backing.ty, visiting);
+                        } else {
+                            writeBytes(hasher, "none");
+                        }
+                    }
                 } else {
                     writeBytes(hasher, "not-builtin");
                 }
-                self.writeTypeSpanDigest(name_store, hasher, named.args);
+                self.writeTypeSpanDigest(name_store, hasher, named.args, visiting);
             },
             .record => |fields| {
                 writeBytes(hasher, "record");
@@ -223,12 +312,12 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(field_slice.len));
                 for (field_slice) |field| {
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
-                    self.writeTypeDigest(name_store, hasher, field.ty);
+                    self.writeTypeDigest(name_store, hasher, field.ty, visiting);
                 }
             },
             .tuple => |items| {
                 writeBytes(hasher, "tuple");
-                self.writeTypeSpanDigest(name_store, hasher, items);
+                self.writeTypeSpanDigest(name_store, hasher, items, visiting);
             },
             .tag_union => |tags| {
                 writeBytes(hasher, "tag_union");
@@ -236,21 +325,21 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(tag_slice.len));
                 for (tag_slice) |tag| {
                     writeBytes(hasher, name_store.tagLabelText(tag.name));
-                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads);
+                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads, visiting);
                 }
             },
             .list => |elem| {
                 writeBytes(hasher, "list");
-                self.writeTypeDigest(name_store, hasher, elem);
+                self.writeTypeDigest(name_store, hasher, elem, visiting);
             },
             .box => |elem| {
                 writeBytes(hasher, "box");
-                self.writeTypeDigest(name_store, hasher, elem);
+                self.writeTypeDigest(name_store, hasher, elem, visiting);
             },
             .func => |function| {
                 writeBytes(hasher, "func");
-                self.writeTypeSpanDigest(name_store, hasher, function.args);
-                self.writeTypeDigest(name_store, hasher, function.ret);
+                self.writeTypeSpanDigest(name_store, hasher, function.args, visiting);
+                self.writeTypeDigest(name_store, hasher, function.ret, visiting);
             },
             .erased => |erased| {
                 writeBytes(hasher, "erased");
@@ -265,11 +354,12 @@ pub const Store = struct {
         name_store: *const names.NameStore,
         hasher: *std.crypto.hash.sha2.Sha256,
         span_: Span,
+        visiting: *DigestVisiting,
     ) void {
         const values = self.span(span_);
         writeU32(hasher, @intCast(values.len));
         for (values) |child| {
-            self.writeTypeDigest(name_store, hasher, child);
+            self.writeTypeDigest(name_store, hasher, child, visiting);
         }
     }
 };
@@ -398,4 +488,68 @@ test "monotype empty spans use shared empty descriptor" {
     try std.testing.expectEqual(Span.empty(), try store.addSpan(&.{}));
     try std.testing.expectEqual(Span.empty(), try store.addFields(&.{}));
     try std.testing.expectEqual(Span.empty(), try store.addTags(&.{}));
+}
+
+test "monotype digest terminates on recursive structural types" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("step");
+
+    // A record whose field is a function returning the record itself.
+    const rec_a = try store.add(.zst);
+    const fn_a = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_a } });
+    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a }});
+    store.types.items[@intFromEnum(rec_a)] = .{ .record = fields_a };
+
+    const first = store.typeDigest(&name_store, rec_a);
+    const again = store.typeDigest(&name_store, rec_a);
+    try std.testing.expect(std.mem.eql(u8, first.bytes[0..], again.bytes[0..]));
+
+    // An isomorphic cycle at different ids digests identically: cycles are
+    // encoded as back references by position, not by id.
+    const rec_b = try store.add(.zst);
+    const fn_b = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_b } });
+    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b }});
+    store.types.items[@intFromEnum(rec_b)] = .{ .record = fields_b };
+
+    const other = store.typeDigest(&name_store, rec_b);
+    try std.testing.expect(std.mem.eql(u8, first.bytes[0..], other.bytes[0..]));
+}
+
+test "monotype digest treats aliases as their backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_name = try name_store.internModuleName("Test");
+    const type_name = try name_store.internTypeName("Pretty");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const str = try store.add(.{ .primitive = .str });
+    const aliased = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+    const nominal = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+
+    const str_digest = store.typeDigest(&name_store, str);
+    const alias_digest = store.typeDigest(&name_store, aliased);
+    const nominal_digest = store.typeDigest(&name_store, nominal);
+    try std.testing.expect(std.mem.eql(u8, str_digest.bytes[0..], alias_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, str_digest.bytes[0..], nominal_digest.bytes[0..]));
 }

@@ -15,6 +15,8 @@ const lir = @import("lir");
 const reporting = @import("reporting");
 
 const builtin_loading = @import("builtin_loading.zig");
+const eval_loader = @import("vendor_eval_loader");
+const native_runtime_libcalls = builtins.native_runtime_libcalls;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
@@ -42,7 +44,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
             extern "kernel32" fn FreeLibrary(hLibModule: std.os.windows.HMODULE) callconv(.winapi) c_int;
         };
 
-        fn open(allocator: Allocator, path: []const u8) anyerror!@This() {
+        fn open(allocator: Allocator, path: [:0]const u8) anyerror!@This() {
             const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
             defer allocator.free(wide_path);
             const handle = kernel32.LoadLibraryW(wide_path.ptr) orelse return error.LlvmBackendUnavailable;
@@ -59,10 +61,24 @@ const EvalDynLib = switch (builtin.target.os.tag) {
         }
     },
     else => struct {
-        inner: std.DynLib,
+        // On a static, no-libc roc binary `std.DynLib` falls back to Zig's
+        // `ElfDynLib`, which mishandles writable segments and applies no dynamic
+        // relocations. Use a vendored loader that does both correctly. Every
+        // other configuration keeps `std.DynLib`, whose `DlDynLib` defers to the
+        // OS dynamic loader.
+        const Inner = if (eval_loader.active) eval_loader.ElfDynLib else std.DynLib;
 
-        fn open(_: Allocator, path: []const u8) anyerror!@This() {
-            return .{ .inner = try std.DynLib.open(path) };
+        inner: Inner,
+
+        fn open(_: Allocator, path: [:0]const u8) anyerror!@This() {
+            // The vendored loader has no dynamic linker behind it, so it needs a
+            // resolver to bind the compiler-rt libcalls native codegen emits.
+            // `std.DynLib` defers to the OS loader, which resolves them itself.
+            if (comptime eval_loader.active) {
+                return .{ .inner = try Inner.open(path, &native_runtime_libcalls.resolve) };
+            } else {
+                return .{ .inner = try Inner.open(path) };
+            }
         }
 
         fn close(self: *@This()) void {
@@ -188,6 +204,23 @@ const AvailableImport = struct {
     env: *const ModuleEnv,
     statement_idx: ?CIR.Statement.Idx,
 };
+
+/// Statement index of an imported type module's main type declaration, mirroring
+/// the package driver's `computeSiblingStatementIdx`. Qualified member lookups
+/// (`Mod.member(...)`) into a type module resolve through the type declaration's
+/// exposed node; regular modules store members under plain names and need no
+/// statement index. Without this, the canonicalizer falls back to the unqualified
+/// lookup path and a type module's exposed functions cannot be called by import
+/// qualification.
+fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.Statement.Idx {
+    switch (env.module_kind) {
+        .type_module => {},
+        else => return null,
+    }
+    const type_ident = env.common.findIdent(module_name) orelse return null;
+    const type_node_idx = env.getExposedTypeNodeIndexById(type_ident) orelse return null;
+    return @enumFromInt(type_node_idx);
+}
 
 const ModuleValidation = enum {
     roc_check,
@@ -421,6 +454,26 @@ pub fn parseAndCanonicalizeProgram(
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
 }
 
+/// Same as `parseAndCanonicalizeProgram` but reuses a Builtin artifact the
+/// caller has already published.
+pub fn parseAndCanonicalizeProgramWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .{ .eval_root = false },
+        pre_published_builtin,
+    );
+}
+
 /// Same as `parseAndCanonicalizeProgramPublishedRoots` but reuses a Builtin
 /// artifact the caller has already published.
 pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
@@ -510,7 +563,7 @@ fn parseAndCheckProgramForProblemsImpl(
             available_imports[i] = .{
                 .name = extra.module_env.module_name,
                 .env = extra.module_env,
-                .statement_idx = null,
+                .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
             };
         }
 
@@ -536,7 +589,7 @@ fn parseAndCheckProgramForProblemsImpl(
         main_imports[i] = .{
             .name = extra.module_env.module_name,
             .env = extra.module_env,
-            .statement_idx = null,
+            .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
         };
     }
 
@@ -840,8 +893,12 @@ pub fn publishProgramForComptimeProblems(
         error.CompileTimeProblem => return .comptime_problems,
         else => return err,
     };
-    cleanupParseAndCanonical(allocator, resources);
-    return .no_problems;
+    defer cleanupParseAndCanonical(allocator, resources);
+
+    return if (resources.checker.problems.problems.items.len == 0)
+        .no_problems
+    else
+        .comptime_problems;
 }
 
 const PublishedRootMode = union(enum) {
@@ -856,7 +913,7 @@ const ComptimeProblemReporting = enum {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
         else => true,
     };
 }
@@ -939,7 +996,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             available_imports[i] = .{
                 .name = extra.module_env.module_name,
                 .env = extra.module_env,
-                .statement_idx = null,
+                .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
             };
         }
 
@@ -969,7 +1026,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         main_imports[i] = .{
             .name = extra.module_env.module_name,
             .env = extra.module_env,
-            .statement_idx = null,
+            .statement_idx = importStatementIdx(extra.module_env, extra.module_env.module_name),
         };
     }
 

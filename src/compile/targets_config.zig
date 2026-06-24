@@ -173,7 +173,7 @@ pub const TargetsConfig = struct {
 
     /// Get the default target for commands that must execute the result on this host.
     /// This excludes build-compatible targets such as wasm32 that are not native
-    /// process executables for `roc run`, and targets that don't produce executables.
+    /// process executables for the default `roc` command, and targets that don't produce executables.
     pub fn getDefaultHostExecutableTarget(self: TargetsConfig) ?RocTarget {
         for (self.targets) |spec| {
             if (spec.output == .exe and spec.target.isExecutableOnHost()) {
@@ -228,7 +228,7 @@ pub const TargetsConfig = struct {
 
         // Extract inputs_dir from string literal token (StringPart token)
         // Dupe the string so we own the memory
-        const inputs_dir: ?[]const u8 = if (targets_section.inputs_path) |tok_idx|
+        const inputs_dir: ?[]const u8 = if (targets_section.inputs_dir) |tok_idx|
             try allocator.dupe(u8, ast.resolve(tok_idx))
         else
             null;
@@ -797,7 +797,7 @@ test "fromAST captures punned wasm identifier config" {
         \\    packages {}
         \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        wasm32: {
         \\            inputs: ["libhost.a", app],
         \\            output: Shared,

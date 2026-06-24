@@ -4,6 +4,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const base = @import("base");
 const unbundle = @import("unbundle.zig");
 const localhost = @import("localhost.zig");
 
@@ -62,6 +63,7 @@ fn getTempDir(allocator: std.mem.Allocator, io: std.Io) Allocator.Error!std.Io.D
 /// Errors that can occur during the download operation.
 pub const DownloadError = error{
     InvalidUrl,
+    InvalidVersion,
     LocalhostWasNotLoopback,
     InvalidHash,
     HttpError,
@@ -70,9 +72,15 @@ pub const DownloadError = error{
     FileError,
 } || unbundle.UnbundleError || std.mem.Allocator.Error;
 
+pub const Version = base.url.Version;
+
+pub const ParsedUrl = base.url.ParsedUrl;
+
+pub const parseUrlPath = base.url.parseUrlPath;
+
 /// Parse URL and validate it meets our security requirements.
-/// Returns the hash from the URL if valid.
-pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
+/// Returns the parsed hash and optional version from the URL if valid.
+pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
     // Check for https:// prefix
     if (std.mem.startsWith(u8, url, "https://")) {
         // This is fine, extract hash from last segment
@@ -86,27 +94,22 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
         return error.InvalidUrl;
     }
 
-    // Extract the last path segment (should be the hash)
-    const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;
-    const hash_part = url[last_slash + 1 ..];
-
-    // Remove .tar.zst extension if present
-    const hash = if (std.mem.endsWith(u8, hash_part, ".tar.zst"))
-        hash_part[0 .. hash_part.len - 8]
-    else
-        hash_part;
-
-    if (hash.len == 0) {
-        return error.NoHashInUrl;
-    }
-
-    return hash;
+    return parseUrlPath(url);
 }
 
+/// Options controlling download and extraction.
+pub const DownloadOptions = struct {
+    /// Maximum allowed decompressed size of the bundle in bytes, or null for
+    /// no limit.
+    max_expanded_bytes: ?u64 = null,
+};
+
 /// Download and extract a bundled tar.zst file from a URL.
+/// Returns the total decompressed size of the bundle in bytes.
 ///
 /// The URL must:
 /// - Start with "https://" or "http://127.0.0.1"
+/// - Optionally have a MAJOR.MINOR.PATCH path segment before the hash
 /// - Have the base58-encoded blake3 hash as the last path segment
 /// - Point to a tar.zst file created with `roc bundle`
 ///
@@ -117,12 +120,14 @@ pub fn downloadAndExtract(
     io: std.Io,
     url: []const u8,
     dest_path: []const u8,
-) DownloadError!void {
+    options: DownloadOptions,
+) DownloadError!u64 {
     var extract_dir = std.Io.Dir.cwd().openDir(io, dest_path, .{}) catch return error.FileError;
     defer extract_dir.close(io);
 
     // Validate URL and extract hash
-    const base58_hash = try validateUrl(url);
+    const parsed_url = try validateUrl(url);
+    const base58_hash = parsed_url.hash;
 
     // Validate the hash before starting any I/O
     const expected_hash = (try unbundle.validateBase58Hash(base58_hash)) orelse {
@@ -155,7 +160,9 @@ pub fn downloadAndExtract(
     defer dir_writer.deinit();
 
     // Extract the content using the streaming architecture
-    unbundle.unbundleStream(allocator.*, &file_reader.interface, dir_writer.extractWriter(), &expected_hash, null) catch |err| {
+    const expanded_bytes = unbundle.unbundleStream(allocator.*, &file_reader.interface, dir_writer.extractWriter(), &expected_hash, null, .{
+        .max_expanded_bytes = options.max_expanded_bytes,
+    }) catch |err| {
         // Clean up temp file on error
         extract_dir.deleteFile(io, temp_filename) catch {};
         return err;
@@ -166,6 +173,8 @@ pub fn downloadAndExtract(
         // If rename fails, just delete the temp file
         extract_dir.deleteFile(io, temp_filename) catch {};
     };
+
+    return expanded_bytes;
 }
 
 /// Download HTTP response body to a file with a unique random suffix.
@@ -213,8 +222,9 @@ fn downloadToFile(
             error.PathAlreadyExists => continue, // Retry with new random suffix
             else => return error.FileError,
         };
+        var file_closed = false;
         errdefer {
-            file.close(io);
+            if (!file_closed) file.close(io);
             dir.deleteFile(io, filename) catch {};
         }
 
@@ -237,6 +247,7 @@ fn downloadToFile(
 
         // Close file after fetch completes
         file.close(io);
+        file_closed = true;
 
         // Check for successful response
         if (fetch_result.status != .ok) {
@@ -259,9 +270,11 @@ pub fn downloadAndExtractToBuffer(
     allocator: *std.mem.Allocator,
     io: std.Io,
     url: []const u8,
+    options: DownloadOptions,
 ) DownloadError!unbundle.BufferExtractWriter {
     // Validate URL and extract hash
-    const base58_hash = try validateUrl(url);
+    const parsed_url = try validateUrl(url);
+    const base58_hash = parsed_url.hash;
 
     // Validate the hash before starting any I/O
     const expected_hash = (try unbundle.validateBase58Hash(base58_hash)) orelse {
@@ -300,7 +313,9 @@ pub fn downloadAndExtractToBuffer(
     errdefer buffer_writer.deinit();
 
     // Extract the content using the streaming architecture
-    try unbundle.unbundleStream(allocator.*, &file_reader.interface, buffer_writer.extractWriter(), &expected_hash, null);
+    _ = try unbundle.unbundleStream(allocator.*, &file_reader.interface, buffer_writer.extractWriter(), &expected_hash, null, .{
+        .max_expanded_bytes = options.max_expanded_bytes,
+    });
 
     return buffer_writer;
 }

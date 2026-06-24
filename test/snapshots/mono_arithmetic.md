@@ -10,7 +10,7 @@ sum = 1 + 2
 # MONO
 ~~~roc
 sum : Dec
-sum = 1.plus(2)
+sum = 1 + 2
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,7 +41,7 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 71)
+		(e-dispatch-call (method "plus") (constraint-fn-var 77)
 			(receiver
 				(e-num (value "1")))
 			(args

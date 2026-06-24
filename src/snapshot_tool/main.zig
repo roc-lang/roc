@@ -482,6 +482,8 @@ fn generateAllReports(
         try reports.append(report);
     }
 
+    _ = try solver.problems.flushPendingStaticExhaustiveness(allocator);
+
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
@@ -2647,15 +2649,11 @@ fn getDefaultedTypeStringWithSeen(
     defer _ = seen.pop();
 
     switch (resolved.desc.content) {
-        .flex => |flex| {
-            // Check if this flex var has a from_numeral constraint
-            const constraints = can_ir.types.sliceStaticDispatchConstraints(flex.constraints);
-            for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
-                    return allocator.dupe(u8, "Dec");
-                }
-            }
-            // No numeral constraint - fall through to TypeWriter
+        .flex => {
+            // Fall through to TypeWriter. `finalizeLiteralDefaults` already
+            // committed concrete `Dec` to the store for any defaulted numeral
+            // before MONO renders, so the live store is the source of truth —
+            // no display-time `Dec` substitution is needed here.
         },
         .structure => |flat_type| {
             switch (flat_type) {
@@ -2761,13 +2759,9 @@ fn getDefaultedTypeStringWithSeen(
         else => {},
     }
 
-    // Use TypeWriter for all other cases - it has proper cycle detection
+    // Use TypeWriter for all other cases - it has proper cycle detection.
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
-
-    // Enable numeral defaulting for MONO output - flex vars with from_numeral
-    // constraint should display as "Dec" instead of showing the constraint
-    type_writer.setDefaultNumeralsToDec(true);
 
     if (is_top_level) {
         try type_writer.write(type_var, .one_line);
@@ -2957,11 +2951,13 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
     defer allocator.free(can_diagnostics);
 
-    // Count only actual errors, not warnings (shadowing_warning is just a warning)
+    // Count only actual errors, not warnings
     var error_count: usize = 0;
     for (can_diagnostics) |diagnostic| {
         switch (diagnostic) {
-            .shadowing_warning => {}, // Skip warnings
+            .shadowing_warning,
+            .unreachable_string_pattern_capture,
+            => {}, // Skip warnings
             else => error_count += 1,
         }
     }
@@ -2970,7 +2966,9 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         std.log.err("MONO CANONICALIZATION ERROR in {s}: {d} error(s) in generated MONO output:", .{ source_path, error_count });
         for (can_diagnostics) |diagnostic| {
             switch (diagnostic) {
-                .shadowing_warning => {}, // Skip warnings in output too
+                .shadowing_warning,
+                .unreachable_string_pattern_capture,
+                => {}, // Skip warnings in output too
                 else => {
                     const tag_name = @tagName(diagnostic);
                     std.log.err("  - {s}", .{tag_name});
@@ -3640,7 +3638,10 @@ fn processDocsSnapshot(
     }
 
     for (modules) |mod| {
-        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, mod.package_name, mod.path) catch |err| {
+        // Docs show the alias the root uses for a package, not its internal
+        // identity name (full URL or absolute path).
+        const display_pkg_name = build_env.rootAliasForPackage(mod.package_name) orelse mod.package_name;
+        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, display_pkg_name, mod.path) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
@@ -3651,6 +3652,10 @@ fn processDocsSnapshot(
         mod_docs.name = clean_name;
         try module_docs_list.append(allocator, mod_docs);
     }
+
+    // Modules are collected in package hash-map order, which is not
+    // deterministic; docs output must be.
+    std.mem.sort(docs_mod.DocModel.ModuleDocs, module_docs_list.items, {}, docs_mod.DocModel.moduleDocsLessThan);
 
     // Build PackageDocs
     const package_name = try allocator.dupe(u8, "test-app");
@@ -4108,13 +4113,16 @@ fn processDevObjectSnapshot(
                     break :target_snapshot;
                 },
             };
+            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests);
+            defer allocator.free(build_roots);
+
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
                 allocator,
                 .{
                     .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
-                .{ .requests = root_artifact.root_requests.runtime_requests },
+                .{ .requests = build_roots, .include_static_data_exports = true },
                 .{
                     .target_usize = target_usize,
                 },

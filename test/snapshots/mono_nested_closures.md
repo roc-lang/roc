@@ -19,7 +19,7 @@ x : Dec
 x = 10
 
 make_adder : Dec -> (Dec -> Dec)
-make_adder = |y| |z| x.plus(y).plus(z)
+make_adder = |y| |z| x + y + z
 
 add_five : Dec -> Dec
 add_five = make_adder(5)
@@ -92,9 +92,9 @@ EndOfFile,
 				(e-lambda
 					(args
 						(p-assign (ident "z")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 64)
+					(e-dispatch-call (method "plus") (constraint-fn-var 67)
 						(receiver
-							(e-dispatch-call (method "plus") (constraint-fn-var 62)
+							(e-dispatch-call (method "plus") (constraint-fn-var 65)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -106,13 +106,13 @@ EndOfFile,
 								(p-assign (ident "z")))))))))
 	(d-let
 		(p-assign (ident "add_five"))
-		(e-call (constraint-fn-var 99)
+		(e-call (constraint-fn-var 105)
 			(e-lookup-local
 				(p-assign (ident "make_adder")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 130)
+		(e-call (constraint-fn-var 139)
 			(e-lookup-local
 				(p-assign (ident "add_five")))
 			(e-num (value "3")))))

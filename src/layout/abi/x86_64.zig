@@ -91,7 +91,7 @@ pub fn classifyWindows(store: *const Store, idx: Idx) Class {
                 .str => return .memory,
             }
         },
-        .box, .box_of_zst => return .integer, // single pointer
+        .box, .box_of_zst, .ptr => return .integer, // single pointer
         .list, .list_of_zst => return .memory, // 24-byte aggregate
         .struct_, .tag_union, .closure, .erased_callable => {},
         .zst => unreachable,
@@ -136,7 +136,7 @@ pub fn classifySystemV(store: *const Store, idx: Idx, ctx: Context) [8]Class {
         // exactly like a box. Classifying it as an aggregate would recurse
         // forever: classifyAggregateSysV has no case for it and would route
         // it right back here.
-        .box, .box_of_zst, .erased_callable => return Class.one_integer,
+        .box, .box_of_zst, .ptr, .erased_callable => return Class.one_integer,
         .list, .list_of_zst => return integerAggregateSysV(size),
         .struct_, .tag_union, .closure => {
             if (size > 64) return Class.stack;
@@ -167,6 +167,13 @@ fn classifyAggregateSysV(store: *const Store, result: *[8]Class, base_offset: u3
             var i: u32 = 0;
             while (i < field_count) : (i += 1) {
                 const field_off = base_offset + store.getStructFieldOffset(struct_idx, i);
+                // Unnamed padding holds uninitialized, alignment-1 bytes — not a
+                // typed member — so it classifies as INTEGER bytes (like a C
+                // `char[N]`), regardless of the type it borrowed its size from.
+                if (store.getStructFieldIsPadding(struct_idx, i)) {
+                    classifyPaddingBytesSysV(result, field_off, store.getStructFieldSize(struct_idx, i));
+                    continue;
+                }
                 const field_idx = store.getStructFieldLayout(struct_idx, i);
                 classifyMemberSysV(store, result, field_off, field_idx);
             }
@@ -211,6 +218,18 @@ fn classifyMemberSysV(store: *const Store, result: *[8]Class, offset: u32, idx: 
 
 fn combineInto(result: *[8]Class, eightbyte: usize, class: Class) void {
     result[eightbyte] = Class.combineSystemV(result[eightbyte], class);
+}
+
+/// Classify `size` bytes of unnamed padding starting at `offset` as INTEGER,
+/// marking every eightbyte the padding touches. Padding bytes are opaque
+/// (alignment 1), so they behave like a C `char[N]` member for ABI purposes.
+fn classifyPaddingBytesSysV(result: *[8]Class, offset: u32, size: u32) void {
+    if (size == 0) return;
+    var eightbyte = offset / 8;
+    const last = (offset + size - 1) / 8;
+    while (eightbyte <= last) : (eightbyte += 1) {
+        combineInto(result, eightbyte, .integer);
+    }
 }
 
 /// Apply System V's post-merge cleanup rules and return the final eightbyte classes.
@@ -288,6 +307,21 @@ test "x86_64 SysV: Plant and other small structs use registers" {
     // { i64, f64 } -> INTEGER then SSE.
     const mixed = try testStruct(&store, &.{ .i64, .f64 });
     try testing.expectEqual([8]Class{ .integer, .sse, .none, .none, .none, .none, .none, .none }, classifySystemV(&store, mixed, .arg));
+}
+
+test "x86_64 SysV: unnamed padding classifies as integer bytes, not its declared type" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // { x : U64, _ : F64 } — the second eightbyte is 8 bytes of unnamed, alignment-1
+    // padding. It must classify as INTEGER (like a C `char[8]`), NOT SSE as a real
+    // `double` member would, so a nominal mirroring `{ uint64_t; char[8]; }` is passed
+    // in two integer registers rather than one integer + one SSE register.
+    const padded = try store.putNominalStructFields(&.{
+        .{ .index = 0, .layout = .u64 },
+        .{ .index = 1, .layout = .f64, .is_padding = true },
+    });
+    try testing.expectEqual(Class.two_integers, classifySystemV(&store, padded, .arg));
 }
 
 test "x86_64 SysV: large aggregates go to memory" {

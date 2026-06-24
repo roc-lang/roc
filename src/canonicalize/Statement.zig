@@ -49,6 +49,13 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         anno: ?Annotation.Idx,
     },
+    /// A rebindable declaration using the "var" keyword, with no initializer.
+    ///
+    /// Reads are only valid after every control-flow path has assigned this var.
+    s_var_uninitialized: struct {
+        pattern_idx: Pattern.Idx,
+        anno: ?Annotation.Idx,
+    },
     /// Reassignment of a previously declared var
     ///
     /// Not valid at the top level of a module
@@ -118,6 +125,20 @@ pub const Statement = union(enum) {
     /// }
     /// ```
     s_while: struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+    },
+    /// A `while True`/`while Bool.True` loop that cannot break from this loop.
+    ///
+    /// Kept distinct from `s_while` so type checking can treat it as divergent.
+    s_infinite_loop: struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+    },
+    /// A `while True`/`while Bool.True` loop with a break that exits this loop.
+    ///
+    /// This has the same type as an ordinary `while`, but stays distinct for tooling.
+    s_breakable_loop: struct {
         cond: Expr.Idx,
         body: Expr.Idx,
     },
@@ -236,6 +257,17 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .s_var_uninitialized => |v| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-var-uninitialized");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getPattern(v.pattern_idx).pushToSExprTree(env, tree, v.pattern_idx);
+
+                try tree.endNode(begin, attrs);
+            },
             .s_reassign => |r| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-reassign");
@@ -306,6 +338,30 @@ pub const Statement = union(enum) {
             .s_while => |s| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-while");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
+                try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_infinite_loop => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-infinite-loop");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
+                try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_breakable_loop => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-breakable-loop");
                 const region = env.store.getStatementRegion(stmt_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

@@ -12,7 +12,7 @@ platform ""
         "roc_main": Host.triple!,
     }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         arm64mac: { inputs: [app] },
         x64mac: { inputs: [app] },
         x64glibc: { inputs: [app] },

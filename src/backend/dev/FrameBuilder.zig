@@ -88,6 +88,13 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// This does NOT include space for callee-saved registers.
         stack_size: u32 = 0,
 
+        /// AArch64-only register that should hold the caller's stack-argument
+        /// base, which is the value of SP on callee entry. Deferred AArch64
+        /// prologues set FP to the bottom of the allocated frame, so incoming
+        /// stack arguments are at FP + actual_stack_alloc rather than a fixed
+        /// FP offset.
+        caller_stack_arg_base_reg: ?GeneralReg = null,
+
         /// Frame-pointer strategy for this function.
         frame_pointer_policy: FramePointerPolicy = FramePointerPolicy.forTarget(roc_target),
 
@@ -108,6 +115,20 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// Set the stack space needed for local variables.
         pub fn setStackSize(self: *Self, size: u32) void {
             self.stack_size = size;
+        }
+
+        /// Ask the AArch64 prologue to materialize the caller's stack-argument
+        /// base into a callee-saved register. The caller is responsible for
+        /// marking that register as used so the normal callee-saved save/restore
+        /// path preserves the incoming value before this prologue overwrites it.
+        pub fn setCallerStackArgBaseReg(self: *Self, reg: GeneralReg) void {
+            if (!is_aarch64) {
+                if (std.debug.runtime_safety) {
+                    @panic("caller stack-argument base register is only meaningful on aarch64");
+                }
+                unreachable;
+            }
+            self.caller_stack_arg_base_reg = reg;
         }
 
         /// Override the frame-pointer strategy for this function.
@@ -401,6 +422,10 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 }
             }
 
+            if (self.caller_stack_arg_base_reg != null) {
+                size += if (aligned_frame <= 4095) 4 else 8;
+            }
+
             return size;
         }
 
@@ -450,6 +475,16 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
         }
 
+        fn emitCallerStackArgBaseAarch64(self: *Self, emit: *EmitType, aligned_frame: u32) Allocator.Error!void {
+            const reg = self.caller_stack_arg_base_reg orelse return;
+            if (aligned_frame <= 4095) {
+                try emit.addRegRegImm12(.w64, reg, .FP, @intCast(aligned_frame));
+            } else {
+                try emit.movRegImm64(.IP0, aligned_frame);
+                try emit.addRegRegReg(.w64, reg, .FP, .IP0);
+            }
+        }
+
         fn emitPrologueAarch64(self: *Self, emit: *EmitType) Allocator.Error!i32 {
             // Calculate total frame size.
             // Use the FULL callee-saved area size (not just used pairs) because
@@ -484,6 +519,11 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
             // 3. Save callee-saved register pairs at fixed FP offsets
             try self.emitSaveCalleeSavedAarch64(emit);
+
+            // 4. The caller's outgoing stack arguments are above this frame.
+            // Materialize their base after saving callee-saved registers so the
+            // original value of this register is preserved in the save area.
+            try self.emitCallerStackArgBaseAarch64(emit, aligned_frame);
 
             self.actual_stack_alloc = aligned_frame;
 
@@ -1046,6 +1086,26 @@ test "DeferredFrameBuilder Windows aarch64 large frame prologue size matches emi
     _ = try frame.emitPrologue(&emit);
 
     try std.testing.expect(frame.actual_stack_alloc >= 4096);
+    try std.testing.expectEqual(calculated_size, @as(u32, @intCast(emit.buf.items.len)));
+}
+
+test "DeferredFrameBuilder aarch64 caller stack arg base prologue size matches emitted bytes" {
+    const Emit = aarch64.MacEmit;
+    const Builder = DeferredFrameBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Builder.init();
+    const x28_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X28);
+    frame.setCalleeSavedMask(x28_bit);
+    frame.setStackSize(64);
+    frame.setCallerStackArgBaseReg(.X28);
+
+    const calculated_size = frame.calculatePrologueSize();
+    _ = try frame.emitPrologue(&emit);
+
+    try std.testing.expect(frame.actual_stack_alloc >= 64);
     try std.testing.expectEqual(calculated_size, @as(u32, @intCast(emit.buf.items.len)));
 }
 

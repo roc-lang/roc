@@ -65,9 +65,6 @@ scratch_tags: std.array_list.Managed(types_mod.Tag),
 import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
-/// When true, flex vars with from_numeral constraint are displayed as "Dec"
-/// instead of showing the constraint. Used for MONO output.
-default_numerals_to_dec: bool = false,
 
 const ByteWrite = std.Io.Writer;
 
@@ -163,12 +160,6 @@ pub fn deinit(self: *TypeWriter) void {
 /// is returned by value, which invalidates the original pointer.
 pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mapping_mod.ImportMapping) void {
     self.import_mapping = import_mapping;
-}
-
-/// Enable defaulting of flex vars with from_numeral constraint to "Dec".
-/// Used for MONO output where we want to show concrete types.
-pub fn setDefaultNumeralsToDec(self: *TypeWriter, enabled: bool) void {
-    self.default_numerals_to_dec = enabled;
 }
 
 /// Reset type writer state
@@ -410,32 +401,16 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
 
         switch (resolved.desc.content) {
             .flex => |flex| {
-                // Check if this flex var should be defaulted to Dec (has from_numeral constraint)
                 const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-                var has_numeral = false;
-                if (self.default_numerals_to_dec) {
-                    for (constraints) |constraint| {
-                        if (constraint.origin == .from_numeral) {
-                            has_numeral = true;
-                            break;
-                        }
-                    }
+
+                if (flex.name) |ident_idx| {
+                    try writer.writeAll(self.getIdent(ident_idx));
+                } else {
+                    try self.writeFlexVarName(writer, var_, context, root_var);
                 }
 
-                if (has_numeral) {
-                    // Default numeral types to Dec for display
-                    try writer.writeAll("Dec");
-                    // Don't add constraints for defaulted types
-                } else {
-                    if (flex.name) |ident_idx| {
-                        try writer.writeAll(self.getIdent(ident_idx));
-                    } else {
-                        try self.writeFlexVarName(writer, var_, context, root_var);
-                    }
-
-                    for (constraints) |constraint| {
-                        try self.appendStaticDispatchConstraint(var_, constraint);
-                    }
+                for (constraints) |constraint| {
+                    try self.appendStaticDispatchConstraint(var_, constraint);
                 }
             },
             .rigid => |rigid| {
@@ -1131,25 +1106,23 @@ fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
         }
     }
 
-    const name = self.idents.getText(idx);
+    return stripBuiltinQualification(self.idents.getText(idx));
+}
 
-    // Strip "Builtin." prefix from builtin types for display
-    // Types like "Builtin.Try" should display as "Try", "Builtin.Num.Numeral" as "Numeral"
+/// Strip the implementation-detail `Builtin.` / `Num.` qualification from a
+/// type name for user-facing display: "Builtin.Try" -> "Try",
+/// "Builtin.Num.Dec" -> "Dec", "Num.U8" -> "U8".
+pub fn stripBuiltinQualification(name: []const u8) []const u8 {
     if (std.mem.startsWith(u8, name, "Builtin.")) {
-        const without_builtin = name[8..]; // Skip "Builtin."
-        // Also strip "Num." if present (e.g., "Builtin.Num.Numeral" -> "Numeral")
+        const without_builtin = name[8..];
         if (std.mem.startsWith(u8, without_builtin, "Num.")) {
-            return without_builtin[4..]; // Skip "Num."
+            return without_builtin[4..];
         }
         return without_builtin;
     }
-
-    // Strip "Num." prefix from builtin number types for display
-    // Number types are stored as "Num.U8", "Num.F32", etc. but should display as "U8", "F32"
     if (std.mem.startsWith(u8, name, "Num.")) {
-        return name[4..]; // Skip "Num."
+        return name[4..];
     }
-
     return name;
 }
 

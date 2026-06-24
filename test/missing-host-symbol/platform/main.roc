@@ -10,7 +10,7 @@ platform ""
         "roc_host_vanish": Host.vanish!,
     }
     targets: {
-        inputs: "../../dylib/platform/targets/",
+        inputs_dir: "../../dylib/platform/targets/",
         arm64mac: { inputs: ["libhost.a", app], output: Shared },
         x64musl: { inputs: ["libhost.a", app], output: Shared },
         arm64musl: { inputs: ["libhost.a", app], output: Shared },

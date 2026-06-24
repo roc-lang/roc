@@ -216,6 +216,33 @@ test "check - repro - issue 9129 - control no closure" {
     try test_env.assertNoErrors();
 }
 
+test "check - repro - issue 9693 - polymorphic helper method constraints are not defaulted at def site" {
+    const src =
+        \\is_valid : Str -> U64
+        \\is_valid = |str| {
+        \\    str.to_utf8().map_with_index(char_value).len()
+        \\}
+        \\
+        \\char_value = |char, index| {
+        \\    if char >= '0' and char <= '9' {
+        \\        Ok((10 - index) * (char - '0').to_u64())
+        \\    } else {
+        \\        Err(BadChar)
+        \\    }
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    dbg is_valid("1234")
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - issue 9129 - with explicit block" {
     // Test with explicit block - still fails
     const src =
@@ -677,6 +704,65 @@ test "check - repro - self-recursive local fn recursive use still type-checked a
     defer test_env.deinit();
 
     try test_env.assertOneTypeError("TYPE MISMATCH");
+}
+
+test "check - repro - issue 9670 - typed local binding of parametric fn result" {
+    // Faithful reduction of the issue: a parser-combinator-style function whose
+    // result is assigned to a local binding with an explicit type annotation that
+    // reuses the enclosing function's type parameters produces a spurious
+    // `Parser(input, a)` != `Parser(input, a)` mismatch (the two sides print
+    // identically). NOTE: this currently FAILS — it documents the open bug.
+    //
+    // Root cause is NOT the local annotation (see the minimal case below): the
+    // trigger is the multi-parameter alias `Parser(input, output)` used with one
+    // parameter (`input`) passed through unchanged and another (`a`) wrapped in a
+    // different constructor (`List(a)`) between argument and return.
+    const src =
+        \\Parser(input, output) : { parse : input -> output }
+        \\
+        \\sep_by1 : Parser(input, a), Parser(input, sep) -> Parser(input, List(a))
+        \\sep_by1 = |_parser, _separator| { parse: |_in| [] }
+        \\
+        \\sep_by : Parser(input, a), Parser(input, sep) -> Parser(input, List(a))
+        \\sep_by = |parser, separator| {
+        \\    sb1 : Parser(input, List(a))
+        \\    sb1 = sep_by1(parser, separator)
+        \\    sb1
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9670 - minimal: multi-param alias, passthrough + wrapped param" {
+    // Minimal trigger for issue 9670. A two-parameter type alias is applied with
+    // its first parameter (`input`) passed through unchanged and its second
+    // parameter (`a`) wrapped in `List` in the return. Calling such a function
+    // yields a spurious `Parser(input, a)` != `Parser(input, a)` mismatch on the
+    // argument. NOTE: this currently FAILS — it documents the open bug.
+    //
+    // Contrast (all pass today):
+    //   * single-param alias wrapped in return:  `Wrap(a) -> Wrap(List(a))`
+    //   * same param shape in arg and return:    `Parser(input, a) -> Parser(input, a)`
+    //   * bare type var:                         `a -> List(a)`
+    //   * pure builtin List chain:               `List(a) -> List(List(a))`
+    const src =
+        \\Parser(input, output) : { parse : input -> output }
+        \\
+        \\f : Parser(input, a) -> Parser(input, List(a))
+        \\f = |_p| { parse: |_in| [] }
+        \\
+        \\g : Parser(input, a) -> Parser(input, List(a))
+        \\g = |p| f(p)
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
 }
 
 test "check - repro - issue 9491 follow-up - top-level mutually recursive parametric fns" {

@@ -58,7 +58,7 @@ NO CHANGE
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_lte") (constraint-fn-var 60)
+						(e-dispatch-call (method "is_lte") (constraint-fn-var 63)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -67,22 +67,22 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "n")))))
 				(if-else
-					(e-dispatch-call (method "plus") (constraint-fn-var 135)
+					(e-dispatch-call (method "plus") (constraint-fn-var 144)
 						(receiver
-							(e-call (constraint-fn-var 99)
+							(e-call (constraint-fn-var 105)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 95)
+								(e-dispatch-call (method "minus") (constraint-fn-var 101)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(args
 										(e-num (value "1"))))))
 						(args
-							(e-call (constraint-fn-var 134)
+							(e-call (constraint-fn-var 143)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 130)
+								(e-dispatch-call (method "minus") (constraint-fn-var 139)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
@@ -93,7 +93,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, a -> a, a.plus : a, a -> a]")))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, b -> a, a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, a -> a, a.plus : a, a -> a]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, b -> a, a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
 ~~~

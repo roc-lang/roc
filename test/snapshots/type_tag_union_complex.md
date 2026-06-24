@@ -32,9 +32,26 @@ handleResponse = |_response| "handled"
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+DUPLICATE DEFINITION - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
-NIL
+**DUPLICATE DEFINITION**
+The name `Try` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_tag_union_complex.md:7:1:7:52:**
+```roc
+Try : [Success(Str), Error(Str), Warning(Str, I32)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Try` was already defined here:
+**type_tag_union_complex.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/main.roc" }
+```
+^
+
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

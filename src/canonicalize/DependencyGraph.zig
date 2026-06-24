@@ -193,9 +193,19 @@ fn collectExprDependencies(
                 }
                 try pending.append(stack_allocator, call.receiver);
             },
+            .e_interpolation => |interpolation| {
+                for (cir.store.sliceExpr(interpolation.parts)) |part_idx| {
+                    try pending.append(stack_allocator, part_idx);
+                }
+                try pending.append(stack_allocator, interpolation.first);
+            },
             .e_structural_eq => |eq| {
                 try pending.append(stack_allocator, eq.rhs);
                 try pending.append(stack_allocator, eq.lhs);
+            },
+            .e_structural_hash => |h| {
+                try pending.append(stack_allocator, h.hasher);
+                try pending.append(stack_allocator, h.value);
             },
             .e_method_eq => |eq| {
                 try pending.append(stack_allocator, eq.rhs);
@@ -236,6 +246,7 @@ fn collectExprDependencies(
                     switch (stmt) {
                         .s_decl => |decl| try pending.append(stack_allocator, decl.expr),
                         .s_var => |var_stmt| try pending.append(stack_allocator, var_stmt.expr),
+                        .s_var_uninitialized => {},
                         .s_reassign => |reassign| try pending.append(stack_allocator, reassign.expr),
                         .s_dbg => |dbg| try pending.append(stack_allocator, dbg.expr),
                         .s_expr => |expr_stmt| try pending.append(stack_allocator, expr_stmt.expr),
@@ -244,6 +255,14 @@ fn collectExprDependencies(
                         .s_while => |while_stmt| {
                             try pending.append(stack_allocator, while_stmt.body);
                             try pending.append(stack_allocator, while_stmt.cond);
+                        },
+                        .s_infinite_loop => |loop_stmt| {
+                            try pending.append(stack_allocator, loop_stmt.body);
+                            try pending.append(stack_allocator, loop_stmt.cond);
+                        },
+                        .s_breakable_loop => |loop_stmt| {
+                            try pending.append(stack_allocator, loop_stmt.body);
+                            try pending.append(stack_allocator, loop_stmt.cond);
                         },
                         .s_return => |ret| try pending.append(stack_allocator, ret.expr),
                         .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
@@ -278,6 +297,7 @@ fn collectExprDependencies(
             .e_return => |ret| {
                 try pending.append(stack_allocator, ret.expr);
             },
+            .e_break => {},
             .e_for => |for_expr| {
                 try pending.append(stack_allocator, for_expr.body);
                 try pending.append(stack_allocator, for_expr.expr);

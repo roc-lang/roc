@@ -160,6 +160,16 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "String interpolation",
     },
 
+    // Host-interop layout: a nominal record with an unnamed padding field and a
+    // non-alphabetical declared order must reach the host with the matching C /
+    // extern-struct byte layout (z@0, padding@4, a@8). The host reads the fields
+    // at those offsets and returns "<z*100 + a>"; 11/22 -> "1122".
+    .{
+        .roc_file = "test/fx/host_interop_padding.roc",
+        .io_spec = "1>1122",
+        .description = "Nominal record declared-order + unnamed padding matches the host C struct layout",
+    },
+
     // Lookup tests
     .{
         .roc_file = "test/fx/numeric_lookup_test.roc",
@@ -170,6 +180,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/string_lookup_test.roc",
         .io_spec = "1>hello",
         .description = "String lookup",
+    },
+    .{
+        .roc_file = "test/fx/dict_pseudo_seed_repro.roc",
+        .io_spec = "1>b",
+        .description = "Regression test: compiled Dict operations call the hasher builtins",
     },
     .{
         .roc_file = "test/fx/test_direct_string.roc",
@@ -522,6 +537,31 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/keep_oks.roc",
         .io_spec = "1>done",
         .description = "Regression test: Monomorphize panic when callback always returns Ok but match expects Err tag",
+    },
+
+    // Leak regression tests for the address-taken element-decref callbacks in
+    // the list/str builtins. The lld COFF linker once misresolved strJoinWithC's
+    // &strDecref callback into .rdata, silently leaking every heap element string
+    // of a consumed List(Str) under `roc build` (LLVM backend) on x64 Windows.
+    // These apps build runtime heap strings (>= 24 bytes, derived from stdin) so
+    // the fx host's tracking allocator reports any missed decref as a leak, which
+    // the harness turns into a hard failure. Note: the listReverse/listPrepend
+    // wrappers are not reachable from the current Roc surface (List.rev is pure
+    // Roc; there is no List.prepend), so they have no coverage here.
+    .{
+        .roc_file = "test/fx/leak_join_with_heap_strs.roc",
+        .io_spec = "0<xy|1>joined bytes: 98",
+        .description = "Regression test: Str.join_with consuming a unique heap List(Str) frees its element strings (lld-COFF &strDecref misresolution)",
+    },
+    .{
+        .roc_file = "test/fx/leak_list_str_ops.roc",
+        .io_spec = "0<xy|1>ops done: 3 5",
+        .description = "Leak coverage for refcounted-element list ops (concat/drop_at/sublist/replace/swap/append/release_excess_capacity callback paths in dev_wrappers.zig)",
+    },
+    .{
+        .roc_file = "test/fx/leak_list_str_drop_nested.roc",
+        .io_spec = "0<xy|1>drop done",
+        .description = "Leak coverage for dropped heap List(Str) and List(List(Str)) (roc_builtins_list_decref_str / _flat_list callback paths)",
     },
 };
 

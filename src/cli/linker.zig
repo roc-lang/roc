@@ -8,11 +8,12 @@ const builtin = @import("builtin");
 const collections = @import("collections");
 const build_options = @import("build_options");
 const libc_finder = @import("libc_finder.zig");
-const stack_probe = @import("stack_probe.zig");
 const embedded_lld = @import("embedded_lld");
-const CodeSignature = @import("macho/CodeSignature.zig");
+const stack_probe = embedded_lld.stack_probe;
+const CodeSignature = @import("vendor_macho").CodeSignature;
 const DwarfSplice = @import("macho/DwarfSplice.zig");
-const RocTarget = @import("roc_target").RocTarget;
+const roc_target = @import("roc_target");
+const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
@@ -35,8 +36,8 @@ pub const TargetAbi = enum {
     gnu,
 
     /// Convert from RocTarget to TargetAbi
-    pub fn fromRocTarget(roc_target: RocTarget) TargetAbi {
-        return if (roc_target.isStatic()) .musl else .gnu;
+    pub fn fromRocTarget(target: RocTarget) TargetAbi {
+        return if (target.isStatic()) .musl else .gnu;
     }
 };
 
@@ -95,6 +96,14 @@ pub const LinkConfig = struct {
 
     /// Symbols that must remain live even under section garbage collection.
     force_undefined_symbols: []const []const u8 = &.{},
+
+    /// Host-declared symbols to force-include and place in the shared library's
+    /// export table. Only consulted for shared-library output. Generalizes the
+    /// wasm `--export` model to native formats so a Roc-built shared library
+    /// exports the host's public API on every target rather than relying on the
+    /// platform linker's implicit default-visibility auto-export (which COFF
+    /// does not do).
+    export_symbols: []const []const u8 = &.{},
 
     /// Whether to allow LLD to exit early on errors
     can_exit_early: bool = false,
@@ -161,6 +170,55 @@ fn appendForceUndefinedSymbol(
             const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
             try args.append(undefined_arg);
         },
+    }
+}
+
+/// Emit the flags that both force-include `symbol` and place it in the shared
+/// library's export table, in each linker's spelling. Force-inclusion matters
+/// because an outward export is typically unreferenced by the rest of the link
+/// (the loader resolves it at runtime), so lazy archive members holding it
+/// would otherwise be dropped.
+fn appendExportSymbol(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    target_os: std.Target.Os.Tag,
+    symbol: []const u8,
+) LinkError!void {
+    switch (target_os) {
+        .macos => {
+            const prefixed = std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append("-exported_symbol");
+            try args.append(prefixed);
+            try args.append("-u");
+            try args.append(prefixed);
+        },
+        .windows => {
+            // `/export:` adds the symbol to the export table and as an undefined,
+            // which pulls its archive member and roots it against `/opt:ref`.
+            const export_arg = std.fmt.allocPrint(ctx.arena, "/export:{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(export_arg);
+        },
+        else => {
+            const export_arg = std.fmt.allocPrint(ctx.arena, "--export-dynamic-symbol={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(export_arg);
+            try args.append(undefined_arg);
+        },
+    }
+}
+
+fn appendSharedLibraryExports(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    target_os: std.Target.Os.Tag,
+    target_format: TargetFormat,
+    output_kind: OutputKind,
+    export_symbols: []const []const u8,
+) LinkError!void {
+    if (output_kind != .shared_lib or target_format == .wasm) return;
+
+    for (export_symbols) |symbol| {
+        try appendExportSymbol(ctx, args, target_os, symbol);
     }
 }
 
@@ -368,11 +426,17 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 else => try args.append("arm64"), // default to arm64
             }
 
-            // Add platform version - use a conservative minimum that works across macOS versions
+            // Roc rewrites the ad-hoc code signature after patching Mach-O
+            // load commands. Suppress lld's content-derived LC_UUID so the
+            // final executable bytes do not depend on lld's pre-patch view of
+            // the output, which includes the output basename in the signature.
+            try args.append("-no_uuid");
+
+            // Add platform version metadata required by Mach-O links.
             try args.append("-platform_version");
             try args.append("macos");
-            try args.append("13.0"); // minimum deployment target
-            try args.append("13.0"); // SDK version
+            try args.append(roc_target.macos_deployment.linker_version);
+            try args.append(roc_target.macos_deployment.linker_version);
 
             if (config.macho_dwarf_object != null) {
                 // The post-link DWARF splice adds a __DWARF load command, so
@@ -661,6 +725,10 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
         try appendForceUndefinedSymbol(ctx, &args, target_os, symbol);
     }
 
+    // Force-include and export the host's declared exports from a shared
+    // library. (wasm shared output uses --export via config.wasm_exports.)
+    try appendSharedLibraryExports(ctx, &args, target_os, config.target_format, config.output_kind, config.export_symbols);
+
     // For WASM targets, wrap platform files in --whole-archive to include all symbols
     // This ensures host exports (init, handleEvent, update) aren't stripped even when
     // not referenced by other code
@@ -772,6 +840,8 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
 
 const macho = std.macho;
 
+const deterministic_macho_code_signature_identifier = "roc";
+
 /// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
 /// callsite in `link` for why this is needed.
 fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!void {
@@ -852,21 +922,31 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
     const linkedit = linkedit_seg orelse return error.MissingLinkeditSegment;
 
     const page_size: u16 = if (header.cputype == macho.CPU_TYPE_ARM64) 0x4000 else 0x1000;
-    const ident = std.fs.path.basename(path);
+    const ident = deterministic_macho_code_signature_identifier;
 
     // The signature hashes every page before LC_CODE_SIGNATURE's dataoff,
     // including page 0 with the load commands. Its exact size is known up
     // front (one CodeDirectory blob, no special slots), so any load command
-    // growth must be written back before hashing.
+    // size changes must be written back before hashing.
     const hash_size = std.crypto.hash.sha2.Sha256.digest_length;
     const total_pages = std.mem.alignForward(usize, cs.dataoff, page_size) / page_size;
     const exact_size = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) +
         @sizeOf(macho.CodeDirectory) + ident.len + 1 + total_pages * hash_size;
 
-    if (exact_size > cs.datasize) {
-        const grow = exact_size - cs.datasize;
+    const old_datasize = cs.datasize;
+    const old_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, old_datasize);
+    if (try file.length(io) != old_sig_end) return error.CodeSignatureNotAtEnd;
+
+    if (exact_size != old_datasize) {
         cs.datasize = @intCast(exact_size);
-        linkedit.filesize += grow;
+        if (exact_size > old_datasize) {
+            const grow: u64 = @intCast(exact_size - old_datasize);
+            linkedit.filesize += grow;
+        } else {
+            const shrink: u64 = @intCast(old_datasize - exact_size);
+            if (linkedit.filesize < shrink) return error.InvalidCodeSignatureSize;
+            linkedit.filesize -= shrink;
+        }
         linkedit.vmsize = std.mem.alignForward(u64, linkedit.filesize, page_size);
         try file.writePositionalAll(io, cmds_buf, @sizeOf(macho.mach_header_64));
     }
@@ -888,13 +968,8 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
     const sig = sig_bytes.written();
     std.debug.assert(sig.len == exact_size);
     try file.writePositionalAll(io, sig, cs.dataoff);
-    if (sig.len < cs.datasize) {
-        // Zero the slack so stale signature bytes cannot survive within the
-        // load command's extent.
-        const slack = try ctx.arena.alloc(u8, cs.datasize - sig.len);
-        @memset(slack, 0);
-        try file.writePositionalAll(io, slack, cs.dataoff + sig.len);
-    }
+    const new_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, @intCast(sig.len));
+    try file.setLength(io, new_sig_end);
 }
 
 fn findArg(args: []const []const u8, needle: []const u8) ?usize {
@@ -1019,6 +1094,39 @@ test "force undefined symbols use target linker spelling" {
     };
     const linux_args = try buildLinkArgs(&ctx, linux_config);
     _ = findArg(linux_args.items, "--undefined=roc__answer") orelse return error.MissingForceUndefined;
+}
+
+test "shared library exports use target linker spelling" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    // Windows: /export: both exports and force-includes.
+    var win_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &win_args, .windows, .coff, .shared_lib, &.{"roc_run_app"});
+    _ = findArg(win_args.items, "/export:roc_run_app") orelse return error.MissingExport;
+
+    // macOS: -exported_symbol + -u, both underscore-prefixed.
+    var mac_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &mac_args, .macos, .macho, .shared_lib, &.{"roc_run_app"});
+    const mac_exp_idx = findArg(mac_args.items, "-exported_symbol") orelse return error.MissingExport;
+    try std.testing.expect(mac_exp_idx + 1 < mac_args.items.len);
+    try std.testing.expectEqualStrings("_roc_run_app", mac_args.items[mac_exp_idx + 1]);
+
+    // ELF: --export-dynamic-symbol + --undefined to root and pull the member.
+    var linux_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &linux_args, .linux, .elf, .shared_lib, &.{"roc_run_app"});
+    _ = findArg(linux_args.items, "--export-dynamic-symbol=roc_run_app") orelse return error.MissingExport;
+    _ = findArg(linux_args.items, "--undefined=roc_run_app") orelse return error.MissingExport;
+
+    // Exports must not leak into a non-shared (exe) link.
+    var exe_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &exe_args, .windows, .coff, .exe, &.{"roc_run_app"});
+    try std.testing.expectEqual(@as(?usize, null), findArg(exe_args.items, "/export:roc_run_app"));
 }
 
 test "macOS platform archives use scoped force_load" {

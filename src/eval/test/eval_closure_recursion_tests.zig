@@ -1320,7 +1320,7 @@ pub const tests = [_]TestCase{
         \\main = {
         \\    kept = Iter.keep_if(range_to(1.I64, 4.I64), |item| item == 2.I64)
         \\    match (kept.next)() {
-        \\        One({ item }) => item
+        \\        One({ item, .. }) => item
         \\        Done => -1.I64
         \\    }
         \\}
@@ -1362,7 +1362,7 @@ pub const tests = [_]TestCase{
         \\main = {
         \\    dropped = Iter.drop_if(range_to(1.I64, 4.I64), |item| item == 1.I64)
         \\    match (dropped.next)() {
-        \\        One({ item }) => item
+        \\        One({ item, .. }) => item
         \\        Done => -1.I64
         \\    }
         \\}

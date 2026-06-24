@@ -20,11 +20,10 @@ answer = func(42)
 ~~~
 # MONO
 ~~~roc
-func : Dec -> Dec
 func = |x| {
 	result = match True {
 		True => {
-			add_x = |y| x.plus(y)
+			add_x = |y| x + y
 			add_x(10)
 		}
 		False => 0
@@ -137,7 +136,7 @@ EndOfFile,
 															(args
 																(e-lookup-local
 																	(p-assign (ident "y"))))))))
-											(e-call (constraint-fn-var 77)
+											(e-call (constraint-fn-var 80)
 												(e-lookup-local
 													(p-assign (ident "add_x")))
 												(e-num (value "10"))))))
@@ -151,7 +150,7 @@ EndOfFile,
 					(p-assign (ident "result"))))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 150)
+		(e-call (constraint-fn-var 232)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "42")))))

@@ -105,13 +105,25 @@ pub const Output = struct {
 };
 
 /// Options used by solved-to-LIR lowering.
+pub const DebugEffectMode = enum {
+    run,
+    erase,
+};
+
+/// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
     inline_plan: SolvedInline.Plan = .{},
+    /// Whether inline `dbg` and `expect` are lowered into runtime statements.
+    /// Compile-time finalization and tests leave this enabled; optimized
+    /// runtime builds erase these effects before LIR reaches any backend.
+    debug_effects: DebugEffectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation for its
     /// output when the input and output element layouts are interchangeable.
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
     /// in-place branch of `List.map` is dropped before it reaches LIR.
     list_in_place_map: bool = false,
+    /// Preserve source-level procedure names in LIR for runtime diagnostics.
+    proc_debug_names: bool = false,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -130,6 +142,7 @@ pub fn run(
     try lowerer.result.store.setSourceFiles(owned.lifted.source_files.items);
     try lowerer.lower();
     try lowerer.bindRoots();
+    try lowerer.lowerReachableFns();
     try lowerer.writeRuntimeSchemas();
     if (builtin.mode == .Debug) {
         try lowerer.verifyMaterializedDecisions();
@@ -248,8 +261,12 @@ const Lowerer = struct {
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
+    fn_reachable: std.ArrayList(bool),
+    fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
+    debug_effects: DebugEffectMode,
     list_in_place_map: bool,
+    proc_debug_names: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
@@ -263,11 +280,13 @@ const Lowerer = struct {
     const_plan_map: std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId),
     symbols: Common.SymbolGen,
     local_map: []?LIR.LocalId,
+    comptime_site_map: []?LIR.ComptimeSiteId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
     current_fn: ?Type.FnId = null,
+    current_proc: ?LIR.LirProcSpecId = null,
     erased_capture_ptr_ty: ?Type.TypeId = null,
 
     const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
@@ -289,6 +308,10 @@ const Lowerer = struct {
         errdefer allocator.free(local_map);
         @memset(local_map, null);
 
+        const comptime_site_map = try allocator.alloc(?LIR.ComptimeSiteId, solved.lifted.comptime_sites.items.len);
+        errdefer allocator.free(comptime_site_map);
+        @memset(comptime_site_map, null);
+
         return .{
             .allocator = allocator,
             .solved = solved,
@@ -300,8 +323,12 @@ const Lowerer = struct {
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
+            .fn_reachable = .empty,
+            .fn_reach_queue = .empty,
             .inline_plan = options.inline_plan,
+            .debug_effects = options.debug_effects,
             .list_in_place_map = options.list_in_place_map,
+            .proc_debug_names = options.proc_debug_names,
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
@@ -313,6 +340,7 @@ const Lowerer = struct {
             .const_plan_map = std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = local_map,
+            .comptime_site_map = comptime_site_map,
             .loop_stack = .empty,
         };
     }
@@ -320,6 +348,7 @@ const Lowerer = struct {
     fn deinit(self: *Lowerer) void {
         self.folded_map_matches.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
+        self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
         self.type_layouts.deinit();
@@ -329,6 +358,8 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.fn_reach_queue.deinit(self.allocator);
+        self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
         self.fn_entries.deinit(self.allocator);
@@ -346,6 +377,7 @@ const Lowerer = struct {
         };
         self.folded_map_matches.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
+        self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
         self.type_layouts.deinit();
@@ -355,6 +387,8 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.fn_reach_queue.deinit(self.allocator);
+        self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
         self.fn_entries.deinit(self.allocator);
@@ -364,6 +398,7 @@ const Lowerer = struct {
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = &.{};
+        self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.folded_map_matches = .empty;
         return output;
@@ -374,10 +409,12 @@ const Lowerer = struct {
 
         try self.roots.ensureTotalCapacity(self.allocator, self.solved.lifted.roots.items.len);
         for (self.solved.lifted.roots.items) |root| {
+            const fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite);
             try self.roots.append(self.allocator, .{
-                .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
+                .fn_id = fn_id,
                 .request = root.request,
             });
+            _ = try self.markReachableFn(fn_id);
         }
 
         try self.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
@@ -396,7 +433,7 @@ const Lowerer = struct {
             });
         }
 
-        try self.lowerQueuedFns();
+        try self.lowerReachableFns();
     }
 
     fn indexSourceFns(self: *Lowerer) Common.LowerError!void {
@@ -408,17 +445,18 @@ const Lowerer = struct {
         }
     }
 
-    fn lowerQueuedFns(self: *Lowerer) Common.LowerError!void {
+    fn lowerReachableFns(self: *Lowerer) Common.LowerError!void {
         var index: usize = 0;
-        while (index < self.fn_specs.items.len) : (index += 1) {
-            if (self.fn_written.items[index]) continue;
-            const fn_id: Type.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            try self.lowerFnSpec(fn_id, self.fn_specs.items[index]);
+        while (index < self.fn_reach_queue.items.len) : (index += 1) {
+            const fn_id = self.fn_reach_queue.items[index];
+            const fn_index = @intFromEnum(fn_id);
+            if (self.fn_written.items[fn_index]) continue;
+            try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
         }
     }
 
     fn lowerFnSpec(self: *Lowerer, fn_id: Type.FnId, spec: FnSpec) Common.LowerError!void {
-        const proc_id = try self.fnProc(fn_id);
+        const proc_id = try self.procPlaceholder(fn_id);
         const entry = self.fn_entries.items[@intFromEnum(fn_id)];
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(spec.source)];
 
@@ -462,16 +500,19 @@ const Lowerer = struct {
                 const saved_ret_ty = self.current_ret_ty;
                 const saved_proc_locals = self.current_proc_locals;
                 const saved_current_fn = self.current_fn;
+                const saved_current_proc = self.current_proc;
                 var proc_locals: ProcLocalSet = .{};
                 defer proc_locals.deinit(self.allocator);
 
                 self.current_proc_locals = &proc_locals;
                 self.current_ret_ty = entry.ret;
                 self.current_fn = fn_id;
+                self.current_proc = proc_id;
                 defer {
                     self.current_ret_ty = saved_ret_ty;
                     self.current_proc_locals = saved_proc_locals;
                     self.current_fn = saved_current_fn;
+                    self.current_proc = saved_current_proc;
                 }
 
                 try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
@@ -560,6 +601,7 @@ const Lowerer = struct {
         result.value_ptr.* = fn_id;
         try self.fn_specs.append(self.allocator, spec);
         try self.fn_written.append(self.allocator, false);
+        try self.fn_reachable.append(self.allocator, false);
         try self.fn_entries.append(self.allocator, undefined);
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(source)];
         const symbol = self.symbols.fresh();
@@ -579,7 +621,18 @@ const Lowerer = struct {
         return fn_id;
     }
 
-    fn fnProc(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
+    fn markReachableFn(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
+        const index = @intFromEnum(fn_id);
+        if (index >= self.fn_entries.items.len) Common.invariant("direct LIR reachability referenced a missing function spec");
+        const proc = try self.procPlaceholder(fn_id);
+        if (!self.fn_reachable.items[index]) {
+            self.fn_reachable.items[index] = true;
+            try self.fn_reach_queue.append(self.allocator, fn_id);
+        }
+        return proc;
+    }
+
+    fn procPlaceholder(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
         const index = @intFromEnum(fn_id);
         if (self.fn_entries.items[index].proc) |existing| return existing;
         return try self.finalizeFnProc(fn_id);
@@ -619,9 +672,15 @@ const Lowerer = struct {
 
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = switch (source_fn.body) {
             .roc => |body_id| self.solved.lifted.exprLoc(body_id),
             .hosted => base.SourceLoc.none,
+        };
+        self.result.store.current_region = switch (source_fn.body) {
+            .roc => |body_id| self.solved.lifted.exprRegion(body_id),
+            .hosted => base.Region.zero(),
         };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
@@ -631,6 +690,11 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
         });
+        if (self.proc_debug_names) {
+            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
+            }
+        }
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
         return proc;
@@ -650,7 +714,7 @@ const Lowerer = struct {
         if (captures.len != fields.len) Common.invariant("function capture argument arity differed from capture slots");
 
         for (captures, fields) |capture, field| {
-            if (capture.symbol != field.symbol or capture.binder != field.binder) {
+            if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
                 Common.invariant("function capture argument fields differed from capture slots");
             }
             try self.captures.put(capture.local, .{
@@ -757,6 +821,7 @@ const Lowerer = struct {
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
+                .capture_id = capture.capture_id,
                 .ty = try self.lowerType(capture.ty),
             };
         }
@@ -846,10 +911,28 @@ const Lowerer = struct {
                         .ty = try self.lowerType(backing.ty),
                         .use = backing.use,
                     } else null,
+                    .declared_order = try self.lowerDeclaredOrder(named.declared_order),
                 } };
             },
             .lambda_set => |members| .{ .callable = try self.lowerFnMembers(members, .finite) },
         };
+    }
+
+    /// Re-materializes a nominal record's declared field order from the Lambda
+    /// Solved store into this lowerer's Lambda Mono store. Named entries copy the
+    /// shared field-name id; padding entries re-lower their reserved type.
+    fn lowerDeclaredOrder(self: *Lowerer, span: SolvedType.Span) Common.LowerError!Type.Span {
+        const source = self.solved.types.declaredFieldSpan(span);
+        if (source.len == 0) return Type.Span.empty();
+        const lowered = try self.allocator.alloc(Type.DeclaredField, source.len);
+        defer self.allocator.free(lowered);
+        for (source, 0..) |entry, i| {
+            lowered[i] = switch (entry) {
+                .named => |name| .{ .named = name },
+                .padding => |ty| .{ .padding = try self.lowerType(ty) },
+            };
+        }
+        return try self.types.addDeclaredFields(lowered);
     }
 
     fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Common.LowerError!Type.Span {
@@ -890,6 +973,11 @@ const Lowerer = struct {
         return self.solved.lifted.string_literals.items[@intFromEnum(id)];
     }
 
+    fn lirStrLiteral(self: *Lowerer, id: Lifted.StringLiteralId) Common.LowerError!LIR.StrLiteral {
+        const str_lit = self.stringLiteral(id);
+        return try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len);
+    }
+
     fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
         if (self.current_proc_locals) |locals| {
             try locals.put(self.allocator, @intFromEnum(local), {});
@@ -900,6 +988,20 @@ const Lowerer = struct {
         for (self.result.store.getLocalSpan(span)) |local| {
             try self.noteLocal(local);
         }
+    }
+
+    fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
+        const index = @intFromEnum(site);
+        if (self.comptime_site_map[index]) |existing| return existing;
+        const proc = self.current_proc orelse Common.invariant("compile-time site reached direct LIR lowering outside a proc");
+        const source = self.solved.lifted.comptimeSite(site);
+        const lowered = try self.result.addComptimeSite(switch (source.kind) {
+            .match => .match,
+            .destructure => .destructure,
+            .if_ => .if_,
+        }, source.region, source.checked_site, proc, source.branch_regions);
+        self.comptime_site_map[index] = lowered;
+        return lowered;
     }
 
     fn writeFrameLocals(self: *Lowerer, locals: *ProcLocalSet) Common.LowerError!LIR.LocalSpan {
@@ -920,7 +1022,7 @@ const Lowerer = struct {
     fn bindRoots(self: *Lowerer) Common.LowerError!void {
         for (self.roots.items) |root| {
             const entry = self.fn_entries.items[@intFromEnum(root.fn_id)];
-            const proc = try self.fnProc(root.fn_id);
+            const proc = try self.markReachableFn(root.fn_id);
             try self.result.root_procs.append(self.allocator, proc);
             try self.result.root_metadata.append(self.allocator, RootMetadata.fromCheckedRoot(root.request));
             if (root.request.abi == .compile_time) {
@@ -1110,7 +1212,7 @@ const Lowerer = struct {
             errdefer if (captures_owned) self.allocator.free(captures);
 
             entries[index] = .{
-                .entry = try self.fnProc(member.target),
+                .entry = try self.markReachableFn(member.target),
                 .capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst,
                 .template = constFnTemplateFromMono(self.fnTemplateForFn(member.target)),
                 .captures = captures,
@@ -1160,7 +1262,12 @@ const Lowerer = struct {
         errdefer self.allocator.free(slots);
         for (fields, 0..) |field, index| {
             slots[index] = .{
-                .binder = field.binder orelse Common.invariant("function result capture had no checked binder"),
+                .id = if (field.binder) |binder|
+                    .{ .binder = binder }
+                else if (field.capture_id) |capture_id|
+                    .{ .generated = capture_id }
+                else
+                    .{ .generated = @intFromEnum(field.symbol) },
                 .slot = @intCast(index),
                 .plan = try self.constPlanOfType(field.ty),
             };
@@ -1269,7 +1376,12 @@ const Lowerer = struct {
         var clone_owned = true;
         errdefer if (clone_owned) solved_clone.deinit();
 
-        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items);
+        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items, .{
+            .debug_effects = switch (self.debug_effects) {
+                .run => .run,
+                .erase => .erase,
+            },
+        });
         clone_owned = false;
         defer materialized.deinit();
 
@@ -1283,8 +1395,8 @@ const Lowerer = struct {
     }
 
     fn verifyFnEntriesMatch(self: *Lowerer, materialized: *const LambdaMono.Program) Common.LowerError!void {
-        if (self.fn_entries.items.len != materialized.fns.items.len) {
-            Common.invariant("debug Lambda Mono verifier saw a function count mismatch");
+        if (self.fn_entries.items.len > materialized.fns.items.len) {
+            Common.invariant("debug Lambda Mono verifier saw too many direct function specs");
         }
         const used = try self.allocator.alloc(bool, materialized.fns.items.len);
         defer self.allocator.free(used);
@@ -1351,7 +1463,11 @@ const Lowerer = struct {
             Common.invariant("debug Lambda Mono verifier saw a root count mismatch");
         }
         for (self.roots.items, materialized.roots.items) |direct, expected| {
-            if (direct.fn_id != expected.fn_id or !std.meta.eql(direct.request, expected.request)) {
+            if (!std.meta.eql(direct.request, expected.request)) {
+                Common.invariant("debug Lambda Mono verifier saw a root mismatch");
+            }
+            const expected_fn = materialized.fns.items[@intFromEnum(expected.fn_id)];
+            if (!try self.fnEntryMatchesMaterialized(self.fn_entries.items[@intFromEnum(direct.fn_id)], expected_fn, materialized)) {
                 Common.invariant("debug Lambda Mono verifier saw a root mismatch");
             }
         }
@@ -1395,7 +1511,10 @@ const Lowerer = struct {
         const expr_ty = try self.lowerExprTy(expr_id);
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
+        self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
             .unit => try self.assignZst(target, next),
@@ -1430,6 +1549,7 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
+            .uninitialized, .uninitialized_payload => next,
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_ty, fields, next),
@@ -1441,14 +1561,18 @@ const Lowerer = struct {
             .fn_ref => |fn_id| try self.lowerFnRefInto(target, expr_id, fn_id, next),
             .nominal => |backing| try self.lowerNominalInto(target, expr_ty, backing, next),
             .let_ => |let_| try self.lowerLetInto(target, let_, next),
-            .call_proc => |call| try self.lowerDirectProcCallInto(target, Lifted.callProcCallee(call), self.solved.lifted.exprSpan(call.args), next),
+            .call_proc => |call| try self.lowerDirectProcCallInto(target, Lifted.callProcCallee(call), self.solved.lifted.exprSpan(call.args), call.is_cold, next),
             .call_value => |call| try self.lowerValueCallInto(target, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .low_level => |call| try self.lowerLowLevelInto(target, call.op, call.args, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
-            .match_ => |match_| try self.lowerMatchInto(target, match_.scrutinee, match_.branches, next),
+            .structural_hash => |h| try self.lowerStructuralHashInto(target, h.value, h.hasher, next),
+            .match_ => |match_| try self.lowerMatchInto(target, match_.scrutinee, match_.branches, match_.comptime_site, next),
             .if_ => |if_| try self.lowerIfInto(target, if_.branches, if_.final_else, next),
+            .if_initialized_payload => |payload_switch| try self.lowerInitializedPayloadSwitchInto(target, payload_switch, next),
+            .try_sequence => |sequence| try self.lowerTrySequenceInto(target, expr_ty, sequence, next),
+            .try_record_sequence => |sequence| try self.lowerTryRecordSequenceInto(target, expr_ty, sequence, next),
             .block => |block| try self.lowerBlockInto(target, block.statements, block.final_expr, next),
             .loop_ => |loop| try self.lowerLoopInto(target, loop, next),
             .break_ => |value| try self.lowerBreak(value),
@@ -1457,7 +1581,16 @@ const Lowerer = struct {
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
             } }),
+            .comptime_branch_taken => |taken| try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
+                .site = try self.lowerComptimeSite(taken.site),
+                .branch_index = taken.branch_index,
+                .next = try self.lowerExprInto(target, taken.body, next),
+            } }),
+            .comptime_exhaustiveness_failed => |site| try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
+                .site = try self.lowerComptimeSite(site),
+            } }),
             .dbg => |child| blk: {
+                if (self.debug_effects == .erase) break :blk try self.assignZst(target, next);
                 const after_dbg = try self.assignZst(target, next);
                 const message = try self.addTemp(try self.lowerExprTy(child));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
@@ -1471,7 +1604,10 @@ const Lowerer = struct {
                 } });
                 break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
-            .expect => |child| try self.lowerExpectExprInto(target, child, next),
+            .expect => |child| if (self.debug_effects == .erase)
+                try self.assignZst(target, next)
+            else
+                try self.lowerExpectExprInto(target, child, next),
         };
     }
 
@@ -1584,7 +1720,7 @@ const Lowerer = struct {
 
         const target_is_zst = self.isZstLocal(target);
         for (captures, fields, 0..) |capture, field, i| {
-            if (capture.symbol != field.symbol or capture.binder != field.binder) {
+            if (capture.symbol != field.symbol or capture.binder != field.binder or capture.capture_id != field.capture_id) {
                 Common.invariant("callable capture payload fields differed from captured locals");
             }
             expr_locals[i] = try self.addTemp(field.ty);
@@ -1835,7 +1971,7 @@ const Lowerer = struct {
     fn lowerLetInto(self: *Lowerer, target: LIR.LocalId, let_: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const rest = try self.lowerExprInto(target, let_.rest, next);
         const value_local = try self.addTemp(try self.lowerExprTy(let_.value));
-        const bind = try self.bindPatternOrCrash(let_.bind, value_local, rest);
+        const bind = try self.bindPatternOrCrash(let_.bind, value_local, rest, let_.comptime_site);
         return try self.lowerExprInto(value_local, let_.value, bind);
     }
 
@@ -1924,7 +2060,7 @@ const Lowerer = struct {
 
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = try self.fnProc(fn_id),
+            .proc = try self.markReachableFn(fn_id),
             .capture = capture,
             .capture_layout = capture_layout,
             .on_drop = on_drop,
@@ -1939,16 +2075,17 @@ const Lowerer = struct {
         target: LIR.LocalId,
         callee: Lifted.FnId,
         args: []const Lifted.ExprId,
+        is_cold: bool,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const target_fn = try self.ensureOwnFnSpec(callee, .finite);
         const captures = self.capturesForFn(callee);
         if (captures.len == 0) {
-            return try self.lowerKnownCallInto(target, target_fn, args, null, next);
+            return try self.lowerKnownCallInto(target, target_fn, args, null, is_cold, next);
         }
         const capture_ty = try self.captureRecordType(captures);
         const capture_local = try self.addTemp(capture_ty);
-        const call = try self.lowerKnownCallInto(target, target_fn, args, capture_local, next);
+        const call = try self.lowerKnownCallInto(target, target_fn, args, capture_local, is_cold, next);
         return try self.lowerCaptureRecordFromCapturesInto(capture_local, captures, capture_ty, call);
     }
 
@@ -1958,12 +2095,13 @@ const Lowerer = struct {
         callee: Type.FnId,
         args: []const Lifted.ExprId,
         capture_arg: ?LIR.LocalId,
+        is_cold: bool,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const lowered = try self.lowerExprsToTemps(args);
         defer self.allocator.free(lowered.ids);
 
-        if (capture_arg == null) {
+        if (capture_arg == null and !is_cold) {
             if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
                 var current = try self.lowerInlineKnownCallInto(target, callee, lowered.ids, body_expr, next);
                 current = try self.prependExprs(lowered, current);
@@ -1981,8 +2119,9 @@ const Lowerer = struct {
         defer if (capture_arg != null) self.allocator.free(call_args);
         var current = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = target,
-            .proc = try self.fnProc(callee),
+            .proc = try self.markReachableFn(callee),
             .args = try self.result.store.addLocalSpan(call_args),
+            .is_cold = is_cold,
             .next = next,
         } });
         current = try self.prependExprs(lowered, current);
@@ -2092,7 +2231,7 @@ const Lowerer = struct {
             const variant_index: u16 = @intCast(i);
             const branch_done = try self.joinJump(done);
             const branch_body = try self.lowerCallableVariantCallInto(target, callee, variant, variant_index, arg_exprs, branch_done);
-            current = try self.discriminantSwitch(callee, variant_index, branch_body, current);
+            current = try self.discriminantSwitch(callee, variant_index, branch_body, current, false);
         }
         const remainder = try self.lowerExprInto(callee, callee_expr, current);
         return try self.result.store.addCFStmt(.{ .join = .{
@@ -2114,7 +2253,7 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         if (variant.capture_ty) |_| {
             const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
-            const call = try self.lowerKnownCallInto(target, variant.target, arg_exprs, payload, next);
+            const call = try self.lowerKnownCallInto(target, variant.target, arg_exprs, payload, false, next);
             if (self.isZstLocal(payload)) return call;
             return try self.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = payload,
@@ -2126,7 +2265,7 @@ const Lowerer = struct {
                 .next = call,
             } });
         }
-        return try self.lowerKnownCallInto(target, variant.target, arg_exprs, null, next);
+        return try self.lowerKnownCallInto(target, variant.target, arg_exprs, null, false, next);
     }
 
     fn lowerLowLevelInto(self: *Lowerer, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -2362,18 +2501,72 @@ const Lowerer = struct {
         return try self.lowerExprInto(lhs_local, lhs, current);
     }
 
+    fn lowerStructuralHashInto(self: *Lowerer, target: LIR.LocalId, value: Lifted.ExprId, hasher: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const value_ty = try self.lowerExprTy(value);
+        const value_local = try self.addTemp(value_ty);
+        const hasher_local = try self.addTemp(try self.lowerExprTy(hasher));
+        var current = try self.lowerHashLocalsInto(target, value_local, hasher_local, value_ty, next);
+        current = try self.lowerExprInto(hasher_local, hasher, current);
+        return try self.lowerExprInto(value_local, value, current);
+    }
+
+    /// Feed `value` (of `value_ty`) into `hasher`, writing the resulting Hasher
+    /// into `target`. Aggregate types are decomposed in Monotype lowering, so
+    /// this only ever sees a scalar/str/zst leaf or a transparent nominal wrapper.
+    fn lowerHashLocalsInto(self: *Lowerer, target: LIR.LocalId, value: LIR.LocalId, hasher: LIR.LocalId, value_ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return switch (self.types.get(value_ty)) {
+            .primitive => |primitive| try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
+            // Hashing a zero-sized value contributes nothing; thread the hasher through.
+            .zst => try self.assignLocal(target, hasher, next),
+            .named => |named| blk: {
+                const backing = named.backing orelse Common.invariant("named hash reached direct LIR without runtime backing");
+                break :blk try self.lowerHashLocalsInto(target, value, hasher, backing.ty, next);
+            },
+            .record,
+            .tuple,
+            .tag_union,
+            .capture_record,
+            .list,
+            .box,
+            .callable,
+            .erased_fn,
+            .erased_capture_ptr,
+            => Common.invariant("aggregate/owned hash reached direct LIR structural hash lowering"),
+        };
+    }
+
+    fn lowerPrimitiveHashLocalsInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        primitive: MonoType.Primitive,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const op = Common.hasherWriteOp(primitive);
+        const args = [_]LIR.LocalId{ hasher, value };
+        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&args),
+            .next = next,
+        } });
+    }
+
     fn lowerMatchInto(
         self: *Lowerer,
         target: LIR.LocalId,
         scrutinee: Lifted.ExprId,
         branches_span: Lifted.Span(Lifted.Branch),
+        comptime_site: ?Lifted.ComptimeSiteId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         if (try self.foldListMapCanReuseMatch(target, scrutinee, branches_span, next)) |folded| return folded;
         const scrutinee_local = try self.addTemp(try self.lowerExprTy(scrutinee));
         const branches = self.solved.lifted.branchSpan(branches_span);
         const done = self.freshJoinPointId();
-        const branch_chain = try self.lowerBranchChain(scrutinee_local, branches, target, done);
+        const branch_chain = try self.lowerBranchChain(scrutinee_local, branches, target, done, comptime_site);
         const remainder = try self.lowerExprInto(scrutinee_local, scrutinee, branch_chain);
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = done,
@@ -2433,6 +2626,203 @@ const Lowerer = struct {
         } });
     }
 
+    fn lowerInitializedPayloadSwitchInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        payload_switch: Lifted.InitializedPayloadSwitch,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const done = self.freshJoinPointId();
+        const branch_done = try self.joinJump(done);
+        var initialized_body: LIR.CFStmtId = undefined;
+        var uninitialized_body: LIR.CFStmtId = undefined;
+        if (payload_switch.initialized == payload_switch.uninitialized) {
+            const shared = try self.lowerExprInto(target, payload_switch.initialized, branch_done);
+            initialized_body = shared;
+            uninitialized_body = shared;
+        } else {
+            initialized_body = try self.lowerExprInto(target, payload_switch.initialized, branch_done);
+            uninitialized_body = try self.lowerExprInto(target, payload_switch.uninitialized, branch_done);
+        }
+        const cond_data = self.solved.lifted.exprs.items[@intFromEnum(payload_switch.cond)];
+        const cond_local = switch (cond_data.data) {
+            .local => |local| try self.localFor(local),
+            else => try self.addTemp(try self.lowerExprTy(payload_switch.cond)),
+        };
+        const switch_stmt = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
+            .cond = cond_local,
+            .cond_mask = payload_switch.cond_mask,
+            .payload = try self.localFor(payload_switch.payload),
+            .uninitialized_is_cold = payload_switch.uninitialized_is_cold,
+            .initialized_branch = initialized_body,
+            .uninitialized_branch = uninitialized_body,
+        } });
+        const remainder = switch (cond_data.data) {
+            .local => switch_stmt,
+            else => try self.lowerExprInto(cond_local, payload_switch.cond, switch_stmt),
+        };
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = done,
+            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
+            .body = next,
+            .remainder = remainder,
+        } });
+    }
+
+    fn lowerTrySequenceInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        out_try_ty: Type.TypeId,
+        sequence: Mono.TrySequence,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const input_try_ty = try self.lowerExprTy(sequence.try_expr);
+        const input_try_local = try self.addTemp(input_try_ty);
+
+        const ok_variant = self.tagIndexByText(input_try_ty, "Ok");
+        const err_variant = self.tagIndexByText(input_try_ty, "Err");
+        const out_err_variant = self.tagIndexByText(out_try_ty, "Err");
+
+        const ok_body = try self.lowerExprInto(target, sequence.ok_body, next);
+        const ok_payload_local = try self.localFor(sequence.ok_local);
+        const ok_start = if (self.isZstLocal(ok_payload_local))
+            try self.assignZst(ok_payload_local, ok_body)
+        else
+            try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = ok_payload_local,
+                .op = .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = ok_variant,
+                    .tag_discriminant = ok_variant,
+                } },
+                .next = ok_body,
+            } });
+
+        const out_backing_ty = self.runtimeBackingType(out_try_ty);
+        const out_backing_layout = try self.layoutOfType(out_backing_ty);
+        const out_backing_local = try self.addLocalForLayout(out_backing_layout);
+        const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
+
+        const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+        const err_payload_local = try self.addLocalForLayout(err_payload_layout);
+        const err_tag = if (self.isZstLocal(out_backing_local))
+            try self.assignZst(out_backing_local, boundary)
+        else
+            try self.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = out_backing_local,
+                .variant_index = out_err_variant,
+                .discriminant = out_err_variant,
+                .payload = err_payload_local,
+                .next = boundary,
+            } });
+        const err_start = if (self.isZstLocal(err_payload_local))
+            err_tag
+        else
+            try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = err_payload_local,
+                .op = .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = err_variant,
+                    .tag_discriminant = err_variant,
+                } },
+                .next = err_tag,
+            } });
+
+        const switch_stmt = try self.discriminantSwitch(input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
+        return try self.lowerExprInto(input_try_local, sequence.try_expr, switch_stmt);
+    }
+
+    fn lowerTryRecordSequenceInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        out_try_ty: Type.TypeId,
+        sequence: Mono.TryRecordSequence,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const input_try_ty = try self.lowerExprTy(sequence.try_expr);
+        const input_try_local = try self.addTemp(input_try_ty);
+
+        const ok_variant = self.tagIndexByText(input_try_ty, "Ok");
+        const err_variant = self.tagIndexByText(input_try_ty, "Err");
+        const out_err_variant = self.tagIndexByText(out_try_ty, "Err");
+        const ok_payload_ty = self.singleTagPayloadTypeByIndex(input_try_ty, ok_variant);
+
+        var ok_start = try self.lowerExprInto(target, sequence.ok_body, next);
+        ok_start = try self.bindTryRecordPayloadField(
+            sequence.rest_local,
+            input_try_local,
+            ok_variant,
+            ok_payload_ty,
+            sequence.rest_field,
+            ok_start,
+        );
+        ok_start = try self.bindTryRecordPayloadField(
+            sequence.value_local,
+            input_try_local,
+            ok_variant,
+            ok_payload_ty,
+            sequence.value_field,
+            ok_start,
+        );
+
+        const out_backing_ty = self.runtimeBackingType(out_try_ty);
+        const out_backing_layout = try self.layoutOfType(out_backing_ty);
+        const out_backing_local = try self.addLocalForLayout(out_backing_layout);
+        const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
+
+        const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+        const err_payload_local = try self.addLocalForLayout(err_payload_layout);
+        const err_tag = if (self.isZstLocal(out_backing_local))
+            try self.assignZst(out_backing_local, boundary)
+        else
+            try self.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = out_backing_local,
+                .variant_index = out_err_variant,
+                .discriminant = out_err_variant,
+                .payload = err_payload_local,
+                .next = boundary,
+            } });
+        const err_start = if (self.isZstLocal(err_payload_local))
+            err_tag
+        else
+            try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = err_payload_local,
+                .op = .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = err_variant,
+                    .tag_discriminant = err_variant,
+                } },
+                .next = err_tag,
+            } });
+
+        const switch_stmt = try self.discriminantSwitch(input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
+        return try self.lowerExprInto(input_try_local, sequence.try_expr, switch_stmt);
+    }
+
+    fn bindTryRecordPayloadField(
+        self: *Lowerer,
+        local: Mono.LocalId,
+        input_try_local: LIR.LocalId,
+        ok_variant: u16,
+        ok_payload_ty: Type.TypeId,
+        field_name: Type.names.RecordFieldNameId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const target = try self.localFor(local);
+        if (self.isZstLocal(target)) return try self.assignZst(target, next);
+        const field_index = self.recordFieldIndex(ok_payload_ty, field_name);
+        return try self.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .tag_payload = .{
+                .source = input_try_local,
+                .payload_idx = field_index,
+                .variant_index = ok_variant,
+                .tag_discriminant = ok_variant,
+            } },
+            .next = next,
+        } });
+    }
+
     fn lowerBlockInto(self: *Lowerer, target: LIR.LocalId, stmts_span: Lifted.Span(Lifted.StmtId), final_expr: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         var current = try self.lowerExprInto(target, final_expr, next);
         const stmts = self.solved.lifted.stmtSpan(stmts_span);
@@ -2447,19 +2837,24 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const saved_loc = self.result.store.current_loc;
         defer self.result.store.current_loc = saved_loc;
+        const saved_region = self.result.store.current_region;
+        defer self.result.store.current_region = saved_region;
         self.result.store.current_loc = self.solved.lifted.stmtLoc(stmt_id);
+        self.result.store.current_region = self.solved.lifted.stmtRegion(stmt_id);
         return switch (self.solved.lifted.stmts.items[@intFromEnum(stmt_id)]) {
+            .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
                 const value = try self.addTemp(try self.lowerExprTy(let_.value));
-                const bind = try self.bindPatternOrCrash(let_.pat, value, next);
+                const bind = try self.bindPatternOrCrash(let_.pat, value, next, let_.comptime_site);
                 break :blk try self.lowerExprInto(value, let_.value, bind);
             },
             .expr => |expr_id| blk: {
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 break :blk try self.lowerExprInto(temp, expr_id, next);
             },
-            .expect => |expr_id| try self.lowerExpectStmt(expr_id, next),
+            .expect => |expr_id| if (self.debug_effects == .erase) next else try self.lowerExpectStmt(expr_id, next),
             .dbg => |expr_id| blk: {
+                if (self.debug_effects == .erase) break :blk next;
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } });
                 break :blk try self.lowerExprInto(temp, expr_id, debug_stmt);
@@ -2471,6 +2866,97 @@ const Lowerer = struct {
         };
     }
 
+    fn initUninitializedPattern(
+        self: *Lowerer,
+        pat_id: Lifted.PatId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const pat_data = self.pat(pat_id);
+        const pat_ty = try self.lowerPatTy(pat_id);
+        return switch (pat_data.data) {
+            .bind => |local| try self.initUninitializedLocal(try self.localForTyped(local, pat_ty), next),
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => next,
+            .str_pattern => |str| blk: {
+                var current = next;
+                const steps = self.solved.lifted.strPatternStepSpan(str.steps);
+                var i = steps.len;
+                while (i > 0) {
+                    i -= 1;
+                    if (steps[i].capture) |capture| {
+                        current = try self.initUninitializedPattern(capture, current);
+                    }
+                }
+                break :blk current;
+            },
+            .as => |as| blk: {
+                const inner = try self.initUninitializedPattern(as.pattern, next);
+                break :blk try self.initUninitializedLocal(try self.localForTyped(as.local, pat_ty), inner);
+            },
+            .record => |fields| blk: {
+                var current = next;
+                const destructs = self.solved.lifted.recordDestructSpan(fields);
+                var i = destructs.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(destructs[i].pattern, current);
+                }
+                break :blk current;
+            },
+            .tuple => |items| blk: {
+                var current = next;
+                const pats = self.solved.lifted.patSpan(items);
+                var i = pats.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(pats[i], current);
+                }
+                break :blk current;
+            },
+            .list => |list| blk: {
+                var current = next;
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| current = try self.initUninitializedPattern(rest_pattern, current);
+                }
+                const pats = self.solved.lifted.patSpan(list.patterns);
+                var i = pats.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(pats[i], current);
+                }
+                break :blk current;
+            },
+            .tag => |tag| blk: {
+                var current = next;
+                const payloads = self.solved.lifted.patSpan(tag.payloads);
+                var i = payloads.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(payloads[i], current);
+                }
+                break :blk current;
+            },
+            .nominal => |inner| try self.initUninitializedPattern(inner, next),
+        };
+    }
+
+    fn initUninitializedLocal(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (self.isZstLocal(target)) return next;
+        return try self.result.store.addCFStmt(.{ .init_uninitialized = .{
+            .target = target,
+            .next = next,
+        } });
+    }
+
     fn lowerLoopInto(self: *Lowerer, target: LIR.LocalId, loop: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const params = self.solved.lifted.typedLocalSpan(loop.params);
         const initial_values = self.solved.lifted.exprSpan(loop.initial_values);
@@ -2480,6 +2966,25 @@ const Lowerer = struct {
         defer self.allocator.free(param_locals);
         for (params, 0..) |param, i| param_locals[i] = try self.localFor(param.local);
         const param_span = try self.result.store.addLocalSpan(param_locals);
+        var maybe_uninitialized_params: std.ArrayList(LIR.LocalId) = .empty;
+        defer maybe_uninitialized_params.deinit(self.allocator);
+        var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
+        defer maybe_uninitialized_conditions.deinit(self.allocator);
+        var maybe_uninitialized_condition_masks: std.ArrayList(u64) = .empty;
+        defer maybe_uninitialized_condition_masks.deinit(self.allocator);
+        for (initial_values, param_locals) |initial, param_local| {
+            switch (self.solved.lifted.exprs.items[@intFromEnum(initial)].data) {
+                .uninitialized_payload => |payload| {
+                    try maybe_uninitialized_params.append(self.allocator, param_local);
+                    try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
+                    try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
+                },
+                else => {},
+            }
+        }
+        const maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_params.items);
+        const maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
+        const maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
         const join_id = self.freshJoinPointId();
 
         try self.loop_stack.append(self.allocator, .{
@@ -2491,17 +2996,20 @@ const Lowerer = struct {
         defer _ = self.loop_stack.pop();
 
         const body = try self.lowerExprInto(target, loop.body, next);
-        const jump_args = try self.lowerExprsToTemps(initial_values);
+        const jump_args = try self.lowerExprsToJoinTemps(param_span, initial_values);
         defer self.allocator.free(jump_args.ids);
         var initial_jump = try self.result.store.addCFStmt(.{ .jump = .{
             .target = join_id,
         } });
         initial_jump = try self.prependJoinParamInitializers(param_span, jump_args.ids, initial_jump);
-        initial_jump = try self.prependExprs(jump_args, initial_jump);
+        initial_jump = try self.prependJoinExprs(jump_args, initial_jump);
 
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = join_id,
             .params = param_span,
+            .maybe_uninitialized_params = maybe_uninitialized_span,
+            .maybe_uninitialized_conditions = maybe_uninitialized_conditions_span,
+            .maybe_uninitialized_condition_masks = maybe_uninitialized_condition_masks_span,
             .body = body,
             .remainder = initial_jump,
         } });
@@ -2521,13 +3029,13 @@ const Lowerer = struct {
         if (self.result.store.getLocalSpan(loop.params).len != values.len) {
             Common.invariant("continue value count differed from loop parameter count during direct LIR lowering");
         }
-        const locals = try self.lowerExprsToTemps(values);
+        const locals = try self.lowerExprsToJoinTemps(loop.params, values);
         defer self.allocator.free(locals.ids);
         var jump = try self.result.store.addCFStmt(.{ .jump = .{
             .target = loop.join_id,
         } });
         jump = try self.prependJoinParamInitializers(loop.params, locals.ids, jump);
-        jump = try self.prependExprs(locals, jump);
+        jump = try self.prependJoinExprs(locals, jump);
         return jump;
     }
 
@@ -2553,10 +3061,36 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
     };
 
-    fn lowerBranchChain(self: *Lowerer, scrutinee: LIR.LocalId, branches: []const Lifted.Branch, target: LIR.LocalId, done: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
-        var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
+    fn lowerBranchChain(
+        self: *Lowerer,
+        scrutinee: LIR.LocalId,
+        branches: []const Lifted.Branch,
+        target: LIR.LocalId,
+        done: LIR.JoinPointId,
+        comptime_site: ?Lifted.ComptimeSiteId,
+    ) Common.LowerError!LIR.CFStmtId {
+        var current = if (comptime_site) |site|
+            try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.lowerComptimeSite(site) } })
+        else
+            try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = branches.len;
         while (i > 0) {
+            const group_end = i;
+            const group_start = self.strPatternBranchGroupStart(branches, group_end);
+            if (group_end - group_start >= 2) {
+                const next_branch = current;
+                const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+                const branch_start = try self.lowerStrPatternBranchGroup(branches[group_start..group_end], scrutinee, target, done, miss);
+                current = try self.result.store.addCFStmt(.{ .join = .{
+                    .id = miss.join_id,
+                    .params = LIR.LocalSpan.empty(),
+                    .body = next_branch,
+                    .remainder = branch_start,
+                } });
+                i = group_start;
+                continue;
+            }
+
             i -= 1;
             const next_branch = current;
             const needs_miss_join = branches[i].guard != null or self.patternCanMiss(branches[i].pat);
@@ -2585,6 +3119,52 @@ const Lowerer = struct {
         return current;
     }
 
+    fn strPatternBranchGroupStart(self: *Lowerer, branches: []const Lifted.Branch, end: usize) usize {
+        var start = end;
+        while (start > 0 and self.directStrPattern(branches[start - 1].pat) != null) {
+            start -= 1;
+        }
+        return start;
+    }
+
+    fn directStrPattern(self: *Lowerer, pat_id: Lifted.PatId) ?Lifted.StrPattern {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
+            .str_pattern => |str| str,
+            else => null,
+        };
+    }
+
+    fn lowerStrPatternBranchGroup(
+        self: *Lowerer,
+        branches: []const Lifted.Branch,
+        source: LIR.LocalId,
+        target: LIR.LocalId,
+        done: LIR.JoinPointId,
+        miss: PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const arms = try self.allocator.alloc(LIR.StrMatchArm, branches.len);
+        defer self.allocator.free(arms);
+
+        for (branches, arms) |branch, *arm| {
+            const str = self.directStrPattern(branch.pat) orelse Common.invariant("string-pattern branch group contained a non-string-pattern branch");
+            const branch_done = try self.joinJump(done);
+            const branch_body = try self.lowerExprInto(target, branch.body, branch_done);
+            const guarded = if (branch.guard) |guard| blk: {
+                const guard_local = try self.addTemp(try self.lowerExprTy(guard));
+                const guard_switch = try self.boolSwitchNoContinuation(guard_local, branch_body, try self.patternMissJump(miss));
+                break :blk try self.lowerExprInto(guard_local, guard, guard_switch);
+            } else branch_body;
+            arm.* = try self.lowerStrPatternArm(str, guarded);
+        }
+
+        return try self.result.store.addCFStmt(.{ .str_match_set = .{
+            .source = source,
+            .arms = try self.result.store.addStrMatchArms(arms),
+            .on_miss = try self.patternMissJump(miss),
+        } });
+    }
+
     fn joinJump(self: *Lowerer, join_id: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
         return try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
     }
@@ -2611,8 +3191,12 @@ const Lowerer = struct {
                 }
                 break :blk false;
             },
+            // A list pattern can fail unless it imposes no length constraint:
+            // only `[.. as rest]` / `[..]` (a rest with no fixed elements, which
+            // matches every list) is irrefutable.
+            .list => |list| list.patterns.len > 0 or list.rest == null,
             .nominal => |inner| self.patternCanMiss(inner),
-            .tag, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => true,
+            .tag, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => true,
         };
     }
 
@@ -2627,6 +3211,7 @@ const Lowerer = struct {
             },
             .record => |fields| try self.lowerRecordPatternThen(pat_ty, fields, source, on_match, miss, continuation),
             .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, miss, continuation),
+            .list => |list| try self.lowerListPatternThen(list, source, on_match, miss, continuation),
             .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, miss, continuation),
             .tag => |tag| try self.lowerTagPatternThen(pat_ty, tag.name, tag.payloads, source, on_match, miss, continuation),
             .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .int_lit = value }, on_match, miss),
@@ -2634,6 +3219,7 @@ const Lowerer = struct {
             .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .frac_f32_lit = value }, on_match, miss),
             .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .frac_f64_lit = value }, on_match, miss),
             .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .str_lit = value }, on_match, miss),
+            .str_pattern => |str| try self.lowerStrPatternThen(str, source, on_match, miss),
         };
     }
 
@@ -2705,7 +3291,7 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const variant_index = self.tagIndex(ty, name);
         const bind_payloads = try self.matchTagPayloadPatterns(variant_index, payloads, source, on_match, miss, continuation);
-        return try self.discriminantSwitch(source, variant_index, bind_payloads, try self.patternMissJump(miss));
+        return try self.discriminantSwitch(source, variant_index, bind_payloads, try self.patternMissJump(miss), false);
     }
 
     fn lowerRecordPatternThen(
@@ -2766,6 +3352,125 @@ const Lowerer = struct {
         return current;
     }
 
+    /// Lower a list pattern as a sequence of tests that all share a single
+    /// `miss` target: a length test, then one extracted-and-matched element per
+    /// fixed pattern, then the optional captured rest slice. Because every miss
+    /// jumps to the one shared join, the lowered control flow is linear in the
+    /// pattern's size rather than duplicating the remainder of the match per
+    /// element.
+    fn lowerListPatternThen(
+        self: *Lowerer,
+        list: Lifted.ListPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+        continuation: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const elems = self.solved.lifted.patSpan(list.patterns);
+        const fixed_count: i64 = @intCast(elems.len);
+
+        if (elems.len == 0) {
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    return try self.bindPattern(rest_pattern, source, on_match);
+                }
+                return on_match;
+            }
+        }
+
+        // The list length is read by the length test, by the indices of fixed
+        // elements that match from the back, and by the rest slice. It is
+        // assigned once at the head of the chain so every reader sees it.
+        const len_local = try self.addLocalForLayout(.u64);
+
+        var current = on_match;
+
+        // The captured rest binds the slice between the matched front and back
+        // elements. `[.. as rest]` with no fixed elements is the whole list and
+        // simply aliases the source; a bare `..` binds nothing.
+        if (list.rest) |rest| {
+            if (rest.pattern) |rest_pattern| {
+                if (elems.len == 0) {
+                    current = try self.bindPattern(rest_pattern, source, current);
+                } else {
+                    const source_layout = self.result.store.getLocal(source).layout_idx;
+                    const rest_local = try self.addLocalForLayout(source_layout);
+                    current = try self.bindPattern(rest_pattern, rest_local, current);
+                    // rest = take_first(take_last(source, len - rest.index), len - fixed_count)
+                    const front_dropped = try self.addLocalForLayout(source_layout);
+                    const keep_len = try self.addLocalForLayout(.u64);
+                    current = try self.assignBinaryLowLevel(rest_local, .list_take_first, front_dropped, keep_len, current);
+                    current = try self.lenMinusConst(keep_len, len_local, fixed_count, current);
+                    const keep_after_front = try self.addLocalForLayout(.u64);
+                    current = try self.assignBinaryLowLevel(front_dropped, .list_take_last, source, keep_after_front, current);
+                    current = try self.lenMinusConst(keep_after_front, len_local, @intCast(rest.index), current);
+                }
+            }
+        }
+
+        const rest_index: ?u32 = if (list.rest) |rest| rest.index else null;
+        var i = elems.len;
+        while (i > 0) {
+            i -= 1;
+            const elem_local = try self.addTemp(try self.lowerPatTy(elems[i]));
+            current = try self.lowerPatternThen(elems[i], elem_local, current, miss, continuation);
+            const index_local = try self.addLocalForLayout(.u64);
+            current = try self.assignBinaryLowLevel(elem_local, .list_get_unsafe, source, index_local, current);
+            const matches_from_back = if (rest_index) |ri| i >= ri else false;
+            if (matches_from_back) {
+                // Elements after the rest are indexed relative to the end:
+                // len - (fixed_count - i).
+                current = try self.lenMinusConst(index_local, len_local, fixed_count - @as(i64, @intCast(i)), current);
+            } else {
+                current = try self.assignU64Literal(index_local, @intCast(i), current);
+            }
+        }
+
+        // Length test at the head: an exact match needs `len == fixed_count`; a
+        // pattern with a rest needs `len >= fixed_count`.
+        const required = try self.addLocalForLayout(.u64);
+        const cond = try self.addLocalForLayout(.bool);
+        const cmp_op: LIR.LowLevel = if (list.rest == null) .num_is_eq else .num_is_gte;
+        const length_check = try self.boolSwitchNoContinuation(cond, current, try self.patternMissJump(miss));
+        var head = try self.assignBinaryLowLevel(cond, cmp_op, len_local, required, length_check);
+        head = try self.assignU64Literal(required, fixed_count, head);
+        head = try self.assignUnaryLowLevel(len_local, .list_len, source, head);
+        return head;
+    }
+
+    fn assignU64Literal(self: *Lowerer, target: LIR.LocalId, value: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u64 } },
+            .next = next,
+        } });
+    }
+
+    fn assignBinaryLowLevel(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const args = [_]LIR.LocalId{ lhs, rhs };
+        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&args),
+            .next = next,
+        } });
+    }
+
+    /// Emit `target = len_local - value` using a fresh u64 literal operand.
+    fn lenMinusConst(self: *Lowerer, target: LIR.LocalId, len_local: LIR.LocalId, value: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const operand = try self.addLocalForLayout(.u64);
+        const subtract = try self.assignBinaryLowLevel(target, .num_minus, len_local, operand, next);
+        return try self.assignU64Literal(operand, value, subtract);
+    }
+
     fn bindPattern(self: *Lowerer, pat_id: Lifted.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const pat_data = self.pat(pat_id);
         const pat_ty = try self.lowerPatTy(pat_id);
@@ -2778,18 +3483,102 @@ const Lowerer = struct {
             },
             .record => |fields| try self.bindRecordPattern(pat_ty, fields, source, next),
             .tuple => |items| try self.bindTuplePattern(items, source, next),
+            // Only an irrefutable list pattern reaches binding: `[.. as rest]`
+            // binds the whole list (aliasing the source); `[..]` binds nothing.
+            .list => |list| if (list.rest) |rest| (if (rest.pattern) |rest_pattern|
+                try self.bindPattern(rest_pattern, source, next)
+            else
+                next) else next,
             .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_ty, tag.name), tag.payloads, source, next),
             .nominal => |inner| try self.bindPattern(inner, source, next),
-            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => next,
+            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,
         };
     }
 
-    fn bindPatternOrCrash(self: *Lowerer, pat_id: Lifted.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn lowerStrPatternThen(
+        self: *Lowerer,
+        str: Lifted.StrPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const arm = try self.lowerStrPatternArm(str, on_match);
+        return try self.result.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = arm.prefix,
+            .steps = arm.steps,
+            .end = arm.end,
+            .on_match = arm.on_match,
+            .on_miss = try self.patternMissJump(miss),
+        } });
+    }
+
+    fn lowerStrPatternArm(
+        self: *Lowerer,
+        str: Lifted.StrPattern,
+        on_match: LIR.CFStmtId,
+    ) Common.LowerError!LIR.StrMatchArm {
+        const input_steps = self.solved.lifted.strPatternStepSpan(str.steps);
+        const lir_steps = try self.allocator.alloc(LIR.StrMatchStep, input_steps.len);
+        defer self.allocator.free(lir_steps);
+
+        for (input_steps, lir_steps) |input_step, *lir_step| {
+            lir_step.* = .{
+                .capture = if (input_step.capture) |capture|
+                    .{ .view = try self.addTemp(try self.lowerPatTy(capture)) }
+                else
+                    .discard,
+                .delimiter = try self.lirStrLiteral(input_step.delimiter),
+            };
+        }
+
+        var match_body = on_match;
+        var index = input_steps.len;
+        while (index > 0) {
+            index -= 1;
+            if (input_steps[index].capture) |capture| {
+                const capture_local = switch (lir_steps[index].capture) {
+                    .view => |local| local,
+                    .discard => Common.invariant("string-pattern capture step lowered without a capture local"),
+                };
+                match_body = try self.bindPattern(capture, capture_local, match_body);
+            }
+        }
+
+        return .{
+            .prefix = try self.lirStrLiteral(str.prefix),
+            .steps = try self.result.store.addStrMatchSteps(lir_steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+            .on_match = match_body,
+        };
+    }
+
+    fn bindPatternOrCrash(
+        self: *Lowerer,
+        pat_id: Lifted.PatId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+        comptime_site: ?Lifted.ComptimeSiteId,
+    ) Common.LowerError!LIR.CFStmtId {
         if (!self.patternCanMiss(pat_id)) return try self.bindPattern(pat_id, source, next);
 
         const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
-        const crash = try self.result.store.addCFStmt(.{ .runtime_error = {} });
-        const matched = try self.lowerPatternThen(pat_id, source, next, miss, next);
+        const crash = if (comptime_site) |site|
+            try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.lowerComptimeSite(site) } })
+        else
+            try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        const on_match = if (comptime_site) |site|
+            try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
+                .site = try self.lowerComptimeSite(site),
+                .branch_index = 0,
+                .next = next,
+            } })
+        else
+            next;
+        const matched = try self.lowerPatternThen(pat_id, source, on_match, miss, on_match);
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = miss.join_id,
             .params = LIR.LocalSpan.empty(),
@@ -3239,7 +4028,14 @@ const Lowerer = struct {
         } });
     }
 
-    fn discriminantSwitch(self: *Lowerer, source: LIR.LocalId, discriminant: u16, body: LIR.CFStmtId, default: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn discriminantSwitch(
+        self: *Lowerer,
+        source: LIR.LocalId,
+        discriminant: u16,
+        body: LIR.CFStmtId,
+        default: LIR.CFStmtId,
+        default_is_cold: bool,
+    ) Common.LowerError!LIR.CFStmtId {
         if (self.isZstLocal(source)) return body;
         const disc_local = try self.addLocalForLayout(.u16);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = discriminant, .body = body }};
@@ -3247,6 +4043,7 @@ const Lowerer = struct {
             .cond = disc_local,
             .branches = try self.result.store.addCFSwitchBranches(&branches),
             .default_branch = default,
+            .default_is_cold = default_is_cold,
             .continuation = null,
         } });
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
@@ -3261,11 +4058,43 @@ const Lowerer = struct {
         ids: []LIR.LocalId,
     };
 
+    const LoweredJoinExprLocals = struct {
+        exprs: []const Lifted.ExprId,
+        ids: []?LIR.LocalId,
+    };
+
     fn lowerExprsToTemps(self: *Lowerer, exprs: []const Lifted.ExprId) Common.LowerError!LoweredExprLocals {
         const ids = try self.allocator.alloc(LIR.LocalId, exprs.len);
         errdefer self.allocator.free(ids);
         for (exprs, 0..) |expr_id, i| ids[i] = try self.addTemp(try self.lowerExprTy(expr_id));
         return .{ .exprs = exprs, .ids = ids };
+    }
+
+    fn lowerExprsToJoinTemps(
+        self: *Lowerer,
+        params: LIR.LocalSpan,
+        exprs: []const Lifted.ExprId,
+    ) Common.LowerError!LoweredJoinExprLocals {
+        const param_locals = self.result.store.getLocalSpan(params);
+        if (param_locals.len != exprs.len) Common.invariant("LIR join arg arity differed from parameter arity");
+
+        const ids = try self.allocator.alloc(?LIR.LocalId, exprs.len);
+        errdefer self.allocator.free(ids);
+        for (exprs, 0..) |expr_id, i| {
+            ids[i] = if (try self.joinArgNeedsWrite(param_locals[i], expr_id))
+                try self.addTemp(try self.lowerExprTy(expr_id))
+            else
+                null;
+        }
+        return .{ .exprs = exprs, .ids = ids };
+    }
+
+    fn joinArgNeedsWrite(self: *Lowerer, param: LIR.LocalId, expr_id: Lifted.ExprId) Common.LowerError!bool {
+        return switch (self.solved.lifted.exprs.items[@intFromEnum(expr_id)].data) {
+            .uninitialized, .uninitialized_payload => false,
+            .local => |local| (try self.localFor(local)) != param,
+            else => true,
+        };
     }
 
     fn prependExprs(self: *Lowerer, lowered: LoweredExprLocals, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -3278,10 +4107,21 @@ const Lowerer = struct {
         return current;
     }
 
+    fn prependJoinExprs(self: *Lowerer, lowered: LoweredJoinExprLocals, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        var current = next;
+        var i = lowered.ids.len;
+        while (i > 0) {
+            i -= 1;
+            const target = lowered.ids[i] orelse continue;
+            current = try self.lowerExprInto(target, lowered.exprs[i], current);
+        }
+        return current;
+    }
+
     fn prependJoinParamInitializers(
         self: *Lowerer,
         params: LIR.LocalSpan,
-        args: []const LIR.LocalId,
+        args: []const ?LIR.LocalId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const param_locals = self.result.store.getLocalSpan(params);
@@ -3293,9 +4133,10 @@ const Lowerer = struct {
         var i = args.len;
         while (i > 0) {
             i -= 1;
+            const arg = args[i] orelse continue;
             current = try self.result.store.addCFStmt(.{ .set_local = .{
                 .target = param_locals[i],
-                .value = args[i],
+                .value = arg,
                 .mode = .initialize_join_param,
                 .next = current,
             } });
@@ -3421,6 +4262,28 @@ const Lowerer = struct {
 
             switch (self.lowerer.types.get(ty)) {
                 .named => |named| if (named.backing) |backing| {
+                    // A nominal or opaque record lays out its fields in declared
+                    // order. The declared-order channel carries that order (the
+                    // backing row stays lexicographic for name resolution); build
+                    // the struct node from it and mark it nominal so the shared
+                    // commit keeps declared order, repaired only for padding.
+                    // Reserve the node first (mapping both the named type and its
+                    // backing) so a recursive backing field resolves to it.
+                    if (named.kind != .alias and named.declared_order.len != 0 and
+                        self.lowerer.types.get(backing.ty) == .record)
+                    {
+                        const node = try self.graph.reserveNode(self.lowerer.allocator);
+                        self.local_nodes[index] = node;
+                        self.local_nodes[@intFromEnum(backing.ty)] = node;
+                        if (try self.declaredOrderStructFields(named.declared_order, backing.ty)) |field_span| {
+                            self.graph.setNode(node, .{ .struct_ = field_span });
+                            try self.graph.markNominalStruct(self.lowerer.allocator, node);
+                        } else {
+                            self.graph.setNode(node, try self.nodeForType(backing.ty));
+                        }
+                        return layout.localGraphInput(node);
+                    }
+
                     const backing_input = try self.inputForType(backing.ty);
                     if (layout.graphInputCommitted(backing_input)) |layout_idx| return layout.committedGraphInput(layout_idx);
                     if (layout.graphInputLocal(backing_input)) |node| {
@@ -3492,6 +4355,61 @@ const Lowerer = struct {
             defer self.lowerer.allocator.free(fields);
             for (items, 0..) |item, i| {
                 fields[i] = .{ .index = @intCast(i), .child = try self.inputForType(item.ty) };
+            }
+            return try self.graph.appendFields(self.lowerer.allocator, fields);
+        }
+
+        /// Builds graph fields for a nominal record in declared order from its
+        /// declared-order channel. Each named entry maps to the matching backing
+        /// field, keeping `.index` = the field's lexicographic position so
+        /// name-resolution (which indexes the lexicographic backing row) and the
+        /// layout offset map stay consistent. Returns null when the backing is
+        /// not a record or the declared order does not cover the backing fields,
+        /// so the caller falls back to the structural path.
+        fn declaredOrderStructFields(
+            self: *LayoutGraphBuilder,
+            declared_order: Type.Span,
+            backing_ty: Type.TypeId,
+        ) Common.LowerError!?layout.GraphFieldSpan {
+            const backing_fields = switch (self.lowerer.types.get(backing_ty)) {
+                .record => |span| self.lowerer.types.fieldSpan(span),
+                else => return null,
+            };
+            const entries = self.lowerer.types.declaredFieldSpan(declared_order);
+
+            var named_count: usize = 0;
+            for (entries) |entry| {
+                if (entry == .named) named_count += 1;
+            }
+            if (named_count != backing_fields.len) return null;
+
+            const fields = try self.lowerer.allocator.alloc(layout.GraphField, entries.len);
+            defer self.lowerer.allocator.free(fields);
+            // Padding spacers carry an index past every named field so they never
+            // collide with a named field's original (lexicographic) index, which
+            // is what `getStructFieldOffsetByOriginalIndex` looks up.
+            var padding_ordinal: u16 = 0;
+            for (entries, 0..) |entry, i| {
+                switch (entry) {
+                    .named => |name| {
+                        var lexicographic_index: ?u16 = null;
+                        var field_ty: Type.TypeId = undefined;
+                        for (backing_fields, 0..) |field, idx| {
+                            if (field.name == name) {
+                                lexicographic_index = @intCast(idx);
+                                field_ty = field.ty;
+                                break;
+                            }
+                        }
+                        const idx = lexicographic_index orelse return null;
+                        fields[i] = .{ .index = idx, .child = try self.inputForType(field_ty) };
+                    },
+                    .padding => |ty| {
+                        const pad_index: u16 = @intCast(backing_fields.len + padding_ordinal);
+                        padding_ordinal += 1;
+                        fields[i] = .{ .index = pad_index, .child = try self.inputForType(ty), .is_padding = true };
+                    },
+                }
             }
             return try self.graph.appendFields(self.lowerer.allocator, fields);
         }
@@ -3573,7 +4491,12 @@ const Lowerer = struct {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
-            .list, .box => null,
+            .list,
+            .box,
+            .parse_tag_union_spec,
+            .fields,
+            .field,
+            => null,
         };
     }
 
@@ -3584,11 +4507,32 @@ const Lowerer = struct {
         Common.invariant("tag operation referenced tag absent from Lambda Mono type");
     }
 
+    fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) u16 {
+        for (self.tagUnionTags(ty), 0..) |tag, index| {
+            if (std.mem.eql(u8, self.solved.lifted.names.tagLabelText(tag.name), text)) return @intCast(index);
+        }
+        Common.invariant("tag operation referenced tag text absent from Lambda Mono type");
+    }
+
     fn tagUnionTags(self: *Lowerer, ty: Type.TypeId) []const Type.Tag {
         return switch (self.types.get(ty)) {
             .tag_union => |tags| self.types.tagSpan(tags),
             .named => |named| if (named.backing) |backing| return self.tagUnionTags(backing.ty) else Common.invariant("named tag has no backing"),
             else => Common.invariant("tag operation expected tag-union type"),
+        };
+    }
+
+    fn singleTagPayloadTypeByIndex(self: *Lowerer, ty: Type.TypeId, variant_index: u16) Type.TypeId {
+        const tags = self.tagUnionTags(ty);
+        const payloads = self.types.span(tags[variant_index].payloads);
+        if (payloads.len != 1) Common.invariant("operation expected tag with exactly one payload");
+        return payloads[0];
+    }
+
+    fn runtimeBackingType(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
+        return switch (self.types.get(ty)) {
+            .named => |named| if (named.backing) |backing| backing.ty else ty,
+            else => ty,
         };
     }
 
@@ -3766,6 +4710,7 @@ const TypeEquivalence = struct {
         for (lhs, rhs) |a, b| {
             if (a.symbol != b.symbol) return false;
             if (!std.meta.eql(a.binder, b.binder)) return false;
+            if (!std.meta.eql(a.capture_id, b.capture_id)) return false;
             if (!try self.equivalent(a.ty, b.ty)) return false;
         }
         return true;
@@ -3855,15 +4800,20 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .stmt_ids = try cloneArrayList(Lifted.StmtId, allocator, &program.stmt_ids),
         .field_exprs = try cloneArrayList(Lifted.FieldExpr, allocator, &program.field_exprs),
         .record_destructs = try cloneArrayList(Lifted.RecordDestruct, allocator, &program.record_destructs),
+        .str_pattern_steps = try cloneArrayList(Lifted.StrPatternStep, allocator, &program.str_pattern_steps),
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),
         .if_branches = try cloneArrayList(Lifted.IfBranch, allocator, &program.if_branches),
         .string_literals = string_literals,
+        .proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names),
         .roots = try cloneArrayList(Lifted.Root, allocator, &program.roots),
         .layout_requests = try cloneArrayList(Lifted.LayoutRequest, allocator, &program.layout_requests),
         .runtime_schema_requests = try cloneArrayList(Lifted.RuntimeSchemaRequest, allocator, &program.runtime_schema_requests),
+        .comptime_sites = try cloneComptimeSites(allocator, &program.comptime_sites),
         .source_files = source_files,
         .expr_locs = try cloneArrayList(base.SourceLoc, allocator, &program.expr_locs),
+        .expr_regions = try cloneArrayList(base.Region, allocator, &program.expr_regions),
         .stmt_locs = try cloneArrayList(base.SourceLoc, allocator, &program.stmt_locs),
+        .stmt_regions = try cloneArrayList(base.Region, allocator, &program.stmt_regions),
         .local_names = blk: {
             var names: std.ArrayList([]const u8) = .empty;
             errdefer {
@@ -3879,47 +4829,80 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
             break :blk names;
         },
         .current_loc = program.current_loc,
+        .current_region = program.current_region,
     };
+}
+
+fn cloneComptimeSites(allocator: std.mem.Allocator, source: *const std.ArrayList(Lifted.ComptimeSite)) std.mem.Allocator.Error!std.ArrayList(Lifted.ComptimeSite) {
+    var cloned: std.ArrayList(Lifted.ComptimeSite) = .empty;
+    errdefer {
+        for (cloned.items) |site| allocator.free(site.branch_regions);
+        cloned.deinit(allocator);
+    }
+    try cloned.ensureTotalCapacityPrecise(allocator, source.items.len);
+    for (source.items) |site| {
+        cloned.appendAssumeCapacity(.{
+            .kind = site.kind,
+            .region = site.region,
+            .checked_site = site.checked_site,
+            .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
+        });
+    }
+    return cloned;
+}
+
+fn cloneProcDebugNameMap(allocator: std.mem.Allocator, source: *const Lifted.ProcDebugNameMap) std.mem.Allocator.Error!Lifted.ProcDebugNameMap {
+    var cloned = Lifted.ProcDebugNameMap.init(allocator);
+    errdefer cloned.deinit();
+
+    try cloned.ensureTotalCapacity(source.count());
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        cloned.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    return cloned;
 }
 
 fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedNames.NameStore) std.mem.Allocator.Error!check.CheckedNames.NameStore {
     var cloned = check.CheckedNames.NameStore.init(allocator);
     errdefer cloned.deinit();
 
-    for (source.module_names.items, 0..) |text, index| {
-        const id = try cloned.internModuleName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed module-name ids");
-    }
-    for (source.type_names.items, 0..) |text, index| {
-        const id = try cloned.internTypeName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed type-name ids");
-    }
-    for (source.method_names.items, 0..) |text, index| {
-        const id = try cloned.internMethodName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed method-name ids");
-    }
-    for (source.record_field_labels.items, 0..) |text, index| {
-        const id = try cloned.internRecordFieldLabel(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed record-field ids");
-    }
-    for (source.tag_labels.items, 0..) |text, index| {
-        const id = try cloned.internTagLabel(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed tag ids");
-    }
-    for (source.export_names.items, 0..) |text, index| {
-        const id = try cloned.internExportName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed export-name ids");
-    }
-    for (source.external_symbol_names.items, 0..) |text, index| {
-        const id = try cloned.internExternalSymbolName(text);
-        if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed external-symbol ids");
-    }
-    for (source.proc_bases.items, 0..) |key, index| {
+    // Re-intern every name in serial-id order; the ids must come back identical.
+    try reinternNames("module-name", &source.module_names, &cloned, NameStore.internModuleName);
+    try reinternNames("type-name", &source.type_names, &cloned, NameStore.internTypeName);
+    try reinternNames("method-name", &source.method_names, &cloned, NameStore.internMethodName);
+    try reinternNames("record-field", &source.record_field_labels, &cloned, NameStore.internRecordFieldLabel);
+    try reinternNames("tag", &source.tag_labels, &cloned, NameStore.internTagLabel);
+    try reinternNames("export-name", &source.export_names, &cloned, NameStore.internExportName);
+    try reinternNames("external-symbol", &source.external_symbol_names, &cloned, NameStore.internExternalSymbolName);
+    for (source.proc_bases.items.items, 0..) |key, index| {
         const id = try cloned.internProcBase(key);
         if (@intFromEnum(id) != index) Common.invariant("debug name-store clone changed proc-base ids");
     }
 
     return cloned;
+}
+
+const NameStore = check.CheckedNames.NameStore;
+
+/// Re-intern every text of one source interner into `dest` in serial-id order,
+/// asserting each id round-trips to its original position. A name interner
+/// deduplicates, so this reproduces ids `0..count-1` exactly UNLESS the source
+/// held the same text under two ids — dedup would collapse those and shift every
+/// later id, which the per-id check turns into a loud invariant break rather than
+/// a silently divergent clone.
+fn reinternNames(
+    comptime label: []const u8,
+    source: anytype,
+    dest: *NameStore,
+    comptime intern: anytype,
+) std.mem.Allocator.Error!void {
+    var i: u32 = 0;
+    while (i < source.count()) : (i += 1) {
+        const id = try intern(dest, source.getText(i));
+        if (@intFromEnum(id) != i) Common.invariant("debug name-store clone changed " ++ label ++ " ids (duplicate text in source?)");
+    }
 }
 
 fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Store) std.mem.Allocator.Error!MonoType.Store {
@@ -3929,6 +4912,7 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
         .spans = try cloneArrayList(MonoType.TypeId, allocator, &source.spans),
         .fields = try cloneArrayList(MonoType.Field, allocator, &source.fields),
         .tags = try cloneArrayList(MonoType.Tag, allocator, &source.tags),
+        .declared_fields = try cloneArrayList(MonoType.DeclaredField, allocator, &source.declared_fields),
     };
 }
 
@@ -3941,6 +4925,7 @@ fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.
         .tags = try cloneArrayList(SolvedType.Tag, allocator, &source.tags),
         .captures = try cloneArrayList(SolvedType.Capture, allocator, &source.captures),
         .fn_members = try cloneArrayList(SolvedType.FnMember, allocator, &source.fn_members),
+        .declared_fields = try cloneArrayList(SolvedType.DeclaredField, allocator, &source.declared_fields),
     };
 }
 
@@ -3994,6 +4979,14 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
         .local_hosted => |hosted| .{ .local_hosted = hosted.template },
         .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },
         .checked_generated => |template| .{ .checked_generated = template },
+        .parser_runtime => |runtime| .{ .parser_runtime = .{
+            .owner = runtime.owner,
+            .expr = runtime.expr,
+        } },
+        .encode_to_runtime => |runtime| .{ .encode_to_runtime = .{
+            .owner = runtime.owner,
+            .expr = runtime.expr,
+        } },
     };
 }
 

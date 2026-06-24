@@ -1018,6 +1018,7 @@ pub const tests = [_]TestCase{
         \\            "boxed callable second item definitely long enough to allocate outside small-string storage",
         \\        ],
         \\    }
+        \\    boxed : Box((I64 -> I64))
         \\    boxed = Box.box(|x| x + List.len(record.items).to_i64_wrap())
         \\    f = Box.unbox(boxed)
         \\    expect f(40) == 42

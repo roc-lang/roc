@@ -268,6 +268,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .crash_statement_in_expr_position => "CRASH IN EXPRESSION",
         .return_outside_function => "RETURN OUTSIDE FUNCTION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
@@ -280,6 +281,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
         .deprecated_number_suffix => "DEPRECATED NUMBER SUFFIX",
+        .expr_double_dot_is_not_range => "NOT A RANGE OPERATOR",
         else => "PARSE ERROR",
     };
 
@@ -410,6 +412,18 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addText("Tip: ");
                 try report.document.addReflowingTextWithBackticks(tip);
             }
+        },
+        .crash_statement_in_expr_position => {
+            try report.document.addReflowingText("The `crash` keyword starts a statement, but this position needs an expression.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Wrap it in a block expression:");
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(
+                \\{
+                \\    crash "unreachable"
+                \\}
+            );
         },
         .return_outside_function => {
             try report.document.addText("The ");
@@ -605,6 +619,14 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addReflowingText(" instead.");
             return report;
         },
+        .expr_double_dot_is_not_range => {
+            try report.document.addInlineCode("..");
+            try report.document.addText(" is not an operator. For an exclusive range use ");
+            try report.document.addInlineCode("..<");
+            try report.document.addText("; for an inclusive range use ");
+            try report.document.addInlineCode("..=");
+            try report.document.addText(".");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -711,6 +733,7 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
+        crash_statement_in_expr_position,
         return_outside_function,
         expected_expr_record_field_name,
         expected_ty_apply_close_round,
@@ -724,6 +747,8 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
+        /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
+        expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,
         var_must_have_ident,
         var_expected_equals,
@@ -956,7 +981,7 @@ pub const Statement = union(enum) {
     decl: Decl,
     @"var": struct {
         name: Token.Idx,
-        body: Expr.Idx,
+        body: ?Expr.Idx,
         region: TokenizedRegion,
     },
     expr: struct {
@@ -1071,7 +1096,9 @@ pub const Statement = union(enum) {
                 try tree.pushStringPair("name", name_str);
                 const attrs = tree.beginNode();
 
-                try ast.store.getExpr(v.body).pushToSExprTree(gpa, env, ast, tree);
+                if (v.body) |body| {
+                    try ast.store.getExpr(body).pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -1392,7 +1419,7 @@ pub const Pattern = union(enum) {
     string: struct {
         string_tok: Token.Idx,
         region: TokenizedRegion,
-        expr: Expr.Idx,
+        parts: PatternStringPart.Span,
     },
     single_quote: struct {
         token: Token.Idx,
@@ -1544,6 +1571,9 @@ pub const Pattern = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
                 try tree.pushStringPair("raw", ast.resolve(str.string_tok));
                 const attrs = tree.beginNode();
+                for (ast.store.patternStringPartSlice(str.parts)) |part_idx| {
+                    try ast.store.getPatternStringPart(part_idx).pushToSExprTree(env, ast, tree);
+                }
                 try tree.endNode(begin, attrs);
             },
             .single_quote => |sq| {
@@ -1565,7 +1595,9 @@ pub const Pattern = union(enum) {
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try ast.appendRegionInfoToSexprTree(env, tree, field.region);
-                    try tree.pushStringPair("name", ast.resolve(field.name));
+                    if (field.name) |name_tok| {
+                        try tree.pushStringPair("name", ast.resolve(name_tok));
+                    }
                     try tree.pushBoolPair("rest", field.rest);
                     const attrs2 = tree.beginNode();
 
@@ -1647,6 +1679,47 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+        }
+    }
+};
+
+/// A part of a string pattern. Unlike expression strings, interpolation holes
+/// in patterns are pattern binders or discards, never expressions.
+pub const PatternStringPart = union(enum) {
+    text: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    capture: struct {
+        name: ?Token.Idx,
+        region: TokenizedRegion,
+    },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+
+    pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) Allocator.Error!void {
+        switch (self) {
+            .text => |text| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-text");
+                try ast.appendRegionInfoToSexprTree(env, tree, text.region);
+                try tree.pushStringPair("raw", ast.resolve(text.token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .capture => |capture| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-capture");
+                try ast.appendRegionInfoToSexprTree(env, tree, capture.region);
+                if (capture.name) |name| {
+                    try tree.pushStringPair("name", ast.resolve(name));
+                } else {
+                    try tree.pushBoolPair("discard", true);
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2194,7 +2267,7 @@ pub const ExposedItem = union(enum) {
 
 /// A targets section in a platform header
 pub const TargetsSection = struct {
-    inputs_path: ?Token.Idx, // "inputs:" directive string literal
+    inputs_dir: ?Token.Idx, // "inputs_dir:" directive string literal
     entries: TargetEntry.Span, // per-target entries
     region: TokenizedRegion,
 
@@ -2823,7 +2896,19 @@ pub const Expr = union(enum) {
         fields: RecordField.Span,
         region: TokenizedRegion,
     },
+    nominal_record: struct {
+        mapper: Expr.Idx,
+        backing: Expr.Idx,
+        region: TokenizedRegion,
+    },
     ellipsis: struct {
+        region: TokenizedRegion,
+    },
+    @"break": struct {
+        region: TokenizedRegion,
+    },
+    @"return": struct {
+        expr: Expr.Idx,
         region: TokenizedRegion,
     },
     block: Block,
@@ -2894,7 +2979,10 @@ pub const Expr = union(enum) {
             .dbg => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
+            .nominal_record => |e| e.region,
             .ellipsis => |e| e.region,
+            .@"break" => |e| e.region,
+            .@"return" => |e| e.region,
             .for_expr => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
@@ -3225,10 +3313,45 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .nominal_record => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-nominal-record");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                const mapper_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("mapper");
+                try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
+                const mapper_attrs = tree.beginNode();
+                try tree.endNode(mapper_wrapper, mapper_attrs);
+
+                const backing_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("backing");
+                try ast.store.getExpr(a.backing).pushToSExprTree(gpa, env, ast, tree);
+                const backing_attrs = tree.beginNode();
+                try tree.endNode(backing_wrapper, backing_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
             .ellipsis => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-ellipsis");
                 const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"break" => |b| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-break");
+                try ast.appendRegionInfoToSexprTree(env, tree, b.region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"return" => |ret| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-return");
+                try ast.appendRegionInfoToSexprTree(env, tree, ret.region);
+                const attrs = tree.beginNode();
+                try ast.store.getExpr(ret.expr).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
             },
             .block => |block| {
@@ -3348,7 +3471,8 @@ pub const Expr = union(enum) {
 
 /// TODO
 pub const PatternRecordField = struct {
-    name: Token.Idx,
+    /// The field name, or `null` for a bare rest pattern (`..`), which has no name.
+    name: ?Token.Idx,
     value: ?Pattern.Idx,
     rest: bool,
     region: TokenizedRegion,

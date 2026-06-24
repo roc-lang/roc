@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
@@ -62,26 +63,14 @@ pub fn monotonicNs() u64 {
     }
 }
 
-const non_tty_progress_env = "ROC_TEST_PROGRESS_INTERVAL_MS";
-
 fn testProgressIntervalNs(is_tty: bool) u64 {
     if (is_tty) return std.time.ns_per_s;
 
-    const raw_z = std.c.getenv(non_tty_progress_env) orelse return 0;
-    const raw = std.mem.span(raw_z);
-    if (raw.len == 0) {
-        std.debug.print("invalid {s}: value must be an integer number of milliseconds\n", .{non_tty_progress_env});
-        return 0;
-    }
-
-    const interval_ms = std.fmt.parseInt(u64, raw, 10) catch |err| {
-        std.debug.print("invalid {s}='{s}': {s}\n", .{ non_tty_progress_env, raw, @errorName(err) });
-        return 0;
-    };
+    const interval_ms = build_options.test_progress_interval_ms;
     if (interval_ms == 0) return 0;
 
     return std.math.mul(u64, interval_ms, std.time.ns_per_ms) catch {
-        std.debug.print("invalid {s}='{s}': value is too large\n", .{ non_tty_progress_env, raw });
+        std.debug.print("invalid -Dtest-progress-interval-ms={d}: value is too large\n", .{interval_ms});
         return 0;
     };
 }
@@ -1220,7 +1209,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
 
                 // TTY progress updates in-place. Non-TTY progress is opt-in via
-                // ROC_TEST_PROGRESS_INTERVAL_MS and prints one factual line per interval.
+                // -Dtest-progress-interval-ms and prints one factual line per interval.
                 const progress_elapsed = progress_timer.read();
                 if (progress_interval_ns != 0 and progress_elapsed - last_progress_ns >= progress_interval_ns) {
                     last_progress_ns = progress_elapsed;

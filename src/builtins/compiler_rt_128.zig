@@ -27,7 +27,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const ryu = @import("ryu.zig");
+const ryu = @import("vendor_ryu");
 const math = std.math;
 const Log2Int = math.Log2Int;
 const native_endian = builtin.cpu.arch.endian();

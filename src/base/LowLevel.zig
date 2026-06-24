@@ -8,6 +8,9 @@
 pub const LowLevel = enum {
     // String operations
     str_is_eq,
+    str_is_eq_static_small,
+    str_static_small_word_eq,
+    str_static_small_word_caseless_eq,
     str_concat,
     str_contains,
     str_trim,
@@ -20,7 +23,9 @@ pub const LowLevel = enum {
     str_ends_with,
     str_repeat,
     str_drop_prefix,
+    str_drop_prefix_caseless_ascii,
     str_drop_suffix,
+    str_find_first,
     str_count_utf8_bytes,
     str_with_capacity,
     str_reserve,
@@ -78,6 +83,26 @@ pub const LowLevel = enum {
     // Bool operations
     bool_not,
 
+    // Hasher operations
+    dict_pseudo_seed,
+    hasher_finish,
+    hasher_write_bool,
+    hasher_write_u8,
+    hasher_write_u16,
+    hasher_write_u32,
+    hasher_write_u64,
+    hasher_write_u128,
+    hasher_write_i8,
+    hasher_write_i16,
+    hasher_write_i32,
+    hasher_write_i64,
+    hasher_write_i128,
+    hasher_write_f32,
+    hasher_write_f64,
+    hasher_write_dec,
+    hasher_write_bytes,
+    hasher_write_str,
+
     // Numeric comparison operations
     num_is_eq,
     num_is_gt,
@@ -98,11 +123,21 @@ pub const LowLevel = enum {
     num_mod_by,
     num_pow,
     num_sqrt,
+    num_sin,
+    num_cos,
+    num_tan,
+    num_asin,
+    num_acos,
+    num_atan,
     num_log,
     num_round,
     num_floor,
     num_ceiling,
     num_to_str,
+    f32_to_bits,
+    f32_from_bits,
+    f64_to_bits,
+    f64_from_bits,
 
     // Bitwise shift operations
     num_shift_left_by,
@@ -408,6 +443,24 @@ pub const LowLevel = enum {
     box_unbox,
     erased_capture_load,
 
+    // Compiler-internal pointer operations, introduced by the TRMC pass
+    // (src/lir/trmc.zig). Never produced by user code or canonicalization.
+    // Sizes always come from local layouts: the target local for ptr_alloca /
+    // box_alloc_zeroed (inner of ptr/box) and ptr_load, the value arg for
+    // ptr_store.
+    /// () -> Ptr(T): reserve a zeroed stack/frame slot for T, yield its address.
+    /// Emitted once per proc entry (pre-loop); backends may hoist to the prologue.
+    ptr_alloca,
+    /// () -> Box(T): heap cell via allocateWithRefcount (rc=1), payload zero-filled.
+    /// Bit-identical to a box_box whose payload is all zeroes.
+    box_alloc_zeroed,
+    /// (Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into *ptr.
+    ptr_store,
+    /// (Ptr(T)) -> T: copy sizeOf(T) bytes out of *ptr.
+    ptr_load,
+    /// (Box(T) | Ptr(T)) -> Ptr(T): identity bits.
+    ptr_cast,
+
     // Comparison
     compare,
 
@@ -530,6 +583,15 @@ pub const LowLevel = enum {
             };
         }
 
+        pub fn retainsSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = mask != 0,
+                .retain_args = mask,
+                .result_shares_args = mask,
+                .result_unique = true,
+            };
+        }
+
         pub fn allocatesSharingArgs(mask: u64) RcEffect {
             return .{
                 .may_allocate = true,
@@ -581,9 +643,12 @@ pub const LowLevel = enum {
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .str_drop_prefix,
+            .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
-            .str_from_utf8,
-            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
+            .str_find_first,
+            => RcEffect.retainsSharingArgs(argMask(&.{0})),
+
+            .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
@@ -668,7 +733,21 @@ pub const LowLevel = enum {
             // result cannot name a lender to borrow from.
             .erased_capture_load => RcEffect.retainsResult(),
 
+            .box_alloc_zeroed => RcEffect.allocates(),
+
+            // The stored value's ownership transfers into the pointed-at structure.
+            // The pointer args/results are ptr layouts, which are never refcounted.
+            .ptr_store => RcEffect.consumesArgsRetainingArgs(argMask(&.{1}), 0),
+
+            .ptr_alloca,
+            .ptr_load,
+            .ptr_cast,
+            => RcEffect.none(),
+
             .str_is_eq,
+            .str_is_eq_static_small,
+            .str_static_small_word_eq,
+            .str_static_small_word_caseless_eq,
             .str_contains,
             .str_caseless_ascii_equals,
             .str_starts_with,
@@ -676,6 +755,24 @@ pub const LowLevel = enum {
             .str_count_utf8_bytes,
             .list_len,
             .bool_not,
+            .dict_pseudo_seed,
+            .hasher_finish,
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_u128,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            .hasher_write_i128,
+            .hasher_write_f32,
+            .hasher_write_f64,
+            .hasher_write_dec,
+            .hasher_write_bytes,
+            .hasher_write_str,
             .num_is_eq,
             .num_is_gt,
             .num_is_gte,
@@ -693,10 +790,20 @@ pub const LowLevel = enum {
             .num_mod_by,
             .num_pow,
             .num_sqrt,
+            .num_sin,
+            .num_cos,
+            .num_tan,
+            .num_asin,
+            .num_acos,
+            .num_atan,
             .num_log,
             .num_round,
             .num_floor,
             .num_ceiling,
+            .f32_to_bits,
+            .f32_from_bits,
+            .f64_to_bits,
+            .f64_from_bits,
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,
@@ -967,6 +1074,23 @@ pub const LowLevel = enum {
             .compare,
             .crash,
             => RcEffect.none(),
+        };
+    }
+
+    /// Whether this primitive can consume borrowed string views directly,
+    /// without first materializing them into RocStr values.
+    pub fn acceptsStrViewArgs(self: LowLevel) bool {
+        return switch (self) {
+            .str_count_utf8_bytes,
+            .str_is_eq,
+            .str_contains,
+            .str_starts_with,
+            .str_ends_with,
+            .str_caseless_ascii_equals,
+            .str_drop_prefix,
+            .str_drop_suffix,
+            => true,
+            else => false,
         };
     }
 

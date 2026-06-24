@@ -20,6 +20,7 @@ const MAX_PATH_BYTES: usize = if (builtin.os.tag == .freestanding) 4096 else std
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
     DecompressionFailed,
+    ExpandedSizeLimitExceeded,
     InvalidTarHeader,
     UnexpectedEndOfStream,
     FileCreateFailed,
@@ -439,6 +440,66 @@ const HashingReader = struct {
     }
 };
 
+/// A reader that counts decompressed bytes as they pass through and fails the
+/// stream once an optional limit is exceeded, so a malicious archive cannot
+/// expand without bound (a "zip bomb") regardless of what its zstd frame
+/// header claims.
+const CountingLimitReader = struct {
+    inner: *std.Io.Reader,
+    total_bytes: u64,
+    max_bytes: ?u64,
+    limit_exceeded: bool,
+    interface: std.Io.Reader,
+
+    const Self = @This();
+
+    pub fn init(inner: *std.Io.Reader, max_bytes: ?u64, buffer: []u8) Self {
+        var result = Self{
+            .inner = inner,
+            .total_bytes = 0,
+            .max_bytes = max_bytes,
+            .limit_exceeded = false,
+            .interface = undefined,
+        };
+        result.interface = .{
+            .vtable = &vtable,
+            .buffer = buffer,
+            .seek = 0,
+            .end = 0,
+        };
+        return result;
+    }
+
+    const vtable: std.Io.Reader.VTable = .{
+        .stream = stream,
+    };
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", r));
+
+        if (self.limit_exceeded) return error.ReadFailed;
+
+        const out_buf = limit.slice(try w.writableSliceGreedy(1));
+        var vec: [1][]u8 = .{out_buf};
+        const bytes_read = self.inner.readVec(&vec) catch |err| switch (err) {
+            error.EndOfStream => return error.EndOfStream,
+            error.ReadFailed => return error.ReadFailed,
+        };
+
+        if (bytes_read > 0) {
+            self.total_bytes += bytes_read;
+            if (self.max_bytes) |max| {
+                if (self.total_bytes > max) {
+                    self.limit_exceeded = true;
+                    return error.ReadFailed;
+                }
+            }
+            w.advance(bytes_read);
+        }
+        return bytes_read;
+    }
+};
+
 /// A reader that decompresses zstd data and verifies hash incrementally
 /// Uses Zig's stdlib zstd for WASM compatibility
 /// Note: Must be heap-allocated to avoid self-referential pointer invalidation
@@ -449,8 +510,10 @@ const DecompressingHashReader = struct {
     hash_verified: bool,
     hashing_reader: HashingReader,
     decompressor: zstd.Decompress,
+    counting_reader: CountingLimitReader,
     hashing_buffer: []u8,
     decompressor_buffer: []u8,
+    counting_buffer: []u8,
 
     const Self = @This();
 
@@ -460,6 +523,7 @@ const DecompressingHashReader = struct {
         allocator: std.mem.Allocator,
         input_reader: *std.Io.Reader,
         expected_hash: [32]u8,
+        max_expanded_bytes: ?u64,
     ) Allocator.Error!*Self {
         // Allocate the struct itself on the heap so pointers remain stable
         const self = try allocator.create(Self);
@@ -473,6 +537,10 @@ const DecompressingHashReader = struct {
         const decompressor_buffer = try allocator.alloc(u8, DECOMPRESS_BUFFER_SIZE);
         errdefer allocator.free(decompressor_buffer);
 
+        // Allocate buffer for the counting reader
+        const counting_buffer = try allocator.alloc(u8, STREAM_BUFFER_SIZE);
+        errdefer allocator.free(counting_buffer);
+
         self.* = Self{
             .allocator = allocator,
             .hasher = std.crypto.hash.Blake3.init(.{}),
@@ -480,8 +548,10 @@ const DecompressingHashReader = struct {
             .hash_verified = false,
             .hashing_reader = undefined,
             .decompressor = undefined,
+            .counting_reader = undefined,
             .hashing_buffer = hashing_buffer,
             .decompressor_buffer = decompressor_buffer,
+            .counting_buffer = counting_buffer,
         };
 
         // Create hashing wrapper around input reader
@@ -495,32 +565,54 @@ const DecompressingHashReader = struct {
             .{},
         );
 
+        // Count every decompressed byte the consumer reads
+        self.counting_reader = CountingLimitReader.init(
+            &self.decompressor.reader,
+            max_expanded_bytes,
+            counting_buffer,
+        );
+
         return self;
     }
 
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.hashing_buffer);
         self.allocator.free(self.decompressor_buffer);
+        self.allocator.free(self.counting_buffer);
         self.allocator.destroy(self);
     }
 
     /// Get the reader interface for tar extraction
     pub fn reader(self: *Self) *std.Io.Reader {
-        return &self.decompressor.reader;
+        return &self.counting_reader.interface;
+    }
+
+    /// Total decompressed bytes consumed so far.
+    pub fn expandedBytes(self: *const Self) u64 {
+        return self.counting_reader.total_bytes;
+    }
+
+    /// Whether the expanded-size limit was exceeded during reading.
+    pub fn limitExceeded(self: *const Self) bool {
+        return self.counting_reader.limit_exceeded;
     }
 
     /// Verify that the hash matches. This should be called after reading is complete.
-    pub fn verifyComplete(self: *Self) error{HashMismatch}!void {
+    pub fn verifyComplete(self: *Self) error{ HashMismatch, ExpandedSizeLimitExceeded }!void {
         // Drain remaining compressed data through the hashing reader
         // This ensures all compressed bytes are hashed even if tar didn't need them
         while (true) {
             // Try to read more compressed data through the decompressor
             var discard_buf: [4096]u8 = undefined;
-            const bytes_read = self.decompressor.reader.readSliceShort(&discard_buf) catch {
+            const bytes_read = self.counting_reader.interface.readSliceShort(&discard_buf) catch {
                 // ReadFailed indicates stream is done or error occurred
                 break;
             };
             if (bytes_read == 0) break;
+        }
+
+        if (self.limitExceeded()) {
+            return error.ExpandedSizeLimitExceeded;
         }
 
         if (!self.hash_verified) {
@@ -534,7 +626,15 @@ const DecompressingHashReader = struct {
     }
 };
 
+/// Options controlling streaming extraction.
+pub const StreamOptions = struct {
+    /// Maximum allowed decompressed size of the archive in bytes, or null for
+    /// no limit. Exceeding it aborts extraction with ExpandedSizeLimitExceeded.
+    max_expanded_bytes: ?u64 = null,
+};
+
 /// Unbundle a compressed tar archive, streaming from input_reader to extract_writer.
+/// Returns the total decompressed size of the archive in bytes.
 ///
 /// This is the core streaming unbundle logic that can be used by both file-based
 /// unbundling and network-based downloading.
@@ -545,11 +645,13 @@ pub fn unbundleStream(
     extract_writer: ExtractWriter,
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
-) UnbundleError!void {
+    options: StreamOptions,
+) UnbundleError!u64 {
     const decompress_reader = DecompressingHashReader.create(
         allocator,
         input_reader,
         expected_hash.*,
+        options.max_expanded_bytes,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -567,7 +669,10 @@ pub fn unbundleStream(
     while (true) {
         const maybe_entry = tar_iterator.next() catch |err| switch (err) {
             error.EndOfStream => break,
-            else => return error.InvalidTarHeader,
+            else => {
+                if (decompress_reader.limitExceeded()) return error.ExpandedSizeLimitExceeded;
+                return error.InvalidTarHeader;
+            },
         };
 
         const entry = maybe_entry orelse break;
@@ -594,7 +699,10 @@ pub fn unbundleStream(
                 // below and propagates OOM.
                 errdefer extract_writer.finishFile() catch {};
 
-                try tar_iterator.streamRemaining(entry, file_writer);
+                tar_iterator.streamRemaining(entry, file_writer) catch |err| {
+                    if (decompress_reader.limitExceeded()) return error.ExpandedSizeLimitExceeded;
+                    return err;
+                };
                 try file_writer.flush();
                 try extract_writer.finishFile();
 
@@ -638,11 +746,14 @@ pub fn unbundleStream(
     // Verify hash after all data is read
     decompress_reader.verifyComplete() catch |err| switch (err) {
         error.HashMismatch => return error.HashMismatch,
+        error.ExpandedSizeLimitExceeded => return error.ExpandedSizeLimitExceeded,
     };
 
     if (!data_extracted) {
         return error.NoDataExtracted;
     }
+
+    return decompress_reader.expandedBytes();
 }
 
 /// Validate a base58-encoded hash string and decode it.
@@ -679,5 +790,5 @@ pub fn unbundle(
 
     var dir_writer = DirExtractWriter.init(extract_dir, io, allocator);
     defer dir_writer.deinit();
-    return unbundleStream(allocator, input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
+    _ = try unbundleStream(allocator, input_reader, dir_writer.extractWriter(), &expected_hash, error_context, .{});
 }

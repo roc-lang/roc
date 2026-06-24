@@ -811,7 +811,7 @@ const ReplDefinitionIdentity = struct {
     name: []const u8,
 };
 
-fn resolveReplInputKind(line: []const u8) parse.Parser.Error!?ReplInputKind {
+fn resolveReplInputKind(line: []const u8) std.mem.Allocator.Error!?ReplInputKind {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -843,7 +843,7 @@ fn resolveReplInputKind(line: []const u8) parse.Parser.Error!?ReplInputKind {
     };
 }
 
-fn replDefinitionIdentity(line: []const u8) parse.Parser.Error!?ReplDefinitionIdentity {
+fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinitionIdentity {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -2358,12 +2358,13 @@ export fn unbundleToBuffer(
     defer buffer_writer.deinit();
 
     // Perform unbundling
-    unbundle.unbundleStream(
+    _ = unbundle.unbundleStream(
         allocator,
         &fixed_reader,
         buffer_writer.extractWriter(),
         &expected_hash,
         null,
+        .{},
     ) catch |err| {
         // Write error response
         return writeUnbundleErrorResponse(response_ptr[0..response_len], err);
@@ -2376,6 +2377,7 @@ export fn unbundleToBuffer(
 fn writeUnbundleErrorResponse(response: []u8, err: unbundle.UnbundleError) u8 {
     const error_msg = switch (err) {
         error.DecompressionFailed => "Decompression failed",
+        error.ExpandedSizeLimitExceeded => "Expanded size limit exceeded",
         error.InvalidTarHeader => "Invalid tar header",
         error.UnexpectedEndOfStream => "Unexpected end of stream",
         error.FileCreateFailed => "File create failed",

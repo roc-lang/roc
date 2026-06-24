@@ -28,7 +28,7 @@ This argument has the type:
     { age: a, namee: b }
       where [
         a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
+        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
       ]
 
 But `getName` needs the first argument to be:

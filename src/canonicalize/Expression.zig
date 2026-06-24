@@ -201,6 +201,7 @@ pub const Expr = union(enum) {
     e_if: struct {
         branches: IfBranch.Span,
         final_else: Expr.Idx,
+        warn_unused_branches: bool,
     },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -356,6 +357,23 @@ pub const Expr = union(enum) {
         method_name_region: base.Region,
         args: Expr.Span,
         constraint_fn_var: TypeVar,
+        surface_origin: SurfaceOrigin,
+    },
+    /// Compiler-created interpolation dispatch.
+    ///
+    /// Unlike an ordinary method call, this dispatch is owned by the result
+    /// type of the whole interpolation expression. Runtime arguments are the
+    /// first `Str` segment and a compiler-generated `Iter` over interpolated
+    /// values paired with following `Str` segments.
+    e_interpolation: struct {
+        first: Expr.Idx,
+        /// Flat `(interpolated, following_segment)` pairs. The span length is
+        /// always even, with `following_segment` expressions already typed as
+        /// builtin `Str` segments.
+        parts: Expr.Span,
+        method_name_region: base.Region,
+        constraint_fn_var: ?TypeVar = null,
+        step_fn_var: ?TypeVar = null,
     },
     /// Structural equality chosen explicitly by the checker.
     ///
@@ -367,26 +385,38 @@ pub const Expr = union(enum) {
         rhs: Expr.Idx,
         negated: bool,
     },
+    /// Structural hashing chosen explicitly by the checker.
+    ///
+    /// This is not method dispatch. It represents the semantic case where
+    /// `to_hash` is satisfied structurally — threading a `Hasher` through each
+    /// component's hash — rather than via a user-defined `to_hash` method.
+    e_structural_hash: struct {
+        value: Expr.Idx,
+        hasher: Expr.Idx,
+    },
     e_method_eq: struct {
         lhs: Expr.Idx,
         rhs: Expr.Idx,
         negated: bool,
         constraint_fn_var: types.Var,
     },
-    /// Method call expression rooted in a type-var alias namespace.
+    /// Method call expression rooted in a type-dispatch owner.
     ///
     /// ```roc
     /// Fmt : fmt
     /// Fmt.decode_str(format, source)
+    ///
+    /// Shape : { foo : Str }
+    /// Shape.parser_for(format)
     /// ```
     e_type_method_call: struct {
-        type_var_alias_stmt: CIR.Statement.Idx,
+        type_dispatch_stmt: CIR.Statement.Idx,
         method_name: Ident.Idx,
         method_name_region: base.Region,
         args: Expr.Span,
     },
     e_type_dispatch_call: struct {
-        type_var_alias_stmt: CIR.Statement.Idx,
+        type_dispatch_stmt: CIR.Statement.Idx,
         method_name: Ident.Idx,
         method_name_region: base.Region,
         args: Expr.Span,
@@ -504,6 +534,9 @@ pub const Expr = union(enum) {
             try_suffix,
         };
     },
+
+    /// Break expression that exits the enclosing loop.
+    e_break: struct {},
 
     /// For expression that iterates over a list and executes a body for each element.
     /// The for expression evaluates to the empty record `{}`.
@@ -636,6 +669,22 @@ pub const Expr = union(enum) {
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
             return Binop{ .op = op, .lhs = lhs, .rhs = rhs };
         }
+    };
+
+    /// The surface syntax a dispatch call was desugared from, recorded as
+    /// explicit CIR data so re-emission can reproduce the operator form.
+    /// Operator forms carry contracts the method-call form does not (e.g.
+    /// arithmetic binops: `ret = lhs`), so re-emitting them as `.method()`
+    /// calls would weaken the program.
+    pub const SurfaceOrigin = union(enum) {
+        /// Written as a method call (`a.plus(b)`) in the source.
+        method_call,
+        /// Desugared from a binary operator expression (`a + b`).
+        binop: Binop.Op,
+        /// Desugared from unary negation (`-a`).
+        unary_minus,
+        /// Desugared from unary logical not (`!a`).
+        unary_not,
     };
 
     /// Unary minus operation for numeric negation.
@@ -1261,6 +1310,36 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_interpolation => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-interpolation");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                if (e.constraint_fn_var) |constraint_fn_var| {
+                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                }
+                const attrs = tree.beginNode();
+
+                {
+                    const first_begin = tree.beginNode();
+                    try tree.pushStaticAtom("first");
+                    const first_attrs = tree.beginNode();
+                    try ir.store.getExpr(e.first).pushToSExprTree(ir, tree, e.first);
+                    try tree.endNode(first_begin, first_attrs);
+                }
+
+                {
+                    const parts_begin = tree.beginNode();
+                    try tree.pushStaticAtom("parts");
+                    const parts_attrs = tree.beginNode();
+                    for (ir.store.sliceExpr(e.parts)) |part_idx| {
+                        try ir.store.getExpr(part_idx).pushToSExprTree(ir, tree, part_idx);
+                    }
+                    try tree.endNode(parts_begin, parts_attrs);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
             .e_structural_eq => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-structural-eq");
@@ -1280,6 +1359,27 @@ pub const Expr = union(enum) {
                 const rhs_attrs = tree.beginNode();
                 try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
                 try tree.endNode(rhs_begin, rhs_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_structural_hash => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-structural-hash");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const value_begin = tree.beginNode();
+                try tree.pushStaticAtom("value");
+                const value_attrs = tree.beginNode();
+                try ir.store.getExpr(e.value).pushToSExprTree(ir, tree, e.value);
+                try tree.endNode(value_begin, value_attrs);
+
+                const hasher_begin = tree.beginNode();
+                try tree.pushStaticAtom("hasher");
+                const hasher_attrs = tree.beginNode();
+                try ir.store.getExpr(e.hasher).pushToSExprTree(ir, tree, e.hasher);
+                try tree.endNode(hasher_begin, hasher_attrs);
 
                 try tree.endNode(begin, attrs);
             },
@@ -1313,7 +1413,7 @@ pub const Expr = union(enum) {
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 const attrs = tree.beginNode();
 
-                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(e.type_dispatch_stmt));
 
                 const args_begin = tree.beginNode();
                 try tree.pushStaticAtom("args");
@@ -1331,7 +1431,7 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
-                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(e.type_dispatch_stmt));
                 try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
                 const attrs = tree.beginNode();
 
@@ -1484,6 +1584,14 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_break => {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-break");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .e_for => |for_expr| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-for");
@@ -1532,6 +1640,9 @@ pub const Expr = union(enum) {
         /// Whether this match was desugared from the `?` (try suffix) operator.
         /// When true, we need to verify the condition is actually a Try type.
         is_try_suffix: bool,
+        /// Whether to skip user-facing exhaustiveness/redundancy diagnostics for this match.
+        /// This is true for compiler-generated matches such as `?` and `??` desugarings.
+        skip_exhaustiveness: bool,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };

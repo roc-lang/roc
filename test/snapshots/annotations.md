@@ -256,7 +256,7 @@ NO CHANGE
 				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes"))
-		(e-call (constraint-fn-var 559)
+		(e-call (constraint-fn-var 562)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-string

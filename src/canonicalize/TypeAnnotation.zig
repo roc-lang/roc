@@ -332,6 +332,12 @@ pub const TypeAnno = union(enum) {
     pub const RecordField = struct {
         name: Ident.Idx,
         ty: TypeAnno.Idx,
+        /// True for unnamed fields (`_` / `_name`), which are only permitted in
+        /// nominal record declarations and act as layout padding rather than
+        /// real fields. Such fields are kept in the declaration's canonical
+        /// record annotation (preserving declared order) but excluded from the
+        /// backing record row, so they are never name-resolved or constructed.
+        is_unnamed: bool = false,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: DataSpan };
@@ -433,7 +439,6 @@ pub const TypeAnno = union(enum) {
         pub fn fromBytes(bytes: []const u8) ?@This() {
             if (std.mem.eql(u8, bytes, "List")) return .list;
             if (std.mem.eql(u8, bytes, "Box")) return .box;
-            if (std.mem.eql(u8, bytes, "Num")) return .num;
             if (std.mem.eql(u8, bytes, "U8")) return .u8;
             if (std.mem.eql(u8, bytes, "U16")) return .u16;
             if (std.mem.eql(u8, bytes, "U32")) return .u32;

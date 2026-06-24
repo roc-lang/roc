@@ -2,6 +2,7 @@
 //! interpreter consumers.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const layout = @import("layout");
 
@@ -44,7 +45,7 @@ pub const FnTemplate = struct {
 
 /// Capture field copied from a checked binder into a callable payload.
 pub const CaptureSlot = struct {
-    binder: checked.PatternBinderId,
+    id: const_store.CaptureId,
     slot: u32,
     plan: ConstPlanId,
 };
@@ -129,6 +130,7 @@ pub const Result = struct {
     erased_fns: std.ArrayList(ErasedFns),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
+    comptime_sites: std.ArrayList(LIR.ComptimeSite),
 
     pub fn init(allocator: Allocator, target_usize: @import("base").target.TargetUsize) Allocator.Error!Result {
         return .{
@@ -141,11 +143,16 @@ pub const Result = struct {
             .erased_fns = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
+            .comptime_sites = .empty,
         };
     }
 
     pub fn deinit(self: *Result) void {
         const allocator = self.store.allocator;
+        for (self.comptime_sites.items) |site| {
+            allocator.free(site.branch_regions);
+        }
+        self.comptime_sites.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
         self.const_plans.deinit(allocator);
@@ -165,6 +172,27 @@ pub const Result = struct {
             if (std.mem.eql(u8, entry.ty.bytes[0..], ty.bytes[0..])) return entry.layout_idx;
         }
         return null;
+    }
+
+    pub fn addComptimeSite(
+        self: *Result,
+        kind: LIR.ComptimeSiteKind,
+        region: base.Region,
+        checked_site: ?LIR.CheckedExhaustivenessSiteId,
+        proc: LIR.LirProcSpecId,
+        branch_regions: []const base.Region,
+    ) Allocator.Error!LIR.ComptimeSiteId {
+        const owned_branch_regions = try self.store.allocator.dupe(base.Region, branch_regions);
+        errdefer self.store.allocator.free(owned_branch_regions);
+        const id: LIR.ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        try self.comptime_sites.append(self.store.allocator, .{
+            .kind = kind,
+            .region = region,
+            .checked_site = checked_site,
+            .proc = proc,
+            .branch_regions = owned_branch_regions,
+        });
+        return id;
     }
 };
 

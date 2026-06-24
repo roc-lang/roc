@@ -29,11 +29,13 @@ pub fn managedWriterFinish(aw: *std.Io.Writer.Allocating, managed: *std.array_li
 pub const SafeList = @import("safe_list.zig").SafeList;
 pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
+pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
+pub const ExposedItemTarget = @import("ExposedItems.zig").ExposedItemTarget;
 pub const CompactWriter = @import("CompactWriter.zig");
 
 /// Single-threaded arena allocator; the non-atomic counterpart to

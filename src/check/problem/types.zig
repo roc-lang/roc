@@ -40,6 +40,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     polymorphic_value: VarWithSnapshot,
+    polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_expect: EffectfulExpect,
     annotation_only_value: AnnotationOnlyValue,
@@ -53,9 +54,14 @@ pub const Problem = union(enum) {
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
+    tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
+    literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
+    non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    unreachable_code: UnreachableCode,
+    comptime_unused_branch: ComptimeUnusedBranch,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -103,6 +109,13 @@ pub const HostedUnboxedFunction = struct {
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A mutable `var` whose annotation introduces an unbound type variable. A `var`
+/// is never generalized, so a free type variable in its annotation can never be
+/// bound — the variable must have a concrete type.
+pub const PolymorphicVarAnnotation = struct {
     region: base.Region,
 };
 
@@ -184,6 +197,28 @@ pub const InvalidNumericLiteral = struct {
     region: base.Region,
 };
 
+/// Tuple access on an unconstrained value cannot infer the tuple's full arity.
+pub const TupleAccessNeedsAnnotation = struct {
+    region: base.Region,
+    elem_index: u32,
+};
+
+/// Warning (the Haskell §4.3.4 / `-Wtype-defaults` analogue): an open literal
+/// (number or string) unreachable from its definition's type was defaulted at the
+/// generalization boundary. Such a literal is shared by every instantiation of the
+/// def and can never adapt per call site; the warning lets the user pin a
+/// different type with an annotation.
+pub const LiteralDefaulted = struct {
+    literal_var: Var,
+    /// Which kind defaulted (numeral vs. quote), so the report can word the
+    /// message and hint per kind.
+    kind: types_mod.StaticDispatchConstraint.LiteralKind,
+    /// Snapshot of the committed default type (e.g. `Dec`) for rendering.
+    default_snapshot: SnapshotContentIdx,
+    /// The literal's own source region.
+    region: base.Region,
+};
+
 /// Error when a stmt expression returns a non-empty record value
 pub const UnusedValue = struct {
     var_: Var,
@@ -230,6 +265,29 @@ pub const NonExhaustiveMatch = struct {
     condition_snapshot: SnapshotContentIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
+    /// This was discovered by compile-time evaluation taking the generated miss branch.
+    empirical: bool = false,
+};
+
+/// Problem data for a non-exhaustive destructuring pattern
+pub const NonExhaustiveDestructure = struct {
+    pattern: CIR.Pattern.Idx,
+    /// Snapshot of the destructured value type for error messages
+    value_snapshot: SnapshotContentIdx,
+    /// Range into the problems store's missing_patterns_backing for pattern indices
+    missing_patterns: MissingPatternsRange,
+    /// This was discovered by compile-time evaluation taking the generated miss branch.
+    empirical: bool = false,
+};
+
+/// A compile-time-only branch or match alternative was not taken by compile-time evaluation.
+pub const ComptimeUnusedBranch = struct {
+    kind: enum {
+        match,
+        if_,
+    },
+    site_region: base.Region,
+    branch_region: base.Region,
 };
 
 /// Problem data for a redundant pattern in a match
@@ -246,6 +304,11 @@ pub const UnmatchablePattern = struct {
     problem_branch_index: u32,
 };
 
+/// Code that appears after an expression or statement that never returns.
+pub const UnreachableCode = struct {
+    region: base.Region,
+};
+
 // static dispatch //
 
 /// Error related to static dispatch
@@ -254,6 +317,7 @@ pub const StaticDispatch = union(enum) {
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
     type_does_not_support_equality: TypeDoesNotSupportEquality,
     unresolved_dispatcher: UnresolvedDispatcher,
+    recursive_dispatch: RecursiveDispatch,
 };
 
 /// Error when a static dispatch method is called on a receiver whose type is an
@@ -320,6 +384,14 @@ pub const TypeDoesNotSupportEquality = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+};
+
+/// Error when satisfying a static-dispatch constraint immediately requires the
+/// same static-dispatch constraint again on the same dispatcher type.
+pub const RecursiveDispatch = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
 };
 
 // nominal type errors //

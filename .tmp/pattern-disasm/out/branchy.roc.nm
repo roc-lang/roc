@@ -1,0 +1,10 @@
+
+/Users/rtfeldman/Library/Caches/roc/debug-02932267/src/roc_build/roc_app_llvm_arm64mac_speed_17c7dfcc.o:
+0000000000000538 T _roc__proc_10
+0000000000000000 T _roc__proc_11
+00000000000005dc T _roc__proc_12
+00000000000005ec T _roc__proc_13
+00000000000006a0 T _roc__proc_f
+                 U _roc_dealloc
+0000000000000604 T _roc_main
+0000000000000000 t ltmp0

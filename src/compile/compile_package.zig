@@ -35,7 +35,6 @@ const roc_target = @import("roc_target");
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
 const CheckedModules = check.TypedCIR.Modules;
-const CheckedModuleSource = CheckedModules.SourceModule;
 const Can = can.Can;
 const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
@@ -321,15 +320,17 @@ pub const TypeCheckOutput = struct {
 pub const ArtifactPublicationInputs = struct {
     available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
+    platform_requirement_artifact: ?CheckedArtifact.ImportedModuleView = null,
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
+    hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
 };
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
         else => true,
     };
 }
@@ -355,6 +356,7 @@ fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool 
             .underscore_in_type_declaration,
             .module_header_deprecated,
             .deprecated_number_suffix,
+            .unreachable_string_pattern_capture,
             => {},
             else => return true,
         }
@@ -1468,6 +1470,8 @@ pub const PackageEnv = struct {
 
         try checker.checkFile();
 
+        _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+
         return checker;
     }
 
@@ -1484,7 +1488,7 @@ pub const PackageEnv = struct {
             else => return null,
         }
         const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse return null;
-        const type_node_idx = sibling_env.getExposedNodeIndexById(type_ident_in_module) orelse return null;
+        const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
         return @enumFromInt(type_node_idx);
     }
 
@@ -1605,7 +1609,7 @@ pub const PackageEnv = struct {
             const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
                 // Look up the type in the module's exposed_items to get the actual node index
                 const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
-                const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
+                const type_node_idx = actual_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
                 break :stmt_blk @enumFromInt(type_node_idx);
             };
 
@@ -1702,6 +1706,7 @@ pub const PackageEnv = struct {
             checkerHasArtifactBlockingProblems(&checker) or
             !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
         {
+            _ = try checker.problems.flushPendingStaticExhaustiveness(check_alloc);
             return .{
                 .checker = checker,
                 .checked_artifact = null,
@@ -1717,13 +1722,17 @@ pub const PackageEnv = struct {
                 .platform_requirement_context = null,
                 .platform_app_relation = null,
                 .explicit_roots = explicit_roots,
+                .hoisted_roots = checker.selectedHoistedRoots(),
                 .available_artifacts = available_artifacts,
                 .problem_store = &checker.problems,
             },
         ) catch |err| switch (err) {
-            error.CompileTimeProblem => return .{
-                .checker = checker,
-                .checked_artifact = null,
+            error.CompileTimeProblem => {
+                _ = try checker.problems.flushPendingStaticExhaustiveness(check_alloc);
+                return .{
+                    .checker = checker,
+                    .checked_artifact = null,
+                };
             },
             else => |other| return other,
         };
@@ -1760,40 +1769,37 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
     ) anyerror!CheckedArtifact.CheckedModuleArtifact {
-        var imported_source_count: usize = 0;
-        for (imported_envs) |imported_env| {
-            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            imported_source_count += 1;
-        }
+        var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
+        defer typed.modules.deinit();
+        return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
+    }
 
-        var source_modules = try gpa.alloc(CheckedModuleSource, imported_source_count + 1);
-        defer gpa.free(source_modules);
-        var source_index: usize = 0;
-        for (imported_envs) |imported_env| {
-            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            source_modules[source_index] = .{ .precompiled = @constCast(imported_env) };
-            source_index += 1;
-        }
-
-        const checked_module_idx_usize = imported_source_count;
-        const checked_module_idx: u32 = @intCast(checked_module_idx_usize);
-        source_modules[checked_module_idx_usize] = .{ .precompiled = env };
-
-        var typed_modules = try CheckedModules.init(gpa, source_modules);
-        defer typed_modules.deinit();
-
+    /// Publish from an already-built `Modules` graph. The cache-key probe builds the
+    /// root graph to compute the key; on a miss the same graph is reused here instead of
+    /// rebuilding it (the build runs `prepareRuntimeEnv` over every env, so rebuilding is
+    /// real, redundant work).
+    pub fn publishFromPrebuiltModules(
+        gpa: Allocator,
+        modules: *const CheckedModules,
+        module_idx: u32,
+        module_env_storage: CheckedArtifact.ModuleEnvStorage,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        publication: ArtifactPublicationInputs,
+    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
-            &typed_modules,
-            checked_module_idx,
+            modules,
+            module_idx,
             .{
                 .module_env_storage = module_env_storage,
                 .imports = imported_artifacts,
                 .available_artifacts = publication.available_artifacts,
                 .relation_artifacts = publication.relation_artifacts,
+                .platform_requirement_artifact = publication.platform_requirement_artifact,
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
+                .hoisted_roots = publication.hoisted_roots,
                 .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
                 .problem_store = publication.problem_store,
             },

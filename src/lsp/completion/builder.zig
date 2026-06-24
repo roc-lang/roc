@@ -310,8 +310,8 @@ pub const CompletionBuilder = struct {
             var detail: ?[]const u8 = null;
             var documentation: ?[]const u8 = null;
             if (type_writer) |*tw| {
-                if (module_env.common.getNodeIndexById(self.allocator, ident_idx)) |node_idx| {
-                    if (node_idx != 0 and module_env.store.isDefNode(node_idx)) {
+                if (module_env.common.getValueNodeIndexById(self.allocator, ident_idx)) |node_idx| {
+                    if (module_env.store.isDefNode(node_idx)) {
                         const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
                         const def = module_env.store.getDef(def_idx);
                         const type_var = ModuleEnv.varFrom(def.pattern);
@@ -678,6 +678,7 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
+                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                 else => continue,
             };
 
@@ -1035,6 +1036,7 @@ pub const CompletionBuilder = struct {
                 const pattern_idx = switch (stmt) {
                     .s_decl => |decl| decl.pattern,
                     .s_var => |var_stmt| var_stmt.pattern_idx,
+                    .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                     else => continue,
                 };
 
@@ -1308,6 +1310,7 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
+                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                 else => continue,
             };
 
@@ -1358,6 +1361,7 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
+                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                 else => continue,
             };
 
@@ -1690,9 +1694,12 @@ fn getStatementParts(stmt: CIR.Statement) StatementParts {
     return switch (stmt) {
         .s_decl => |decl| .{ .pattern = decl.pattern, .expr = decl.expr, .expr2 = null },
         .s_var => |var_stmt| .{ .pattern = var_stmt.pattern_idx, .expr = var_stmt.expr, .expr2 = null },
+        .s_var_uninitialized => |var_stmt| .{ .pattern = var_stmt.pattern_idx, .expr = null, .expr2 = null },
         .s_reassign => |reassign| .{ .pattern = null, .expr = reassign.expr, .expr2 = null },
         .s_for => |for_stmt| .{ .pattern = for_stmt.patt, .expr = for_stmt.expr, .expr2 = for_stmt.body },
         .s_while => |while_stmt| .{ .pattern = null, .expr = while_stmt.cond, .expr2 = while_stmt.body },
+        .s_infinite_loop => |while_stmt| .{ .pattern = null, .expr = while_stmt.cond, .expr2 = while_stmt.body },
+        .s_breakable_loop => |while_stmt| .{ .pattern = null, .expr = while_stmt.cond, .expr2 = while_stmt.body },
         .s_expr => |expr_stmt| .{ .pattern = null, .expr = expr_stmt.expr, .expr2 = null },
         .s_expect => |expect_stmt| .{ .pattern = null, .expr = expect_stmt.body, .expr2 = null },
         .s_dbg => |dbg_stmt| .{ .pattern = null, .expr = dbg_stmt.expr, .expr2 = null },

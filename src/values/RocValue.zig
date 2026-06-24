@@ -427,6 +427,7 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
             return s_payload.equals(o_payload, ctx);
         },
         .closure => return false, // Closures are not compared structurally
+        .ptr => unreachable, // Compiler-internal TRMC pointer; never a comparable runtime value.
     }
 }
 

@@ -85,11 +85,8 @@ assembled_strings = {
 intermediate_final : Str
 intermediate_final = {
     intermediate = "INTERMEDIATE_ONLY_LEFT_SHOULD_NOT_BE_EMITTED".concat("_INTERMEDIATE_ONLY_RIGHT_SHOULD_NOT_BE_EMITTED")
-    if intermediate.count_utf8_bytes() > 0 {
-        "final readonly string after comptime branch"
-    } else {
-        "unreachable readonly string after comptime branch"
-    }
+    empty_suffix = intermediate.drop_prefix(intermediate)
+    "final readonly string after comptime branch".concat(empty_suffix)
 }
 
 static_slices : (Str, Str)

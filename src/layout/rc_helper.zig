@@ -109,7 +109,8 @@ pub const Resolver = struct {
         if (!self.store.layoutContainsRefcounted(l)) return .noop;
 
         return switch (l.tag) {
-            .zst => .noop,
+            // ptr is never refcounted, so the early return above already handled it.
+            .zst, .ptr => .noop,
             .scalar => if (l.getScalar().tag == .str)
                 switch (helper_key.op) {
                     .incref => .str_incref,
@@ -155,6 +156,8 @@ pub const Resolver = struct {
 
     /// Return the child step for one refcounted struct field, if any.
     pub fn structFieldPlan(self: *const Resolver, struct_plan: StructPlan, field_index: u32) ?FieldPlan {
+        // Padding spacers hold uninitialized bytes, never a refcounted value.
+        if (self.store.getStructFieldIsPadding(struct_plan.struct_idx, @intCast(field_index))) return null;
         const field_layout_idx = self.store.getStructFieldLayout(struct_plan.struct_idx, @intCast(field_index));
         const field_layout = self.store.getLayout(field_layout_idx);
         if (!self.store.layoutContainsRefcounted(field_layout)) return null;

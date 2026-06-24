@@ -568,7 +568,7 @@ test "malformed associated type header does not suppress later associated value"
     try canonicalizeModuleAndCheck(source, struct {
         fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
             const qualified_outer_ok = env.common.findIdent("Test.Outer.ok") orelse return error.MissingQualifiedOuterOkIdent;
-            try testing.expect(env.getExposedNodeIndexById(qualified_outer_ok) != null);
+            try testing.expect(env.getExposedValueNodeIndexById(qualified_outer_ok) != null);
             try testing.expectEqual(@as(usize, 0), countAssociatedLookupDiagnostics(env, diagnostics, "Outer.ok"));
         }
     }.check);
@@ -593,10 +593,10 @@ test "block-local associated value does not leak after owner scope exits" {
             try testing.expectEqual(@as(usize, 1), countValueLookupDiagnostics(env, diagnostics, "T", "marker"));
 
             if (env.common.findIdent("T.marker")) |ident| {
-                try testing.expect(env.getExposedNodeIndexById(ident) == null);
+                try testing.expect(env.getExposedValueNodeIndexById(ident) == null);
             }
             if (env.common.findIdent("Test.T.marker")) |ident| {
-                try testing.expect(env.getExposedNodeIndexById(ident) == null);
+                try testing.expect(env.getExposedValueNodeIndexById(ident) == null);
             }
         }
     }.check);

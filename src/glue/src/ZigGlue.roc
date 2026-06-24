@@ -30,6 +30,7 @@ make_glue = |types_list| {
 				hosted_func = {
 					arg_fields: func.arg_fields,
 					arg_type_ids: func.arg_type_ids,
+					ffi_symbol: func.ffi_symbol,
 					index: func.index,
 					name: full_qualified_name,
 					ret_fields: func.ret_fields,
@@ -73,6 +74,20 @@ type_id_to_zig = |type_table, type_id| {
 	}
 }
 
+## Render one `extern struct` field declaration for a record field. Unnamed
+## nominal-record padding fields become fixed-size byte arrays (`[size]u8`);
+## named fields use their resolved Zig type.
+zig_record_field_decl : List(TypeRepr), RecordField -> Str
+zig_record_field_decl = |type_table, field| {
+	field_name = name_to_zig_quoted_ident(field.name)
+	zig_type = if field.is_padding {
+		"[${U64.to_str(field.size)}]u8"
+	} else {
+		type_id_to_zig(type_table, field.type_id)
+	}
+	"    ${field_name}: ${zig_type},\n"
+}
+
 ## Convert a TypeRepr to its Zig type string
 type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
 type_repr_to_zig = |type_table, type_repr| {
@@ -81,7 +96,15 @@ type_repr_to_zig = |type_table, type_repr| {
 		RocBox(inner_id) =>
 			match List.get(type_table, inner_id) {
 				Ok(RocFunction(_)) => "RocErasedCallable"
-				_ => "*${type_id_to_zig(type_table, inner_id)}"
+				Ok(RocUnknown(_)) => "RocBox"
+				_ => {
+					inner_zig = type_id_to_zig(type_table, inner_id)
+					if inner_zig == "*anyopaque" {
+						"*anyopaque"
+					} else {
+						"*${inner_zig}"
+					}
+				}
 			}
 		RocStr => "RocStr"
 		RocUnit => "void"
@@ -133,7 +156,7 @@ is_repr_refcounted = |type_table, type_repr| {
 		RocBox(_) => Bool.True
 		RocList(_) => Bool.True
 		RocFunction(_) => Bool.True
-		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
+		RocRecord(rec) => List.any(rec.fields, |field| !field.is_padding and is_type_refcounted(type_table, field.type_id))
 		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
 		RocBool => Bool.False
 		RocDec => Bool.False
@@ -205,6 +228,14 @@ generate_roc_list_generic =
 	\\            return &[_]T{};
 	\\        }
 	\\
+	\\        /// Return every initialized element in the backing allocation.
+	\\        pub fn allocationItems(self: Self) []const T {
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return &[_]T{};
+	\\            const count = self.allocationElementCount();
+	\\            const ptr: [*]const T = @ptrCast(@alignCast(alloc_ptr));
+	\\            return ptr[0..count];
+	\\        }
+	\\
 	\\        /// Return the number of elements in the list.
 	\\        pub fn len(self: Self) usize {
 	\\            return self.length;
@@ -238,12 +269,21 @@ generate_roc_list_generic =
 	\\            return @ptrCast(ptr);
 	\\        }
 	\\
+	\\        fn allocationElementCount(self: Self) usize {
+	\\            if (self.isSeamlessSlice() and elements_refcounted) {
+	\\                const alloc_ptr = self.getAllocationPtr() orelse return 0;
+	\\                const ptr: [*]const usize = @ptrCast(@alignCast(alloc_ptr));
+	\\                return (ptr - 2)[0];
+	\\            }
+	\\            return self.length;
+	\\        }
+	\\
 	\\        /// Allocate a new list with space for `length` elements.
-	\\        pub fn allocate(length: usize, roc_ops: *RocOps) Self {
+	\\        pub fn allocate(length: usize, roc_host: *RocHost) Self {
 	\\            if (length == 0) return empty();
 	\\            const data_bytes = length * @sizeOf(T);
 	\\            const total = data_bytes + header_bytes;
-	\\            const base: [*]u8 = @ptrCast(roc_ops.roc_alloc(roc_ops, total, alloc_align));
+	\\            const base: [*]u8 = @ptrCast(roc_host.roc_alloc(roc_host, total, alloc_align));
 	\\            const data_ptr = base + header_bytes;
 	\\            const rc: *isize = @ptrFromInt(@intFromPtr(data_ptr) - @sizeOf(isize));
 	\\            rc.* = 1;
@@ -255,9 +295,9 @@ generate_roc_list_generic =
 	\\        }
 	\\
 	\\        /// Create a RocList from a slice, copying elements into a new allocation.
-	\\        pub fn fromSlice(slice: []const T, roc_ops: *RocOps) Self {
+	\\        pub fn fromSlice(slice: []const T, roc_host: *RocHost) Self {
 	\\            if (slice.len == 0) return empty();
-	\\            const list = allocate(slice.len, roc_ops);
+	\\            const list = allocate(slice.len, roc_host);
 	\\            const dest: [*]u8 = @ptrCast(list.elements_ptr.?);
 	\\            const src: [*]const u8 = @ptrCast(slice.ptr);
 	\\            @memcpy(dest[0 .. slice.len * @sizeOf(T)], src[0 .. slice.len * @sizeOf(T)]);
@@ -265,7 +305,7 @@ generate_roc_list_generic =
 	\\        }
 	\\
 	\\        /// Decrement the reference count; frees the allocation when it reaches zero.
-	\\        pub fn decref(self: Self, roc_ops: *RocOps) void {
+	\\        pub fn decref(self: Self, roc_host: *RocHost) void {
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\            const data_addr = @intFromPtr(alloc_ptr);
 	\\            const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
@@ -273,7 +313,7 @@ generate_roc_list_generic =
 	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\            if (prev == 1) {
 	\\                const base: *anyopaque = @ptrFromInt(data_addr - header_bytes);
-	\\                roc_ops.roc_dealloc(roc_ops, base, alloc_align);
+	\\                roc_host.roc_dealloc(roc_host, base, alloc_align);
 	\\            }
 	\\        }
 	\\
@@ -290,6 +330,13 @@ generate_roc_list_generic =
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return true;
 	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
 	\\            if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
+	\\            return rc.* == 1;
+	\\        }
+	\\
+	\\        /// Return true if this list's allocation has exactly one counted ref.
+	\\        pub fn hasOneRef(self: Self) bool {
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return false;
+	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
 	\\            return rc.* == 1;
 	\\        }
 	\\    };
@@ -346,7 +393,7 @@ generate_roc_io =
 	\\    }
 	\\
 	\\    fn nativeWriteStderr(_: ?*anyopaque, data: []const u8) void {
-	\\        std.fs.File.stderr().writeAll(data) catch {};
+	\\        std.Io.File.stderr().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), data) catch {};
 	\\    }
 	\\
 	\\    fn nativeOnFatal(_: ?*anyopaque) noreturn {
@@ -401,12 +448,7 @@ generate_element_type_structs = |type_table| {
 					struct_name = name_to_struct_name(rec.name)
 					var $field_strs = ""
 					for field in rec.fields {
-						zig_type = type_id_to_zig(type_table, field.type_id)
-						field_name = name_to_zig_quoted_ident(field.name)
-						$field_strs = Str.concat(
-							$field_strs,
-							"    ${field_name}: ${zig_type},\n",
-						)
+						$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, field))
 					}
 
 					# Comptime size/alignment assertions (guarded by pointer width)
@@ -574,6 +616,312 @@ disc_type_for_count = |count| {
 	} else {
 		"u32"
 	}
+}
+
+# =============================================================================
+# Generated Refcount Helpers
+# =============================================================================
+
+indent_lines = |text, prefix| {
+	if text == "" {
+		return ""
+	}
+
+	lines = Str.split_on(text, "\n")
+	var $result = ""
+	for line in lines {
+		if line != "" {
+			$result = Str.concat($result, "${prefix}${line}\n")
+		}
+	}
+
+	$result
+}
+
+box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
+
+missing_type_compile_error = |type_id, mode| {
+	"    comptime { @compileError(\"missing glue type information for recursive ${mode} of type id ${U64.to_str(type_id)}\"); }\n"
+}
+
+decref_helper_name_from_repr = |type_repr| {
+	match type_repr {
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				"decref${name_to_struct_name(rec.name)}"
+			}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) >= 2 and tu.name != "" {
+				"decref${name_to_struct_name(tu.name)}"
+			} else {
+				""
+			}
+		_ => ""
+	}
+}
+
+incref_helper_name_from_repr = |type_repr| {
+	match type_repr {
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				"incref${name_to_struct_name(rec.name)}"
+			}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) >= 2 and tu.name != "" {
+				"incref${name_to_struct_name(tu.name)}"
+			} else {
+				""
+			}
+		_ => ""
+	}
+}
+
+decref_stmt_for_type_id = |type_table, type_id, expr| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => decref_stmt_for_repr(type_table, type_repr, expr)
+		Err(_) => missing_type_compile_error(type_id, "decref")
+	}
+}
+
+decref_stmt_for_repr = |type_table, type_repr, expr| {
+	match type_repr {
+		RocStr => "    ${expr}.decref(roc_host);\n"
+		RocList(elem_id) => {
+			elem_stmt = decref_stmt_for_type_id(type_table, elem_id, "item")
+			"    {\n        const list = ${expr};\n        if (list.hasOneRef()) {\n            for (list.allocationItems()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+		}
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "    decrefErasedCallable(${expr}, roc_host);\n"
+				Ok(_) => {
+					inner_zig = type_id_to_zig(type_table, inner_id)
+					if inner_zig == "*anyopaque" {
+						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
+					} else if is_type_refcounted(type_table, inner_id) {
+						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), &${box_payload_decref_name(inner_id)}, roc_host);\n"
+					} else {
+						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
+					}
+				}
+				Err(_) => missing_type_compile_error(inner_id, "boxed-payload decref")
+			}
+		RocRecord(_) => {
+			helper = decref_helper_name_from_repr(type_repr)
+			if helper == "" {
+				""
+			} else {
+				"    ${helper}(${expr}, roc_host);\n"
+			}
+		}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => decref_stmt_for_type_id(type_table, payload_id, expr)
+							_ => ""
+						}
+					_ => ""
+				}
+			} else {
+				helper = decref_helper_name_from_repr(type_repr)
+				if helper == "" {
+					""
+				} else {
+					"    ${helper}(${expr}, roc_host);\n"
+				}
+			}
+		_ => ""
+	}
+}
+
+incref_stmt_for_type_id = |type_table, type_id, expr| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => incref_stmt_for_repr(type_table, type_repr, expr)
+		Err(_) => missing_type_compile_error(type_id, "incref")
+	}
+}
+
+incref_stmt_for_repr = |type_table, type_repr, expr| {
+	match type_repr {
+		RocStr => "    ${expr}.incref(amount);\n"
+		RocList(_) => "    ${expr}.incref(amount);\n"
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "    increfErasedCallable(${expr}, amount);\n"
+				Ok(_) => "    increfBox(@ptrCast(${expr}), amount);\n"
+				Err(_) => missing_type_compile_error(inner_id, "boxed-payload incref")
+			}
+		RocRecord(_) => {
+			helper = incref_helper_name_from_repr(type_repr)
+			if helper == "" {
+				""
+			} else {
+				"    ${helper}(${expr}, amount);\n"
+			}
+		}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => incref_stmt_for_type_id(type_table, payload_id, expr)
+							_ => ""
+						}
+					_ => ""
+				}
+			} else {
+				helper = incref_helper_name_from_repr(type_repr)
+				if helper == "" {
+					""
+				} else {
+					"    ${helper}(${expr}, amount);\n"
+				}
+			}
+		_ => ""
+	}
+}
+
+generate_record_refcount_helpers = |type_table, rec| {
+	struct_name = name_to_struct_name(rec.name)
+	var $decref_body = ""
+	var $incref_body = ""
+
+	for field in rec.fields {
+		# Padding fields are raw bytes with no Roc type, so they are never
+		# refcounted and contribute no incref/decref statements.
+		if !field.is_padding {
+			field_expr = "value.${name_to_zig_quoted_ident(field.name)}"
+			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, field.type_id, field_expr))
+			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id(type_table, field.type_id, field_expr))
+		}
+	}
+
+	if $decref_body == "" {
+		$decref_body = "    _ = value;\n    _ = roc_host;\n"
+	}
+	if $incref_body == "" {
+		$incref_body = "    _ = value;\n    _ = amount;\n"
+	}
+
+	"/// Recursively decrement Roc-owned fields in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${$decref_body}}\n\n/// Increment Roc-owned fields in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${$incref_body}}\n\n"
+}
+
+generate_tag_payload_refcount_branch = |type_table, tag, mode| {
+	snake = to_lower_snake_case(tag.name)
+	if List.is_empty(tag.payload) {
+		return "        .${tag.name} => {},\n"
+	}
+
+	if List.len(tag.payload) == 1 {
+		body =
+			match List.first(tag.payload) {
+				Ok(payload_id) =>
+					if mode == "decref" {
+						decref_stmt_for_type_id(type_table, payload_id, "value.payload.${snake}")
+					} else {
+						incref_stmt_for_type_id(type_table, payload_id, "value.payload.${snake}")
+					}
+				_ => ""
+			}
+
+		if body == "" {
+			"        .${tag.name} => {},\n"
+		} else {
+			"        .${tag.name} => {\n${indent_lines(body, "    ")}        },\n"
+		}
+	} else {
+		var $body = "        const payload = value.payload.${snake};\n"
+		var $idx = 0
+		for payload_id in tag.payload {
+			field_expr = "payload._${U64.to_str($idx)}"
+			stmt = if mode == "decref" {
+				decref_stmt_for_type_id(type_table, payload_id, field_expr)
+			} else {
+				incref_stmt_for_type_id(type_table, payload_id, field_expr)
+			}
+			$body = Str.concat($body, indent_lines(stmt, "    "))
+			$idx = $idx + 1
+		}
+
+		"        .${tag.name} => {\n${$body}        },\n"
+	}
+}
+
+generate_tag_union_refcount_helpers = |type_table, tu| {
+	struct_name = name_to_struct_name(tu.name)
+	var $decref_branches = ""
+	var $incref_branches = ""
+	for tag in tu.tags {
+		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, tag, "decref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, tag, "incref"))
+	}
+
+	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n    switch (value.tag) {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
+}
+
+generate_box_payload_decref_helpers = |type_table| {
+	var $helpers = ""
+	var $seen_inner_ids = []
+
+	for type_repr in type_table {
+		match type_repr {
+			RocBox(inner_id) => {
+				if !(List.contains($seen_inner_ids, inner_id)) {
+					$seen_inner_ids = $seen_inner_ids.append(inner_id)
+					match List.get(type_table, inner_id) {
+						Ok(RocFunction(_)) => {}
+						Ok(_) => {
+							inner_zig = type_id_to_zig(type_table, inner_id)
+							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) {
+								stmt = decref_stmt_for_type_id(type_table, inner_id, "payload.*")
+								$helpers = Str.concat(
+									$helpers,
+									"fn ${box_payload_decref_name(inner_id)}(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c) void {\n    const payload: *${inner_zig} = @ptrCast(@alignCast(data_ptr orelse return));\n${stmt}}\n\n",
+								)
+							}
+						}
+						Err(_) => {
+							$helpers = Str.concat(
+								$helpers,
+								"fn ${box_payload_decref_name(inner_id)}(_: ?*anyopaque, _: *RocHost) callconv(.c) void {\n    comptime { @compileError(\"missing glue type information for boxed payload type id ${U64.to_str(inner_id)}\"); }\n}\n\n",
+							)
+						}
+					}
+				}
+			}
+			_ => {}
+		}
+	}
+
+	$helpers
+}
+
+generate_refcount_helpers = |type_table| {
+	var $helpers = "// =============================================================================\n// Generated Refcount Helpers\n// =============================================================================\n\n"
+	var $seen_names = []
+
+	for type_repr in type_table {
+		match type_repr {
+			RocRecord(rec) =>
+				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
+					$seen_names = $seen_names.append(rec.name)
+					$helpers = Str.concat($helpers, generate_record_refcount_helpers(type_table, rec))
+				}
+			RocTagUnion(tu) =>
+				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) {
+					$seen_names = $seen_names.append(tu.name)
+					$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers(type_table, tu))
+				}
+			_ => {}
+		}
+	}
+
+	$helpers.concat(generate_box_payload_decref_helpers(type_table))
 }
 
 # =============================================================================
@@ -838,9 +1186,11 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_tag_union_structs(type_table))
 		.concat(generate_all_record_structs(hosted_functions, type_table))
 		.concat(generate_all_args_structs(hosted_functions, type_table))
-		.concat(generate_platform_fns_struct(hosted_functions, type_table))
+		.concat(generate_refcount_helpers(type_table))
 		.concat("\n")
-		.concat(generate_hosted_functions_helper(hosted_functions))
+		.concat(generate_runtime_symbol_externs)
+		.concat("\n")
+		.concat(generate_hosted_symbol_externs(hosted_functions, type_table))
 		.concat("\n")
 		.concat(generate_host_helpers)
 		.concat("\n")
@@ -850,7 +1200,7 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 ## File header comment
 file_header : Str
 file_header =
-	"//! Roc Platform ABI\n//!\n//! This file defines the Zig interface for hosted functions in a Roc platform.\n//! It is automatically generated by the Roc glue generator.\n//!\n//! Hosted argument ownership:\n//! - Roc transfers ownership of refcounted arguments to the hosted function.\n//! - The hosted function must decref owned refcounted arguments when done.\n//! - If the host stores or returns an argument, it must retain or transfer ownership explicitly.\n//!\n//! Usage:\n//! 1. Import this file in your platform host\n//! 2. Implement each hosted function according to its signature\n//! 3. Call hostedFunctions() to create the dispatch table for RocOps\n\n"
+	"//! Roc Platform ABI\n//!\n//! This file defines Zig declarations for the direct symbol ABI used by a Roc platform.\n//! It is automatically generated by the Roc glue generator.\n//!\n//! Hosted argument ownership:\n//! - Roc transfers ownership of refcounted arguments to the hosted function.\n//! - The hosted function must decref owned refcounted arguments when done.\n//! - If the host stores or returns an argument, it must retain or transfer ownership explicitly.\n//!\n//! Import this file from the platform host and implement the listed hosted symbols\n//! with the exact natural C ABI signatures shown below.\n\n"
 
 ## Import section
 generate_imports : Str
@@ -860,44 +1210,28 @@ generate_imports =
 ## Generate self-contained host ABI type definitions
 generate_host_abi_types : Str
 generate_host_abi_types =
-	\\/// Type-erased pointer to a hosted function. Each hosted function has its own natural
-	\\/// C signature (determined by its Roc argument and return types under the platform C
-	\\/// ABI), so they are stored type-erased here and cast to their concrete signature at the
-	\\/// Roc call site. A hosted function takes a leading `*RocOps` only when it allocates or
-	\\/// frees Roc-managed memory (i.e. when an argument or its return is a heap type).
+	\\/// Runtime representation of an opaque `Box(T)` value.
+	\\pub const RocBox = ?*anyopaque;
+	\\
+	\\/// Host-internal allocator and diagnostic context used by helper functions in this file.
 	\\///
-	\\/// Roc transfers ownership of refcounted arguments to hosted functions. Hosted functions
-	\\/// must decref owned refcounted arguments when done, or transfer that ownership into the
-	\\/// return value or longer-lived storage. If the host keeps both the call argument and a
-	\\/// stored copy, it must incref the stored copy so each live reference has one ownership.
-	\\pub const HostedFn = *const anyopaque;
-	\\
-	\\/// Table of hosted function pointers passed to the Roc runtime.
-	\\pub const HostedFunctions = extern struct {
-	\\    count: u32,
-	\\    fns: [*]HostedFn,
-	\\};
-	\\
-	\\/// The operations table passed from the host to the Roc runtime. The memory and
-	\\/// diagnostic callbacks take a leading `*RocOps` and pass their remaining arguments and
-	\\/// return value in registers per the platform C ABI. `roc_alloc`/`roc_realloc` return the
-	\\/// allocation (or null on OOM — a platform host aborts instead of returning null).
-	\\pub const RocOps = extern struct {
+	\\/// Compiled Roc code does not receive this value. The real host ABI is the set of direct
+	\\/// linker symbols declared below (`roc_alloc`, hosted symbols, and provided entrypoints).
+	\\pub const RocHost = extern struct {
 	\\    env: *anyopaque,
-	\\    roc_alloc: *const fn (*RocOps, usize, usize) callconv(.c) ?*anyopaque,
-	\\    roc_dealloc: *const fn (*RocOps, *anyopaque, usize) callconv(.c) void,
-	\\    roc_realloc: *const fn (*RocOps, *anyopaque, usize, usize) callconv(.c) ?*anyopaque,
-	\\    roc_dbg: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
-	\\    roc_expect_failed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
-	\\    roc_crashed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
-	\\    hosted_fns: HostedFunctions,
+	\\    roc_alloc: *const fn (*RocHost, usize, usize) callconv(.c) ?*anyopaque,
+	\\    roc_dealloc: *const fn (*RocHost, *anyopaque, usize) callconv(.c) void,
+	\\    roc_realloc: *const fn (*RocHost, *anyopaque, usize, usize) callconv(.c) ?*anyopaque,
+	\\    roc_dbg: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
+	\\    roc_expect_failed: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
+	\\    roc_crashed: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
 	\\};
 	\\
-	\\/// Uniform ABI function pointer stored in `RocErasedCallablePayload`.
-	\\pub const RocErasedCallableFn = *const fn (*RocOps, ?[*]u8, ?[*]const u8, ?[*]u8) callconv(.c) void;
+	\\/// Private erased-callable function pointer stored in `RocErasedCallablePayload`.
+	\\pub const RocErasedCallableFn = *const fn (*RocHost, ?[*]u8, ?[*]const u8, ?[*]u8) callconv(.c) void;
 	\\
 	\\/// Final-drop callback for inline erased-callable captures.
-	\\pub const RocErasedCallableOnDrop = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+	\\pub const RocErasedCallableOnDrop = *const fn (?[*]u8, *RocHost) callconv(.c) void;
 	\\
 	\\/// Payload header for `Box(function)`.
 	\\pub const RocErasedCallablePayload = extern struct {
@@ -926,7 +1260,7 @@ generate_host_abi_types =
 	\\}
 	\\
 	\\pub fn rocErasedCallableAllocate(
-	\\    roc_ops: *RocOps,
+	\\    roc_host: *RocHost,
 	\\    callable_fn_ptr: RocErasedCallableFn,
 	\\    on_drop: ?RocErasedCallableOnDrop,
 	\\    capture_size: usize,
@@ -935,21 +1269,13 @@ generate_host_abi_types =
 	\\    const alignment = @max(ptr_width, roc_erased_callable_payload_alignment);
 	\\    const extra_bytes = @max(ptr_width, roc_erased_callable_payload_alignment);
 	\\    const length = extra_bytes + rocErasedCallablePayloadSize(capture_size);
-	\\    const base: [*]u8 = @ptrCast(roc_ops.roc_alloc(roc_ops, length, alignment));
+	\\    const base: [*]u8 = @ptrCast(roc_host.roc_alloc(roc_host, length, alignment));
 	\\    const data = base + extra_bytes;
 	\\    const rc: *isize = @ptrFromInt(@intFromPtr(data) - @sizeOf(isize));
 	\\    rc.* = 1;
 	\\    const payload: *RocErasedCallablePayload = @ptrCast(@alignCast(data));
 	\\    payload.* = .{ .callable_fn_ptr = callable_fn_ptr, .on_drop = on_drop };
 	\\    return data;
-	\\}
-	\\
-	\\/// Type-erase a concrete hosted function pointer to `HostedFn` for storage in the vtable.
-	\\/// Hosted functions are written with their natural C signatures (e.g.
-	\\/// `fn(ops: *RocOps, x: i32) Plant` or `fn(s: RocStr) void`); this stores the pointer
-	\\/// type-erased, and the Roc call site casts it back to the concrete signature.
-	\\pub fn hostedFn(func: anytype) HostedFn {
-	\\    return @ptrCast(func);
 	\\}
 	\\
 
@@ -961,7 +1287,7 @@ generate_roc_box_helpers =
 	\\/// The callback receives the boxed payload data pointer and must recursively
 	\\/// decref any Roc refcounted values inside the payload. It must not free the
 	\\/// box allocation; `decrefBoxWith` and `freeBoxWith` free it after the callback.
-	\\pub const RocBoxPayloadDecref = *const fn (?*anyopaque, *RocOps) callconv(.c) void;
+	\\pub const RocBoxPayloadDecref = *const fn (?*anyopaque, *RocHost) callconv(.c) void;
 	\\
 	\\/// Increment the refcount of a boxed payload data pointer.
 	\\pub fn increfBox(data_ptr: ?*anyopaque, amount: isize) void {
@@ -971,9 +1297,48 @@ generate_roc_box_helpers =
 	\\    _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\}
 	\\
+	\\/// Allocate a Roc box and return a pointer to its payload data.
+	\\pub fn allocateBox(
+	\\    payload_size: usize,
+	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
+	\\    roc_host: *RocHost,
+	\\) *anyopaque {
+	\\    const ptr_width = @sizeOf(usize);
+	\\    const required_space: usize = if (payload_contains_refcounted) (2 * ptr_width) else ptr_width;
+	\\    const header_bytes = @max(required_space, payload_alignment);
+	\\    const alloc_alignment = @max(ptr_width, payload_alignment);
+	\\    const base: [*]u8 = @ptrCast(roc_host.roc_alloc(roc_host, header_bytes + payload_size, alloc_alignment));
+	\\    const data = base + header_bytes;
+	\\    const rc: *isize = @ptrFromInt(@intFromPtr(data) - @sizeOf(isize));
+	\\    rc.* = 1;
+	\\    return @ptrCast(data);
+	\\}
+	\\
 	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
-	\\pub fn decrefBox(data_ptr: ?*anyopaque, roc_ops: *RocOps) void {
-	\\    decrefBoxWith(data_ptr, @alignOf(usize), null, roc_ops);
+	\\pub fn decrefBox(data_ptr: ?*anyopaque, roc_host: *RocHost) void {
+	\\    decrefBoxWith(data_ptr, @alignOf(usize), null, roc_host);
+	\\}
+	\\
+	\\/// Increment a boxed function closure.
+	\\pub fn increfErasedCallable(callable: RocErasedCallable, amount: isize) void {
+	\\    const data = callable orelse return;
+	\\    increfBox(@ptrCast(data), amount);
+	\\}
+	\\
+	\\/// Decrement a boxed function closure and run its capture drop callback on final release.
+	\\pub fn decrefErasedCallable(callable: RocErasedCallable, roc_host: *RocHost) void {
+	\\    const data = callable orelse return;
+	\\    decrefBoxWith(@ptrCast(data), roc_erased_callable_payload_alignment, &dropErasedCallablePayload, roc_host);
+	\\}
+	\\
+	\\fn dropErasedCallablePayload(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c) void {
+	\\    const data = data_ptr orelse return;
+	\\    const callable: RocErasedCallable = @ptrCast(data);
+	\\    const payload = rocErasedCallablePayloadPtr(callable);
+	\\    if (payload.on_drop) |on_drop| {
+	\\        on_drop(rocErasedCallableCapturePtr(callable), roc_host);
+	\\    }
 	\\}
 	\\
 	\\/// Decrement a boxed payload and run payload teardown when this is the final ref.
@@ -981,7 +1346,7 @@ generate_roc_box_helpers =
 	\\    data_ptr: ?*anyopaque,
 	\\    payload_alignment: usize,
 	\\    payload_decref: ?RocBoxPayloadDecref,
-	\\    roc_ops: *RocOps,
+	\\    roc_host: *RocHost,
 	\\) void {
 	\\    const data = boxDataPtr(data_ptr) orelse return;
 	\\    const rc = boxRefcountPtr(data);
@@ -989,8 +1354,8 @@ generate_roc_box_helpers =
 	\\
 	\\    const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\    if (prev == 1) {
-	\\        if (payload_decref) |callback| callback(data_ptr, roc_ops);
-	\\        freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_ops);
+	\\        if (payload_decref) |callback| callback(data_ptr, roc_host);
+	\\        freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_host);
 	\\    }
 	\\}
 	\\
@@ -999,11 +1364,11 @@ generate_roc_box_helpers =
 	\\    data_ptr: ?*anyopaque,
 	\\    payload_alignment: usize,
 	\\    payload_decref: ?RocBoxPayloadDecref,
-	\\    roc_ops: *RocOps,
+	\\    roc_host: *RocHost,
 	\\) void {
 	\\    const data = boxDataPtr(data_ptr) orelse return;
-	\\    if (payload_decref) |callback| callback(data_ptr, roc_ops);
-	\\    freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_ops);
+	\\    if (payload_decref) |callback| callback(data_ptr, roc_host);
+	\\    freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_host);
 	\\}
 	\\
 	\\/// Return true when a boxed payload data pointer has exactly one live ref.
@@ -1026,14 +1391,14 @@ generate_roc_box_helpers =
 	\\    data: [*]u8,
 	\\    payload_alignment: usize,
 	\\    payload_contains_refcounted: bool,
-	\\    roc_ops: *RocOps,
+	\\    roc_host: *RocHost,
 	\\) void {
 	\\    const ptr_width = @sizeOf(usize);
 	\\    const required_space: usize = if (payload_contains_refcounted) (2 * ptr_width) else ptr_width;
 	\\    const header_bytes = @max(required_space, payload_alignment);
 	\\    const alloc_alignment = @max(ptr_width, payload_alignment);
 	\\    const base: *anyopaque = @ptrFromInt(@intFromPtr(data) - header_bytes);
-	\\    roc_ops.roc_dealloc(roc_ops, base, alloc_alignment);
+	\\    roc_host.roc_dealloc(roc_host, base, alloc_alignment);
 	\\}
 	\\
 
@@ -1103,8 +1468,8 @@ generate_roc_str =
 	\\        return .{ .bytes = null, .capacity_or_alloc_ptr = 0, .length = small_str_bit };
 	\\    }
 	\\
-	\\    /// Create a RocStr from a byte slice, using `roc_ops` for heap allocation if needed.
-	\\    pub fn fromSlice(slice: []const u8, roc_ops: *RocOps) Self {
+	\\    /// Create a RocStr from a byte slice, using `roc_host` for heap allocation if needed.
+	\\    pub fn fromSlice(slice: []const u8, roc_host: *RocHost) Self {
 	\\        if (slice.len < small_string_size) {
 	\\            var result = Self.empty();
 	\\            const ptr: [*]u8 = @ptrCast(&result);
@@ -1115,7 +1480,7 @@ generate_roc_str =
 	\\            const ptr_width = @sizeOf(usize);
 	\\            const extra_bytes = ptr_width;
 	\\            const total = extra_bytes + slice.len;
-	\\            const base: [*]u8 = @ptrCast(roc_ops.roc_alloc(roc_ops, total, @alignOf(usize)));
+	\\            const base: [*]u8 = @ptrCast(roc_host.roc_alloc(roc_host, total, @alignOf(usize)));
 	\\            const data_ptr = base + extra_bytes;
 	\\            const rc: *isize = @ptrFromInt(@intFromPtr(data_ptr) - @sizeOf(isize));
 	\\            rc.* = 1;
@@ -1129,7 +1494,7 @@ generate_roc_str =
 	\\    }
 	\\
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
-	\\    pub fn decref(self: Self, roc_ops: *RocOps) void {
+	\\    pub fn decref(self: Self, roc_host: *RocHost) void {
 	\\        if (self.isSmallStr()) return;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const data_addr = @intFromPtr(alloc_ptr);
@@ -1139,7 +1504,7 @@ generate_roc_str =
 	\\        if (prev == 1) {
 	\\            const ptr_width = @sizeOf(usize);
 	\\            const base: *anyopaque = @ptrFromInt(data_addr - ptr_width);
-	\\            roc_ops.roc_dealloc(roc_ops, base, @alignOf(usize));
+	\\            roc_host.roc_dealloc(roc_host, base, @alignOf(usize));
 	\\        }
 	\\    }
 	\\
@@ -1185,12 +1550,7 @@ generate_all_record_structs = |hosted_functions, type_table| {
 
 			var $fields = ""
 			for field in type_table_result.fields {
-				zig_type = type_id_to_zig(type_table, field.type_id)
-				field_name = name_to_zig_quoted_ident(field.name)
-				$fields = Str.concat(
-					$fields,
-					"    ${field_name}: ${zig_type},\n",
-				)
+				$fields = Str.concat($fields, zig_record_field_decl(type_table, field))
 			}
 
 			assertions = if type_table_result.size > 0 {
@@ -1241,12 +1601,7 @@ generate_args_struct = |func, type_table| {
 	if type_table_result.found {
 		var $fields = ""
 		for field in type_table_result.fields {
-			zig_type = type_id_to_zig(type_table, field.type_id)
-			field_name = name_to_zig_quoted_ident(field.name)
-			$fields = Str.concat(
-				$fields,
-				"    ${field_name}: ${zig_type},\n",
-			)
+			$fields = Str.concat($fields, zig_record_field_decl(type_table, field))
 		}
 
 		assertions = if type_table_result.size > 0 {
@@ -1276,49 +1631,49 @@ generate_args_struct = |func, type_table| {
 	"${doc}pub const ${struct_name}Args = extern struct {\n${$positional_fields}};\n\n"
 }
 
-## Generate the PlatformHostedFns struct type
-generate_platform_fns_struct = |hosted_functions, type_table| {
-	var $fields = ""
-
-	for func in hosted_functions {
-		snake = name_to_snake(func.name)
-		fn_type = hosted_fn_type(func, type_table)
-
-		$fields = Str.concat(
-			$fields,
-			"    ${snake}: ${fn_type}, // ${func.name}\n",
-		)
+## Check whether a type is the zero-sized Roc unit type.
+is_unit_type_id = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(RocUnit) => Bool.True
+		_ => Bool.False
 	}
-
-	"/// Implement this struct with your hosted function implementations.\n/// Refcounted hosted arguments are owned by the hosted function.\n/// Pass it to hostedFunctions() to create the dispatch table.\npub const PlatformHostedFns = struct {\n${$fields}};\n"
 }
 
-## Get the Zig function-pointer type for a hosted function, in its natural C signature.
-##
-## A leading `*RocOps` is present only when the function allocates or frees Roc-managed
-## memory (i.e. when its return or any argument is a heap type). Each Roc argument becomes a
-## by-value parameter of its natural Zig type; the return is the natural Zig return type
-## (`void` for a unit return). This matches exactly what the compiler emits at the call site.
-hosted_fn_type = |func, type_table| {
-	needs_ops =
-		is_type_refcounted(type_table, func.ret_type_id)
-		or List.any(func.arg_type_ids, |id| is_type_refcounted(type_table, id))
-
-	var $params = if needs_ops {
-		"roc_ops: *RocOps"
-	} else {
-		""
+## Check whether a type is an explicitly anonymous record shape.
+is_anonymous_record_type_id = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => is_anonymous_record_repr(type_table, type_repr)
+		Err(_) => Bool.False
 	}
+}
 
-	var $idx = 0
-	for arg_type_id in func.arg_type_ids {
-		# Unit (zero-sized) arguments are not passed.
-		is_unit =
-			match List.get(type_table, arg_type_id) {
-				Ok(RocUnit) => Bool.True
-				_ => Bool.False
+is_anonymous_record_repr = |type_table, type_repr| {
+	match type_repr {
+		RocRecord(rec) => rec.anonymous
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => is_anonymous_record_type_id(type_table, payload_id)
+							_ => Bool.False
+						}
+					_ => Bool.False
+				}
+			} else {
+				Bool.False
 			}
-		if !is_unit {
+		_ => Bool.False
+	}
+}
+
+## Build a natural C ABI parameter list from Roc function argument type IDs.
+direct_param_list = |type_table, arg_type_ids| {
+	var $params = ""
+	var $idx = 0
+
+	for arg_type_id in arg_type_ids {
+		if !is_unit_type_id(type_table, arg_type_id) {
 			arg_zig = type_id_to_zig(type_table, arg_type_id)
 			sep = if $params == "" {
 				""
@@ -1326,35 +1681,92 @@ hosted_fn_type = |func, type_table| {
 				", "
 			}
 			$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_zig}"
+			$idx = $idx + 1
 		}
-		$idx = $idx + 1
 	}
 
-	ret_zig = type_id_to_zig(type_table, func.ret_type_id)
-
-	"*const fn (${$params}) callconv(.c) ${ret_zig}"
+	$params
 }
 
-## Generate the hostedFunctions() helper that builds the dispatch table
-generate_hosted_functions_helper = |hosted_functions| {
-	var $entries = ""
+## Build a hosted symbol parameter list, using the generated Args wrapper for
+## anonymous single-record arguments so direct-symbol glue stays readable.
+direct_hosted_param_list = |type_table, func| {
+	use_args_wrapper =
+		if List.len(func.arg_type_ids) == 1 {
+			match List.first(func.arg_type_ids) {
+				Ok(arg_id) => is_anonymous_record_type_id(type_table, arg_id)
+				Err(_) => Bool.False
+			}
+		} else {
+			Bool.False
+		}
+
+	var $params = ""
+	var $idx = 0
+
+	for arg_type_id in func.arg_type_ids {
+		if !is_unit_type_id(type_table, arg_type_id) {
+			arg_zig = if use_args_wrapper {
+				"${name_to_struct_name(func.name)}Args"
+			} else {
+				type_id_to_zig(type_table, arg_type_id)
+			}
+			sep = if $params == "" {
+				""
+			} else {
+				", "
+			}
+			$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_zig}"
+			$idx = $idx + 1
+		}
+	}
+
+	$params
+}
+
+## Generate direct extern declarations for the fixed runtime symbols every host defines.
+generate_runtime_symbol_externs : Str
+generate_runtime_symbol_externs =
+	\\// =============================================================================
+	\\// Runtime Symbols
+	\\//
+	\\// The host defines these linker symbols. Compiled Roc code calls them directly.
+	\\// =============================================================================
+	\\
+	\\pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+	\\pub extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void;
+	\\pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+	\\pub extern fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void;
+	\\pub extern fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void;
+	\\pub extern fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void;
+	\\
+
+## Generate direct extern declarations for hosted symbols.
+generate_hosted_symbol_externs = |hosted_functions, type_table| {
+	if List.is_empty(hosted_functions) {
+		return ""
+	}
+
+	var $result = "// =============================================================================\n// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n// =============================================================================\n\n"
 
 	for func in hosted_functions {
-		snake = name_to_snake(func.name)
-		$entries = Str.concat(
-			$entries,
-			"            hostedFn(fns.${snake}), // ${func.name} (index ${U64.to_str(func.index)})\n",
+		params = direct_hosted_param_list(type_table, func)
+		ret_zig = type_id_to_zig(type_table, func.ret_type_id)
+
+		$result = Str.concat(
+			$result,
+			"/// Hosted symbol for ${func.name}\n/// Roc signature: ${func.type_str}\npub extern fn ${func.ffi_symbol}(${params}) callconv(.c) ${ret_zig};\n\n",
 		)
 	}
 
-	"/// Create a HostedFunctions dispatch table from your implementations.\n/// The comptime parameter + nested struct ensures the function pointer array\n/// lives in static memory, not on the stack.\npub fn hostedFunctions(comptime fns: PlatformHostedFns) HostedFunctions {\n    const Static = struct {\n        const ptrs = [_]HostedFn{\n${$entries}        };\n    };\n    return .{\n        .count = Static.ptrs.len,\n        .fns = @constCast(&Static.ptrs),\n    };\n}\n"
+	$result
 }
 
 # =============================================================================
 # Host Helper Utilities
 # =============================================================================
 
-## Generate DefaultAllocators, DefaultHandlers, and makeRocOps helpers.
+## Generate DefaultAllocators, DefaultHandlers, and makeRocHost helpers.
 ## These are static Zig code blocks that don't depend on specific hosted functions.
 generate_host_helpers : Str
 generate_host_helpers =
@@ -1362,7 +1774,7 @@ generate_host_helpers =
 		.concat("\n")
 		.concat(generate_default_handlers)
 		.concat("\n")
-		.concat(generate_make_roc_ops)
+		.concat(generate_make_roc_host)
 
 ## Generate the DefaultAllocators struct
 generate_default_allocators : Str
@@ -1374,8 +1786,8 @@ generate_default_allocators =
 	\\/// allocation size (required because `roc_dealloc` receives no length).
 	\\pub const DefaultAllocators = struct {
 	\\    /// Allocate memory for the Roc runtime.
-	\\    pub fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_ops.env));
+	\\    pub fn rocAlloc(roc_host: *RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        const allocator = env.allocator;
 	\\
 	\\        const min_alignment: usize = @max(alignment, @alignOf(usize));
@@ -1396,8 +1808,8 @@ generate_default_allocators =
 	\\    }
 	\\
 	\\    /// Free memory previously allocated by `rocAlloc`.
-	\\    pub fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_ops.env));
+	\\    pub fn rocDealloc(roc_host: *RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        const allocator = env.allocator;
 	\\
 	\\        const min_alignment: usize = @max(alignment, @alignOf(usize));
@@ -1413,8 +1825,8 @@ generate_default_allocators =
 	\\    }
 	\\
 	\\    /// Reallocate memory, copying existing data to the new allocation.
-	\\    pub fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_ops.env));
+	\\    pub fn rocRealloc(roc_host: *RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        const allocator = env.allocator;
 	\\
 	\\        const min_alignment: usize = @max(alignment, @alignOf(usize));
@@ -1459,24 +1871,24 @@ generate_default_handlers =
 	\\/// Routes output through `RocEnv.roc_io` for platform portability.
 	\\pub const DefaultHandlers = struct {
 	\\    /// Print a `dbg` expression to stderr.
-	\\    pub fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_ops.env));
+	\\    pub fn rocDbg(roc_host: *RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        env.roc_io.writeStderr("[ROC DBG] ");
 	\\        env.roc_io.writeStderr(bytes[0..len]);
 	\\        env.roc_io.writeStderr("\\n");
 	\\    }
 	\\
 	\\    /// Print a failed `expect` to stderr.
-	\\    pub fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_ops.env));
+	\\    pub fn rocExpectFailed(roc_host: *RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        env.roc_io.writeStderr("[ROC EXPECT] ");
 	\\        env.roc_io.writeStderr(bytes[0..len]);
 	\\        env.roc_io.writeStderr("\\n");
 	\\    }
 	\\
 	\\    /// Print a `crash` message to stderr and terminate.
-	\\    pub fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_ops.env));
+	\\    pub fn rocCrashed(roc_host: *RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        env.roc_io.writeStderr("[ROC CRASHED] ");
 	\\        env.roc_io.writeStderr(bytes[0..len]);
 	\\        env.roc_io.writeStderr("\\n");
@@ -1485,20 +1897,20 @@ generate_default_handlers =
 	\\};
 	\\
 
-## Generate the makeRocOps convenience function
-generate_make_roc_ops : Str
-generate_make_roc_ops =
-	\\/// Create a RocOps struct with default memory management and error handlers.
+## Generate the makeRocHost convenience function
+generate_make_roc_host : Str
+generate_make_roc_host =
+	\\/// Create a host-internal helper context with default memory management and handlers.
 	\\///
-	\\/// Wires `DefaultAllocators`, `DefaultHandlers`, and the provided hosted
-	\\/// functions into a ready-to-use `RocOps`.
+	\\/// This is only for helper functions in this generated file. It is not passed to
+	\\/// compiled Roc code, which uses the direct symbol ABI declared above.
 	\\///
 	\\/// Example:
 	\\/// ```zig
 	\\/// var env = RocEnv{ .allocator = gpa.allocator(), .roc_io = RocIo.default() };
-	\\/// var roc_ops = makeRocOps(&env, hostedFunctions(.{ ... }));
+	\\/// var roc_host = makeRocHost(&env);
 	\\/// ```
-	\\pub fn makeRocOps(env: *RocEnv, hosted_fns: HostedFunctions) RocOps {
+	\\pub fn makeRocHost(env: *RocEnv) RocHost {
 	\\    return .{
 	\\        .env = @ptrCast(env),
 	\\        .roc_alloc = &DefaultAllocators.rocAlloc,
@@ -1507,7 +1919,6 @@ generate_make_roc_ops =
 	\\        .roc_dbg = &DefaultHandlers.rocDbg,
 	\\        .roc_expect_failed = &DefaultHandlers.rocExpectFailed,
 	\\        .roc_crashed = &DefaultHandlers.rocCrashed,
-	\\        .hosted_fns = hosted_fns,
 	\\    };
 	\\}
 	\\
@@ -1538,86 +1949,18 @@ has_meaningful_args = |func, type_table| {
 # Entrypoint Declarations
 # =============================================================================
 
-## Get the return pointer type from a function TypeRepr
-ret_type_from_repr = |type_table, type_repr| {
+generate_provided_decl = |entry, type_table, type_repr| {
 	match type_repr {
-		RocFunction(func) =>
-			if type_id_to_zig(type_table, func.ret) == "void" {
-				"*anyopaque"
-			} else {
-				"*${type_id_to_zig(type_table, func.ret)}"
-			}
-		_ => "*anyopaque"
-	}
-}
-
-## Get the return pointer type from a type_id
-ret_type_from_id = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => ret_type_from_repr(type_table, type_repr)
-		_ => "*anyopaque"
-	}
-}
-
-## Get the non-void args from a function TypeRepr
-meaningful_args_from_repr = |type_table, type_repr| {
-	match type_repr {
-		RocFunction(func) =>
-			List.keep_if(func.args, |arg_id|
-				type_id_to_zig(type_table, arg_id) != "void"
-			)
-		_ => []
-	}
-}
-
-## Get the non-void args from a type_id
-meaningful_args_from_id = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => meaningful_args_from_repr(type_table, type_repr)
-		_ => []
-	}
-}
-
-## Get the argument pointer type from a type_id
-arg_type_from_id = |type_table, type_id, ffi_symbol| {
-	meaningful_args = meaningful_args_from_id(type_table, type_id)
-	if List.len(meaningful_args) == 0 {
-		"?*anyopaque"
-	} else if List.len(meaningful_args) == 1 {
-		match List.first(meaningful_args) {
-			Ok(arg_id) => "?*const ${type_id_to_zig(type_table, arg_id)}"
-			_ => "?*anyopaque"
+		RocFunction(func) => {
+			params = direct_param_list(type_table, func.args)
+			ret_zig = type_id_to_zig(type_table, func.ret)
+			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(${params}) callconv(.c) ${ret_zig};\n\n"
 		}
-	} else {
-		"?*const ${name_to_struct_name(ffi_symbol)}Args"
-	}
-}
-
-## Generate arg structs for multi-arg entrypoint functions
-generate_entrypoint_arg_structs = |provides_list, type_table| {
-	if List.is_empty(provides_list) {
-		return ""
-	}
-
-	var $result = ""
-
-	for entry in provides_list {
-		meaningful = meaningful_args_from_id(type_table, entry.type_id)
-		if List.len(meaningful) > 1 {
-			struct_name = name_to_struct_name(entry.ffi_symbol)
-			var $fields = ""
-			var $idx = 0
-			for arg_id in meaningful {
-				zig_type = type_id_to_zig(type_table, arg_id)
-				$fields = Str.concat($fields, "    arg${U64.to_str($idx)}: ${zig_type},\n")
-				$idx = $idx + 1
-			}
-			$result = Str.concat($result,
-				"/// Arguments for entrypoint: ${entry.name}\npub const ${struct_name}Args = extern struct {\n${$fields}};\n\n")
+		_ => {
+			value_zig = type_repr_to_zig(type_table, type_repr)
+			"/// Static provided value: ${entry.name}\npub extern const ${entry.ffi_symbol}: ${value_zig};\n\n"
 		}
 	}
-
-	$result
 }
 
 ## Generate extern declarations for entrypoints from the provides clause.
@@ -1626,18 +1969,17 @@ generate_entrypoint_externs = |provides_list, type_table| {
 		return ""
 	}
 
-	var $result = "// =============================================================================\n// Entrypoint Declarations\n//\n// Extern declarations for Roc entrypoints. Call these from your platform host\n// to invoke Roc application functions.\n// =============================================================================\n\n"
-
-	$result = Str.concat($result, generate_entrypoint_arg_structs(provides_list, type_table))
+	var $result = "// =============================================================================\n// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n// =============================================================================\n\n"
 
 	for entry in provides_list {
-		ret_type = ret_type_from_id(type_table, entry.type_id)
-		arg_type = arg_type_from_id(type_table, entry.type_id, entry.ffi_symbol)
-
-		$result = Str.concat(
-			$result,
-			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(ops: *RocOps, ret_ptr: ${ret_type}, arg_ptr: ${arg_type}) callconv(.c) void;\n\n",
-		)
+		match List.get(type_table, entry.type_id) {
+			Ok(type_repr) => {
+				$result = Str.concat($result, generate_provided_decl(entry, type_table, type_repr))
+			}
+			Err(_) => {
+				$result = Str.concat($result, "comptime { @compileError(\"missing glue type information for provided symbol ${entry.ffi_symbol}\"); }\n\n")
+			}
+		}
 	}
 
 	$result

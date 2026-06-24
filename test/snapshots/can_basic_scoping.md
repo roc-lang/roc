@@ -131,14 +131,14 @@ outerFunc = |_| {
 					(e-block
 						(s-let
 							(p-assign (ident "z"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 123)
+							(e-dispatch-call (method "plus") (constraint-fn-var 132)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
 								(args
 									(e-lookup-local
 										(p-assign (ident "y"))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 155)
+						(e-dispatch-call (method "plus") (constraint-fn-var 167)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "z"))))
@@ -153,9 +153,9 @@ outerFunc = |_| {
 	(defs
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "_arg -> Dec")))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, Dec -> a]")))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "_arg -> Dec"))))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, Dec -> a]"))))
 ~~~

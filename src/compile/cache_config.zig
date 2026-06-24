@@ -21,8 +21,16 @@ pub const Constants = struct {
     /// Maximum cache file size (256MB)
     pub const MAX_CACHE_SIZE = 256 * 1024 * 1024;
 
-    /// Cache format version
-    pub const CACHE_VERSION = 2;
+    /// Cache format version. Folded into the module-cache version hash, so bump
+    /// this whenever the serialized layout changes in a way the automatic
+    /// top-level-field hash can't see (e.g. a node-payload layout edit).
+    /// 3: annotation node payload gained mentions/introduces-type-var flags.
+    /// 4: numeric suffix metadata was renamed to suffix targets.
+    /// 5: nominal record declared-field-order and unnamed padding fields added
+    ///    node, diagnostic, and type-annotation payloads.
+    /// 6: merge with typed node/static-dispatch payload layout changes.
+    /// 7: field-order layout metadata moved from nominal-only to general field-order.
+    pub const CACHE_VERSION = 7;
 };
 
 /// Configuration for the Roc cache system.

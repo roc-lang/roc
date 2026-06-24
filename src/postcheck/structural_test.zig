@@ -47,6 +47,7 @@ test "Monotype has direct calls and no checked-only expression forms" {
     try std.testing.expect(@hasField(Mono.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Mono.ExprData, "call_value"));
     try std.testing.expect(@hasField(Mono.ExprData, "structural_eq"));
+    try std.testing.expect(@hasField(Mono.ExprData, "structural_hash"));
     try std.testing.expect(@hasField(Mono.ExprData, "loop_"));
 
     try std.testing.expect(!@hasField(Mono.ExprData, "dispatch_call"));
@@ -124,7 +125,7 @@ test "Lifted functions own captures and consume Monotype expression storage" {
     try std.testing.expect(@hasField(Lifted.ExprData, "fn_ref"));
     try std.testing.expect(@hasField(Lifted.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Lifted.ExprData, "call_value"));
-    try std.testing.expect(@hasField(Mono.ProcCallee, "template"));
+    try std.testing.expect(@hasField(Mono.ProcCallee, "func"));
     try std.testing.expect(@hasField(Mono.ProcCallee, "lifted"));
 
     try std.testing.expect(!@hasField(Lifted.ExprData, "dispatch_call"));
@@ -216,7 +217,7 @@ test "Monotype lifting mutates only callable expression nodes in place" {
     try expectContains(rewrite_expr, "expr.data = .{ .fn_ref");
     try expectContains(rewrite_expr, "expr.data = .{ .call_proc");
 
-    const lift_lambda = sourceSliceBetween(lifted_source, "fn liftLambda", "fn reserveFnTemplate");
+    const lift_lambda = sourceSliceBetween(lifted_source, "fn liftLambda", "fn reserveFn");
     try expectContains(lift_lambda, "self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = fn_id };");
 
     const lambda_mono_source = @embedFile("lambda_mono/lower.zig");

@@ -166,7 +166,7 @@ fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std
     try report.document.addLineBreak();
     try report.document.addCodeBlock(
         \\    targets: {
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        x64linux: { inputs: ["host.o", app] },
         \\        arm64linux: { inputs: ["host.o", app] },
         \\    }

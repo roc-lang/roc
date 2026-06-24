@@ -42,11 +42,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "test1"))
-		(e-call (constraint-fn-var 77)
+		(e-call (constraint-fn-var 83)
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 45)
+				(e-dispatch-call (method "plus") (constraint-fn-var 48)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))

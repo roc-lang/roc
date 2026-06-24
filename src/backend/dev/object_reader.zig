@@ -695,6 +695,24 @@ pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) All
             const r_type: u32 = @truncate(r_info & 0xFFFFFFFF);
             const r_sym: u32 = @truncate(r_info >> 32);
 
+            // Base-relative relocations carry no symbol (sym index 0), so they
+            // would otherwise be dropped at the `resolveSymbol orelse continue`
+            // gate below. The relocatable objects this loader reads do not emit
+            // them today, but handle them explicitly rather than silently skip:
+            // value = load base + addend.
+            const is_relative = switch (builtin.cpu.arch) {
+                .aarch64 => r_type == 1027, // R_AARCH64_RELATIVE
+                .x86_64 => r_type == 8, // R_X86_64_RELATIVE
+                else => false,
+            };
+            if (is_relative) {
+                const rel_patch_off: u64 = target_buf_offset.? + r_offset;
+                if (rel_patch_off + 8 > buf.len) continue;
+                const value: u64 = @intFromPtr(buf.ptr) +% @as(u64, @bitCast(r_addend));
+                std.mem.writeInt(u64, buf[@intCast(rel_patch_off)..][0..8], value, .little);
+                continue;
+            }
+
             // Resolve symbol address
             const sym_addr = resolveSymbol(
                 object_bytes,
@@ -823,6 +841,8 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_str_ends_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_ends_with) },
         .{ .name = "roc_builtins_str_equal", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_equal) },
         .{ .name = "roc_builtins_str_count_utf8_bytes", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_count_utf8_bytes) },
+        .{ .name = "roc_builtins_str_find_first", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_find_first) },
+        .{ .name = "roc_builtins_str_drop_prefix_caseless_ascii", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_drop_prefix_caseless_ascii) },
         .{ .name = "roc_builtins_str_caseless_ascii_equals", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_caseless_ascii_equals) },
         .{ .name = "roc_builtins_str_repeat", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_repeat) },
         .{ .name = "roc_builtins_str_trim", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_trim) },
@@ -900,6 +920,15 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_num_rem_trunc_i128", .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_i128) },
         .{ .name = "roc_builtins_int_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str) },
         .{ .name = "roc_builtins_float_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str) },
+        .{ .name = "roc_builtins_float_floor", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_floor) },
+        .{ .name = "roc_builtins_float_ceiling", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_ceiling) },
+        .{ .name = "roc_builtins_float_pow", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_pow) },
+        .{ .name = "roc_builtins_float_sin", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_sin) },
+        .{ .name = "roc_builtins_float_cos", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_cos) },
+        .{ .name = "roc_builtins_float_tan", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_tan) },
+        .{ .name = "roc_builtins_float_asin", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_asin) },
+        .{ .name = "roc_builtins_float_acos", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_acos) },
+        .{ .name = "roc_builtins_float_atan", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_atan) },
         .{ .name = "roc_builtins_int_from_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str) },
     };
 
@@ -1025,6 +1054,24 @@ fn getSectionName(strtab: []const u8, name_idx: u32) []const u8 {
 //
 // Tests
 //
+
+test "resolve float rounding wrappers" {
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_floor), resolveBuiltinWrapper("roc_builtins_float_floor").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_ceiling), resolveBuiltinWrapper("roc_builtins_float_ceiling").?);
+}
+
+test "resolve float pow wrapper" {
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_pow), resolveBuiltinWrapper("roc_builtins_float_pow").?);
+}
+
+test "resolve float trig wrappers" {
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_sin), resolveBuiltinWrapper("roc_builtins_float_sin").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_cos), resolveBuiltinWrapper("roc_builtins_float_cos").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_tan), resolveBuiltinWrapper("roc_builtins_float_tan").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_asin), resolveBuiltinWrapper("roc_builtins_float_asin").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_acos), resolveBuiltinWrapper("roc_builtins_float_acos").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_atan), resolveBuiltinWrapper("roc_builtins_float_atan").?);
+}
 
 test "detect ELF magic" {
     // Minimal ELF header (just magic)

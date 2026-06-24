@@ -33,7 +33,7 @@ pub const NumericLiteral = @import("NumericLiteral.zig");
 pub const AST = @import("AST.zig");
 
 /// Internal parsing implementation.
-fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
+fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Allocator.Error!u32) Allocator.Error!*AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -76,16 +76,16 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn file(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+pub fn file(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, fileRootNode);
 }
 
-fn fileRootNode(parser: *Parser) Parser.Error!u32 {
+fn fileRootNode(parser: *Parser) Allocator.Error!u32 {
     try parser.runFile();
     return 0;
 }
 
-fn exprRootNode(parser: *Parser) Parser.Error!u32 {
+fn exprRootNode(parser: *Parser) Allocator.Error!u32 {
     const id = try parser.runExpr();
     return @intFromEnum(id);
 }
@@ -94,11 +94,11 @@ fn exprRootNode(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn expr(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+pub fn expr(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, exprRootNode);
 }
 
-fn headerRootNode(parser: *Parser) Parser.Error!u32 {
+fn headerRootNode(parser: *Parser) Allocator.Error!u32 {
     const id = try parser.runHeader();
     return @intFromEnum(id);
 }
@@ -107,11 +107,11 @@ fn headerRootNode(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn header(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+pub fn header(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, headerRootNode);
 }
 
-fn statementRootNode(parser: *Parser) Parser.Error!u32 {
+fn statementRootNode(parser: *Parser) Allocator.Error!u32 {
     const idx = try parser.runStatement();
     return @intFromEnum(idx);
 }
@@ -120,7 +120,7 @@ fn statementRootNode(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn statement(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+pub fn statement(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, statementRootNode);
 }
 
@@ -156,6 +156,37 @@ test "deeply nested parentheses parse stack-safely" {
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+}
+
+test "range operators parse as binary operators" {
+    const gpa = std.testing.allocator;
+
+    for ([_][]const u8{ "1..<5", "1..=5", "1..<n + 1", "start..=finish" }) |source| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+    }
+}
+
+test "bare .. in expression position is a helpful parse error" {
+    const gpa = std.testing.allocator;
+
+    var env = try CommonEnv.init(gpa, "1..5");
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expect(ast.parse_diagnostics.items.len > 0);
+    try std.testing.expectEqual(
+        AST.Diagnostic.Tag.expr_double_dot_is_not_range,
+        ast.parse_diagnostics.items[0].tag,
+    );
 }
 
 fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {

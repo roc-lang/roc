@@ -11,9 +11,12 @@ platform ""
         "roc_init_for_host": init_for_host!,
         "roc_render_for_host": render_for_host!,
     }
-    hosted { "roc_host_read_env": Host.read_env! }
+    hosted {
+        "roc_host_read_env": Host.read_env!,
+        "roc_host_set_mouse": Host.set_mouse!,
+    }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
         x64musl: { inputs: [app], output: Archive },

@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» Iter.fold(0.5.Dec.to(2.5), [], |acc, item| acc.append(item))
-» Iter.fold(1.25.Dec.to(1.25), [], |acc, item| acc.append(item))
-» Iter.fold(3.5.Dec.to(2.5), [], |acc, item| acc.append(item))
+» Iter.fold(0.5.Dec..=2.5, [], |acc, item| acc.append(item))
+» Iter.fold(1.25.Dec..=1.25, [], |acc, item| acc.append(item))
+» Iter.fold(3.5.Dec..=2.5, [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [0.5, 1.5, 2.5]

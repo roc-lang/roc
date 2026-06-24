@@ -10,7 +10,10 @@ overflow = |n|
     overflow(n + 1) + 1
 
 main! = || {
+    # The var keyword creates a runtime variable that can't be constant-folded.
+    var $start = 0.I64
+
     # This will overflow the stack at runtime
-    result = overflow(0)
+    result = overflow($start)
     Stdout.line!("Result: ${I64.to_str(result)}")
 }

@@ -82,42 +82,19 @@ NO CHANGE
 							(e-lookup-local
 								(p-assign (ident "email"))))
 						(args)))
-				(e-method-call (method "from_interpolation")
-					(receiver
-						(e-string
-							(e-literal (string "User: "))))
-					(args
-						(e-method-call (method "prepended")
-							(receiver
-								(e-method-call (method "prepended")
-									(receiver
-										(e-method-call (method "prepended")
-											(receiver
-												(e-method-call (method "iter")
-													(receiver
-														(e-empty_list))
-													(args)))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_2")))
-														(e-string
-															(e-literal (string ""))))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_1")))
-												(e-string
-													(e-literal (string " years old) - Contact: "))))))))
-							(args
-								(e-tuple
-									(elems
-										(e-lookup-local
-											(p-assign (ident "#interp_0")))
-										(e-string
-											(e-literal (string " (")))))))))))))
+				(e-interpolation
+					(first
+						(e-literal (string "User: ")))
+					(parts
+						(e-lookup-local
+							(p-assign (ident "#interp_0")))
+						(e-literal (string " ("))
+						(e-lookup-local
+							(p-assign (ident "#interp_1")))
+						(e-literal (string " years old) - Contact: "))
+						(e-lookup-local
+							(p-assign (ident "#interp_2")))
+						(e-literal (string ""))))))))
 ~~~
 # TYPES
 ~~~clojure

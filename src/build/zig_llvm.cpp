@@ -44,6 +44,7 @@
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/Process.h>
 #include <llvm/Support/TimeProfiler.h>
 #include <llvm/Support/Timer.h>
@@ -359,15 +360,11 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     // Pipeline configurations
     const OptimizationLevel opt_level = toLLVMOptimizationLevel(options->ir_opt_level);
     PipelineTuningOptions pipeline_opts;
-    pipeline_opts.LoopUnrolling = true;
-    pipeline_opts.SLPVectorization = true;
-    pipeline_opts.LoopVectorization = true;
-    pipeline_opts.LoopInterleaving = true;
-    pipeline_opts.MergeFunctions = true;
-    // HACK (experiment): crank the inliner threshold so LLVM inlines the
-    // specialized iterator/stream combinator steps into their drive loops,
-    // to observe what fusion/unrolling becomes possible. Not for production.
-    pipeline_opts.InlinerThreshold = 1000000;
+    pipeline_opts.LoopUnrolling = !options->is_debug;
+    pipeline_opts.SLPVectorization = !options->is_debug;
+    pipeline_opts.LoopVectorization = false; // https://github.com/llvm/llvm-project/issues/186922
+    pipeline_opts.LoopInterleaving = !options->is_debug;
+    pipeline_opts.MergeFunctions = !options->is_debug;
 
     // Instrumentations
     PassInstrumentationCallbacks instr_callbacks;
@@ -675,6 +672,7 @@ bool ZigLLVMWriteArchiveFlattened(const char *archive_name, const char **file_na
                 consumeError(member.takeError());
                 return true;
             }
+            member->MemberName = sys::path::filename(file_names[i]);
             new_members.push_back(std::move(*member));
         }
     }

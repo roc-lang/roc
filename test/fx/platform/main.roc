@@ -2,7 +2,7 @@ platform ""
     requires {
         main! : () => {}
     }
-    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element]
+    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
@@ -19,12 +19,13 @@ platform ""
         "roc_host_roundtrip_boxed": Host.roundtrip_boxed!,
         "roc_host_store_boxed": Host.store_boxed!,
         "roc_host_stored_boxed_call": Host.stored_boxed_call!,
+        "roc_padded_check": Padded.check!,
         "roc_stderr_line": Stderr.line!,
         "roc_stdin_line": Stdin.line!,
         "roc_stdout_line": Stdout.line!,
     }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
         arm64mac: { inputs: ["libhost.a", app] },
         x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
@@ -41,6 +42,7 @@ import Host
 import NodeA
 import NodeB
 import Element
+import Padded
 
 main_for_host! : () => {}
 main_for_host! = main!

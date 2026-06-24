@@ -84,7 +84,7 @@ EndOfFile,
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lte") (constraint-fn-var 69)
+							(e-dispatch-call (method "is_lte") (constraint-fn-var 72)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -92,15 +92,15 @@ EndOfFile,
 									(e-num (value "1"))))
 							(e-num (value "1"))))
 					(if-else
-						(e-dispatch-call (method "times") (constraint-fn-var 139)
+						(e-dispatch-call (method "times") (constraint-fn-var 148)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "x"))))
 							(args
-								(e-call (constraint-fn-var 138)
+								(e-call (constraint-fn-var 147)
 									(e-lookup-local
 										(p-assign (ident "fac")))
-									(e-dispatch-call (method "minus") (constraint-fn-var 134)
+									(e-dispatch-call (method "minus") (constraint-fn-var 143)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -111,12 +111,12 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "y")))
-				(e-call (constraint-fn-var 149)
+				(e-call (constraint-fn-var 162)
 					(e-lookup-local
 						(p-assign (ident "fac")))
 					(e-lookup-local
 						(p-assign (ident "y"))))))
-		(e-call (constraint-fn-var 158)
+		(e-call (constraint-fn-var 175)
 			(e-lookup-local
 				(p-assign (ident "helper")))
 			(e-lookup-local
@@ -124,5 +124,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, a -> a, a.times : a, a -> a]"))
+(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, b -> a, a.times : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

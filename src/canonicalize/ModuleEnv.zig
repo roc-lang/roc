@@ -119,6 +119,9 @@ pub const CommonIdents = extern struct {
     is_gt: Ident.Idx,
     is_gte: Ident.Idx,
     is_eq: Ident.Idx,
+    to_hash: Ident.Idx,
+    parser_for: Ident.Idx,
+    encode_to: Ident.Idx,
 
     // Type/module names
     @"try": Ident.Idx,
@@ -154,6 +157,9 @@ pub const CommonIdents = extern struct {
     builtin_str: Ident.Idx,
     builtin_list: Ident.Idx,
     builtin_box: Ident.Idx,
+    builtin_parse_tag_union_spec: Ident.Idx,
+    builtin_str_field_names: Ident.Idx,
+    builtin_str_field_name: Ident.Idx,
     builtin_str_inspect: Ident.Idx,
     u8_type: Ident.Idx,
     i8_type: Ident.Idx,
@@ -190,6 +196,7 @@ pub const CommonIdents = extern struct {
     err: Ident.Idx,
     from_numeral: Ident.Idx,
     from_quote: Ident.Idx,
+    from_interpolation: Ident.Idx,
     true_tag: Ident.Idx,
     false_tag: Ident.Idx,
     // from_utf8 result fields
@@ -225,6 +232,9 @@ pub const CommonIdents = extern struct {
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
+            .to_hash = try common.insertIdent(gpa, Ident.for_text("to_hash")),
+            .parser_for = try common.insertIdent(gpa, Ident.for_text("parser_for")),
+            .encode_to = try common.insertIdent(gpa, Ident.for_text("encode_to")),
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
@@ -255,6 +265,9 @@ pub const CommonIdents = extern struct {
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
             .builtin_list = try common.insertIdent(gpa, Ident.for_text("Builtin.List")),
             .builtin_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box")),
+            .builtin_parse_tag_union_spec = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.ParseTagUnionSpec")),
+            .builtin_str_field_names = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.FieldName.FieldNames")),
+            .builtin_str_field_name = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.FieldName")),
             .builtin_str_inspect = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.inspect")),
             .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
             .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
@@ -289,6 +302,7 @@ pub const CommonIdents = extern struct {
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
             .from_quote = try common.insertIdent(gpa, Ident.for_text("from_quote")),
+            .from_interpolation = try common.insertIdent(gpa, Ident.for_text("from_interpolation")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
             // from_utf8 result fields
@@ -327,6 +341,9 @@ pub const CommonIdents = extern struct {
             .is_gt = common.findIdent("is_gt") orelse unreachable,
             .is_gte = common.findIdent("is_gte") orelse unreachable,
             .is_eq = common.findIdent("is_eq") orelse unreachable,
+            .to_hash = common.findIdent("to_hash") orelse unreachable,
+            .parser_for = common.findIdent("parser_for") orelse unreachable,
+            .encode_to = common.findIdent("encode_to") orelse unreachable,
             .@"try" = common.findIdent("Try") orelse unreachable,
             .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module = common.findIdent("Builtin") orelse unreachable,
@@ -357,6 +374,9 @@ pub const CommonIdents = extern struct {
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
             .builtin_list = common.findIdent("Builtin.List") orelse unreachable,
             .builtin_box = common.findIdent("Builtin.Box") orelse unreachable,
+            .builtin_parse_tag_union_spec = common.findIdent("Builtin.Str.ParseTagUnionSpec") orelse unreachable,
+            .builtin_str_field_names = common.findIdent("Builtin.Str.FieldName.FieldNames") orelse unreachable,
+            .builtin_str_field_name = common.findIdent("Builtin.Str.FieldName") orelse unreachable,
             .builtin_str_inspect = common.findIdent("Builtin.Str.inspect") orelse unreachable,
             .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
             .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
@@ -391,6 +411,7 @@ pub const CommonIdents = extern struct {
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
             .from_quote = common.findIdent("from_quote") orelse unreachable,
+            .from_interpolation = common.findIdent("from_interpolation") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
             .false_tag = common.findIdent("False") orelse unreachable,
             // from_utf8 result fields
@@ -517,7 +538,7 @@ pub const NumeralDispatchPlan = extern struct {
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
-pub const NumericSuffixType = extern struct {
+pub const NumericSuffixTarget = extern struct {
     node_idx: u32,
     kind: u32,
     data1: u32,
@@ -529,6 +550,7 @@ pub const NumericSuffixType = extern struct {
         builtin,
         local,
         external,
+        invalid,
     };
 
     pub const Target = union(enum) {
@@ -538,9 +560,10 @@ pub const NumericSuffixType = extern struct {
             import_idx: CIR.Import.Idx,
             target_node_idx: u32,
         },
+        invalid,
     };
 
-    pub fn target(self: NumericSuffixType) Target {
+    pub fn target(self: NumericSuffixTarget) Target {
         return switch (@as(Kind, @enumFromInt(self.kind))) {
             .builtin => .{ .builtin = @enumFromInt(self.data1) },
             .local => .{ .local = @enumFromInt(self.data1) },
@@ -548,6 +571,7 @@ pub const NumericSuffixType = extern struct {
                 .import_idx = @enumFromInt(self.data1),
                 .target_node_idx = self.data2,
             } },
+            .invalid => .invalid,
         };
     }
 };
@@ -642,13 +666,8 @@ numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// expression and pattern nodes. Shares `NumeralDispatchPlan`'s shape: a source
 /// node plus the constraint's target and function type vars.
 quote_dispatch_plans: NumeralDispatchPlan.SafeList,
-/// Raw node indices of the `from_interpolation` calls canonicalization
-/// synthesized while desugaring interpolated string literals. The
-/// from_interpolation protocol returns the receiver's type, and checking
-/// consumes this to unify the call result with the receiver.
-interpolation_call_nodes: collections.SafeList(u32),
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
-numeric_suffix_types: NumericSuffixType.SafeList,
+numeric_suffix_targets: NumericSuffixTarget.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -806,8 +825,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
         .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
-        .interpolation_call_nodes = try collections.SafeList(u32).initCapacity(gpa, 4),
-        .numeric_suffix_types = try NumericSuffixType.SafeList.initCapacity(gpa, 8),
+        .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -829,8 +847,7 @@ pub fn deinit(self: *Self) void {
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
-    self.interpolation_call_nodes.deinit(self.gpa);
-    self.numeric_suffix_types.deinit(self.gpa);
+    self.numeric_suffix_targets.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -871,8 +888,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
-    self.interpolation_call_nodes.deinit(self.gpa);
-    self.numeric_suffix_types.deinit(self.gpa);
+    self.numeric_suffix_targets.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -908,6 +924,13 @@ pub fn pushRuntimeErrorExpr(self: *Self, comptime RetIdx: type, reason: CIR.Diag
     const region = getDiagnosticRegion(reason);
     const malformed_idx = try self.addMalformed(diag_idx, region);
     return castIdx(Node.Idx, RetIdx, malformed_idx);
+}
+
+/// Replaces an existing expression with a runtime error and records the diagnostic.
+pub fn replaceExprWithRuntimeError(self: *Self, expr_idx: CIR.Expr.Idx, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
+    const diag_idx = try self.addDiagnostic(reason);
+    self.store.setExprRuntimeError(expr_idx, diag_idx);
+    self.debugAssertArraysInSync();
 }
 
 /// Extract the region from any diagnostic variant
@@ -1024,6 +1047,28 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" or ");
             try report.document.addKeyword("exposing");
             try report.document.addReflowingText(" missing up-top?");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .read_uninitialized_var => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "READING UNINITIALIZED VAR", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("This reads ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" before every path has assigned it a value.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1787,6 +1832,28 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
             break :blk report;
         },
+        .unreachable_string_pattern_capture => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "UNREACHABLE PATTERN CAPTURE", .warning);
+            try report.document.addReflowingText("This string pattern capture is directly after another capture, so it is unreachable.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("String pattern captures need literal text between them. Add a delimiter between the captures, or remove this capture.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .shadowing_warning => |data| blk: {
             const ident_name = self.getIdent(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
@@ -2358,7 +2425,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", .warning);
+            var report = Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", .runtime_error);
 
             // Format the message to match origin/main
             try report.document.addText("You cannot define a ");
@@ -2383,7 +2450,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .open_ext_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .warning);
+            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .runtime_error);
 
             // Format the message to match origin/main
             try report.document.addText("You cannot use a ");
@@ -2407,6 +2474,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" You need a named variable, like ");
             try report.document.addInlineCode("..others");
             try report.document.addReflowingText(", to use this here.");
+
+            break :blk report;
+        },
+        .unnamed_field_not_allowed_in_structural_record => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD", .runtime_error);
+
+            try report.document.addReflowingText("Unnamed fields (written ");
+            try report.document.addInlineCode("_");
+            try report.document.addReflowingText(" or ");
+            try report.document.addInlineCode("_name");
+            try report.document.addReflowingText(") are only allowed in nominal record type declarations, not in structural record types:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Unnamed fields reserve layout padding for a nominal type (declared with ");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText("). Give the field a name, or move it into a nominal type declaration.");
 
             break :blk report;
         },
@@ -2847,6 +2945,32 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .infinite_loop_never_exits => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "INFINITE LOOP NEVER EXITS", .warning);
+            try report.document.addReflowingText("This infinite loop has no ");
+            try report.document.addAnnotated("return", .inline_code);
+            try report.document.addReflowingText(", ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(", ");
+            try report.document.addAnnotated("crash", .inline_code);
+            try report.document.addReflowingText(", or ");
+            try report.document.addAnnotated("break", .inline_code);
+            try report.document.addReflowingText(" that exits this loop, so it will run forever and hang the program.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .return_outside_fn => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2961,6 +3085,29 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .range_op_chained => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "CHAINED RANGE", .runtime_error);
+            try report.document.addReflowingText("Range operators can't be chained. Write a single range instead, like ");
+            try report.document.addInlineCode("a..<b");
+            try report.document.addReflowingText(" or ");
+            try report.document.addInlineCode("a..=b");
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
@@ -3025,8 +3172,7 @@ pub const Serialized = extern struct {
     numeral_literals: NumeralLiteral.SafeList.Serialized,
     numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
-    interpolation_call_nodes: collections.SafeList(u32).Serialized,
-    numeric_suffix_types: NumericSuffixType.SafeList.Serialized,
+    numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3089,8 +3235,7 @@ pub const Serialized = extern struct {
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
         try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
         try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
-        try self.interpolation_call_nodes.serialize(&env.interpolation_call_nodes, allocator, writer);
-        try self.numeric_suffix_types.serialize(&env.numeric_suffix_types, allocator, writer);
+        try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3144,8 +3289,7 @@ pub const Serialized = extern struct {
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
             .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
             .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
-            .interpolation_call_nodes = self.interpolation_call_nodes.deserializeInto(base_addr),
-            .numeric_suffix_types = self.numeric_suffix_types.deserializeInto(base_addr),
+            .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
         };
 
         return env;
@@ -3202,8 +3346,7 @@ pub const Serialized = extern struct {
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
             .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .interpolation_call_nodes = try self.interpolation_call_nodes.deserializeWithCopy(base_addr, gpa),
-            .numeric_suffix_types = try self.numeric_suffix_types.deserializeWithCopy(base_addr, gpa),
+            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3382,163 +3525,53 @@ pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralD
     return null;
 }
 
-/// Record a `from_interpolation` call synthesized by interpolation desugaring.
-pub fn recordInterpolationCallNode(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
-    _ = try self.interpolation_call_nodes.append(self.gpa, @intFromEnum(node_idx));
-}
-
-/// Whether the node is a `from_interpolation` call synthesized by
-/// interpolation desugaring.
-pub fn isInterpolationCallNode(self: *const Self, node_idx: Node.Idx) bool {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.interpolation_call_nodes.items.items) |recorded| {
-        if (recorded == raw_node) return true;
-    }
-    return false;
-}
-
-/// Whether the expression is a desugared interpolation dispatch call whose
-/// result type resolved to builtin `Str`. Such a call can be published as a
-/// plain ordered segment list — equivalent to `Str.from_interpolation` —
-/// instead of dispatching through the synthetic iterator chain.
-pub fn isStrInterpolationCall(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
-    if (!self.isInterpolationCallNode(nodeIdxFrom(expr_idx))) return false;
-    switch (self.store.getExpr(expr_idx)) {
-        .e_dispatch_call => {},
-        else => return false,
-    }
-    var current = varFrom(expr_idx);
-    while (true) {
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| return switch (flat) {
-                .nominal_type => |nominal| nominal.originIsBuiltin() and
-                    (nominal.ident.ident_idx.eql(self.idents.str) or
-                        nominal.ident.ident_idx.eql(self.idents.builtin_str)),
-                else => false,
-            },
-            else => return false,
-        }
-    }
-}
-
-/// One `(interpolation, following-segment)` pair from the synthetic
-/// `prepended` chain of a desugared interpolated string.
-pub const InterpolationPair = struct {
-    interpolation: CIR.Expr.Idx,
-    segment: CIR.Expr.Idx,
-};
-
-/// Iterator yielding a desugared interpolated string's
-/// `(interpolation, following-segment)` pairs in source order.
-pub const InterpolationPairIterator = struct {
-    env: *const Self,
-    current: CIR.Expr.Idx,
-
-    /// Next pair in source order, or null once the terminal `[].iter()`
-    /// call is reached.
-    pub fn next(self: *InterpolationPairIterator) ?InterpolationPair {
-        const call = switch (self.env.store.getExpr(self.current)) {
-            .e_dispatch_call => |call| call,
-            else => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("module env invariant violated: interpolation chain expression is not a dispatch call", .{});
-                }
-                unreachable;
-            },
-        };
-        const args = self.env.store.sliceExpr(call.args);
-        if (args.len == 0) return null;
-        if (args.len != 1) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("module env invariant violated: interpolation chain call has {d} arguments", .{args.len});
-            }
-            unreachable;
-        }
-        const elems = switch (self.env.store.getExpr(args[0])) {
-            .e_tuple => |tuple| self.env.store.sliceExpr(tuple.elems),
-            else => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("module env invariant violated: interpolation chain argument is not a pair", .{});
-                }
-                unreachable;
-            },
-        };
-        if (elems.len != 2) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("module env invariant violated: interpolation pair has {d} elements", .{elems.len});
-            }
-            unreachable;
-        }
-        self.current = call.receiver;
-        return .{ .interpolation = elems[0], .segment = elems[1] };
-    }
-};
-
-/// Iterate the `(interpolation, following-segment)` pairs of a desugared
-/// interpolation dispatch call in source order.
-pub fn interpolationPairs(self: *const Self, call_expr_idx: CIR.Expr.Idx) InterpolationPairIterator {
-    const call = switch (self.store.getExpr(call_expr_idx)) {
-        .e_dispatch_call => |call| call,
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("module env invariant violated: interpolation call expression is not a dispatch call", .{});
-            }
-            unreachable;
-        },
-    };
-    const args = self.store.sliceExpr(call.args);
-    if (args.len != 1) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("module env invariant violated: interpolation call has {d} arguments", .{args.len});
-        }
-        unreachable;
-    }
-    return .{ .env = self, .current = args[0] };
-}
-
 /// Record the scope-resolved type target for an explicit numeric suffix.
-pub fn recordNumericSuffixType(
+pub fn recordNumericSuffixTarget(
     self: *Self,
     node_idx: Node.Idx,
-    target: NumericSuffixType.Target,
+    target: NumericSuffixTarget.Target,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
-    const suffix_type = switch (target) {
-        .builtin => |num_kind| NumericSuffixType{
+    const suffix_target = switch (target) {
+        .builtin => |num_kind| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixType.Kind.builtin),
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.builtin),
             .data1 = @intFromEnum(num_kind),
             .data2 = 0,
         },
-        .local => |stmt_idx| NumericSuffixType{
+        .local => |stmt_idx| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixType.Kind.local),
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.local),
             .data1 = @intFromEnum(stmt_idx),
             .data2 = 0,
         },
-        .external => |external| NumericSuffixType{
+        .external => |external| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixType.Kind.external),
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.external),
             .data1 = @intFromEnum(external.import_idx),
             .data2 = external.target_node_idx,
         },
+        .invalid => NumericSuffixTarget{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.invalid),
+            .data1 = 0,
+            .data2 = 0,
+        },
     };
 
-    for (self.numeric_suffix_types.items.items) |*existing| {
+    for (self.numeric_suffix_targets.items.items) |*existing| {
         if (existing.node_idx != raw_node) continue;
-        existing.* = suffix_type;
+        existing.* = suffix_target;
         return;
     }
-    _ = try self.numeric_suffix_types.append(self.gpa, suffix_type);
+    _ = try self.numeric_suffix_targets.append(self.gpa, suffix_target);
 }
 
 /// Return the scope-resolved type target for an explicit numeric suffix.
-pub fn numericSuffixTypeForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixType {
+pub fn numericSuffixTargetForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixTarget {
     const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.numeric_suffix_types.items.items) |suffix_type| {
-        if (suffix_type.node_idx == raw_node) return suffix_type;
+    for (self.numeric_suffix_targets.items.items) |suffix_target| {
+        if (suffix_target.node_idx == raw_node) return suffix_target;
     }
     return null;
 }
@@ -3548,14 +3581,29 @@ pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) Allocator.Error!void {
     return try self.common.exposed_items.addExposedById(self.gpa, @bitCast(ident_idx));
 }
 
-/// Associates a node index with an exposed identifier.
-pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
-    return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
+/// Associates a value definition node index with an exposed identifier.
+pub fn setExposedValueNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.common.setValueNodeIndexById(self.gpa, ident_idx, node_idx);
 }
 
-/// Retrieves the node index associated with an exposed identifier, if any.
-pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
-    return self.common.getNodeIndexById(self.gpa, ident_idx);
+/// Associates a type declaration node index with an exposed identifier.
+pub fn setExposedTypeNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.common.setTypeNodeIndexById(self.gpa, ident_idx, node_idx);
+}
+
+/// Retrieves the value definition node index associated with an exposed identifier, if any.
+pub fn getExposedValueNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
+    return self.common.getValueNodeIndexById(self.gpa, ident_idx);
+}
+
+/// Retrieves the type declaration node index associated with an exposed identifier, if any.
+pub fn getExposedTypeNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
+    return self.common.getTypeNodeIndexById(self.gpa, ident_idx);
+}
+
+/// Retrieves the explicit exposure target associated with an exposed identifier, if any.
+pub fn getExposedTargetById(self: *const Self, ident_idx: Ident.Idx) ?collections.ExposedItemTarget {
+    return self.common.getExposedTargetById(self.gpa, ident_idx);
 }
 
 /// Get the exposed node index for a type given its statement index.

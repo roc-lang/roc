@@ -169,33 +169,16 @@ match events {
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
 									(p-assign (ident "y")))))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 401)
-							(receiver
-								(e-string
-									(e-literal (string "single click at ("))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 359)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 301)
-											(receiver
-												(e-dispatch-call (method "iter") (constraint-fn-var 237)
-													(receiver
-														(e-empty_list))
-													(args)))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_1")))
-														(e-string
-															(e-literal (string ")"))))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-string
-													(e-literal (string ", "))))))))))))
+						(e-interpolation
+							(first
+								(e-literal (string "single click at (")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ", "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string ")")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -219,33 +202,16 @@ match events {
 										(builtin))
 									(e-lookup-local
 										(p-assign (ident "rest"))))))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 605)
-							(receiver
-								(e-string
-									(e-literal (string "key "))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 563)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 505)
-											(receiver
-												(e-dispatch-call (method "iter") (constraint-fn-var 441)
-													(receiver
-														(e-empty_list))
-													(args)))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_3")))
-														(e-string
-															(e-literal (string " more events"))))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_2")))
-												(e-string
-													(e-literal (string " pressed, "))))))))))))
+						(e-interpolation
+							(first
+								(e-literal (string "key ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_2")))
+								(e-literal (string " pressed, "))
+								(e-lookup-local
+									(p-assign (ident "#interp_3")))
+								(e-literal (string " more events")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -281,51 +247,22 @@ match events {
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
 									(p-assign (ident "dy2")))))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 910)
-							(receiver
-								(e-string
-									(e-literal (string "moved "))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 868)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 810)
-											(receiver
-												(e-dispatch-call (method "prepended") (constraint-fn-var 752)
-													(receiver
-														(e-dispatch-call (method "prepended") (constraint-fn-var 694)
-															(receiver
-																(e-dispatch-call (method "iter") (constraint-fn-var 630)
-																	(receiver
-																		(e-empty_list))
-																	(args)))
-															(args
-																(e-tuple
-																	(elems
-																		(e-lookup-local
-																			(p-assign (ident "#interp_7")))
-																		(e-string
-																			(e-literal (string ""))))))))
-													(args
-														(e-tuple
-															(elems
-																(e-lookup-local
-																	(p-assign (ident "#interp_6")))
-																(e-string
-																	(e-literal (string ","))))))))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_5")))
-														(e-string
-															(e-literal (string " then "))))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_4")))
-												(e-string
-													(e-literal (string ","))))))))))))
+						(e-interpolation
+							(first
+								(e-literal (string "moved ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_4")))
+								(e-literal (string ","))
+								(e-lookup-local
+									(p-assign (ident "#interp_5")))
+								(e-literal (string " then "))
+								(e-lookup-local
+									(p-assign (ident "#interp_6")))
+								(e-literal (string ","))
+								(e-lookup-local
+									(p-assign (ident "#interp_7")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -355,42 +292,19 @@ match events {
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
 									(p-assign (ident "y")))))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 1160)
-							(receiver
-								(e-string
-									(e-literal (string "scroll "))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 1118)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 1060)
-											(receiver
-												(e-dispatch-call (method "prepended") (constraint-fn-var 1002)
-													(receiver
-														(e-dispatch-call (method "iter") (constraint-fn-var 938)
-															(receiver
-																(e-empty_list))
-															(args)))
-													(args
-														(e-tuple
-															(elems
-																(e-lookup-local
-																	(p-assign (ident "#interp_10")))
-																(e-string
-																	(e-literal (string ""))))))))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_9")))
-														(e-string
-															(e-literal (string ","))))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_8")))
-												(e-string
-													(e-literal (string " then click at "))))))))))))
+						(e-interpolation
+							(first
+								(e-literal (string "scroll ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_8")))
+								(e-literal (string " then click at "))
+								(e-lookup-local
+									(p-assign (ident "#interp_9")))
+								(e-literal (string ","))
+								(e-lookup-local
+									(p-assign (ident "#interp_10")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -401,5 +315,5 @@ match events {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~

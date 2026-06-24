@@ -51,6 +51,7 @@ const compile_package = @import("compile_package.zig");
 const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
+const package_source = @import("package_source.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -105,6 +106,7 @@ const Thread = threading.Thread;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 const CheckedArtifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
+const CanonicalTypeKey = canonical.CanonicalTypeKey;
 
 fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: bool) void {
     const allocator = artifact.canonical_names.allocator;
@@ -160,82 +162,91 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v1";
-const checked_module_cache_format_version: u64 = 1;
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32;
+const checked_module_cache_magic = "roc-mod-cache-v4";
+const checked_module_cache_format_version: u64 = 4;
+// Header: magic, format version (u64), artifact-layout version hash (32), artifact
+// key (32), env-blob length (u64), artifact-blob length (u64). The two length-prefixed
+// bodies (env blob then artifact blob) follow the header. The layout hash guards
+// against relocating a cached artifact whose `Serialized` layout differs from the
+// running compiler's — important in development, where `compiler_version` is a fixed
+// release string that does not move between rebuilds.
+//
+// There is no body checksum: cache entries are written to a temp file and atomically
+// renamed into place (so a torn write never replaces a valid entry), the length fields
+// below reject any truncated/over-long entry, the magic+version+layout-hash+key reject
+// stale or wrong entries, and relocation bounds-checks every marker against the blob.
+// A corrupt-but-right-length body is the only residue, which for a recomputable local
+// cache does not justify hashing the whole blob on every read and write.
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32 + 8 + 8;
 
-fn writeU64Little(buf: []u8, value: u64) void {
-    std.debug.assert(buf.len == 8);
-    buf[0] = @truncate(value);
-    buf[1] = @truncate(value >> 8);
-    buf[2] = @truncate(value >> 16);
-    buf[3] = @truncate(value >> 24);
-    buf[4] = @truncate(value >> 32);
-    buf[5] = @truncate(value >> 40);
-    buf[6] = @truncate(value >> 48);
-    buf[7] = @truncate(value >> 56);
-}
+/// Two length-prefixed cache bodies decoded from a checked-module cache entry:
+/// the relocatable `ModuleEnv` blob and the relocatable
+/// `CheckedModuleArtifact` blob.
+const CheckedModuleCacheBodies = struct {
+    env_body: []const u8,
+    artifact_body: []const u8,
+};
 
-fn readU64Little(buf: []const u8) u64 {
-    std.debug.assert(buf.len == 8);
-    return @as(u64, buf[0]) |
-        (@as(u64, buf[1]) << 8) |
-        (@as(u64, buf[2]) << 16) |
-        (@as(u64, buf[3]) << 24) |
-        (@as(u64, buf[4]) << 32) |
-        (@as(u64, buf[5]) << 40) |
-        (@as(u64, buf[6]) << 48) |
-        (@as(u64, buf[7]) << 56);
-}
-
-fn hashCacheBody(body: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(body);
-    return hasher.finalResult();
-}
-
-fn encodeCheckedModuleCacheEntry(
-    allocator: Allocator,
+/// Write the fixed-size checked-module cache header into the first
+/// `checked_module_cache_header_len` bytes of `dest`. The caller gathers the two
+/// relocatable bodies (env blob then artifact blob) into `dest` after the header.
+fn writeCheckedModuleCacheHeader(
+    dest: []u8,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    body: []const u8,
-) Allocator.Error![]u8 {
-    const bytes = try allocator.alloc(u8, checked_module_cache_header_len + body.len);
-    errdefer allocator.free(bytes);
-
+    env_len: usize,
+    artifact_len: usize,
+) void {
     var offset: usize = 0;
-    @memcpy(bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
+    @memcpy(dest[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
     offset += checked_module_cache_magic.len;
-    writeU64Little(bytes[offset..][0..8], checked_module_cache_format_version);
+    std.mem.writeInt(u64, dest[offset..][0..8], checked_module_cache_format_version, .little);
     offset += 8;
-    @memcpy(bytes[offset..][0..32], &key.bytes);
+    @memcpy(dest[offset..][0..32], &check.CheckedArtifact.CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
     offset += 32;
-    const body_hash = hashCacheBody(body);
-    @memcpy(bytes[offset..][0..32], &body_hash);
+    @memcpy(dest[offset..][0..32], &key.bytes);
     offset += 32;
-    @memcpy(bytes[offset..], body);
-
-    return bytes;
+    std.mem.writeInt(u64, dest[offset..][0..8], env_len, .little);
+    offset += 8;
+    std.mem.writeInt(u64, dest[offset..][0..8], artifact_len, .little);
 }
 
 fn decodeCheckedModuleCacheEntry(
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     bytes: []const u8,
-) ?[]const u8 {
+) ?CheckedModuleCacheBodies {
     if (bytes.len < checked_module_cache_header_len) return null;
     var offset: usize = 0;
     if (!std.mem.eql(u8, bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
     offset += checked_module_cache_magic.len;
-    if (readU64Little(bytes[offset..][0..8]) != checked_module_cache_format_version) return null;
+    if (std.mem.readInt(u64, bytes[offset..][0..8], .little) != checked_module_cache_format_version) return null;
     offset += 8;
+    // Reject (as a cache miss) an entry whose artifact `Serialized` layout differs
+    // from this compiler's, so we never relocate into a mismatched struct.
+    if (!check.CheckedArtifact.CheckedModuleArtifact.expectSerializedVersion(bytes[offset..][0..32])) return null;
+    offset += 32;
     if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
     offset += 32;
-    const stored_hash = bytes[offset..][0..32];
-    offset += 32;
-    const body = bytes[offset..];
-    const actual_hash = hashCacheBody(body);
-    if (!std.mem.eql(u8, stored_hash, &actual_hash)) return null;
-    if (body.len < @sizeOf(ModuleEnv.Serialized)) return null;
-    return body;
+    // Cast the on-disk u64 lengths to usize up front: this both keeps every
+    // downstream index/slice in usize (so the cache compiles for 32-bit targets
+    // like wasm32) and rejects a corrupt entry whose length cannot fit the host
+    // address space as a cache miss rather than crashing.
+    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
+    offset += 8;
+    const artifact_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
+    offset += 8;
+
+    const remaining = bytes.len - offset;
+    if (env_len > remaining) return null;
+    if (artifact_len > remaining - env_len) return null;
+    if (env_len + artifact_len != remaining) return null;
+
+    const env_body = bytes[offset..][0..env_len];
+    offset += env_len;
+    const artifact_body = bytes[offset..][0..artifact_len];
+
+    if (env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
+    if (artifact_body.len < @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
+    return .{ .env_body = env_body, .artifact_body = artifact_body };
 }
 
 /// Maximum scratch arena capacity retained by a worker after each task.
@@ -515,6 +526,8 @@ pub const PackageState = struct {
     name: []const u8,
     /// Root directory for the package
     root_dir: []const u8,
+    /// Source URL data when this package came from a URL bundle.
+    url: ?package_source.UrlSource,
     /// All modules in this package
     modules: std.ArrayList(ModuleState),
     /// Module name -> module ID lookup
@@ -526,10 +539,11 @@ pub const PackageState = struct {
     /// Package shorthands (alias -> target package name)
     shorthands: std.StringHashMap([]const u8),
 
-    pub fn init(_: Allocator, name: []const u8, root_dir: []const u8) PackageState {
+    pub fn init(_: Allocator, name: []const u8, root_dir: []const u8, url: ?package_source.UrlSource) PackageState {
         return .{
             .name = name,
             .root_dir = root_dir,
+            .url = url,
             .modules = std.ArrayList(ModuleState).empty,
             .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
             .remaining_modules = 0,
@@ -567,11 +581,19 @@ pub const PackageState = struct {
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: freeing name and root_dir\n", .{self.name});
         }
+        if (self.url) |*url| url.deinit(gpa);
         gpa.free(self.name);
         gpa.free(self.root_dir);
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] done\n", .{});
         }
+    }
+
+    pub fn urlId(self: *const PackageState) ?[]const u8 {
+        if (self.url) |url| {
+            return url.urlId();
+        }
+        return null;
     }
 
     /// Ensure a module exists, creating it if necessary
@@ -719,6 +741,102 @@ pub const ModuleRef = struct {
     module_id: ModuleId,
 };
 
+const PlatformRequiredValidationSnapshot = struct {
+    dispatch_dispatcher_keys: []CanonicalTypeKey = &.{},
+    dispatch_callable_keys: []CanonicalTypeKey = &.{},
+    iterator_iter_dispatcher_keys: []CanonicalTypeKey = &.{},
+    iterator_next_dispatcher_keys: []CanonicalTypeKey = &.{},
+    pattern_type_keys: []CanonicalTypeKey = &.{},
+
+    fn init(
+        allocator: Allocator,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!PlatformRequiredValidationSnapshot {
+        var snapshot = PlatformRequiredValidationSnapshot{};
+        errdefer snapshot.deinit(allocator);
+
+        snapshot.dispatch_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.plans.len);
+        snapshot.dispatch_callable_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.plans.len);
+        for (artifact.static_dispatch_plans.plans, 0..) |plan, i| {
+            snapshot.dispatch_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.dispatcher_ty);
+            snapshot.dispatch_callable_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.callable_ty);
+        }
+
+        snapshot.iterator_iter_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.iterator_for_plans.len);
+        snapshot.iterator_next_dispatcher_keys = try allocator.alloc(CanonicalTypeKey, artifact.static_dispatch_plans.iterator_for_plans.len);
+        for (artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, i| {
+            snapshot.iterator_iter_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.iter.dispatcher_ty);
+            snapshot.iterator_next_dispatcher_keys[i] = check.CheckedArtifact.checkedTypeRootKey(artifact, plan.next.dispatcher_ty);
+        }
+
+        snapshot.pattern_type_keys = try allocator.alloc(CanonicalTypeKey, artifact.checked_bodies.patternCount());
+        for (snapshot.pattern_type_keys, 0..) |*key, i| {
+            const pattern_id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(i);
+            key.* = check.CheckedArtifact.checkedTypeRootKey(artifact, artifact.checked_bodies.pattern(pattern_id).ty);
+        }
+
+        return snapshot;
+    }
+
+    fn deinit(self: *PlatformRequiredValidationSnapshot, allocator: Allocator) void {
+        allocator.free(self.dispatch_dispatcher_keys);
+        allocator.free(self.dispatch_callable_keys);
+        allocator.free(self.iterator_iter_dispatcher_keys);
+        allocator.free(self.iterator_next_dispatcher_keys);
+        allocator.free(self.pattern_type_keys);
+        self.* = .{};
+    }
+
+    fn dispatchPlanChanged(
+        self: *const PlatformRequiredValidationSnapshot,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan_index: usize,
+        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
+    ) bool {
+        if (plan_index >= self.dispatch_dispatcher_keys.len or
+            plan_index >= self.dispatch_callable_keys.len)
+        {
+            return false;
+        }
+        return !typeKeyMatchesArtifactRoot(self.dispatch_dispatcher_keys[plan_index], artifact, plan.dispatcher_ty) or
+            !typeKeyMatchesArtifactRoot(self.dispatch_callable_keys[plan_index], artifact, plan.callable_ty);
+    }
+
+    fn iteratorPlanChanged(
+        self: *const PlatformRequiredValidationSnapshot,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan_index: usize,
+        plan: check.StaticDispatchRegistry.IteratorForPlan,
+    ) bool {
+        if (plan_index >= self.iterator_iter_dispatcher_keys.len or
+            plan_index >= self.iterator_next_dispatcher_keys.len)
+        {
+            return false;
+        }
+        return !typeKeyMatchesArtifactRoot(self.iterator_iter_dispatcher_keys[plan_index], artifact, plan.iter.dispatcher_ty) or
+            !typeKeyMatchesArtifactRoot(self.iterator_next_dispatcher_keys[plan_index], artifact, plan.next.dispatcher_ty);
+    }
+
+    fn patternTypeChanged(
+        self: *const PlatformRequiredValidationSnapshot,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        pattern_index: usize,
+        pattern: check.CheckedArtifact.CheckedPattern,
+    ) bool {
+        if (pattern_index >= self.pattern_type_keys.len) return false;
+        return !typeKeyMatchesArtifactRoot(self.pattern_type_keys[pattern_index], artifact, pattern.ty);
+    }
+
+    fn typeKeyMatchesArtifactRoot(
+        key: CanonicalTypeKey,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        root: check.CheckedArtifact.CheckedTypeId,
+    ) bool {
+        const current = check.CheckedArtifact.checkedTypeRootKey(artifact, root);
+        return std.meta.eql(key.bytes, current.bytes);
+    }
+};
+
 /// Coordinator manages all compilation state and coordinates workers
 pub const Coordinator = struct {
     gpa: Allocator,
@@ -782,6 +900,11 @@ pub const Coordinator = struct {
     /// Whether to run hosted compiler transformation after canonicalization.
     /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
+
+    /// Package name -> note for packages compiled against a dependency
+    /// version they did not declare. Rendered alongside errors from those
+    /// packages. Keys and values are gpa-owned.
+    version_notes: std.StringHashMap([]const u8),
 
     /// Timing accumulators
     total_parse_ns: u64,
@@ -856,6 +979,7 @@ pub const Coordinator = struct {
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
+            .version_notes = std.StringHashMap([]const u8).init(gpa),
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
             .total_canonicalize_diag_ns = 0,
@@ -876,6 +1000,15 @@ pub const Coordinator = struct {
         }
         // Stop workers
         self.shutdown();
+
+        {
+            var note_it = self.version_notes.iterator();
+            while (note_it.next()) |entry| {
+                self.gpa.free(@constCast(entry.key_ptr.*));
+                self.gpa.free(@constCast(entry.value_ptr.*));
+            }
+            self.version_notes.deinit();
+        }
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -961,9 +1094,23 @@ pub const Coordinator = struct {
         return owned;
     }
 
-    /// Create or get a package
     pub fn ensurePackage(self: *Coordinator, name: []const u8, root_dir: []const u8) Allocator.Error!*PackageState {
+        return self.ensurePackageWithUrl(name, root_dir, null);
+    }
+
+    /// Create or get a package.
+    pub fn ensurePackageWithUrl(
+        self: *Coordinator,
+        name: []const u8,
+        root_dir: []const u8,
+        url: ?package_source.UrlSourceView,
+    ) Allocator.Error!*PackageState {
         if (self.packages.get(name)) |pkg| {
+            if (pkg.url == null) {
+                if (url) |url_view| {
+                    pkg.url = try package_source.UrlSource.init(self.gpa, url_view);
+                }
+            }
             return pkg;
         }
 
@@ -975,8 +1122,18 @@ pub const Coordinator = struct {
             self.gpa.free(owned_name);
             return err;
         };
+        var package_initialized = false;
+        errdefer if (!package_initialized) {
+            self.gpa.free(owned_name);
+            self.gpa.free(owned_root_dir);
+        };
 
-        pkg.* = PackageState.init(self.gpa, owned_name, owned_root_dir);
+        var package_url = if (url) |url_view| try package_source.UrlSource.init(self.gpa, url_view) else null;
+        errdefer if (package_url) |*url_source| url_source.deinit(self.gpa);
+
+        pkg.* = PackageState.init(self.gpa, owned_name, owned_root_dir, package_url);
+        package_initialized = true;
+        package_url = null;
         errdefer pkg.deinit(self.gpa);
 
         try self.packages.put(pkg.name, pkg);
@@ -1072,7 +1229,18 @@ pub const Coordinator = struct {
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
     ) Allocator.Error!void {
-        const pf_pkg = try self.ensurePackage("pf", platform_dir);
+        return self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, qualifier, null);
+    }
+
+    pub fn registerPlatformPackageWithUrl(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_dir: []const u8,
+        platform_main_path: []const u8,
+        qualifier: ?[]const u8,
+        url: ?package_source.UrlSourceView,
+    ) Allocator.Error!void {
+        const pf_pkg = try self.ensurePackageWithUrl("pf", platform_dir, url);
 
         if (qualifier) |qual| {
             try app_pkg.shorthands.put(
@@ -1101,7 +1269,18 @@ pub const Coordinator = struct {
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
     ) Allocator.Error!*PackageState {
-        const pkg = try self.ensurePackage(package_name, package_root_dir);
+        return self.registerInlinePackageWithUrl(package_name, package_root_dir, app_pkg, shorthand_on_app, null);
+    }
+
+    pub fn registerInlinePackageWithUrl(
+        self: *Coordinator,
+        package_name: []const u8,
+        package_root_dir: []const u8,
+        app_pkg: ?*PackageState,
+        shorthand_on_app: ?[]const u8,
+        url: ?package_source.UrlSourceView,
+    ) Allocator.Error!*PackageState {
+        const pkg = try self.ensurePackageWithUrl(package_name, package_root_dir, url);
         if (app_pkg) |a| {
             if (shorthand_on_app) |sh| {
                 try a.shorthands.put(
@@ -1206,6 +1385,60 @@ pub const Coordinator = struct {
         return try views.toOwnedSlice(allocator);
     }
 
+    fn appendTypecheckAvailablePublicApiClosure(
+        self: *Coordinator,
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_view: check.CheckedArtifact.ImportedModuleView,
+    ) Allocator.Error!void {
+        var pending = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer pending.deinit(allocator);
+
+        var seen = std.AutoHashMap(check.CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+        defer seen.deinit();
+
+        for (views.items) |view| {
+            try seen.put(view.key, {});
+        }
+        try pending.append(allocator, root_view);
+
+        while (pending.pop()) |view| {
+            const entry = try seen.getOrPut(view.key);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = {};
+
+            try views.append(allocator, view);
+
+            for (view.direct_import_artifact_keys) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing direct dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
+            for (view.public_api_dependencies.artifacts) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing public API dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
+            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
+            }
+        }
+    }
+
     fn rootRelationContainsArtifact(
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         key: check.CheckedArtifact.CheckedModuleArtifactKey,
@@ -1252,7 +1485,11 @@ pub const Coordinator = struct {
                 }
                 unreachable;
             };
-            try dependency_collector.appendPlatformRelationDependency(relation_view, binding);
+            try dependency_collector.appendPlatformRelationDependency(
+                relation_view,
+                binding,
+                root_artifact.platform_required_bindings.relationClosure(binding),
+            );
         }
     }
 
@@ -1301,11 +1538,9 @@ pub const Coordinator = struct {
             self: *RelationLoweringDependencyCollector,
             relation_artifact: CheckedArtifact.ImportedModuleView,
             binding: CheckedArtifact.PlatformRequiredBinding,
+            binding_relation_closure: CheckedArtifact.ImportedTemplateClosureView,
         ) Allocator.Error!void {
-            switch (binding.value_use) {
-                .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
-                .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
-            }
+            try self.appendClosure(binding_relation_closure);
             try self.appendRelationArtifactExportedValueClosure(relation_artifact, binding);
         }
 
@@ -1457,6 +1692,7 @@ pub const Coordinator = struct {
                 .top_level_const,
                 .imported_const,
                 => |const_use| try self.appendConstRef(const_use.const_ref),
+                .selected_hoisted_const => |selected| try self.appendConstRef(selected.const_use.const_ref),
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,
@@ -1535,7 +1771,7 @@ pub const Coordinator = struct {
             const view = self.viewForKey(binding_ref.artifact);
             for (view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def != binding_ref.def or binding.binding.pattern != binding_ref.pattern) continue;
-                try self.appendClosure(binding.template_closure);
+                try self.appendClosure(view.exported_procedure_bindings.rowClosure(binding));
                 try self.appendImportedProcedureBindingBody(binding_ref.artifact, binding.body);
                 return;
             }
@@ -1564,10 +1800,7 @@ pub const Coordinator = struct {
             const binding = view.platform_required_bindings.lookupByBindingId(@intFromEnum(binding_id)) orelse {
                 coordinatorInvariant("relation lowering dependency referenced missing platform-required binding", .{});
             };
-            switch (binding.value_use) {
-                .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
-                .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
-            }
+            try self.appendClosure(view.platform_required_bindings.relationClosure(binding));
         }
 
         fn appendRelationArtifactExportedValueClosure(
@@ -1581,11 +1814,11 @@ pub const Coordinator = struct {
                     for (relation_artifact.exported_procedure_bindings.bindings) |exported| {
                         if (exported.binding.pattern != binding.app_value.pattern) continue;
                         found = true;
-                        try self.appendClosure(exported.template_closure);
+                        try self.appendClosure(relation_artifact.exported_procedure_bindings.rowClosure(exported));
                         try self.appendImportedProcedureBindingBody(relation_artifact.key, exported.body);
                         for (relation_artifact.exported_procedure_templates.templates) |template| {
                             if (template.def != exported.binding.def) continue;
-                            try self.appendClosure(template.template_closure);
+                            try self.appendClosure(relation_artifact.exported_procedure_templates.rowClosure(template));
                             try self.appendProcedureTemplateRef(template.template);
                         }
                     }
@@ -1599,7 +1832,7 @@ pub const Coordinator = struct {
                         if (template.pattern != binding.app_value.pattern) continue;
                         if (!std.meta.eql(template.const_ref, const_use.const_use.const_ref)) continue;
                         found = true;
-                        try self.appendClosure(template.template_closure);
+                        try self.appendClosure(relation_artifact.exported_const_templates.rowClosure(template));
                         try self.appendConstRef(template.const_ref);
                     }
                     if (!found) {
@@ -1644,11 +1877,24 @@ pub const Coordinator = struct {
         return null;
     }
 
+    /// Build a transient platform-required binding row from a relation input.
+    /// The row's stored `value_use` carries only the discriminant and non-closure
+    /// payload (`procedure`/`const_use`); its closure ranges are left empty
+    /// because the binding's own relation closure is passed separately (the input
+    /// owns it as a slice, with no backing pool here).
     fn platformRequiredBindingFromRelationInput(
         relation: CheckedArtifact.PlatformAppRelation,
         input: CheckedArtifact.PlatformRequiredBindingInput,
         index: usize,
     ) CheckedArtifact.PlatformRequiredBinding {
+        const value_use: CheckedArtifact.StoredPlatformRequiredValueUse = switch (input.value_use) {
+            .const_value => |const_use| .{
+                .const_value = .{ .const_use = const_use.const_use },
+            },
+            .procedure_value => |procedure| .{
+                .procedure_value = .{ .procedure = procedure.procedure },
+            },
+        };
         return .{
             .id = @enumFromInt(@as(u32, @intCast(index))),
             .relation = relation.key,
@@ -1658,7 +1904,18 @@ pub const Coordinator = struct {
             .app_value = input.app_value,
             .requested_source_ty = input.requested_source_ty,
             .checked_relation = input.checked_relation,
-            .value_use = input.value_use,
+            .value_use = value_use,
+        };
+    }
+
+    /// The slice-form relation template closure carried inline by a relation
+    /// input's value_use (no backing pool, so it is read directly).
+    fn relationInputClosure(
+        input: CheckedArtifact.PlatformRequiredBindingInput,
+    ) CheckedArtifact.ImportedTemplateClosureView {
+        return switch (input.value_use) {
+            .const_value => |const_use| const_use.relation_template_closure,
+            .procedure_value => |procedure| procedure.relation_template_closure,
         };
     }
 
@@ -1728,17 +1985,22 @@ pub const Coordinator = struct {
             return;
         };
 
-        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing platform declaration artifact", .{});
-            }
-            unreachable;
-        };
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to finalize; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
-        if (app_root.mod.checkedArtifact() == null) return;
+        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
+        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
+        defer validation_snapshot.deinit(self.gpa);
+
+        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
+        if (self.hasUserErrors()) return;
 
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
+            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
             .platform_requirement_context = requirement_context,
         });
 
@@ -1748,6 +2010,10 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
+        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
+        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
+        if (self.hasUserErrors()) return;
+
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
             platform_declaration_artifact,
@@ -1796,17 +2062,22 @@ pub const Coordinator = struct {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
 
-        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing platform declaration artifact", .{});
-            }
-            unreachable;
-        };
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to validate; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
-        if (app_root.mod.checkedArtifact() == null) return;
+        const original_app_artifact = app_root.mod.checkedArtifact() orelse return;
+        var validation_snapshot = try PlatformRequiredValidationSnapshot.init(self.gpa, original_app_artifact);
+        defer validation_snapshot.deinit(self.gpa);
+
+        try self.appendPlatformRequiredInvalidNumericExpressionReports(app_root.mod, original_app_artifact, platform_declaration_artifact);
+        if (self.hasUserErrors()) return;
 
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
+            .platform_requirement_artifact = check.CheckedArtifact.importedView(platform_declaration_artifact),
             .platform_requirement_context = requirement_context,
         });
 
@@ -1816,6 +2087,9 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
+        try self.appendPlatformRequiredUnresolvedDispatchReports(app_root.mod, app_artifact, &validation_snapshot);
+        try self.appendPlatformRequiredInvalidNumericPatternReports(app_root.mod, app_artifact, &validation_snapshot);
+        if (self.hasUserErrors()) return;
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
@@ -1896,6 +2170,366 @@ pub const Coordinator = struct {
         try app_mod.reports.append(self.gpa, report);
     }
 
+    fn appendPlatformRequiredUnresolvedDispatchReports(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        validation_snapshot: *const PlatformRequiredValidationSnapshot,
+    ) Allocator.Error!void {
+        for (app_artifact.static_dispatch_plans.plans, 0..) |plan, plan_index| {
+            if (plan.result_mode != .value) continue;
+
+            if (try self.appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
+                app_mod,
+                app_artifact,
+                plan,
+            )) continue;
+
+            if (!validation_snapshot.dispatchPlanChanged(app_artifact, plan_index, plan)) continue;
+
+            switch (plan.resolution) {
+                .resolved_target => |target| {
+                    const target_artifact = switch (target.kind) {
+                        .procedure => |procedure| blk: {
+                            const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
+                            break :blk self.checkedArtifactByKey(target_key) orelse {
+                                if (builtin.mode == .Debug) {
+                                    std.debug.panic("compile.coordinator missing checked artifact for resolved dispatch target", .{});
+                                }
+                                unreachable;
+                            };
+                        },
+                        .local_proc => app_artifact,
+                    };
+                    if (!try check.CheckedArtifact.checkedTypesCompatible(
+                        self.gpa,
+                        target_artifact,
+                        target.callable_ty,
+                        app_artifact,
+                        plan.callable_ty,
+                    )) {
+                        try self.appendPlatformRequiredDispatchTargetMismatchReport(
+                            app_mod,
+                            app_artifact,
+                            target_artifact,
+                            plan.method,
+                            target.callable_ty,
+                            plan.callable_ty,
+                        );
+                    }
+                    continue;
+                },
+                .unresolved_checked_plan => {},
+            }
+            try self.appendPlatformRequiredUnresolvedDispatchReport(
+                app_mod,
+                app_artifact,
+                plan.method,
+                plan.dispatcher_ty,
+            );
+        }
+        for (app_artifact.static_dispatch_plans.iterator_for_plans, 0..) |plan, plan_index| {
+            if (!validation_snapshot.iteratorPlanChanged(app_artifact, plan_index, plan)) continue;
+
+            try self.appendPlatformRequiredUnresolvedDispatchReport(
+                app_mod,
+                app_artifact,
+                plan.iter.method,
+                plan.iter.dispatcher_ty,
+            );
+        }
+    }
+
+    fn appendPlatformRequiredInvalidNumeralDispatchReportIfNeeded(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        plan: check.StaticDispatchRegistry.StaticDispatchCallPlan,
+    ) Allocator.Error!bool {
+        const method_name = app_artifact.canonical_names.methodNameText(plan.method);
+        if (!std.mem.eql(u8, method_name, "from_numeral")) return false;
+
+        const builtin_nominal = check.CheckedArtifact.checkedTypeBuiltinNominal(
+            app_artifact,
+            plan.dispatcher_ty,
+        ) orelse return false;
+        if (!check.CheckedArtifact.builtinNominalAcceptsNumeralLiteral(builtin_nominal)) return false;
+
+        const args = plan.argsSlice(&app_artifact.static_dispatch_plans);
+        if (args.len != 1) return false;
+        const literal = switch (args[0]) {
+            .generated_numeral => |literal| literal,
+            else => return false,
+        };
+
+        const expr = app_artifact.checked_bodies.expr(plan.expr);
+        const has_suffix = switch (expr.data) {
+            .typed_num_from_numeral => true,
+            else => false,
+        };
+
+        const module_env = app_mod.moduleEnv() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator missing module env for platform-required numeral validation", .{});
+            }
+            unreachable;
+        };
+        if (try check.CheckedArtifact.numeralLiteralFitsBuiltin(
+            self.gpa,
+            module_env,
+            literal,
+            builtin_nominal,
+            has_suffix,
+        )) return false;
+
+        try self.appendPlatformRequiredInvalidNumericExpressionReport(
+            app_mod,
+            expr,
+            builtin_nominal,
+        );
+        return true;
+    }
+
+    fn appendPlatformRequiredInvalidNumericExpressionReports(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        const expectations = try check.CheckedArtifact.collectPlatformRequiredNumericExpectations(
+            self.gpa,
+            platform_artifact,
+            app_artifact,
+        );
+        defer self.gpa.free(expectations);
+        if (expectations.len == 0) return;
+
+        var raw_expr: usize = 0;
+        while (raw_expr < app_artifact.checked_bodies.exprCount()) : (raw_expr += 1) {
+            const expr_id: check.CheckedArtifact.CheckedExprId = @enumFromInt(raw_expr);
+            const expr = app_artifact.checked_bodies.expr(expr_id);
+
+            const int_value = switch (expr.data) {
+                .num => |num| num.value,
+                .typed_int => |typed| typed.value,
+                else => continue,
+            };
+            const expr_key = check.CheckedArtifact.checkedTypeRootKey(app_artifact, expr.ty);
+            for (expectations) |expectation| {
+                if (!std.meta.eql(expectation.app_type.bytes, expr_key.bytes)) continue;
+                if (check.CheckedArtifact.intLiteralFitsBuiltin(int_value, expectation.expected_builtin)) continue;
+
+                try self.appendPlatformRequiredInvalidNumericExpressionReport(
+                    app_mod,
+                    expr,
+                    expectation.expected_builtin,
+                );
+                break;
+            }
+        }
+    }
+
+    fn appendPlatformRequiredDispatchTargetMismatchReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        target_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        method: check.CanonicalNames.MethodNameId,
+        expected_ty: check.CheckedIds.CheckedTypeId,
+        actual_ty: check.CheckedIds.CheckedTypeId,
+    ) Allocator.Error!void {
+        const method_name = app_artifact.canonical_names.methodNameText(method);
+        const expected = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, target_artifact, expected_ty);
+        defer self.gpa.free(expected);
+        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, actual_ty);
+        defer self.gpa.free(actual);
+
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This ");
+        try report.document.addAnnotated(method_name, .emphasized);
+        try report.document.addText(" method call does not match the method it resolves to after applying the platform-required signature.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("The resolved method has type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("But this call was inferred as:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual);
+
+        try app_mod.reports.append(self.gpa, report);
+    }
+
+    fn appendPlatformRequiredInvalidNumericPatternReports(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        validation_snapshot: *const PlatformRequiredValidationSnapshot,
+    ) Allocator.Error!void {
+        var raw_pattern: usize = 0;
+        while (raw_pattern < app_artifact.checked_bodies.patternCount()) : (raw_pattern += 1) {
+            const pattern_id: check.CheckedArtifact.CheckedPatternId = @enumFromInt(raw_pattern);
+            const pattern = app_artifact.checked_bodies.pattern(pattern_id);
+            if (!validation_snapshot.patternTypeChanged(app_artifact, raw_pattern, pattern)) continue;
+            if (!checkedPatternIsNumericLiteral(pattern.data)) continue;
+
+            const builtin_nominal = check.CheckedArtifact.checkedTypeBuiltinNominal(
+                app_artifact,
+                pattern.ty,
+            ) orelse continue;
+            if (check.CheckedArtifact.builtinNominalAcceptsNumeralLiteral(builtin_nominal)) continue;
+
+            try self.appendPlatformRequiredNumericPatternTypeMismatchReport(
+                app_mod,
+                app_artifact,
+                pattern.ty,
+            );
+        }
+    }
+
+    fn appendPlatformRequiredInvalidNumericExpressionReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        expr: check.CheckedArtifact.CheckedExpr,
+        expected_builtin: check.CheckedArtifact.CheckedBuiltinNominal,
+    ) Allocator.Error!void {
+        const module_env = app_mod.moduleEnv() orelse {
+            coordinatorInvariant("platform-required invalid numeric report missing module env", .{});
+        };
+        var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This numeric literal does not fit in the type required by the platform.");
+        try report.document.addLineBreak();
+        const region_info = module_env.calcRegionInfo(expr.source_region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            app_mod.path,
+            module_env.common.source,
+            module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("The platform-required signature expects:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(platformRequiredBuiltinNominalText(expected_builtin));
+
+        try app_mod.reports.append(self.gpa, report);
+    }
+
+    fn platformRequiredBuiltinNominalText(builtin_nominal: check.CheckedArtifact.CheckedBuiltinNominal) []const u8 {
+        return switch (builtin_nominal) {
+            .u8 => "Builtin.Num.U8",
+            .i8 => "Builtin.Num.I8",
+            .u16 => "Builtin.Num.U16",
+            .i16 => "Builtin.Num.I16",
+            .u32 => "Builtin.Num.U32",
+            .i32 => "Builtin.Num.I32",
+            .u64 => "Builtin.Num.U64",
+            .i64 => "Builtin.Num.I64",
+            .u128 => "Builtin.Num.U128",
+            .i128 => "Builtin.Num.I128",
+            .f32 => "Builtin.Num.F32",
+            .f64 => "Builtin.Num.F64",
+            .dec => "Builtin.Num.Dec",
+            .str => "Builtin.Str",
+            .bool => "Builtin.Bool",
+            .list => "Builtin.List",
+            .box => "Builtin.Box",
+            .parse_tag_union_spec => "Builtin.ParseTagUnionSpec",
+            .fields => "Builtin.Fields",
+            .field => "Builtin.Field",
+        };
+    }
+
+    fn appendPlatformRequiredNumericPatternTypeMismatchReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        pattern_ty: check.CheckedArtifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, pattern_ty);
+        defer self.gpa.free(actual);
+
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This numeric pattern cannot match the type required by the platform.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("The platform-required signature expects:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual);
+
+        try app_mod.reports.append(self.gpa, report);
+    }
+
+    fn checkedPatternIsNumericLiteral(data: check.CheckedArtifact.CheckedPatternData) bool {
+        return switch (data) {
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            => true,
+            else => false,
+        };
+    }
+
+    fn appendPlatformRequiredUnresolvedDispatchReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        method: check.CanonicalNames.MethodNameId,
+        dispatcher_ty: check.CheckedIds.CheckedTypeId,
+    ) Allocator.Error!void {
+        if (check.CheckedArtifact.checkedTypeRootIsIdentity(app_artifact, dispatcher_ty)) return;
+
+        const method_name = app_artifact.canonical_names.methodNameText(method);
+        const dispatcher_type = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, dispatcher_ty);
+        defer self.gpa.free(dispatcher_type);
+
+        if (std.mem.eql(u8, method_name, "from_numeral")) {
+            var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+            errdefer report.deinit();
+
+            try report.document.addText("This number is being used where a non-number type is needed.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("The platform-required signature expects:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(dispatcher_type);
+
+            try app_mod.reports.append(self.gpa, report);
+            return;
+        }
+
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This ");
+        try report.document.addAnnotated(method_name, .emphasized);
+        try report.document.addText(" method is being called on a value whose type doesn't have that method.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("The value's type is:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(dispatcher_type);
+
+        try app_mod.reports.append(self.gpa, report);
+    }
+
     pub fn hasUserErrors(self: *const Coordinator) bool {
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
@@ -1914,14 +2548,17 @@ pub const Coordinator = struct {
 
     /// One entry yielded by `ReportIter` — a single diagnostic with the package
     /// and module it came from. Pointers borrow from the Coordinator's storage.
+    /// The report may be appended to in place (e.g. to attach notes), but
+    /// reports must not be added or removed while iterating.
     pub const ReportEntry = struct {
         package_name: []const u8,
         module_name: []const u8,
-        report: *const Report,
+        report: *Report,
     };
 
     /// Iterator over every report from every module in every package.
-    /// Borrows from `Coordinator` storage — do not mutate while iterating.
+    /// Borrows from `Coordinator` storage — do not add or remove reports
+    /// while iterating.
     pub const ReportIter = struct {
         pkg_it: std.StringHashMap(*PackageState).Iterator,
         cur_pkg: ?*PackageState = null,
@@ -2022,8 +2659,54 @@ pub const Coordinator = struct {
         const explicit_roots = try buildExplicitRootRequests(mod, self.gpa);
         defer self.gpa.free(explicit_roots);
 
+        // Build the root module graph ONCE. It both determines the republished
+        // artifact's cache key (a hit relocates the previously-republished root artifact
+        // and skips the expensive republish) and, on a miss, feeds the republish below —
+        // so the graph (and its per-env `prepareRuntimeEnv` pass) is never built twice.
+        // A key failure (OOM) just falls through to a normal republish.
+        var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
+        defer typed.modules.deinit();
+
+        if (check.CheckedArtifact.checkedModuleKeyFromTypedModule(self.gpa, &typed.modules, typed.module_idx, .{
+            .imports = imported_artifacts,
+            .explicit_roots = explicit_roots,
+            .platform_requirement_context = publication.platform_requirement_context,
+            .platform_app_relation = if (publication.platform_app_relation) |relation| relation.key else null,
+        })) |republished_key| {
+            if (self.tryLoadCachedRepublishedRoot(pkg, mod, republished_key)) return;
+        } else |_| {}
+
         var publication_with_availability = publication;
         publication_with_availability.explicit_roots = explicit_roots;
+        const current_artifact = mod.checkedArtifact();
+        const republish_hoisted_roots = if (publication_with_availability.hoisted_roots.len == 0 and current_artifact != null)
+            try selectedHoistedRootInputsFromArtifact(self.gpa, current_artifact.?)
+        else
+            &.{};
+        defer check.HoistRoots.freeSelectedRootSlice(self.gpa, republish_hoisted_roots);
+        if (publication_with_availability.hoisted_roots.len == 0) {
+            publication_with_availability.hoisted_roots = republish_hoisted_roots;
+        }
+
+        var platform_requirement_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
+        var platform_requirement_available_artifacts_owned = false;
+        defer if (platform_requirement_available_artifacts_owned) self.gpa.free(platform_requirement_available_artifacts);
+
+        var base_available_artifacts = available_artifacts;
+        if (publication.platform_requirement_artifact) |platform_requirement_artifact| {
+            var extended_available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+            errdefer extended_available.deinit(self.gpa);
+            try extended_available.appendSlice(self.gpa, available_artifacts);
+            try self.appendTypecheckAvailablePublicApiClosure(
+                &extended_available,
+                self.gpa,
+                platform_requirement_artifact,
+            );
+            platform_requirement_available_artifacts = try extended_available.toOwnedSlice(self.gpa);
+            platform_requirement_available_artifacts_owned = true;
+            base_available_artifacts = platform_requirement_available_artifacts;
+        }
+
         var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
         var relation_available_artifacts_owned = false;
         defer if (relation_available_artifacts_owned) self.gpa.free(relation_available_artifacts);
@@ -2031,7 +2714,7 @@ pub const Coordinator = struct {
         if (publication.platform_app_relation) |relation| {
             var extended_available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
             errdefer extended_available.deinit(self.gpa);
-            try extended_available.appendSlice(self.gpa, available_artifacts);
+            try extended_available.appendSlice(self.gpa, base_available_artifacts);
 
             const root_key = if (mod.checkedArtifact()) |current| current.key else CheckedArtifact.CheckedModuleArtifactKey{};
             for (publication.relation_artifacts) |relation_artifact| {
@@ -2055,21 +2738,21 @@ pub const Coordinator = struct {
                     coordinatorInvariant("platform/app relation publication missing relation checked module view", .{});
                 };
                 const binding = platformRequiredBindingFromRelationInput(relation, binding_input, i);
-                try dependency_collector.appendPlatformRelationDependency(relation_view, binding);
+                try dependency_collector.appendPlatformRelationDependency(relation_view, binding, relationInputClosure(binding_input));
             }
 
             relation_available_artifacts = try extended_available.toOwnedSlice(self.gpa);
             relation_available_artifacts_owned = true;
             publication_with_availability.available_artifacts = relation_available_artifacts;
         } else {
-            publication_with_availability.available_artifacts = available_artifacts;
+            publication_with_availability.available_artifacts = base_available_artifacts;
         }
 
-        var artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
+        var artifact = try compile_package.PackageEnv.publishFromPrebuiltModules(
             self.gpa,
-            env,
+            &typed.modules,
+            typed.module_idx,
             module_env_storage,
-            imported_envs,
             imported_artifacts,
             publication_with_availability,
         );
@@ -2083,6 +2766,79 @@ pub const Coordinator = struct {
         try mod.replaceRepublishedCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
         artifact_ptr_owned = false;
         try self.registerCheckedArtifact(pkg, mod);
+
+        // Persist the freshly republished root artifact under its pairing-keyed
+        // identity so a subsequent build of the same (app, platform) pairing can
+        // relocate it instead of republishing. Keyed by `artifact.key`, which
+        // already folds in the relation context. Store failures never poison the
+        // build (they only forgo the future cache hit). Only cache a diagnostic-free
+        // root: a relocate-on-load hit skips the finalizer, so it can't reproduce the
+        // finalizer's non-fatal diagnostics — caching only clean roots keeps a cache
+        // hit observably identical to a cold republish.
+        if (mod.reports.items.len == 0) {
+            if (mod.checkedArtifact()) |republished_artifact| {
+                self.storeCheckedModuleInCache(republished_artifact);
+            }
+        }
+    }
+
+    fn selectedHoistedRootInputsFromArtifact(
+        allocator: Allocator,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const check.HoistRoots.SelectedHoistedRoot {
+        var count: usize = 0;
+        for (artifact.compile_time_roots.roots) |root| {
+            switch (root.kind) {
+                .hoisted_constant => count += 1,
+                .constant,
+                .callable_binding,
+                .expect,
+                .numeral_conversion,
+                .quote_conversion,
+                => {},
+            }
+        }
+        if (count == 0) return &.{};
+
+        const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
+        var initialized: usize = 0;
+        errdefer {
+            check.HoistRoots.deinitSelectedRootBodies(allocator, roots[0..initialized]);
+            allocator.free(roots);
+        }
+
+        var i: usize = 0;
+        for (artifact.compile_time_roots.roots) |root| {
+            switch (root.kind) {
+                .hoisted_constant => {},
+                .constant,
+                .callable_binding,
+                .expect,
+                .numeral_conversion,
+                .quote_conversion,
+                => continue,
+            }
+            const source_expr = switch (root.source) {
+                .hoisted => |hoisted| hoisted.expr,
+                .def,
+                .expr,
+                .statement,
+                .required_binding,
+                => coordinatorInvariant("hoisted constant root had non-expression source", .{}),
+            };
+            const body = root.hoisted_body orelse
+                coordinatorInvariant("hoisted constant root was missing selected-root body", .{});
+            roots[i] = .{
+                .expr = source_expr,
+                .pattern = root.source_pattern,
+                .body = try check.HoistRoots.cloneBody(allocator, body),
+            };
+            initialized += 1;
+            i += 1;
+        }
+        std.debug.assert(i == count);
+
+        return roots;
     }
 
     const RootModuleRef = struct {
@@ -2503,22 +3259,19 @@ pub const Coordinator = struct {
         return reports;
     }
 
-    fn serializeModuleEnvForCache(self: *Coordinator, env: *const ModuleEnv) Allocator.Error![]u8 {
-        const allocator = self.cache_manager.?.allocator;
-        var arena = base.SingleThreadArena.init(allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-
-        var writer = CompactWriter.init();
-        defer writer.deinit(arena_alloc);
-
-        const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
-        try serialized.serialize(env, arena_alloc, &writer);
-
-        const body = try allocator.alloc(u8, writer.total_bytes);
-        errdefer allocator.free(body);
-        _ = writer.writeToBuffer(body) catch unreachable;
-        return body;
+    /// Serialize `value` into `writer`, allocating all scratch from `arena_alloc`.
+    /// `T.Serialized` is appended first as the relocation header, then `serialize`
+    /// fills it and appends the rest as iovecs. The caller gathers `writer` into the
+    /// final cache buffer once all bodies are built, so this never materializes the
+    /// serialized body in its own allocation.
+    fn serializeForCache(
+        comptime T: type,
+        value: *const T,
+        writer: *CompactWriter,
+        arena_alloc: Allocator,
+    ) Allocator.Error!void {
+        const serialized = try writer.appendAlloc(arena_alloc, T.Serialized);
+        try serialized.serialize(value, arena_alloc, writer);
     }
 
     fn checkedModuleCacheKey(
@@ -2528,32 +3281,13 @@ pub const Coordinator = struct {
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
-        var imported_source_count: usize = 0;
-        for (imported_envs) |imported_env| {
-            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            imported_source_count += 1;
-        }
-
-        var source_modules = try self.gpa.alloc(CheckedModules.SourceModule, imported_source_count + 1);
-        defer self.gpa.free(source_modules);
-
-        var source_index: usize = 0;
-        for (imported_envs) |imported_env| {
-            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            source_modules[source_index] = .{ .precompiled = imported_env };
-            source_index += 1;
-        }
-
-        const module_idx: u32 = @intCast(imported_source_count);
-        source_modules[imported_source_count] = .{ .precompiled = env };
-
-        var typed_modules = try CheckedModules.init(self.gpa, source_modules);
-        defer typed_modules.deinit();
+        var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
+        defer typed.modules.deinit();
 
         return check.CheckedArtifact.checkedModuleKeyFromTypedModule(
             self.gpa,
-            &typed_modules,
-            module_idx,
+            &typed.modules,
+            typed.module_idx,
             .{
                 .imports = imported_artifacts,
                 .explicit_roots = explicit_roots,
@@ -2592,17 +3326,41 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(entries_dir);
 
-        const body = self.serializeModuleEnvForCache(artifact.moduleEnvConst()) catch {
+        // Serialize the env and artifact into scatter-gather writers, then gather both
+        // directly into a single cache-entry buffer laid out as
+        // [header][env blob][artifact blob]. Gathering straight into the final buffer
+        // avoids materializing each body in its own allocation and then concatenating
+        // header + bodies into a third buffer. The writers' iovecs alias the arena
+        // (relocation headers) and the live artifact/env, both of which outlive the
+        // gather below.
+        var arena = base.SingleThreadArena.init(manager.allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var env_writer = CompactWriter.init();
+        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
             manager.stats.recordStoreFailure();
             return;
         };
-        defer manager.allocator.free(body);
 
-        const entry = encodeCheckedModuleCacheEntry(manager.allocator, artifact.key, body) catch {
+        var artifact_writer = CompactWriter.init();
+        serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, artifact, &artifact_writer, arena_alloc) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+
+        const env_len = env_writer.total_bytes;
+        const artifact_len = artifact_writer.total_bytes;
+
+        const entry = manager.allocator.alloc(u8, checked_module_cache_header_len + env_len + artifact_len) catch {
             manager.stats.recordStoreFailure();
             return;
         };
         defer manager.allocator.free(entry);
+
+        writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], artifact.key, env_len, artifact_len);
+        _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
+        _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
 
         manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
     }
@@ -2613,7 +3371,6 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
-        available_artifacts: []const check.CheckedArtifact.ImportedModuleView,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) bool {
         const manager = self.cache_manager orelse return false;
@@ -2622,6 +3379,27 @@ pub const Coordinator = struct {
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
         const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, explicit_roots) catch return false;
+
+        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
+    }
+
+    /// Relocate the cached checked artifact (and its env) stored under `cache_key`
+    /// into freshly-owned, buffer-backed storage and install it as `mod`'s checked
+    /// artifact, retiring the previous artifact. Returns `false` (recording the
+    /// appropriate cache stat) on any miss/invalidation, leaving `mod` unchanged.
+    /// Shared by the ordinary-module cache-load path and the root-pairing
+    /// republish-cache load path; the only difference between the two is how
+    /// `cache_key` is computed (an ordinary module's key is derivable from its env
+    /// alone, while a root's republished key folds in the platform/app relation).
+    fn installCachedCheckedArtifact(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+        cache_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        current_env: *ModuleEnv,
+    ) bool {
+        const manager = self.cache_manager orelse return false;
+        if (!manager.config.enabled) return false;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
             manager.stats.recordMiss();
@@ -2632,17 +3410,17 @@ pub const Coordinator = struct {
         const entry = manager.loadRawBytes(cache_key.bytes, entries_dir) orelse return false;
         defer manager.allocator.free(entry);
 
-        const body = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
+        const bodies = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
             manager.stats.recordInvalidation();
             return false;
         };
 
         const module_alloc = self.getModuleAllocator();
-        const buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, body.len) catch {
+        const buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.env_body.len) catch {
             manager.stats.recordInvalidation();
             return false;
         };
-        @memcpy(buffer, body);
+        @memcpy(buffer, bodies.env_body);
         var buffer_owned = true;
         defer if (buffer_owned) module_alloc.free(buffer);
 
@@ -2669,27 +3447,57 @@ pub const Coordinator = struct {
             module_alloc.destroy(cached_env);
         };
 
-        var artifact = compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
+        // Prepare the cached env exactly as the publish path does: enable runtime ident
+        // inserts, ensure module-name idents, and finalize method tables. This pairs the
+        // runtime env with the frozen artifact and leaves its interner heap-owned so
+        // `deinitCachedModule` frees it correctly (e.g. when a root module is later
+        // republished, which mutates the env via `enableRuntimeInserts`). Call the prep
+        // directly — building a `Modules` graph just to discard it would do O(defs)
+        // hashmap work on every cache hit.
+        check.TypedCIR.prepareRuntimeEnv(module_alloc, cached_env) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+
+        // Relocate the artifact into its own 16-byte-aligned buffer, injecting the
+        // freshly-relocated cached env (transform E). The resulting artifact is
+        // frozen/buffer-backed: its sub-stores alias `artifact_buffer`, and its
+        // `.cached_buffer` storage owns the env + env buffer + source. Cross-artifact
+        // references are content-addressed `CheckedModuleArtifactKey`s already baked
+        // into the blob; a cache hit implies matching imports (the key incorporates
+        // `direct_import_artifact_keys`), so they resolve against the current build's
+        // `available_artifacts` DAG exactly as a freshly published artifact would.
+        const artifact_buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        @memcpy(artifact_buffer, bodies.artifact_body);
+        var artifact_buffer_owned = true;
+        defer if (artifact_buffer_owned) module_alloc.free(artifact_buffer);
+
+        const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
+        // L-10: bounds-check every relocatable marker against the buffer before any
+        // sub-store aliases it. A corrupt/truncated cache body is treated as a cache
+        // miss (the buffer is freed by the `artifact_buffer_owned` defer above).
+        artifact_serialized.validate(artifact_buffer.len) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        // `deserialize` stores `artifact_buffer` in `serialized_backing`, so the
+        // artifact owns it: a single `artifact.deinit` frees the buffer + env storage.
+        var artifact = artifact_serialized.deserialize(
+            artifact_buffer,
             module_alloc,
-            cached_env,
             .{ .cached_buffer = .{
                 .env = cached_env,
                 .buffer = buffer,
                 .source = source,
             } },
-            imported_envs,
-            imported_artifacts,
-            .{
-                .available_artifacts = available_artifacts,
-                .explicit_roots = explicit_roots,
-            },
-        ) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
+        );
         cached_env_owned = false;
         buffer_owned = false;
         source_owned = false;
+        artifact_buffer_owned = false;
         var artifact_owned = true;
         defer if (artifact_owned) artifact.deinit(artifact.canonical_names.allocator);
 
@@ -2744,6 +3552,33 @@ pub const Coordinator = struct {
         }
 
         return true;
+    }
+
+    /// Compute the cache key a root module's artifact will carry *after*
+    /// `republishCheckedArtifact` finalizes it against the platform/app relation.
+    /// This is the ordinary checked-module key (source + identity + imports +
+    /// direct-import keys) extended with the relation context that the republish
+    /// folds into the identity: `platform_requirement_context` and the
+    /// `PlatformAppRelationKey` (= hash(app_artifact.key, requirement_context)).
+    /// Together these capture every input that affects the republished artifact's
+    /// bytes, so a key match implies a byte-identical relocatable artifact.
+    /// Try to load the republished root artifact for `mod` from the disk cache
+    /// under `cache_key` (the pairing-keyed republished key), installing it in
+    /// place of the pre-republish artifact and skipping the expensive republish on
+    /// a hit. Returns `true` on a hit. The root module's pre-republish artifact
+    /// owns the live `.checked_source` env; the relocated artifact brings its own
+    /// `.cached_buffer` env, so retiring the old artifact frees the live env
+    /// exactly once (handled by `installCachedCheckedArtifact`).
+    fn tryLoadCachedRepublishedRoot(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+        cache_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        const manager = self.cache_manager orelse return false;
+        if (!manager.config.enabled) return false;
+        const current_env = mod.moduleEnv() orelse return false;
+        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
 
     fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
@@ -2981,7 +3816,7 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(explicit_roots);
 
         if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, available_artifacts, explicit_roots))
+            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, explicit_roots))
         {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
@@ -3083,8 +3918,16 @@ pub const Coordinator = struct {
             try mod.replaceCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
             artifact_ptr_owned = false;
             try self.registerCheckedArtifact(pkg, mod);
-            if (mod.checkedArtifact()) |cached_artifact| {
-                self.storeCheckedModuleInCache(cached_artifact);
+            // Only cache a fully diagnostic-free module. A relocate-on-load cache hit
+            // skips the compile-time finalizer, so it cannot reproduce the finalizer's
+            // non-fatal diagnostics (e.g. `comptime_unused_branch`); caching only clean
+            // modules guarantees a cache hit reproduces the cold compile's exact
+            // observable result. `mod.reports` holds prior-stage (parse/canon) reports;
+            // `result.reports` holds this stage's (type-check + finalizer) reports.
+            if (mod.reports.items.len == 0 and result.reports.items.len == 0) {
+                if (mod.checkedArtifact()) |cached_artifact| {
+                    self.storeCheckedModuleInCache(cached_artifact);
+                }
             }
         } else if (mod.semantic) |*semantic| {
             self.unregisterCheckedArtifact(mod);
@@ -4024,6 +4867,38 @@ pub const Coordinator = struct {
 const CheckedModuleCacheRunStats = struct {
     build: compile_build.BuildEnv.BuildStats,
     cache: CacheStats,
+    hoisted_constants: usize,
+    pattern_extraction_regions: PatternExtractionRegionStats,
+};
+
+const PatternExtractionRegionStats = struct {
+    count: usize,
+    digest: [32]u8,
+};
+
+const PatternExtractionRegionStatsError = error{
+    PatternExtractionMissingSourcePattern,
+    PatternExtractionSourcePatternMismatch,
+    PatternExtractionMissingCheckedPattern,
+    PatternExtractionMissingSyntheticMatch,
+    PatternExtractionSyntheticMatchRegionMismatch,
+    PatternExtractionRootWasNotSyntheticMatch,
+    PatternExtractionSyntheticMatchBranchCountMismatch,
+    PatternExtractionSyntheticMatchWasTrySuffix,
+    PatternExtractionSyntheticMatchSkippedExhaustiveness,
+    PatternExtractionMissingBaseExpr,
+    PatternExtractionBaseRegionMismatch,
+    PatternExtractionSyntheticPatternCountMismatch,
+    PatternExtractionSyntheticPatternWasDegenerate,
+    PatternExtractionSyntheticPatternHadRemaps,
+    PatternExtractionSyntheticBranchHadGuard,
+    PatternExtractionMissingScrutineePattern,
+    PatternExtractionScrutineePatternRegionMismatch,
+    PatternExtractionMissingSyntheticLookup,
+    PatternExtractionSyntheticLookupRegionMismatch,
+    PatternExtractionValueWasNotSyntheticLookup,
+    PatternExtractionLookupPatternMismatch,
+    PatternExtractionLookupWasNotResolved,
 };
 
 fn compileAppWithCheckedModuleCache(
@@ -4061,11 +4936,152 @@ fn compileAppWithCheckedModuleCache(
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const hoisted_constants = countHoistedConstants(root, imports, relations);
+    const pattern_extraction_regions = try collectPatternExtractionRegionStats(root, imports, relations);
 
     return .{
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
+        .hoisted_constants = hoisted_constants,
+        .pattern_extraction_regions = pattern_extraction_regions,
     };
+}
+
+fn collectPatternExtractionRegionStats(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) PatternExtractionRegionStatsError!PatternExtractionRegionStats {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var count: usize = 0;
+
+    try hashPatternExtractionRegionsForView(&hasher, &count, check.CheckedArtifact.importedView(root));
+    for (imports) |view| {
+        try hashPatternExtractionRegionsForView(&hasher, &count, view);
+    }
+    for (relations) |view| {
+        try hashPatternExtractionRegionsForView(&hasher, &count, view);
+    }
+
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return .{
+        .count = count,
+        .digest = digest,
+    };
+}
+
+fn hashPatternExtractionRegionsForView(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    count: *usize,
+    view: check.CheckedArtifact.ImportedModuleView,
+) PatternExtractionRegionStatsError!void {
+    for (view.compile_time_roots.roots) |root| {
+        if (root.kind != .hoisted_constant) continue;
+        const body = root.hoisted_body orelse continue;
+        const extraction = switch (body) {
+            .expr => continue,
+            .pattern_extraction => |payload| payload,
+        };
+        count.* += 1;
+
+        if (root.source_pattern == null) return error.PatternExtractionMissingSourcePattern;
+        if (root.source_pattern.? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
+        const root_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedPattern;
+
+        const expected_match_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern));
+        const expected_lookup_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern));
+        const expected_base_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr));
+
+        const synthetic_match = checkedExprForId(view, root.expr) orelse return error.PatternExtractionMissingSyntheticMatch;
+        if (!expected_match_region.eq(synthetic_match.source_region)) return error.PatternExtractionSyntheticMatchRegionMismatch;
+        if (std.meta.activeTag(synthetic_match.data) != .match_) return error.PatternExtractionRootWasNotSyntheticMatch;
+        const match_data = synthetic_match.data.match_;
+        if (match_data.branches.len != 1) return error.PatternExtractionSyntheticMatchBranchCountMismatch;
+        if (match_data.is_try_suffix) return error.PatternExtractionSyntheticMatchWasTrySuffix;
+        if (match_data.skip_exhaustiveness) return error.PatternExtractionSyntheticMatchSkippedExhaustiveness;
+
+        const base_expr = checkedExprForId(view, match_data.cond) orelse return error.PatternExtractionMissingBaseExpr;
+        if (!expected_base_region.eq(base_expr.source_region)) return error.PatternExtractionBaseRegionMismatch;
+
+        const branch = match_data.branches[0];
+        const branch_patterns = branch.patternsSlice(view.checked_bodies);
+        if (branch_patterns.len != 1) return error.PatternExtractionSyntheticPatternCountMismatch;
+        if (branch_patterns[0].degenerate) return error.PatternExtractionSyntheticPatternWasDegenerate;
+        if (branch_patterns[0].binderRemapsSlice(view.checked_bodies).len != 0) return error.PatternExtractionSyntheticPatternHadRemaps;
+        if (branch.guard != null) return error.PatternExtractionSyntheticBranchHadGuard;
+
+        const scrutinee_pattern = checkedPatternForId(view, branch_patterns[0].pattern) orelse
+            return error.PatternExtractionMissingScrutineePattern;
+        if (!expected_match_region.eq(scrutinee_pattern.source_region)) return error.PatternExtractionScrutineePatternRegionMismatch;
+
+        const synthetic_lookup = checkedExprForId(view, branch.value) orelse return error.PatternExtractionMissingSyntheticLookup;
+        if (!expected_lookup_region.eq(synthetic_lookup.source_region)) return error.PatternExtractionSyntheticLookupRegionMismatch;
+        if (std.meta.activeTag(synthetic_lookup.data) != .lookup_local) return error.PatternExtractionValueWasNotSyntheticLookup;
+        const lookup = synthetic_lookup.data.lookup_local;
+        if (lookup.pattern != root_pattern) return error.PatternExtractionLookupPatternMismatch;
+        if (lookup.resolved == null) return error.PatternExtractionLookupWasNotResolved;
+
+        hasher.update(&view.key.bytes);
+        hashU32IntoSha256(hasher, @intFromEnum(root.id));
+        hashU32IntoSha256(hasher, @intFromEnum(root.expr));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.base_expr));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.scrutinee_pattern));
+        hashU32IntoSha256(hasher, @intFromEnum(extraction.result_pattern));
+        hashRegionIntoSha256(hasher, expected_base_region);
+        hashRegionIntoSha256(hasher, base_expr.source_region);
+        hashRegionIntoSha256(hasher, expected_match_region);
+        hashRegionIntoSha256(hasher, synthetic_match.source_region);
+        hashRegionIntoSha256(hasher, scrutinee_pattern.source_region);
+        hashRegionIntoSha256(hasher, expected_lookup_region);
+        hashRegionIntoSha256(hasher, synthetic_lookup.source_region);
+    }
+}
+
+fn checkedExprForId(
+    view: check.CheckedArtifact.ImportedModuleView,
+    expr: check.CheckedArtifact.CheckedExprId,
+) ?check.CheckedArtifact.CheckedExpr {
+    const index = @intFromEnum(expr);
+    if (index >= view.checked_bodies.exprCount()) return null;
+    return view.checked_bodies.expr(expr);
+}
+
+fn checkedPatternForId(
+    view: check.CheckedArtifact.ImportedModuleView,
+    pattern: check.CheckedArtifact.CheckedPatternId,
+) ?check.CheckedArtifact.CheckedPattern {
+    const index = @intFromEnum(pattern);
+    if (index >= view.checked_bodies.patternCount()) return null;
+    return view.checked_bodies.pattern(pattern);
+}
+
+fn hashRegionIntoSha256(hasher: *std.crypto.hash.sha2.Sha256, region: base.Region) void {
+    hashU32IntoSha256(hasher, region.start.offset);
+    hashU32IntoSha256(hasher, region.end.offset);
+}
+
+fn hashU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
+fn countHoistedConstants(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) usize {
+    var count = root.hoisted_constants.entries.len;
+    for (imports) |view| count += view.hoisted_constants.entries.len;
+    for (relations) |view| count += view.hoisted_constants.entries.len;
+    return count;
 }
 
 fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) anyerror!usize {
@@ -4126,6 +5142,85 @@ test "Coordinator checked module cache hits on second compile" {
     try std.testing.expect(second.build.cache_hits > 0);
     try std.testing.expect(second.build.modules_compiled < first.build.modules_compiled);
     try std.testing.expect(second.cache.hits > 0);
+}
+
+test "Coordinator checked module cache preserves hoisted roots on hit" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\top = 40.I64
+        \\
+        \\main! = |args| {
+        \\    pair = (top, 2.I64)
+        \\    (left, right) = pair
+        \\    Ok(tag_value) = Ok(45.I64)
+        \\    _ = left + right + tag_value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(first.hoisted_constants >= 2);
+    try std.testing.expect(first.pattern_extraction_regions.count >= 3);
+
+    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
+    try std.testing.expect(second.cache.hits > 0);
+    try std.testing.expectEqual(first.hoisted_constants, second.hoisted_constants);
+    try std.testing.expectEqual(first.pattern_extraction_regions.count, second.pattern_extraction_regions.count);
+    try std.testing.expectEqualSlices(
+        u8,
+        &first.pattern_extraction_regions.digest,
+        &second.pattern_extraction_regions.digest,
+    );
 }
 
 test "Coordinator corrupt checked module cache entries compile from source" {

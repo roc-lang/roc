@@ -633,7 +633,7 @@ const StaticDataBuilder = struct {
         };
         const raw = @intFromEnum(fn_id);
         if (raw >= source.store.fns.items.len) staticDataInvariant("ConstStore function id is out of range");
-        const fn_value = source.store.fns.items[raw];
+        const fn_value = source.store.getFn(@enumFromInt(raw));
         const entry = self.erasedFnEntry(set_id, fn_value);
         const target = try self.materializeErasedFn(source, fn_value, entry);
         try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
@@ -728,13 +728,13 @@ const StaticDataBuilder = struct {
             for (slots) |slot| {
                 const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(capture_layout.getStruct().idx, slot.slot);
                 const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(capture_layout.getStruct().idx, slot.slot);
-                const capture_node = self.captureNode(fn_value, slot.binder);
+                const capture_node = self.captureNode(fn_value, slot.id);
                 try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(capture_node), slot.plan, field_layout);
             }
             return;
         }
         if (slots.len == 1) {
-            const capture_node = self.captureNode(fn_value, slots[0].binder);
+            const capture_node = self.captureNode(fn_value, slots[0].id);
             try self.writeValue(bytes, relocations, base_offset, source, source.store.get(capture_node), slots[0].plan, capture_layout_idx);
             return;
         }
@@ -744,10 +744,10 @@ const StaticDataBuilder = struct {
     fn captureNode(
         _: *StaticDataBuilder,
         fn_value: ConstFn,
-        binder: CheckedModule.PatternBinderId,
+        id: check.ConstStore.CaptureId,
     ) CheckedModule.ConstNodeId {
         for (fn_value.captures) |capture| {
-            if (capture.binder == binder) return capture.value;
+            if (std.meta.eql(capture.id, id)) return capture.value;
         }
         staticDataInvariant("erased callable capture slot had no ConstStore capture");
     }

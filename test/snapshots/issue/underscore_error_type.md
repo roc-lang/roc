@@ -144,7 +144,7 @@ It has the type:
 
     List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
-But the annotation say it should be:
+But the annotation says it should be:
 
     BadList
 
@@ -160,7 +160,7 @@ It has the type:
 
     a -> a
 
-But the annotation say it should be:
+But the annotation says it should be:
 
     BadFunction
 
@@ -176,11 +176,11 @@ It has the type:
 
     (a, b)
       where [
-        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
         b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
       ]
 
-But the annotation say it should be:
+But the annotation says it should be:
 
     BadTuple
 

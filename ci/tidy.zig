@@ -115,12 +115,41 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
         try tidyFile(gpa, &counter, source_file, &errors);
     }
 
+    try checkNoCommittedScratchFiles(gpa, io, &errors);
+
     if (errors.count > 0) {
         std.debug.print("\n{s}[FAIL]{s} Found {d} tidy violations\n", .{ TermColor.red, TermColor.reset, errors.count });
         std.process.exit(1);
     }
 
     std.debug.print("{s}[OK]{s} All tidy checks passed!\n", .{ TermColor.green, TermColor.reset });
+}
+
+/// `plan.md` and `*.mdtodo` files are working scratch — planning notes and
+/// aspirational snapshots kept on a branch. They are allowed to exist on the
+/// filesystem, but must never be checked in. Fail the build only if one is
+/// git-tracked; an untracked scratch file in the working tree is fine. The
+/// pathspecs match across directories, so this is not limited to tidy's normal
+/// file set.
+fn checkNoCommittedScratchFiles(gpa: Allocator, io: std.Io, errors: *Errors) !void {
+    // `:(glob)**/plan.md` matches a file named exactly `plan.md` in any directory
+    // (including the repo root) without also catching e.g. `rollout_plan.md`.
+    const run_result = try std.process.run(gpa, io, .{
+        .argv = &.{ "git", "ls-files", "-z", "--", "*.mdtodo", ":(glob)**/plan.md" },
+    });
+    defer gpa.free(run_result.stdout);
+    defer gpa.free(run_result.stderr);
+
+    if (run_result.term != .exited or run_result.term.exited != 0) return error.GitFailed;
+
+    var lines = std.mem.splitScalar(u8, run_result.stdout, 0);
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        errors.emit(
+            "{s}: error: working/planning scratch files (plan.md, *.mdtodo) must not be checked in; keep it on the filesystem but `git rm --cached` it\n",
+            .{line},
+        );
+    }
 }
 
 fn runGitLints(gpa: Allocator, io: std.Io) !void {
@@ -240,6 +269,18 @@ const Errors = struct {
         );
     }
 
+    pub fn addGitDependency(errors: *Errors, file: SourceFile, offset: usize) void {
+        errors.emit(
+            "{s}:{d}: error: 'git+https://' dependency URLs are banned; use a GitHub archive " ++
+                "tarball instead, e.g. 'https://github.com/OWNER/REPO/archive/<commit>.tar.gz'. " ++
+                "'git+https' makes Zig fetch over the git smart-HTTP protocol, whose ref-discovery " ++
+                "handshake intermittently fails in CI with 'HttpConnectionClosing'; a plain tarball " ++
+                "URL is a reliable HTTP GET and, because Zig hashes the unpacked tree, produces the " ++
+                "exact same package hash.\n",
+            .{ file.path, file.lineNumber(offset) },
+        );
+    }
+
     pub fn addFileUntracked(errors: *Errors, file: []const u8) void {
         errors.emit(
             "{s}: error: imported file untracked by git\n",
@@ -251,6 +292,17 @@ const Errors = struct {
         errors.emit(
             "{s}: error: src/ file never imported in src/ or test/\n",
             .{file},
+        );
+    }
+
+    pub fn addDisallowedBuiltinType(errors: *Errors, file: SourceFile, offset: usize, name: []const u8) void {
+        errors.emit(
+            "{s}:{d}: error: '{s}' is exposed as a top-level Builtin type. The only types allowed " ++
+                "directly under Builtin are: Str, Hasher, Iter, Stream, List, Bool, Box, Try, Dict, Set, Num. " ++
+                "Make '{s}' private by moving it below the exposed Builtin block (to the module's top level), " ++
+                "unless a user-facing method needs it and would break without it — in which case nest it under a " ++
+                "logical Builtin type instead (e.g. DictBucket under Dict, ParseTagUnionSpec under Str).\n",
+            .{ file.path, file.lineNumber(offset), name, name },
         );
     }
 
@@ -302,6 +354,88 @@ fn tidyFile(
     }
     if (file.hasExtension(".md")) {
         tidyMarkdownTitle(file, errors);
+    }
+    if (file.hasExtension(".zon")) {
+        tidyBannedGitDependency(file, errors);
+    }
+    tidyBuiltinExposedTypes(file, errors);
+}
+
+/// The only types allowed to be exposed directly under `Builtin` (i.e. declared at
+/// one level of indentation inside the `Builtin :: [].{ ... }` block). Every other
+/// type must either be private (declared below the exposed block, at the module's
+/// top level) or nested under one of these.
+const allowed_builtin_types = [_][]const u8{
+    "Str", "Hasher", "Iter", "Stream", "List", "Bool", "Box", "Try", "Dict", "Set", "Num",
+};
+
+fn isAllowedBuiltinType(name: []const u8) bool {
+    for (allowed_builtin_types) |allowed| {
+        if (std.mem.eql(u8, name, allowed)) return true;
+    }
+    return false;
+}
+
+/// Enforce that `Builtin.roc` exposes only the sanctioned set of top-level types.
+/// A top-level type declaration is one at exactly one tab of indentation inside the
+/// `Builtin :: [].{ ... }` block. Anything else is assumed to be a mistake: the rule
+/// is that such a type should be private (moved below the exposed block, to the
+/// module's top level) unless it is needed for a user-facing method that would break
+/// without it, in which case it should be nested under a logical Builtin type.
+fn tidyBuiltinExposedTypes(file: SourceFile, errors: *Errors) void {
+    if (!std.mem.endsWith(u8, file.path, "src/build/roc/Builtin.roc")) return;
+
+    var in_block = false;
+    var line_start: usize = 0;
+    while (line_start <= file.text.len) {
+        const line_end = std.mem.findScalarPos(u8, file.text, line_start, '\n') orelse file.text.len;
+        const line = file.text[line_start..line_end];
+
+        if (!in_block) {
+            if (std.mem.startsWith(u8, line, "Builtin :: [].{")) in_block = true;
+        } else if (line.len > 0 and line[0] == '}') {
+            // A column-0 closing brace ends the exposed block; private declarations follow.
+            break;
+        } else if (line.len >= 2 and line[0] == '\t' and line[1] != '\t' and std.ascii.isUpper(line[1])) {
+            // Candidate top-level type declaration at one tab of indentation.
+            const rest = line[1..];
+            if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
+                // Header is everything before the `::` / `:=` / `:` operator; strip any
+                // `(type, params)` suffix to get the bare type name.
+                var header = std.mem.trimEnd(u8, rest[0..colon], " ");
+                if (std.mem.indexOfScalar(u8, header, '(')) |paren| {
+                    header = header[0..paren];
+                }
+                if (header.len > 0 and !isAllowedBuiltinType(header)) {
+                    errors.addDisallowedBuiltinType(file, line_start, header);
+                }
+            }
+        }
+
+        if (line_end == file.text.len) break;
+        line_start = line_end + 1;
+    }
+}
+
+/// Ban `git+https://` dependency URLs in build.zig.zon. They make Zig fetch over
+/// the git smart-HTTP protocol, whose ref-discovery handshake intermittently
+/// fails in CI with `HttpConnectionClosing`. GitHub archive tarball URLs hit a
+/// reliable plain HTTP GET and resolve to the same package hash.
+fn tidyBannedGitDependency(file: SourceFile, errors: *Errors) void {
+    const banned = "git+https://";
+
+    var line_start: usize = 0;
+    while (line_start <= file.text.len) {
+        const line_end = std.mem.findScalarPos(u8, file.text, line_start, '\n') orelse file.text.len;
+        const line = file.text[line_start..line_end];
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (!std.mem.startsWith(u8, trimmed, "//")) {
+            if (std.mem.find(u8, line, banned)) |index| {
+                errors.addGitDependency(file, line_start + index);
+            }
+        }
+        if (line_end == file.text.len) break;
+        line_start = line_end + 1;
     }
 }
 

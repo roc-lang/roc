@@ -160,6 +160,8 @@ pub fn tokenTagToSemanticType(tag: Token.Tag) ?u32 {
         .OpLessThanOrEq,
         .OpBackArrow,
         .OpLessThan,
+        .OpDoubleDotLessThan,
+        .OpDoubleDotEquals,
         .OpEquals,
         .OpColonEqual,
         .OpDoubleColon,
@@ -433,6 +435,10 @@ const SemanticCollector = struct {
         switch (stmt) {
             .s_decl => |d| try self.visitDecl(d.pattern, d.expr),
             .s_var => |v| try self.visitDecl(v.pattern_idx, v.expr),
+            .s_var_uninitialized => |v| {
+                const pattern_region = self.module_env.store.getPatternRegion(v.pattern_idx);
+                try self.addToken(pattern_region, .variable);
+            },
             .s_expr => |e| try self.visitExpr(e.expr),
             // Type declarations and imports don't need special handling
             // since they're covered by the tokenizer

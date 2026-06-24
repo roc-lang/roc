@@ -14,7 +14,90 @@ const checked = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
-const Interpreter = @import("interpreter.zig").Interpreter;
+const interpreter_mod = @import("interpreter.zig");
+const Interpreter = interpreter_mod.Interpreter;
+const ExpectFailure = interpreter_mod.ExpectFailure;
+
+const ComptimeCoverage = struct {
+    allocator: Allocator,
+    entries: std.ArrayList(Entry),
+
+    const Entry = struct {
+        kind: lir.LIR.ComptimeSiteKind,
+        region: base.Region,
+        branch_regions: []base.Region,
+        hits: []bool,
+    };
+
+    fn init(allocator: Allocator) ComptimeCoverage {
+        return .{
+            .allocator = allocator,
+            .entries = .empty,
+        };
+    }
+
+    fn deinit(self: *ComptimeCoverage) void {
+        for (self.entries.items) |entry| {
+            self.allocator.free(entry.branch_regions);
+            self.allocator.free(entry.hits);
+        }
+        self.entries.deinit(self.allocator);
+    }
+
+    fn record(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite, branch_index: u32) Allocator.Error!void {
+        if (site.kind != .match and site.kind != .if_) return;
+        if (site.branch_regions.len == 0) return;
+        if (branch_index >= site.branch_regions.len) {
+            finalizationInvariant("compile-time branch hit referenced a branch outside its site");
+        }
+
+        const entry = try self.entryFor(site);
+        entry.hits[branch_index] = true;
+    }
+
+    fn entryFor(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite) Allocator.Error!*Entry {
+        for (self.entries.items) |*entry| {
+            if (entry.kind == site.kind and regionsEqual(entry.region, site.region)) {
+                if (entry.branch_regions.len != site.branch_regions.len) {
+                    finalizationInvariant("compile-time site branch count changed for one source region");
+                }
+                return entry;
+            }
+        }
+
+        const branch_regions = try self.allocator.dupe(base.Region, site.branch_regions);
+        errdefer self.allocator.free(branch_regions);
+        const hits = try self.allocator.alloc(bool, site.branch_regions.len);
+        errdefer self.allocator.free(hits);
+        @memset(hits, false);
+
+        try self.entries.append(self.allocator, .{
+            .kind = site.kind,
+            .region = site.region,
+            .branch_regions = branch_regions,
+            .hits = hits,
+        });
+        return &self.entries.items[self.entries.items.len - 1];
+    }
+
+    fn reportUnusedBranches(self: *const ComptimeCoverage, allocator: Allocator, problem_store: ?*check.problem.Store) Allocator.Error!void {
+        const store = problem_store orelse return;
+        for (self.entries.items) |entry| {
+            for (entry.hits, 0..) |hit, index| {
+                if (hit) continue;
+                _ = try store.appendProblem(allocator, .{ .comptime_unused_branch = .{
+                    .kind = switch (entry.kind) {
+                        .match => .match,
+                        .if_ => .if_,
+                        .destructure => unreachable,
+                    },
+                    .site_region = entry.region,
+                    .branch_region = entry.branch_regions[index],
+                } });
+            }
+        }
+    }
+};
 
 /// Return the checking finalizer that evaluates compile-time roots.
 pub fn finalizer() checked.CompileTimeFinalizer {
@@ -31,44 +114,76 @@ fn finalize(
     problem_store: ?*check.problem.Store,
 ) anyerror!void {
     const requests = module.root_requests.compile_time_requests;
+    var had_problem = false;
 
     if (requests.len != 0) {
+        var coverage = ComptimeCoverage.init(allocator);
+        defer coverage.deinit();
+
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
         var state = try RootCompletionState.init(allocator, module);
         defer state.deinit();
 
-        var ready = std.ArrayList(checked.RootRequest).empty;
-        defer ready.deinit(allocator);
+        var batch_requests = std.ArrayList(checked.RootRequest).empty;
+        defer batch_requests.deinit(allocator);
 
-        var pending = requests.len;
-        while (pending > 0) {
-            ready.clearRetainingCapacity();
-            for (requests) |request| {
-                const root_id = compileTimeRootForRequest(module, request);
-                if (state.isDone(root_id)) continue;
-                if (state.dependenciesComplete(request)) {
-                    try ready.append(allocator, request);
+        var batch_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
+        defer batch_root_ids.deinit(allocator);
+
+        for (requests, 0..) |request, request_index| {
+            if (!state.dependenciesComplete(request)) {
+                if (batch_requests.items.len == 0) {
+                    finalizationInvariant("compile-time root request order referenced an unfinished dependency");
+                }
+                if (try lowerEvalAndFinishRoots(
+                    allocator,
+                    module,
+                    lowering_imports,
+                    relation_modules,
+                    batch_requests.items,
+                    batch_root_ids.items,
+                    &state,
+                    problem_store,
+                    &coverage,
+                )) had_problem = true;
+                batch_requests.clearRetainingCapacity();
+                batch_root_ids.clearRetainingCapacity();
+
+                if (!state.dependenciesComplete(request)) {
+                    finalizationInvariant("compile-time root request order referenced a later or cyclic dependency");
                 }
             }
-            if (ready.items.len == 0) {
-                finalizationInvariant("compile-time roots had a cyclic or incomplete local dependency");
-            }
-            try lowerEvalAndFinishRoots(
+            try batch_requests.append(allocator, request);
+            try batch_root_ids.append(allocator, state.rootIdForRequestIndex(request_index));
+        }
+
+        if (batch_requests.items.len != 0) {
+            if (try lowerEvalAndFinishRoots(
                 allocator,
                 module,
                 lowering_imports,
                 relation_modules,
-                ready.items,
+                batch_requests.items,
+                batch_root_ids.items,
                 &state,
                 problem_store,
-            );
-            pending -= ready.items.len;
+                &coverage,
+            )) had_problem = true;
+        }
+
+        try coverage.reportUnusedBranches(allocator, problem_store);
+    }
+
+    if (problem_store) |store| {
+        if (try store.flushPendingStaticExhaustiveness(allocator) != 0) {
+            return error.CompileTimeProblem;
         }
     }
 
     try module.const_store.verifyComplete();
+    if (had_problem) return error.CompileTimeProblem;
 }
 
 const RootStatus = enum {
@@ -77,10 +192,14 @@ const RootStatus = enum {
 };
 
 const RootCompletionState = struct {
+    allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     statuses: []RootStatus,
+    requested_roots: []bool,
+    request_root_ids: []checked.ComptimeRootId,
     visited_templates: []u32,
     visit: u32,
+    current_root_id: ?checked.ComptimeRootId = null,
 
     fn init(
         allocator: Allocator,
@@ -90,21 +209,42 @@ const RootCompletionState = struct {
         errdefer allocator.free(statuses);
         @memset(statuses, .pending);
 
+        const requested_roots = try allocator.alloc(bool, module.compile_time_roots.roots.len);
+        errdefer allocator.free(requested_roots);
+        @memset(requested_roots, false);
+
+        const request_root_ids = try allocator.alloc(checked.ComptimeRootId, module.root_requests.compile_time_requests.len);
+        errdefer allocator.free(request_root_ids);
+        for (module.root_requests.compile_time_requests, 0..) |request, i| {
+            const root_id = compileTimeRootForRequest(module, request);
+            const raw = @intFromEnum(root_id);
+            if (requested_roots[raw]) {
+                finalizationInvariant("compile-time root was requested more than once");
+            }
+            requested_roots[raw] = true;
+            request_root_ids[i] = root_id;
+        }
+
         const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.len);
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 
         return .{
+            .allocator = allocator,
             .module = module,
             .statuses = statuses,
+            .requested_roots = requested_roots,
+            .request_root_ids = request_root_ids,
             .visited_templates = visited_templates,
             .visit = 0,
         };
     }
 
     fn deinit(self: *RootCompletionState) void {
-        const allocator = self.module.const_store.allocator;
+        const allocator = self.allocator;
         allocator.free(self.visited_templates);
+        allocator.free(self.request_root_ids);
+        allocator.free(self.requested_roots);
         allocator.free(self.statuses);
         self.* = undefined;
     }
@@ -117,10 +257,21 @@ const RootCompletionState = struct {
         self.statuses[@intFromEnum(root_id)] = .done;
     }
 
+    fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
+        if (request_index >= self.request_root_ids.len) {
+            finalizationInvariant("compile-time request index was out of range");
+        }
+        return self.request_root_ids[request_index];
+    }
+
     fn dependenciesComplete(
         self: *RootCompletionState,
         request: checked.RootRequest,
     ) bool {
+        const saved_current_root_id = self.current_root_id;
+        defer self.current_root_id = saved_current_root_id;
+        self.current_root_id = compileTimeRootForRequest(self.module, request);
+
         self.visit +%= 1;
         if (self.visit == 0) {
             @memset(self.visited_templates, 0);
@@ -174,6 +325,7 @@ const RootCompletionState = struct {
     ) bool {
         return switch (ref) {
             .top_level_const => |const_use| self.constUseComplete(const_use),
+            .selected_hoisted_const => |selected| self.constUseComplete(selected.const_use),
             .top_level_proc,
             .promoted_top_level_proc,
             => |proc_use| self.procedureUseDependenciesComplete(proc_use),
@@ -197,7 +349,12 @@ const RootCompletionState = struct {
         const_use: checked.ConstUseTemplate,
     ) bool {
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
-        return !self.rootHasCompileTimeRequest(root_id) or self.isDone(root_id);
+        const own_hoisted_root = switch (const_use.const_ref.owner) {
+            .hoisted_expr => true,
+            .top_level_binding => false,
+        };
+        if (self.current_root_id != null and root_id == self.current_root_id.? and own_hoisted_root) return true;
+        return !self.requested_roots[@intFromEnum(root_id)] or self.isDone(root_id);
     }
 
     fn rootForConstRef(
@@ -205,11 +362,20 @@ const RootCompletionState = struct {
         const_ref: checked.ConstRef,
     ) ?checked.ComptimeRootId {
         if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
-        const owner = switch (const_ref.owner) {
-            .top_level_binding => |top_level| top_level,
+        return switch (const_ref.owner) {
+            .top_level_binding => |top_level| {
+                return self.module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
+                    finalizationInvariant("local const dependency had no compile-time root");
+            },
+            .hoisted_expr => |hoisted| {
+                if (hoisted.module_idx != self.module.module_identity.module_idx) {
+                    finalizationInvariant("local hoisted const dependency had mismatched module index");
+                }
+                const entry = self.module.hoisted_constants.lookupByExpr(hoisted.expr) orelse
+                    finalizationInvariant("local hoisted const dependency had no hoisted const entry");
+                return entry.root;
+            },
         };
-        return self.module.compile_time_roots.lookupIdByPattern(owner.pattern) orelse
-            finalizationInvariant("local const dependency had no compile-time root");
     }
 
     fn procedureUseDependenciesComplete(
@@ -240,19 +406,9 @@ const RootCompletionState = struct {
             .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
             .callable_eval_template => |template_id| blk: {
                 const template = self.module.callable_eval_templates.get(template_id);
-                break :blk !self.rootHasCompileTimeRequest(template.root) or self.isDone(template.root);
+                break :blk !self.requested_roots[@intFromEnum(template.root)] or self.isDone(template.root);
             },
         };
-    }
-
-    fn rootHasCompileTimeRequest(
-        self: *RootCompletionState,
-        root_id: checked.ComptimeRootId,
-    ) bool {
-        for (self.module.root_requests.compile_time_requests) |request| {
-            if (compileTimeRootForRequest(self.module, request) == root_id) return true;
-        }
-        return false;
     }
 
     fn callableTemplateDependenciesComplete(
@@ -273,8 +429,8 @@ const RootCompletionState = struct {
         const binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
             finalizationInvariant("platform-required procedure dependency referenced a missing binding");
         return switch (binding.value_use) {
-            .procedure_value => |procedure| self.procedureUseDependenciesComplete(procedure.procedure),
-            .const_value => |const_value| self.constUseComplete(const_value.const_use),
+            .procedure_value => |procedure_use| self.procedureUseDependenciesComplete(procedure_use.procedure),
+            .const_value => |const_use| self.constUseComplete(const_use.const_use),
         };
     }
 };
@@ -285,9 +441,15 @@ fn lowerEvalAndFinishRoots(
     lowering_imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     requests: []const checked.RootRequest,
+    root_ids: []const checked.ComptimeRootId,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
-) anyerror!void {
+    coverage: *ComptimeCoverage,
+) anyerror!bool {
+    if (requests.len != root_ids.len) {
+        finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
+    }
+
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
@@ -316,8 +478,15 @@ fn lowerEvalAndFinishRoots(
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
 
-    for (lowered.lir_result.const_roots.items) |root| {
-        const root_id = compileTimeRootForRequest(module, root.request);
+    var had_problem = false;
+    if (lowered.lir_result.const_roots.items.len != requests.len) {
+        finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
+    }
+    for (lowered.lir_result.const_roots.items, 0..) |root, i| {
+        if (!std.meta.eql(root.request, requests[i])) {
+            finalizationInvariant("LIR lowering changed compile-time root request order");
+        }
+        const root_id = root_ids[i];
         const compile_time_root = module.compile_time_roots.root(root_id);
         var payload: checked.CompileTimeRootPayload = blk: {
             if (root.request.kind == .compile_time_constant and problem_store == null) {
@@ -329,6 +498,9 @@ fn lowerEvalAndFinishRoots(
                     error.RuntimeError, error.DivisionByZero => {
                         const message = interpreter.getRuntimeErrorMessage() orelse host.crash_message orelse "compile-time evaluation failed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
+                    },
+                    error.ComptimeExhaustiveness => {
+                        break :blk .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
                     },
                     error.Crash => {
                         const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
@@ -342,10 +514,19 @@ fn lowerEvalAndFinishRoots(
                 break :blk try writer.storeRoot(root, eval_result.value);
             }
 
-            const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, root.proc, root.ret_layout);
+            const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
+            try recordComptimeSiteHits(problem_store, coverage, module, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
+
+        if (try reportCompileTimeExpectFailures(
+            allocator,
+            problem_store,
+            module,
+            compile_time_root,
+            interpreter.getExpectFailures(),
+        )) had_problem = true;
 
         switch (compile_time_root.kind) {
             .numeral_conversion, .quote_conversion => {
@@ -358,6 +539,8 @@ fn lowerEvalAndFinishRoots(
         finishConstRoot(module, compile_time_root, payload);
         state.markDone(root_id);
     }
+
+    return had_problem;
 }
 
 /// Unwrap the `Try` value a literal-conversion root evaluated to. `Ok` payloads
@@ -449,12 +632,33 @@ fn appendCrashConst(
     } });
 }
 
+fn reportCompileTimeExpectFailures(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    failures: []const ExpectFailure,
+) anyerror!bool {
+    if (failures.len == 0) return false;
+    const problem_store = maybe_problem_store orelse return false;
+    const region = module.checked_bodies.expr(root.expr).source_region;
+    for (failures) |failure| {
+        const message_idx = try problem_store.putExtraString(failure.message);
+        _ = try problem_store.appendProblem(allocator, .{ .comptime_expect_failed = .{
+            .message = message_idx,
+            .region = region,
+        } });
+    }
+    return true;
+}
+
 fn evalCompileTimeRoot(
     allocator: Allocator,
     interpreter: *Interpreter,
     problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
+    lir_result: *const lir.Program.Result,
     proc: lir.LIR.LirProcSpecId,
     ret_layout: @import("layout").Idx,
 ) anyerror!Interpreter.EvalResult {
@@ -463,10 +667,140 @@ fn evalCompileTimeRoot(
         .ret_layout = ret_layout,
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
-        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
-        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
+        error.RuntimeError => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed"),
+        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
+        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
+        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
+    };
+}
+
+fn recordComptimeSiteHits(
+    maybe_problem_store: ?*check.problem.Store,
+    coverage: *ComptimeCoverage,
+    module: *const checked.CheckedModuleArtifact,
+    compile_time_root: checked.CompileTimeRoot,
+    lir_result: *const lir.Program.Result,
+    hits: []const Interpreter.ComptimeBranchHit,
+    root_proc: lir.LIR.LirProcSpecId,
+) Allocator.Error!void {
+    const problem_store = maybe_problem_store orelse return;
+    for (hits) |hit| {
+        const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
+        if (comptimeSiteEmpiricalKind(site.kind) != null) {
+            if (site.checked_site) |checked_site| {
+                if (comptimeSiteMayResolvePending(module, compile_time_root.id, checked_site)) {
+                    problem_store.resolvePendingStaticExhaustiveness(checked_site);
+                }
+            }
+        }
+        if (reportsUnusedBranches(compile_time_root.kind) and site.proc == root_proc) {
+            try coverage.record(site, hit.branch_index);
+        }
+    }
+}
+
+fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
+    return switch (kind) {
+        .constant,
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        => true,
+        .hoisted_constant => false,
+    };
+}
+
+fn reportCompileTimeExhaustiveness(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    lir_result: *const lir.Program.Result,
+    interpreter: *const Interpreter,
+    root_proc: lir.LIR.LirProcSpecId,
+) anyerror!Interpreter.EvalResult {
+    const problem_store = maybe_problem_store orelse {
+        finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
+    };
+    const site_id = interpreter.getComptimeFailedSite() orelse {
+        finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
+    };
+    const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
+    _ = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
+        .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
+        .match, .destructure => finalizationInvariant("compile-time root had no empirical exhaustiveness kind"),
+    };
+    const checked_site = site.checked_site orelse {
+        finalizationInvariant("empirical exhaustiveness failure had no checked site id");
+    };
+    discardUnreachedRootComptimeSites(problem_store, lir_result, root_proc, checked_site, module, site_id);
+    if (!comptimeSiteMayResolvePending(module, root.id, checked_site)) {
+        const site_record = module.exhaustiveness_sites.get(checked_site);
+        switch (site_record.policy) {
+            .runtime_reachable => {},
+            .not_pending,
+            .compile_time_only,
+            .compile_time_replaced_by_root,
+            => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
+        }
+    }
+    const matched = try problem_store.appendEmpiricalExhaustivenessFailure(allocator, checked_site);
+    if (!matched) {
+        finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
+    }
+    return error.CompileTimeProblem;
+}
+
+fn discardUnreachedRootComptimeSites(
+    problem_store: *check.problem.Store,
+    lir_result: *const lir.Program.Result,
+    root_proc: lir.LIR.LirProcSpecId,
+    failed_checked_site: checked.CheckedExhaustivenessSiteId,
+    module: *const checked.CheckedModuleArtifact,
+    failed_site_id: lir.LIR.ComptimeSiteId,
+) void {
+    for (lir_result.comptime_sites.items, 0..) |root_site, raw_site_id| {
+        if (root_site.proc != root_proc) continue;
+        if (raw_site_id == @intFromEnum(failed_site_id)) continue;
+        if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
+        const checked_site = root_site.checked_site orelse continue;
+        if (checked_site == failed_checked_site) continue;
+        const site = module.exhaustiveness_sites.get(checked_site);
+        switch (site.policy) {
+            .compile_time_replaced_by_root,
+            .compile_time_only,
+            => problem_store.discardPendingStaticExhaustiveness(checked_site),
+            .runtime_reachable,
+            .not_pending,
+            => {},
+        }
+    }
+}
+
+fn comptimeSiteMayResolvePending(
+    module: *const checked.CheckedModuleArtifact,
+    root_id: checked.ComptimeRootId,
+    checked_site: checked.CheckedExhaustivenessSiteId,
+) bool {
+    const site = module.exhaustiveness_sites.get(checked_site);
+    return switch (site.policy) {
+        .compile_time_replaced_by_root => |owner_root| owner_root == root_id,
+        .compile_time_only => true,
+        .runtime_reachable,
+        .not_pending,
+        => false,
+    };
+}
+
+fn comptimeSiteEmpiricalKind(
+    site_kind: lir.LIR.ComptimeSiteKind,
+) ?check.problem.Store.EmpiricalSiteKind {
+    return switch (site_kind) {
+        .match => .match,
+        .destructure => .destructure,
+        .if_ => null,
     };
 }
 
@@ -475,18 +809,28 @@ fn reportCompileTimeCrash(
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
+    interpreter: *const Interpreter,
     message: []const u8,
 ) anyerror!Interpreter.EvalResult {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
     const message_idx = try problem_store.putExtraString(message);
-    const region = module.checked_bodies.expr(root.expr).source_region;
+    const region = compileTimeCrashRegion(module, root, interpreter);
     _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,
         .region = region,
     } });
     return error.CompileTimeProblem;
+}
+
+fn compileTimeCrashRegion(
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    interpreter: *const Interpreter,
+) base.Region {
+    if (interpreter.getFailedCheckedRegion()) |region| return region;
+    return module.checked_bodies.expr(root.expr).source_region;
 }
 
 fn finalizationImports(
@@ -525,15 +869,26 @@ fn sameModuleIdentity(a: checked.ImportedModuleView, b: checked.ImportedModuleVi
     return std.meta.eql(a.module_identity.stable_hash, b.module_identity.stable_hash);
 }
 
+fn regionsEqual(a: base.Region, b: base.Region) bool {
+    return a.start.offset == b.start.offset and a.end.offset == b.end.offset;
+}
+
 fn compileTimeRootForRequest(
     module: *const checked.CheckedModuleArtifact,
     request: checked.RootRequest,
 ) checked.ComptimeRootId {
     for (module.compile_time_roots.roots) |root| {
         const kind_matches = switch (request.kind) {
-            .compile_time_constant => root.kind == .constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
+            .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
             .compile_time_callable => root.kind == .callable_binding,
-            else => finalizationInvariant("non compile-time request reached compile-time root lookup"),
+            .runtime_entrypoint,
+            .provided_export,
+            .platform_required_binding,
+            .hosted_export,
+            .test_expect,
+            .repl_expr,
+            .dev_expr,
+            => finalizationInvariant("non compile-time request reached compile-time root lookup"),
         };
         if (kind_matches and rootSourceEql(root.source, request.source)) return root.id;
     }
@@ -546,21 +901,40 @@ fn finishConstRoot(
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
 ) void {
-    if (root.kind != .constant) return;
+    if (root.kind != .constant and root.kind != .hoisted_constant) return;
     const node = switch (payload) {
         .const_node => |id| id,
-        else => finalizationInvariant("constant root finalized with non-constant payload"),
+        .pending,
+        .fn_value,
+        .expect,
+        => finalizationInvariant("constant root finalized with non-constant payload"),
     };
-    const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
-    const top_level = module.top_level_values.lookupByPattern(pattern) orelse
-        finalizationInvariant("constant root had no top-level value");
-    const const_ref = switch (top_level.value) {
-        .const_ref => |ref| ref,
-        .procedure_binding => finalizationInvariant("constant root top-level value was not a constant"),
+    const const_ref = switch (root.kind) {
+        .constant => blk: {
+            const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
+            const top_level = module.top_level_values.lookupByPattern(pattern) orelse
+                finalizationInvariant("constant root had no top-level value");
+            break :blk switch (top_level.value) {
+                .const_ref => |ref| ref,
+                .procedure_binding => finalizationInvariant("constant root top-level value was not a constant"),
+            };
+        },
+        .hoisted_constant => blk: {
+            const hoisted = module.hoisted_constants.lookupByRoot(root.id) orelse
+                finalizationInvariant("hoisted constant root had no hoisted const entry");
+            break :blk hoisted.const_ref;
+        },
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        => unreachable,
     };
     const stored = checked.StoredConstTemplate{ .node = node };
     module.const_templates.fillStoredConst(const_ref, stored);
-    module.exported_const_templates.fillStoredConst(const_ref, stored);
+    if (root.kind == .constant) {
+        module.exported_const_templates.fillStoredConst(const_ref, stored);
+    }
 }
 
 fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
@@ -570,6 +944,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
         .expr => |left| left == b.expr,
         .statement => |left| left == b.statement,
         .required_binding => |left| left == b.required_binding,
+        .hoisted => |left| left.index == b.hoisted.index and left.expr == b.hoisted.expr,
     };
 }
 

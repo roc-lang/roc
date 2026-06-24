@@ -41,19 +41,28 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
                 .str => return .indirect,
             }
         },
-        .box, .box_of_zst => return .{ .direct = idx }, // single pointer
+        .box, .box_of_zst, .ptr => return .{ .direct = idx }, // single pointer
         .list, .list_of_zst => return .indirect, // multi-field aggregate
         .struct_ => {
             const struct_idx = lay.getStruct().idx;
             const field_count = store.getStructData(struct_idx).fields.count;
-            // A single-field struct is passed as its field; any other aggregate is indirect.
-            if (field_count != 1) return .indirect;
+            // A single-field struct is passed as its field; any other aggregate is
+            // indirect. A lone unnamed-padding field is not a real newtype member,
+            // so it is never unwrapped.
+            if (field_count != 1 or store.getStructFieldIsPadding(struct_idx, 0)) return .indirect;
             return classifyType(store, store.getStructFieldLayout(struct_idx, 0));
         },
         .tag_union => {
-            // A no-payload tag union is an enum — a single integer, passed directly. Any tag
-            // union carrying a payload is a multi-field aggregate and is passed indirectly.
             const info = store.getTagUnionInfo(lay);
+            if (info.variants.len == 1) {
+                // Single-variant tag unions have an implicit discriminant, so their C ABI
+                // is exactly the payload's C ABI.
+                return classifyType(store, info.variants.get(0).payload_layout);
+            }
+
+            // A no-payload tag union is an enum — a single integer, passed directly. Any
+            // multi-variant tag union carrying a payload is a multi-field aggregate and is
+            // passed indirectly.
             var v: usize = 0;
             while (v < info.variants.len) : (v += 1) {
                 if (store.getLayout(info.variants.get(v).payload_layout).tag != .zst) {
@@ -110,6 +119,18 @@ test "wasm classify: aggregates are indirect, single-field structs unwrap" {
     // A single-field struct is passed as its field.
     const wrapped = try testStruct(&store, &.{.i64});
     try testing.expectEqual(Class{ .direct = .i64 }, classifyType(&store, wrapped));
+
+    // A single-variant tag union has an implicit discriminant and follows the
+    // payload's ABI.
+    const single_tag_u64 = try store.putTagUnion(&.{.u64});
+    try testing.expectEqual(Class{ .direct = .u64 }, classifyType(&store, single_tag_u64));
+
+    // A struct whose only field is unnamed padding is not a real newtype, so it is
+    // passed indirectly rather than unwrapped to the padding's borrowed type.
+    const padding_only = try store.putNominalStructFields(&.{
+        .{ .index = 0, .layout = .u64, .is_padding = true },
+    });
+    try testing.expectEqual(Class.indirect, classifyType(&store, padding_only));
 }
 
 test "wasm classify: enums are direct, Bool included" {
@@ -118,4 +139,15 @@ test "wasm classify: enums are direct, Bool included" {
 
     // Bool is a no-payload tag union -> a direct integer.
     try testing.expectEqual(Class{ .direct = .bool }, classifyType(&store, .bool));
+}
+
+test "wasm classify: single-variant tag union with aggregate payload follows payload ABI" {
+    var store = try Store.init(testing.allocator, .u32);
+    defer store.deinit();
+
+    const wrapped_str = try store.putTagUnion(&.{.str});
+    try testing.expectEqual(Class.indirect, classifyType(&store, wrapped_str));
+
+    const wrapped_struct = try store.putTagUnion(&.{try testStruct(&store, &.{ .i32, .u32 })});
+    try testing.expectEqual(Class.indirect, classifyType(&store, wrapped_struct));
 }

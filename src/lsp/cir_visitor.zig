@@ -211,10 +211,24 @@ pub fn CirVisitor(comptime Context: type) type {
                         if (self.stopped) return;
                     }
                 },
+                .e_interpolation => |interpolation| {
+                    self.walkExpr(store, interpolation.first);
+                    if (self.stopped) return;
+                    for (store.sliceExpr(interpolation.parts)) |part| {
+                        self.walkExpr(store, part);
+                        if (self.stopped) return;
+                    }
+                },
                 .e_structural_eq => |eq| {
                     self.walkExpr(store, eq.lhs);
                     if (self.stopped) return;
                     self.walkExpr(store, eq.rhs);
+                    if (self.stopped) return;
+                },
+                .e_structural_hash => |h| {
+                    self.walkExpr(store, h.value);
+                    if (self.stopped) return;
+                    self.walkExpr(store, h.hasher);
                     if (self.stopped) return;
                 },
                 .e_method_eq => |eq| {
@@ -330,6 +344,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_crash,
                 .e_ellipsis,
                 .e_anno_only,
+                .e_break,
                 .e_bytes_literal,
                 => {},
             }
@@ -377,6 +392,11 @@ pub fn CirVisitor(comptime Context: type) type {
                     if (self.stopped) return;
                     if (v.anno) |a| self.walkAnnotation(store, a);
                 },
+                .s_var_uninitialized => |v| {
+                    self.walkPattern(store, v.pattern_idx);
+                    if (self.stopped) return;
+                    if (v.anno) |a| self.walkAnnotation(store, a);
+                },
                 .s_reassign => |r| {
                     self.walkPattern(store, r.pattern_idx);
                     if (self.stopped) return;
@@ -390,6 +410,16 @@ pub fn CirVisitor(comptime Context: type) type {
                     self.walkExpr(store, f.body);
                 },
                 .s_while => |w| {
+                    self.walkExpr(store, w.cond);
+                    if (self.stopped) return;
+                    self.walkExpr(store, w.body);
+                },
+                .s_infinite_loop => |w| {
+                    self.walkExpr(store, w.cond);
+                    if (self.stopped) return;
+                    self.walkExpr(store, w.body);
+                },
+                .s_breakable_loop => |w| {
                     self.walkExpr(store, w.cond);
                     if (self.stopped) return;
                     self.walkExpr(store, w.body);
@@ -494,6 +524,16 @@ pub fn CirVisitor(comptime Context: type) type {
                     for (store.slicePatterns(t.patterns)) |p| {
                         self.walkPattern(store, p);
                         if (self.stopped) return;
+                    }
+                },
+                .str_interpolation => |str| {
+                    var i: u32 = 0;
+                    while (i < str.steps.span.len) : (i += 1) {
+                        const step = store.getStrPatternStep(str.steps, i);
+                        if (step.capture) |capture| {
+                            self.walkPattern(store, capture);
+                            if (self.stopped) return;
+                        }
                     }
                 },
                 // Leaf patterns - no children to traverse

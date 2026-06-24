@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const check = @import("check");
 const layout = @import("layout");
 const hosted = @import("hosted.zig");
 
@@ -63,6 +64,29 @@ pub const CFStmtId = enum(u32) {
     _,
 };
 
+/// Identifier of a compile-time-observed control-flow site.
+pub const ComptimeSiteId = enum(u32) {
+    _,
+};
+
+pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
+
+/// Source control-flow construct observed during compile-time finalization.
+pub const ComptimeSiteKind = enum {
+    match,
+    destructure,
+    if_,
+};
+
+/// Metadata for one compile-time-observed control-flow site.
+pub const ComptimeSite = struct {
+    kind: ComptimeSiteKind,
+    region: base.Region,
+    checked_site: ?CheckedExhaustivenessSiteId = null,
+    proc: LirProcSpecId,
+    branch_regions: []const base.Region = &.{},
+};
+
 /// Identifier of a join point targeted by `jump`.
 pub const JoinPointId = enum(u32) {
     _,
@@ -89,6 +113,22 @@ pub const LocalSpan = extern struct {
     }
 };
 
+/// Span into flat u64 storage.
+pub const U64Span = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty u64 span.
+    pub fn empty() U64Span {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span contains no u64 values.
+    pub fn isEmpty(self: U64Span) bool {
+        return self.len == 0;
+    }
+};
+
 /// Builtin low-level operations reused from `base`.
 pub const LowLevel = base.LowLevel;
 
@@ -97,6 +137,120 @@ pub const StrLiteral = struct {
     backing: StringLiteral.Idx,
     offset: u32,
     len: u32,
+};
+
+/// How a string interpolation pattern must finish after its last step.
+pub const StrPatternEnd = enum {
+    exact,
+    tail,
+};
+
+/// Whether a string-pattern step binds the captured bytes.
+pub const StrMatchCapture = union(enum) {
+    discard,
+    /// A borrowed `Str` view into the `str_match.source` bytes on the match
+    /// edge. This is not an eagerly materialized RocStr; consumers that need an
+    /// owned string must materialize the view at the use site.
+    view: LocalId,
+};
+
+/// One delimiter search in a string interpolation pattern.
+///
+/// The matcher captures the bytes from the current cursor up to the first
+/// occurrence of `delimiter`, optionally binds that slice as a borrowed view,
+/// and advances the cursor past the delimiter.
+pub const StrMatchStep = struct {
+    capture: StrMatchCapture,
+    delimiter: StrLiteral,
+};
+
+/// Result of executing one string-pattern delimiter step.
+pub const StrMatchStepResult = struct {
+    capture_start: usize,
+    capture_end: usize,
+    next_cursor: usize,
+};
+
+/// Reports whether string-pattern matching may start with this prefix.
+pub fn strMatchPrefixMatches(source: []const u8, prefix: []const u8) bool {
+    return std.mem.startsWith(u8, source, prefix);
+}
+
+/// Executes one string-pattern delimiter step over source bytes.
+pub fn strMatchStep(source: []const u8, cursor: usize, delimiter: []const u8, tail_capture: bool) ?StrMatchStepResult {
+    if (cursor > source.len) return null;
+
+    if (tail_capture) {
+        return .{
+            .capture_start = cursor,
+            .capture_end = source.len,
+            .next_cursor = source.len,
+        };
+    }
+
+    const found = strMatchDelimiter(source, cursor, delimiter) orelse return null;
+    return .{
+        .capture_start = cursor,
+        .capture_end = found,
+        .next_cursor = found + delimiter.len,
+    };
+}
+
+/// Reports whether a string-pattern arm accepts the current cursor as its end.
+pub fn strMatchEndMatches(source_len: usize, cursor: usize, end: StrPatternEnd) bool {
+    return switch (end) {
+        .exact => cursor == source_len,
+        .tail => cursor <= source_len,
+    };
+}
+
+fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?usize {
+    if (delimiter.len == 0) return cursor;
+    if (delimiter.len > source.len - cursor) return null;
+
+    const candidate = std.mem.findScalarPos(u8, source, cursor, delimiter[0]) orelse return null;
+    if (delimiter.len > source.len - candidate) return null;
+    if (!std.mem.eql(u8, source[candidate..][0..delimiter.len], delimiter)) return null;
+    return candidate;
+}
+
+/// Span into flat string-match-step storage.
+pub const StrMatchStepSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() StrMatchStepSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: StrMatchStepSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// One ordered arm in a grouped runtime string-pattern match.
+///
+/// Arms are tried in storage order. On the first successful arm, only that
+/// arm's captured locals are initialized, and control jumps to `on_match`.
+pub const StrMatchArm = struct {
+    prefix: StrLiteral,
+    steps: StrMatchStepSpan,
+    end: StrPatternEnd,
+    on_match: CFStmtId,
+};
+
+/// Span into flat string-match-arm storage.
+pub const StrMatchArmSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() StrMatchArmSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: StrMatchArmSpan) bool {
+        return self.len == 0;
+    }
 };
 
 /// Literal RHS values supported by `assign_literal`.
@@ -224,8 +378,22 @@ pub const ProcAbi = enum {
     erased_callable,
 };
 
+/// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
+/// proc. Consumed by TRMC debug output, test assertions, and the interpreter's
+/// debug validator (null box pointers are legal in-flight holes only inside
+/// `.trmc` procs).
+pub const TailTransform = enum(u8) {
+    none,
+    trmc,
+    tce,
+};
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
+    init_uninitialized: struct {
+        target: LocalId,
+        next: CFStmtId,
+    },
     assign_ref: struct {
         target: LocalId,
         op: RefOp,
@@ -240,6 +408,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         proc: LirProcSpecId,
         args: LocalSpan,
+        is_cold: bool = false,
         next: CFStmtId,
     },
     assign_call_erased: struct {
@@ -312,6 +481,17 @@ pub const CFStmt = union(enum) {
     },
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
+    /// Pattern coverage failed during compile-time evaluation. This is
+    /// terminal and becomes a checking diagnostic while finalizing.
+    comptime_exhaustiveness_failed: struct {
+        site: ComptimeSiteId,
+    },
+    /// One compile-time-observed branch or match alternative was taken.
+    comptime_branch_taken: struct {
+        site: ComptimeSiteId,
+        branch_index: u32,
+        next: CFStmtId,
+    },
     incref: struct {
         value: LocalId,
         rc: layout.RcHelper,
@@ -320,6 +500,18 @@ pub const CFStmt = union(enum) {
         next: CFStmtId,
     },
     decref: struct {
+        value: LocalId,
+        rc: layout.RcHelper,
+        atomicity: RcAtomicity = .atomic,
+        next: CFStmtId,
+    },
+    /// Conditionally release a payload that may or may not have been initialized
+    /// on this path. This is an ARC statement, not a user-control-flow
+    /// statement: `cond` is the explicit compiler-produced presence proof, and
+    /// consumers lower the single statement to "if cond then decref value".
+    decref_if_initialized: struct {
+        cond: LocalId,
+        cond_mask: u64 = 1,
         value: LocalId,
         rc: layout.RcHelper,
         atomicity: RcAtomicity = .atomic,
@@ -335,16 +527,64 @@ pub const CFStmt = union(enum) {
         cond: LocalId,
         branches: CFSwitchBranchSpan,
         default_branch: CFStmtId,
+        /// Explicit provenance from lowering: this switch's default branch is
+        /// expected to be cold. Backends may use this for branch weights or
+        /// block placement, but must not infer it from source names or shapes.
+        default_is_cold: bool = false,
         /// Common continuation used by structured branch-result switches, when
         /// the branch bodies flow back to a shared suffix. ARC insertion uses
         /// this to release branch-local owned values before the shared suffix.
         continuation: ?CFStmtId = null,
+    },
+    /// Branch on a condition that is compiler-proven to describe whether
+    /// `payload` has been initialized. The initialized branch may read
+    /// `payload`; the uninitialized branch may not. ARC insertion and
+    /// certification consume this explicit relationship instead of inferring it
+    /// from field names, tag shapes, or backend codegen.
+    switch_initialized_payload: struct {
+        cond: LocalId,
+        cond_mask: u64 = 1,
+        payload: LocalId,
+        uninitialized_is_cold: bool = false,
+        initialized_branch: CFStmtId,
+        uninitialized_branch: CFStmtId,
+    },
+    /// Runtime string-pattern match. On the match edge this initializes every
+    /// captured local in `steps` as a borrowed `Str` view into `source`; on the
+    /// miss edge no capture locals are initialized.
+    str_match: struct {
+        source: LocalId,
+        prefix: StrLiteral,
+        steps: StrMatchStepSpan,
+        end: StrPatternEnd,
+        on_match: CFStmtId,
+        on_miss: CFStmtId,
+    },
+    /// Ordered runtime string-pattern match set over one source. This is the
+    /// multi-arm form of `str_match`: arms are attempted in order, the first
+    /// successful arm takes its `on_match` edge, and if every arm misses the
+    /// common `on_miss` edge is taken.
+    str_match_set: struct {
+        source: LocalId,
+        arms: StrMatchArmSpan,
+        on_miss: CFStmtId,
     },
     loop_continue: void,
     loop_break: void,
     join: struct {
         id: JoinPointId,
         params: LocalSpan,
+        /// Join params whose initial value is the compiler-only
+        /// uninitialized marker. ARC must not blindly release these outside
+        /// explicit initialized-payload switches.
+        maybe_uninitialized_params: LocalSpan = .empty(),
+        /// Conditions parallel to `maybe_uninitialized_params`. Entry `i`
+        /// proves whether `maybe_uninitialized_params[i]` is initialized.
+        maybe_uninitialized_conditions: LocalSpan = .empty(),
+        /// Presence masks parallel to `maybe_uninitialized_conditions`. This
+        /// lets one condition local be a packed presence word rather than a
+        /// separate Bool local per maybe-initialized payload.
+        maybe_uninitialized_condition_masks: U64Span = .empty(),
         body: CFStmtId,
         remainder: CFStmtId,
     },
@@ -371,6 +611,8 @@ pub const LirProcSpec = struct {
     abi: ProcAbi = .roc,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
+    /// Tail-recursion rewrite applied by the TRMC pass, if any.
+    tail_transform: TailTransform = .none,
 };
 
 /// Identifier of a stored LirPattern.

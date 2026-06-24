@@ -638,7 +638,6 @@ pub const tests = [_]TestCase{
         \\main = (combine(Baz, Baz, |a, b| a + b) == Baz, combine(Bar(1), Bar(2), |a, b| a + b) == Bar(3))
         ,
         .expected = .{ .inspect_str = "(True, True)" },
-        .known_bug = true,
     },
     .{
         .name = "bughunt B102: recursive Monotype record lowering keeps field span stable",
@@ -683,5 +682,69 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "24" },
+    },
+    .{
+        .name = "bughunt B103: dispatched imported-module method returning a multi-field record panics in monotype lowering (#9591)",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Foo",
+            .source =
+            \\Foo :: { id : U64 }.{
+            \\    bar : U64 -> Foo
+            \\    bar = |id| { id: id }
+            \\
+            \\    baz : Foo, {} -> { a : I32, b : I32 }
+            \\    baz = |_, {}| { a: 0, b: 0 }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Foo exposing [bar]
+        \\
+        \\main = {
+        \\    out = bar(0).baz({})
+        \\    out.a
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        // #9700: a match with many fixed-length list patterns must lower to LIR
+        // whose size is linear in the patterns, not exponential. Each list
+        // branch shares one miss target, so this compiles quickly; before the
+        // fix the shared fallback was re-materialized per element test, giving
+        // ~(elements+1)^branches statements that exhausted memory at compile
+        // time. A regression here reappears as an out-of-memory/timeout, not a
+        // wrong value.
+        .name = "issue 9700: long match of List(U8) does not blow up compilation",
+        .source_kind = .module,
+        .source =
+        \\to_instruction : List(U8) -> Try(U8, [InvalidCodon])
+        \\to_instruction = |codon| {
+        \\    match codon {
+        \\        ['A', 'U', 'G'] => Ok(1)
+        \\        ['U', 'U', 'U'] => Ok(2)
+        \\        ['U', 'U', 'C'] => Ok(3)
+        \\        ['U', 'U', 'A'] => Ok(4)
+        \\        ['U', 'U', 'G'] => Ok(5)
+        \\        ['U', 'C', 'U'] => Ok(6)
+        \\        ['U', 'C', 'C'] => Ok(7)
+        \\        ['U', 'C', 'A'] => Ok(8)
+        \\        ['U', 'C', 'G'] => Ok(9)
+        \\        ['U', 'A', 'U'] => Ok(10)
+        \\        ['U', 'A', 'C'] => Ok(11)
+        \\        ['U', 'G', 'U'] => Ok(12)
+        \\        ['U', 'G', 'C'] => Ok(13)
+        \\        ['U', 'G', 'G'] => Ok(14)
+        \\        ['U', 'A', 'A'] => Ok(15)
+        \\        ['U', 'A', 'G'] => Ok(16)
+        \\        ['U', 'G', 'A'] => Ok(17)
+        \\        _ => Err(InvalidCodon)
+        \\    }
+        \\}
+        \\
+        \\main = to_instruction(Str.to_utf8("UUC"))
+        ,
+        .expected = .{ .inspect_str = "Ok(3)" },
     },
 };

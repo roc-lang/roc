@@ -32,7 +32,7 @@ Other code expects this to have the type:
     List(a)
       where [
         a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
       ]
 
 **TYPE MISMATCH**
@@ -48,7 +48,7 @@ The type was determined to be:
     List(a)
       where [
         a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
       ]
 
 **TYPE MISMATCH**

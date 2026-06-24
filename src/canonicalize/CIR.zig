@@ -36,10 +36,14 @@ pub const BuiltinIndices = struct {
     dict_type: Statement.Idx,
     set_type: Statement.Idx,
     str_type: Statement.Idx,
+    hasher_type: Statement.Idx,
     iter_type: Statement.Idx,
     stream_type: Statement.Idx,
     list_type: Statement.Idx,
     box_type: Statement.Idx,
+    parse_tag_union_spec_type: Statement.Idx,
+    fields_type: Statement.Idx,
+    field_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
@@ -62,10 +66,14 @@ pub const BuiltinIndices = struct {
     dict_ident: Ident.Idx,
     set_ident: Ident.Idx,
     str_ident: Ident.Idx,
+    hasher_ident: Ident.Idx,
     iter_ident: Ident.Idx,
     stream_ident: Ident.Idx,
     list_ident: Ident.Idx,
     box_ident: Ident.Idx,
+    parse_tag_union_spec_ident: Ident.Idx,
+    fields_ident: Ident.Idx,
+    field_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
@@ -174,6 +182,7 @@ pub const Def = struct {
             .pattern_f64_literal,
             .pattern_small_dec_literal,
             .pattern_str_literal,
+            .pattern_str_interpolation,
             .pattern_underscore,
             => true,
             else => false,
@@ -326,6 +335,14 @@ pub const Annotation = struct {
 
     anno: TypeAnno.Idx,
     where: ?WhereClause.Span,
+    /// Whether `anno` mentions any type variable (a fresh `.rigid_var` or a
+    /// `.rigid_var_lookup` to an enclosing one). Derived from `anno` by
+    /// `addAnnotation` and populated on read by `getAnnotation`; the value passed
+    /// at construction is ignored.
+    mentions_type_var: bool = false,
+    /// Whether `anno` *introduces* a type variable (`.rigid_var`). Derived and
+    /// populated like `mentions_type_var`.
+    introduces_type_var: bool = false,
 
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;

@@ -140,6 +140,7 @@ src/snapshots/**/*.html
 
 # Local claude-code settings
 .claude/
+.claude
 
 *.bak
 kcov-output/
