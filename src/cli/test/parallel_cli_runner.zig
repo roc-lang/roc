@@ -177,6 +177,8 @@ const CustomCase = enum {
     default_platform_build_x64glibc,
     default_platform_build_arm64glibc,
     default_platform_build_wasm32,
+    default_platform_wasm32_archive_reproducible,
+    macos_output_basename_reproducible,
     default_platform_crash_x64musl,
     default_platform_crash_arm64musl,
     default_platform_crash_x64mac,
@@ -504,6 +506,17 @@ const plus_type_error_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "Found" },
 };
 
+const non_exhaustive_destructure_needles = [_]OutputNeedle{
+    .{ .stream = .stderr, .text = "NON-EXHAUSTIVE DESTRUCTURE" },
+    .{ .stream = .stderr, .text = "Missing patterns:" },
+    .{ .stream = .stderr, .text = "[]" },
+};
+
+const crash_expression_needles = [_]OutputNeedle{
+    .{ .stream = .stderr, .text = "CRASH IN EXPRESSION" },
+    .{ .stream = .stderr, .text = "Wrap it in a block expression" },
+};
+
 const warning_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "UNUSED VARIABLE" },
     .{ .stream = .stderr, .text = "warning" },
@@ -554,6 +567,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 9508: anonymous recursive tag type reports an error", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9508_anonymous_recursion.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "ANONYMOUS RECURSION" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9210: tuple access lambda needs an annotation", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9210_tuple_access_lambda.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "TUPLE ACCESS NEEDS ANNOTATION" }}, .not_contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 2686: bare List tag payload reports its missing type argument", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_2686_bare_list_payload.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "TOO FEW ARGS" }, .{ .stream = .stderr, .text = "expects 1 argument" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 9499: crash in match branch reports one targeted parse error", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9499CrashMatchBranch.roc", .exit = .failure, .contains = &crash_expression_needles, .not_contains = &.{ .{ .stream = .stderr, .text = "UNEXPECTED TOKEN IN EXPRESSION" }, .{ .stream = .stderr, .text = "match_branch_missing_arrow" }, .{ .stream = .stderr, .text = "expected_close_curly_at_end_of_match" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 9544: list function parameter destructure must be exhaustive", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9544NonExhaustiveParam.roc", .exit = .failure, .contains = &non_exhaustive_destructure_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 1 file and 1 symbol", .body = .{ .custom = .generated_graph_1_1 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 5 files and 5 symbols", .body = .{ .custom = .generated_graph_5_5 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many symbols per file", .body = .{ .custom = .generated_graph_2_100 } },
@@ -563,6 +578,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64glibc succeeds", .body = .{ .custom = .default_platform_build_x64glibc } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc succeeds", .body = .{ .custom = .default_platform_build_arm64glibc } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_crash_arm64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64mac", .body = .{ .custom = .default_platform_crash_x64mac } },
@@ -722,6 +739,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check platform-required record field reports nested method diagnostic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9762_platform_required_record_field.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "not_a_method" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "checked method registry is missing resolved dispatch target" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check platform-required destructured arg reports iterator diagnostic (issue 9542)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9542_platform_required_for_args.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "iter" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "checked iterator dispatch method registry is missing resolved target" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check platform-required match args reports type mismatch (issue 9559)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9559_platform_required_match_args.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "TYPE MISMATCH" }, .{ .stream = .stderr, .text = "Str" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "scalar immediate cannot stand in for RocStr layout" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run U8 addition overflow crashes (issue 9360, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue9360_integer_add_overflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer addition overflowed!" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run U8 addition overflow crashes (issue 9360, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9360_integer_add_overflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer addition overflowed!" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run U8 subtraction underflow crashes (issue 9361, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue9361_integer_sub_underflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer subtraction overflowed!" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run U8 subtraction underflow crashes (issue 9361, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9361_integer_sub_underflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer subtraction overflowed!" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run U128 addition overflow crashes (issue 9360, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9360_integer_add_overflow_u128.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer addition overflowed!" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run I128 subtraction underflow crashes (issue 9361, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9361_integer_sub_underflow_i128.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer subtraction overflowed!" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run default app numeric addition wrapped in Err lowers without postcheck panic (issue 9734)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9734_dispatch_plan_err.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "dispatch plan had no method owner" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl Dict.join_map with undetermined key reports ambiguous to_hash (issue 9644)", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "source = Dict.single(\"a\", 1).insert(\"b\", 2)\nDict.join_map(source, |_, _| Dict.empty()).len()\n", .exit = .not_panic, .contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "to_hash" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "dispatch plan had no method owner" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl polymorphic where-clause helper through nested generalized defs is accepted, not ambiguous", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "run : a -> a where [a.go : a -> a]\nrun = |x| x.go()\nwrap = |y| {\n  go2 = |z| run(z)\n  go2(y)\n}\nwrap\n", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "<function>" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "dispatch plan had no method owner" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -1522,6 +1545,8 @@ fn runCustomCase(
         .default_platform_build_x64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64glibc),
         .default_platform_build_arm64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
+        .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
+        .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
         .default_platform_crash_arm64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64musl, .crash),
         .default_platform_crash_x64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64mac, .crash),
@@ -2004,6 +2029,151 @@ fn customDefaultPlatformBuild(
             .stderr_exact = "",
         })) |failure| return failure;
     }
+
+    return null;
+}
+
+fn customDefaultPlatformWasm32ArchiveReproducible(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "default_platform_wasm32_repro.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate default platform app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = default_platform_echo_app }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write default platform app: {}", .{err});
+
+    const opts = [_][]const u8{ "dev", "speed", "size" };
+    for (opts) |opt| {
+        const output_path = std.fmt.allocPrint(allocator, "{s}/default_platform_wasm32_repro_{s}.a", .{ env.dirs.work_dir, opt }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate default platform output path: {}", .{err});
+        const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--no-cache", "--target=wasm32", opt_arg, out_arg },
+            .roc_file = app_path,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        const first = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read first archive {s}: {}", .{ output_path, err });
+        defer allocator.free(first);
+
+        const member_basename = if (std.mem.eql(u8, opt, "dev"))
+            "roc_app_wasm32.o"
+        else
+            std.fmt.allocPrint(allocator, "roc_app_llvm_wasm32_{s}.o", .{opt}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate archive member check: {}", .{err});
+        const bad_forward_member = std.fmt.allocPrint(allocator, "/{s}/", .{member_basename}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate archive member check: {}", .{err});
+        const bad_backslash_member = std.fmt.allocPrint(allocator, "\\{s}/", .{member_basename}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate archive member check: {}", .{err});
+        if (std.mem.find(u8, first, bad_forward_member) != null or
+            std.mem.find(u8, first, bad_backslash_member) != null)
+        {
+            return customFailure(allocator, timer, "default wasm {s} archive leaked an object path into its member name", .{opt});
+        }
+
+        std.Io.Dir.cwd().deleteFile(io, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to delete first archive {s}: {}", .{ output_path, err });
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--no-cache", "--target=wasm32", opt_arg, out_arg },
+            .roc_file = app_path,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        const second = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read second archive {s}: {}", .{ output_path, err });
+        defer allocator.free(second);
+
+        if (!std.mem.eql(u8, first, second)) {
+            return customFailure(allocator, timer, "default wasm {s} archive bytes were not reproducible", .{opt});
+        }
+    }
+
+    return null;
+}
+
+fn customMacosOutputBasenameReproducible(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .macos) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "macOS Mach-O reproducibility test only runs on macOS" };
+    }
+
+    const default_app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "default_platform_macos_repro.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate default platform app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = default_app_path, .data = default_platform_echo_app }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write default platform app: {}", .{err});
+
+    const opts = [_][]const u8{ "dev", "speed", "size" };
+    for (opts) |opt| {
+        if (checkMacosOutputBasenameReproducible(io, allocator, env, timer, timeout_ms, opt, "real_platform", "test/fx/hello_world.roc", "Hello, world!\n")) |failure| return failure;
+        if (checkMacosOutputBasenameReproducible(io, allocator, env, timer, timeout_ms, opt, "default_platform", default_app_path, "Hello, World!\n")) |failure| return failure;
+    }
+
+    return null;
+}
+
+fn checkMacosOutputBasenameReproducible(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt: []const u8,
+    label: []const u8,
+    roc_file: []const u8,
+    expected_stdout: []const u8,
+) ?TestResult {
+    const short_output = std.fmt.allocPrint(allocator, "{s}/{s}_a_{s}", .{ env.dirs.work_dir, label, opt }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate short macOS output path: {}", .{err});
+    const long_output = std.fmt.allocPrint(allocator, "{s}/very-long-{s}-output-name-for-macos-repro-{s}", .{ env.dirs.work_dir, label, opt }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate long macOS output path: {}", .{err});
+    const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    const short_out_arg = outputArg(allocator, short_output) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate short output arg: {}", .{err});
+    const long_out_arg = outputArg(allocator, long_output) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate long output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", opt_arg, short_out_arg },
+        .roc_file = roc_file,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", opt_arg, long_out_arg },
+        .roc_file = roc_file,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+
+    const short_bytes = std.Io.Dir.cwd().readFileAlloc(io, short_output, allocator, .limited(256 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read short macOS output {s}: {}", .{ short_output, err });
+    defer allocator.free(short_bytes);
+    const long_bytes = std.Io.Dir.cwd().readFileAlloc(io, long_output, allocator, .limited(256 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read long macOS output {s}: {}", .{ long_output, err });
+    defer allocator.free(long_bytes);
+
+    if (!std.mem.eql(u8, short_bytes, long_bytes)) {
+        return customFailure(allocator, timer, "macOS {s} {s} output bytes changed when only the output basename changed", .{ label, opt });
+    }
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{short_output}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = expected_stdout,
+        .stderr_exact = "",
+    })) |failure| return failure;
 
     return null;
 }
