@@ -171,6 +171,13 @@ pub const NoMetrics = struct {
     pub inline fn bump(_: *NoMetrics, comptime _: Field, _: u64) void {}
 };
 
+/// Dispatch counters, accumulated per host event and folded into the finalized
+/// runtime metrics. Engine-owned so both hosts share one dispatch path.
+pub const DispatchMetrics = struct {
+    events_processed: u64 = 0,
+    recompute_batches: u64 = 0,
+};
+
 pub const native_host_value_type_tags_enabled = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
     .ReleaseFast, .ReleaseSmall => false,
@@ -1998,10 +2005,18 @@ pub fn Engine(comptime Ctx: type) type {
         // Render-command accumulator (patches/create/append/remove/...) folded into
         // last_runtime_metrics at finish. Engine-owned so both hosts share it.
         render_metrics: render.Metrics = .{},
+        // Dispatch counters (events processed / recompute batches) folded into
+        // last_runtime_metrics at finish. Engine-owned so both hosts share it.
+        dispatch_metrics: DispatchMetrics = .{},
         dirty_signal_generation: u64 = 0,
 
         pub fn init() Self {
             return .{};
+        }
+
+        pub fn recordDispatch(self: *Self) void {
+            self.dispatch_metrics.events_processed += 1;
+            self.dispatch_metrics.recompute_batches += 1;
         }
 
         pub fn recordStreamNodesScanned(self: *Self, count: usize) void {

@@ -140,11 +140,6 @@ const HostEachRowRenderMove = engine.HostEachRowRenderMove;
 
 const HostRenderMetrics = render.Metrics;
 
-const HostDispatchMetrics = struct {
-    events_processed: u64 = 0,
-    recompute_batches: u64 = 0,
-};
-
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
     .log_level = .warn,
@@ -754,7 +749,6 @@ const HostEnv = struct {
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
-    dispatch_metrics: HostDispatchMetrics = .{},
 
     fn init() HostEnv {
         return .{
@@ -1384,8 +1378,7 @@ const HostEnv = struct {
     }
 
     fn recordDispatch(self: *HostEnv) void {
-        self.dispatch_metrics.events_processed += 1;
-        self.dispatch_metrics.recompute_batches += 1;
+        self.engine.recordDispatch();
     }
 
     fn deinitPendingTask(self: *HostEnv, task: *HostPendingTask) void {
@@ -3288,8 +3281,8 @@ fn finishHostMetrics(host: *HostEnv) void {
     metrics.set_metadata = host.engine.render_metrics.set_metadata;
     metrics.bind_event = host.engine.render_metrics.bind_event;
     metrics.retained_alloc_delta = @as(i64, @intCast(host.alloc_count)) - @as(i64, @intCast(host.dealloc_count));
-    metrics.events_processed = host.dispatch_metrics.events_processed;
-    metrics.recompute_batches = host.dispatch_metrics.recompute_batches;
+    metrics.events_processed = host.engine.dispatch_metrics.events_processed;
+    metrics.recompute_batches = host.engine.dispatch_metrics.recompute_batches;
     host.engine.last_runtime_metrics = metrics;
     host.engine.pending_roc_metrics = zeroRuntimeMetrics();
 }
