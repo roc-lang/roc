@@ -9225,6 +9225,13 @@ fn generateDocs(
 
     var is_package = false;
 
+    // Track why modules were dropped so a zero-module result can explain itself
+    // instead of silently writing an empty docs site.
+    var modules_seen: usize = 0;
+    var skipped_platform: usize = 0;
+    var skipped_package: usize = 0;
+    var extract_failed: usize = 0;
+
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
         // Docs show the alias the root uses for a package, not its internal
@@ -9234,9 +9241,12 @@ fn generateDocs(
 
         for (package_env.modules.items) |*module_state| {
             if (module_state.moduleEnv()) |mod_env| {
+                modules_seen += 1;
+
                 // Skip platform main.roc modules when documenting an app
                 // Platform modules are still included when documenting a platform directly
                 if (mod_env.module_kind == .platform and !is_documenting_platform) {
+                    skipped_platform += 1;
                     continue;
                 }
 
@@ -9244,11 +9254,13 @@ fn generateDocs(
                 // are exposed and don't contain docs of their own.
                 if (mod_env.module_kind == .package) {
                     is_package = true;
+                    skipped_package += 1;
                     continue;
                 }
 
                 var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name, module_state.path) catch |err| {
                     std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
+                    extract_failed += 1;
                     continue;
                 };
                 module_docs_list.append(ctx.gpa, mod_docs) catch {
@@ -9257,6 +9269,34 @@ fn generateDocs(
                 };
             }
         }
+    }
+
+    // If no documentable modules were collected, fail loudly instead of
+    // writing an empty docs site, and explain why so the cause is actionable
+    // rather than a silent empty index.html.
+    if (module_docs_list.items.len == 0) {
+        std.debug.print("Error: found no documentable modules in '{s}'.\n", .{module_path});
+        if (modules_seen == 0) {
+            // The file compiled (any check errors would have aborted earlier),
+            // yet no module was scheduled to document. This happens when the
+            // source's module name shadows a compiler builtin (e.g. a file
+            // declaring `Builtin`) or otherwise isn't built as a standalone
+            // module — there are no canonicalization or type errors to report.
+            std.debug.print(
+                "  The file compiled successfully but produced no standalone module to document.\n" ++
+                    "  This typically means its module name shadows a compiler builtin, or it is a\n" ++
+                    "  builtin/dependency file that is only documented as part of its owning package.\n",
+                .{},
+            );
+        } else {
+            // Modules existed but every one was filtered out; report the
+            // breakdown so the user knows which filter dropped them.
+            std.debug.print(
+                "  Saw {d} module(s), all skipped: {d} platform, {d} package definition, {d} failed extraction.\n",
+                .{ modules_seen, skipped_platform, skipped_package, extract_failed },
+            );
+        }
+        return error.DocsFailed;
     }
 
     // Modules are collected in package hash-map order, which is not

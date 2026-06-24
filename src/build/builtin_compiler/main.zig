@@ -207,7 +207,7 @@ fn serializeBuiltinArtifact(
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
-    const parse_tag_union_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseTagUnionSpec");
+    const parse_tag_union_spec_type_idx = try findNestedTypeDeclaration(gpa, env, "Str", "ParseTagUnionSpec");
     const fields_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Str.FieldName.FieldNames");
     const field_type_idx = try findTypeDeclarationByQualifiedName(env, "Builtin.Str.FieldName");
     const try_type_idx = try findTypeDeclaration(gpa, env, "Try");
@@ -267,7 +267,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
         .bool_ident = expectBuiltinIdent(env, "Builtin.Bool"),
-        .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.ParseTagUnionSpec"),
+        .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.Str.ParseTagUnionSpec"),
         .fields_ident = expectBuiltinIdent(env, "Builtin.Str.FieldName.FieldNames"),
         .field_ident = expectBuiltinIdent(env, "Builtin.Str.FieldName"),
         .try_ident = expectBuiltinIdent(env, "Builtin.Try"),
