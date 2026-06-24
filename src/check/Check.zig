@@ -429,7 +429,6 @@ const EffectSlot = struct {
     kind: EffectSlotKind,
     direct_effect: bool = false,
     resolved_effectful: ?bool = null,
-    resolving_effectful: bool = false,
     reported: bool = false,
 };
 
@@ -441,6 +440,11 @@ const EffectEdge = struct {
 const DispatchEffectWatch = struct {
     fn_var: Var,
     slot: EffectSlotId,
+};
+
+const EffectDfsFrame = struct {
+    slot: u32,
+    next_child: usize,
 };
 
 const HoistFrame = struct {
@@ -1317,34 +1321,177 @@ fn effectSlotPtr(self: *Self, slot: EffectSlotId) *EffectSlot {
     return &self.effect_slots.items[@intFromEnum(slot)];
 }
 
-fn effectSlotIsEffectful(self: *Self, slot: EffectSlotId) bool {
-    const slot_ptr = self.effectSlotPtr(slot);
-    if (slot_ptr.resolved_effectful) |resolved| return resolved;
-    if (slot_ptr.direct_effect) {
-        slot_ptr.resolved_effectful = true;
-        return true;
+fn invalidateEffectSlotResolutions(self: *Self) void {
+    for (self.effect_slots.items) |*slot| {
+        slot.resolved_effectful = null;
     }
-    if (slot_ptr.resolving_effectful) return false;
+}
 
-    slot_ptr.resolving_effectful = true;
-    defer slot_ptr.resolving_effectful = false;
+fn resolveEffectSlots(self: *Self) Allocator.Error!void {
+    const slot_count = self.effect_slots.items.len;
+    if (slot_count == 0) return;
+
+    var outgoing = try self.gpa.alloc(std.ArrayListUnmanaged(u32), slot_count);
+    defer {
+        for (outgoing) |*edges| {
+            edges.deinit(self.gpa);
+        }
+        self.gpa.free(outgoing);
+    }
+    @memset(outgoing, .empty);
+
+    var incoming = try self.gpa.alloc(std.ArrayListUnmanaged(u32), slot_count);
+    defer {
+        for (incoming) |*edges| {
+            edges.deinit(self.gpa);
+        }
+        self.gpa.free(incoming);
+    }
+    @memset(incoming, .empty);
 
     for (self.effect_edges.items) |edge| {
-        if (edge.from != slot) continue;
-        if (self.effectSlotIsEffectful(edge.to)) {
-            slot_ptr.resolved_effectful = true;
-            return true;
+        const from: u32 = @intFromEnum(edge.from);
+        const to: u32 = @intFromEnum(edge.to);
+        try outgoing[@intCast(from)].append(self.gpa, to);
+        try incoming[@intCast(to)].append(self.gpa, from);
+    }
+
+    var visited = try self.gpa.alloc(bool, slot_count);
+    defer self.gpa.free(visited);
+    @memset(visited, false);
+
+    var order: std.ArrayListUnmanaged(u32) = .empty;
+    defer order.deinit(self.gpa);
+
+    var dfs_stack: std.ArrayListUnmanaged(EffectDfsFrame) = .empty;
+    defer dfs_stack.deinit(self.gpa);
+
+    for (0..slot_count) |start_usize| {
+        const start: u32 = @intCast(start_usize);
+        if (visited[start_usize]) continue;
+
+        visited[start_usize] = true;
+        try dfs_stack.append(self.gpa, .{ .slot = start, .next_child = 0 });
+
+        while (dfs_stack.items.len > 0) {
+            const top_index = dfs_stack.items.len - 1;
+            const top_slot = dfs_stack.items[top_index].slot;
+            const top_slot_index: usize = @intCast(top_slot);
+            const next_child = dfs_stack.items[top_index].next_child;
+            const children = outgoing[top_slot_index].items;
+
+            if (next_child < children.len) {
+                dfs_stack.items[top_index].next_child = next_child + 1;
+                const child = children[next_child];
+                const child_index: usize = @intCast(child);
+                if (!visited[child_index]) {
+                    visited[child_index] = true;
+                    try dfs_stack.append(self.gpa, .{ .slot = child, .next_child = 0 });
+                }
+            } else {
+                try order.append(self.gpa, top_slot);
+                _ = dfs_stack.pop();
+            }
         }
     }
 
-    return false;
+    var component_by_slot = try self.gpa.alloc(u32, slot_count);
+    defer self.gpa.free(component_by_slot);
+    @memset(component_by_slot, std.math.maxInt(u32));
+
+    var assign_stack: std.ArrayListUnmanaged(u32) = .empty;
+    defer assign_stack.deinit(self.gpa);
+
+    var component_count: u32 = 0;
+    var order_index = order.items.len;
+    while (order_index > 0) {
+        order_index -= 1;
+        const start = order.items[order_index];
+        const start_index: usize = @intCast(start);
+        if (component_by_slot[start_index] != std.math.maxInt(u32)) continue;
+
+        component_by_slot[start_index] = component_count;
+        try assign_stack.append(self.gpa, start);
+
+        while (assign_stack.items.len > 0) {
+            const slot = assign_stack.pop().?;
+            const slot_index: usize = @intCast(slot);
+            for (incoming[slot_index].items) |next| {
+                const next_index: usize = @intCast(next);
+                if (component_by_slot[next_index] != std.math.maxInt(u32)) continue;
+                component_by_slot[next_index] = component_count;
+                try assign_stack.append(self.gpa, next);
+            }
+        }
+
+        component_count += 1;
+    }
+
+    const component_count_usize: usize = @intCast(component_count);
+    var component_effectful = try self.gpa.alloc(bool, component_count_usize);
+    defer self.gpa.free(component_effectful);
+    @memset(component_effectful, false);
+
+    for (self.effect_slots.items, 0..) |slot, slot_index| {
+        if (!slot.direct_effect) continue;
+        component_effectful[@intCast(component_by_slot[slot_index])] = true;
+    }
+
+    var component_dependents = try self.gpa.alloc(std.ArrayListUnmanaged(u32), component_count_usize);
+    defer {
+        for (component_dependents) |*dependents| {
+            dependents.deinit(self.gpa);
+        }
+        self.gpa.free(component_dependents);
+    }
+    @memset(component_dependents, .empty);
+
+    for (self.effect_edges.items) |edge| {
+        const caller_slot: usize = @intCast(@intFromEnum(edge.from));
+        const callee_slot: usize = @intCast(@intFromEnum(edge.to));
+        const caller_component = component_by_slot[caller_slot];
+        const callee_component = component_by_slot[callee_slot];
+        if (caller_component == callee_component) continue;
+        try component_dependents[@intCast(callee_component)].append(self.gpa, caller_component);
+    }
+
+    var worklist: std.ArrayListUnmanaged(u32) = .empty;
+    defer worklist.deinit(self.gpa);
+
+    for (component_effectful, 0..) |is_effectful, component_index| {
+        if (!is_effectful) continue;
+        try worklist.append(self.gpa, @intCast(component_index));
+    }
+
+    var worklist_index: usize = 0;
+    while (worklist_index < worklist.items.len) {
+        const component = worklist.items[worklist_index];
+        worklist_index += 1;
+
+        for (component_dependents[@intCast(component)].items) |dependent| {
+            if (component_effectful[@intCast(dependent)]) continue;
+            component_effectful[@intCast(dependent)] = true;
+            try worklist.append(self.gpa, dependent);
+        }
+    }
+
+    for (self.effect_slots.items, 0..) |*slot, slot_index| {
+        slot.resolved_effectful = component_effectful[@intCast(component_by_slot[slot_index])];
+    }
+}
+
+fn effectSlotIsEffectful(self: *Self, slot: EffectSlotId) Allocator.Error!bool {
+    const slot_ptr = self.effectSlotPtr(slot);
+    if (slot_ptr.resolved_effectful) |resolved| return resolved;
+    try self.resolveEffectSlots();
+    return self.effectSlotPtr(slot).resolved_effectful orelse false;
 }
 
 fn markActiveEffectSlotEffectful(self: *Self) void {
     const slot = self.currentEffectSlot() orelse return;
     const slot_ptr = self.effectSlotPtr(slot);
     slot_ptr.direct_effect = true;
-    slot_ptr.resolved_effectful = null;
+    self.invalidateEffectSlotResolutions();
 }
 
 fn recordActiveEffectSlotDependency(self: *Self, callee_slot: EffectSlotId) Allocator.Error!void {
@@ -1353,7 +1500,7 @@ fn recordActiveEffectSlotDependency(self: *Self, callee_slot: EffectSlotId) Allo
         .from = caller_slot,
         .to = callee_slot,
     });
-    self.effectSlotPtr(caller_slot).resolved_effectful = null;
+    self.invalidateEffectSlotResolutions();
 }
 
 fn recordFunctionEffectSlotForBinding(self: *Self, pattern: CIR.Pattern.Idx, slot: EffectSlotId) Allocator.Error!void {
@@ -1423,7 +1570,7 @@ fn markDispatchEffectWatchers(self: *Self, fn_var: Var) Allocator.Error!bool {
         if (watch.fn_var != fn_var) continue;
         const slot_ptr = self.effectSlotPtr(watch.slot);
         slot_ptr.direct_effect = true;
-        slot_ptr.resolved_effectful = null;
+        self.invalidateEffectSlotResolutions();
         reported_expect = try self.reportExpectEffectSlot(watch.slot) or reported_expect;
         try self.reportTopLevelEffectSlot(watch.slot, null);
     }
@@ -6556,7 +6703,7 @@ fn checkExpectBody(
     defer self.endEffectSlot(effect_slot);
 
     const body_does_fx = try self.checkExpr(body, env, expected);
-    const slot_does_fx = self.effectSlotIsEffectful(effect_slot);
+    const slot_does_fx = try self.effectSlotIsEffectful(effect_slot);
     if (slot_does_fx) {
         _ = try self.reportExpectEffectSlot(effect_slot);
     }
@@ -7174,7 +7321,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     const effect_slot = try self.beginEffectSlot(.{ .top_level_value = def_idx });
     defer self.endEffectSlot(effect_slot);
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
-    if (def_does_fx or self.effectSlotIsEffectful(effect_slot)) {
+    if (def_does_fx or try self.effectSlotIsEffectful(effect_slot)) {
         try self.reportTopLevelEffectSlot(effect_slot, env);
     }
     if (def.annotation == null and self.exprAlwaysCrashes(def.expr)) {
@@ -10269,7 +10416,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 break :blk lambda_body_does_fx;
             };
-            const body_does_fx = legacy_body_does_fx or self.effectSlotIsEffectful(effect_slot);
+            const body_does_fx = legacy_body_does_fx or try self.effectSlotIsEffectful(effect_slot);
 
             // Process any pending return constraints (from early returns / ? operator) before
             // creating the function type. This must happen after the body is fully checked

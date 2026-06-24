@@ -795,7 +795,7 @@ wc -c rocci-bird.wasm
 - [x] Pure where-clause implementation checking rejects effectful methods.
 - [x] Effectful where-clause calls propagate to callers.
 - [x] Function effect kinds finalize before checked function output.
-- [ ] Recursive effect groups solve with directed SCC propagation.
+- [x] Recursive effect groups solve with directed SCC propagation.
 - [x] Top-level effect errors use finalized effect slots.
 - [x] `expect` effect errors use finalized effect slots.
 - [ ] Checked modules export/import explicit effect summaries.
