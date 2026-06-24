@@ -354,12 +354,12 @@ Tasks:
 
 Tests:
 
-- [ ] unreachable top-level `crash` reports during `roc check`
+- [x] unreachable top-level `crash` reports during `roc check`
 - [x] unreachable top-level `dbg` reports during `roc check`
-- [ ] unreachable failed `expect` reports during `roc check`
+- [x] unreachable failed `expect` reports during `roc check`
 - [x] reachable selected-root `crash` reports during `roc check`
-- [ ] reachable selected-root `dbg` reports during `roc check`
-- [ ] reachable selected-root failed `expect` reports during `roc check`
+- [x] reachable selected-root `dbg` reports during `roc check`
+- [x] reachable selected-root failed `expect` reports during `roc check`
 - [x] effectful call inside compile-time-known expression is not evaluated
 - [x] all modules in an import graph run eligible top-level diagnostics
 - [ ] duplicate diagnostics are not emitted for shared top-level/root sources
@@ -426,7 +426,7 @@ Tests:
   policy
 - [ ] focused effect tests pass
 - [x] focused root tests pass
-- [ ] compile-time evaluation tests pass
+- [x] compile-time evaluation tests pass
 - [ ] static-data tests pass
 
 ## Phase 7: Rocci Bird Integration
