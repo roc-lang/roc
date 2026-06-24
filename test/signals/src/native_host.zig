@@ -21,18 +21,55 @@ const HostValue = u64;
 const HostValueTypeTag = *anyopaque;
 const HostValueList = abi.RocListWith(HostValue, false);
 const I64List = abi.RocListWith(i64, false);
-const HostEngine = engine.Engine(engine.NativeCtx);
 const RenderTextField = render.TextField;
 const RenderBoolField = render.BoolField;
 const RenderEventKind = render.EventKind;
 const CommandCounts = render.Counts;
 const HostScopeBranch = scope_tree.Branch;
 
-const host_value_type_tags_enabled = switch (builtin.mode) {
+const native_host_value_type_tags_enabled = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
     .ReleaseFast, .ReleaseSmall => false,
 };
 
+const NativeCtx = struct {
+    pub const Handle = *HostEnv;
+    pub const HostValueTypeTag = *anyopaque;
+    pub const host_value_type_tags_enabled = native_host_value_type_tags_enabled;
+    pub const RegistryOps = hv.RegistryOps(@This().HostValueTypeTag);
+    pub const Metrics = RuntimeMetrics;
+    pub const Sink = render_sink.DomSink(HostEnv);
+
+    pub fn zeroMetrics() Metrics {
+        return zeroRuntimeMetrics();
+    }
+
+    pub fn allocator(ctx: Handle) std.mem.Allocator {
+        return ctx.gpa.allocator();
+    }
+
+    pub fn cloneHostValue(ctx: Handle, value: HostValue) HostValue {
+        return ctx.cloneHostValue(value);
+    }
+
+    pub fn stateValueByNodeId(ctx: Handle, node_id: u64) HostValue {
+        return ctx.stateValueByNodeId(node_id);
+    }
+
+    pub fn stateEqCallable(ctx: Handle, node_id: u64) abi.RocErasedCallable {
+        return ctx.stateEqCallable(node_id);
+    }
+
+    pub fn stateDropCallable(ctx: Handle, node_id: u64) abi.RocErasedCallable {
+        return ctx.stateDropCallable(node_id);
+    }
+
+    pub fn sink(ctx: Handle) Sink {
+        return ctx.sink();
+    }
+};
+
+const HostEngine = engine.Engine(NativeCtx);
 const RuntimeMetrics = engine.RuntimeMetrics;
 const NoMetrics = engine.NoMetrics;
 
@@ -67,7 +104,6 @@ const HostSignalRecord = engine.HostSignalRecord;
 const HostSignalBinding = engine.HostSignalBinding;
 
 const HostNodeScopeSiteDesc = engine.HostNodeScopeSiteDesc;
-const HostNodeEventDesc = engine.HostNodeEventDesc;
 const HostNodeWhenDesc = engine.HostNodeWhenDesc;
 const HostNodeEachDesc = engine.HostNodeEachDesc;
 
@@ -710,11 +746,7 @@ const HostEnv = struct {
         clearRenderBoolField(self, elem_id, field);
     }
 
-    pub fn sinkBindEvent(self: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
-        bindNodeEvent(self, desc, event_id);
-    }
-
-    pub fn sinkBindEventKind(self: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64, _: engine.EventPayloadAccessor) void {
+    pub fn sinkBindEventKind(self: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64, _: EventPayloadAccessor) void {
         bindNodeEventKind(self, elem_id, kind, event_id);
     }
 
@@ -757,7 +789,7 @@ const HostEnv = struct {
         abi.decrefBox(@ptrCast(tag), self.activeRocHost());
     }
 
-    fn hostValueRegistryOps(self: *HostEnv) hv.RegistryOps {
+    fn hostValueRegistryOps(self: *HostEnv) hv.RegistryOps(HostValueTypeTag) {
         return .{ .roc_host = self.activeRocHost() };
     }
 
@@ -852,7 +884,7 @@ const HostEnv = struct {
     }
 
     fn assertHostValueTypeTag(self: *HostEnv, value: HostValue, expected_tag: HostValueTypeTag) void {
-        if (comptime host_value_type_tags_enabled) {
+        if (comptime native_host_value_type_tags_enabled) {
             const actual_tag = self.hostValueTypeTag(value) orelse failHost("HostValue read crossed erasure boundary without a type tag");
             if (!HostEnv.hostValueTypeTagsMatch(actual_tag, expected_tag)) {
                 var buf: [192]u8 = undefined;
@@ -2141,10 +2173,6 @@ fn collectDirtyStructuralSignals(host: *HostEnv, roc_host: *abi.RocHost, allocat
 
 fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) CommandCounts {
     return host.engine.applyDirtyRenderSinks(host, roc_host, dirty_source_node_ids, changed_record_ids, dirty_generation);
-}
-
-fn bindNodeEvent(host: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
-    bindNodeEventKind(host, desc.elem_id, desc.kind, event_id);
 }
 
 fn bindNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64) void {

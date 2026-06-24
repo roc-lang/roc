@@ -116,6 +116,12 @@ pub const EventKind = enum(u64) {
     }
 };
 
+pub const EventPayloadAccessor = enum(u64) {
+    none = 1,
+    target_value = 2,
+    target_checked = 3,
+};
+
 pub const Counts = struct {
     total: u64 = 0,
     reset_dom: u64 = 0,

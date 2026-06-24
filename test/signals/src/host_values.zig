@@ -6,7 +6,7 @@
 //! value constructors. The pieces that genuinely differ per host — which
 //! allocator/registry/`roc_host` to use, and the native-only test-kind
 //! bookkeeping — are supplied by the caller through an explicit `roc_host` and a
-//! small duck-typed `ctx`. See `DESIGN.md` (one engine, two thin hosts).
+//! small constructor context. See `DESIGN.md` (one engine, two thin hosts).
 
 const abi = @import("roc_platform_abi.zig");
 
@@ -18,32 +18,34 @@ pub const ValueKind = enum { unit, str, bool, i64 };
 
 /// Registry-ops adapter passed to `host_value_registry.Registry` calls. It
 /// refcounts boxes and tags through one `roc_host`. The two hosts use different
-/// `TypeTag` representations (`*anyopaque` vs `*u64`), so the tag parameters are
-/// duck-typed; `tagId` reads the leading `u64` id, which is valid for both.
-pub const RegistryOps = struct {
-    roc_host: *abi.RocHost,
+/// `TypeTag` representations (`*anyopaque` vs `*u64`), so the tag type is an
+/// explicit parameter of the adapter.
+pub fn RegistryOps(comptime TypeTag: type) type {
+    return struct {
+        roc_host: *abi.RocHost,
 
-    pub fn retainBox(_: RegistryOps, box: abi.RocBox) void {
-        abi.increfBox(box, 1);
-    }
+        pub fn retainBox(_: @This(), box: abi.RocBox) void {
+            abi.increfBox(box, 1);
+        }
 
-    pub fn releaseBox(self: RegistryOps, box: abi.RocBox) void {
-        abi.decrefBox(box, self.roc_host);
-    }
+        pub fn releaseBox(self: @This(), box: abi.RocBox) void {
+            abi.decrefBox(box, self.roc_host);
+        }
 
-    pub fn retainTag(_: RegistryOps, tag: anytype) void {
-        abi.increfBox(@ptrCast(tag), 1);
-    }
+        pub fn retainTag(_: @This(), tag: TypeTag) void {
+            abi.increfBox(@ptrCast(tag), 1);
+        }
 
-    pub fn releaseTag(self: RegistryOps, tag: anytype) void {
-        abi.decrefBox(@ptrCast(tag), self.roc_host);
-    }
+        pub fn releaseTag(self: @This(), tag: TypeTag) void {
+            abi.decrefBox(@ptrCast(tag), self.roc_host);
+        }
 
-    pub fn tagId(_: RegistryOps, tag: anytype) u64 {
-        const payload: *const u64 = @ptrCast(@alignCast(tag));
-        return payload.*;
-    }
-};
+        pub fn tagId(_: @This(), tag: TypeTag) u64 {
+            const payload: *const u64 = @ptrCast(@alignCast(tag));
+            return payload.*;
+        }
+    };
+}
 
 // Boxed-value constructors. `ctx` must expose:
 //   - `store(box: abi.RocBox) HostValue` — the host's registry store, including

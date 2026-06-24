@@ -26,6 +26,7 @@ const hv = @import("host_values.zig");
 pub const RenderTextField = render.TextField;
 pub const RenderBoolField = render.BoolField;
 pub const RenderEventKind = render.EventKind;
+pub const EventPayloadAccessor = render.EventPayloadAccessor;
 
 pub const HostValue = u64;
 pub const HostValueList = abi.RocListWith(HostValue, false);
@@ -189,80 +190,101 @@ pub const DispatchMetrics = struct {
     recompute_batches: u64 = 0,
 };
 
-pub const native_host_value_type_tags_enabled = switch (builtin.mode) {
-    .Debug, .ReleaseSafe => true,
-    .ReleaseFast, .ReleaseSmall => false,
-};
+fn verifyDeclFn(comptime owner_name: []const u8, comptime Owner: type, comptime decl_name: []const u8, comptime params: anytype, comptime return_type: type) void {
+    if (!@hasDecl(Owner, decl_name)) {
+        @compileError(owner_name ++ " is missing " ++ decl_name);
+    }
 
-pub fn verifyRegistryOps(comptime Ops: type) void {
-    inline for (.{
-        "retainBox",
-        "releaseBox",
-        "retainTag",
-        "releaseTag",
-        "tagId",
-    }) |decl_name| {
-        if (!@hasDecl(Ops, decl_name)) {
-            @compileError("engine RegistryOps is missing " ++ decl_name);
+    const fn_type = @TypeOf(@field(Owner, decl_name));
+    const type_info = @typeInfo(fn_type);
+    if (type_info != .@"fn") {
+        @compileError(owner_name ++ "." ++ decl_name ++ " must be a function");
+    }
+
+    const fn_info = type_info.@"fn";
+    if (fn_info.params.len != params.len) {
+        @compileError(owner_name ++ "." ++ decl_name ++ " has the wrong parameter count");
+    }
+    inline for (params, 0..) |expected, index| {
+        const actual = fn_info.params[index].type orelse {
+            @compileError(owner_name ++ "." ++ decl_name ++ " must not use anytype parameters");
+        };
+        if (actual != expected) {
+            @compileError(owner_name ++ "." ++ decl_name ++ " has an incompatible parameter type");
         }
     }
+    const actual_return = fn_info.return_type orelse void;
+    if (actual_return != return_type) {
+        @compileError(owner_name ++ "." ++ decl_name ++ " has an incompatible return type");
+    }
+}
+
+fn verifyTypeDecl(comptime owner_name: []const u8, comptime Owner: type, comptime decl_name: []const u8) void {
+    if (!@hasDecl(Owner, decl_name)) {
+        @compileError(owner_name ++ " is missing " ++ decl_name);
+    }
+    if (@TypeOf(@field(Owner, decl_name)) != type) {
+        @compileError(owner_name ++ "." ++ decl_name ++ " must be a type");
+    }
+}
+
+pub fn verifyRegistryOps(comptime Ops: type, comptime TypeTag: type) void {
+    verifyDeclFn("engine RegistryOps", Ops, "retainBox", .{ Ops, abi.RocBox }, void);
+    verifyDeclFn("engine RegistryOps", Ops, "releaseBox", .{ Ops, abi.RocBox }, void);
+    verifyDeclFn("engine RegistryOps", Ops, "retainTag", .{ Ops, TypeTag }, void);
+    verifyDeclFn("engine RegistryOps", Ops, "releaseTag", .{ Ops, TypeTag }, void);
+    verifyDeclFn("engine RegistryOps", Ops, "tagId", .{ Ops, TypeTag }, u64);
+}
+
+pub fn verifySink(comptime Sink: type) void {
+    verifyDeclFn("engine Sink", Sink, "reset", .{Sink}, void);
+    verifyDeclFn("engine Sink", Sink, "appendNode", .{ Sink, u64, u64, []const u8 }, void);
+    verifyDeclFn("engine Sink", Sink, "ensureNode", .{ Sink, u64, []const u8 }, void);
+    verifyDeclFn("engine Sink", Sink, "removeNode", .{ Sink, u64 }, void);
+    verifyDeclFn("engine Sink", Sink, "replaceChildren", .{ Sink, u64, []const u64 }, void);
+    verifyDeclFn("engine Sink", Sink, "replaceChildrenForMoves", .{ Sink, u64, []const u64 }, void);
+    verifyDeclFn("engine Sink", Sink, "applyTextField", .{ Sink, u64, RenderTextField, []const u8 }, void);
+    verifyDeclFn("engine Sink", Sink, "applyBoolField", .{ Sink, u64, RenderBoolField, bool }, void);
+    verifyDeclFn("engine Sink", Sink, "clearTextField", .{ Sink, u64, RenderTextField }, void);
+    verifyDeclFn("engine Sink", Sink, "clearBoolField", .{ Sink, u64, RenderBoolField }, void);
+    verifyDeclFn("engine Sink", Sink, "bindEventKind", .{ Sink, u64, RenderEventKind, u64, EventPayloadAccessor }, void);
+    verifyDeclFn("engine Sink", Sink, "clearEvent", .{ Sink, u64, RenderEventKind }, void);
+    verifyDeclFn("engine Sink", Sink, "startInterval", .{ Sink, u64, u64 }, void);
+    verifyDeclFn("engine Sink", Sink, "cancelInterval", .{ Sink, u64 }, void);
+    verifyDeclFn("engine Sink", Sink, "startTask", .{ Sink, u64, []const u8, []const u8 }, void);
+    verifyDeclFn("engine Sink", Sink, "cancelTask", .{ Sink, u64 }, void);
+    verifyDeclFn("engine Sink", Sink, "debugAssertNode", .{ Sink, u64, bool, ?[]const u8, ?u64, []const u64, ?u64, ?u64, ?u64 }, void);
+}
+
+pub fn verifyMetrics(comptime Metrics: type) void {
+    verifyDeclFn("engine Metrics", Metrics, "bump", .{ *Metrics, RuntimeMetrics.Field, u64 }, void);
 }
 
 pub fn verifyCtx(comptime Ctx: type) void {
-    inline for (.{
-        "HostValueTypeTag",
-        "host_value_type_tags_enabled",
-        "RegistryOps",
-        "Metrics",
-        "zeroMetrics",
-        "allocator",
-        "cloneHostValue",
-        "stateValueByNodeId",
-        "stateEqCallable",
-        "stateDropCallable",
-        "sink",
-    }) |decl_name| {
-        if (!@hasDecl(Ctx, decl_name)) {
-            @compileError("engine Ctx is missing " ++ decl_name);
-        }
+    verifyTypeDecl("engine Ctx", Ctx, "Handle");
+    verifyTypeDecl("engine Ctx", Ctx, "HostValueTypeTag");
+    verifyTypeDecl("engine Ctx", Ctx, "RegistryOps");
+    verifyTypeDecl("engine Ctx", Ctx, "Metrics");
+    verifyTypeDecl("engine Ctx", Ctx, "Sink");
+
+    if (!@hasDecl(Ctx, "host_value_type_tags_enabled")) {
+        @compileError("engine Ctx is missing host_value_type_tags_enabled");
     }
-    verifyRegistryOps(Ctx.RegistryOps);
+    if (@TypeOf(Ctx.host_value_type_tags_enabled) != bool) {
+        @compileError("engine Ctx.host_value_type_tags_enabled must be bool");
+    }
+
+    verifyDeclFn("engine Ctx", Ctx, "zeroMetrics", .{}, Ctx.Metrics);
+    verifyDeclFn("engine Ctx", Ctx, "allocator", .{Ctx.Handle}, std.mem.Allocator);
+    verifyDeclFn("engine Ctx", Ctx, "cloneHostValue", .{ Ctx.Handle, HostValue }, HostValue);
+    verifyDeclFn("engine Ctx", Ctx, "stateValueByNodeId", .{ Ctx.Handle, u64 }, HostValue);
+    verifyDeclFn("engine Ctx", Ctx, "stateEqCallable", .{ Ctx.Handle, u64 }, abi.RocErasedCallable);
+    verifyDeclFn("engine Ctx", Ctx, "stateDropCallable", .{ Ctx.Handle, u64 }, abi.RocErasedCallable);
+    verifyDeclFn("engine Ctx", Ctx, "sink", .{Ctx.Handle}, Ctx.Sink);
+    verifyRegistryOps(Ctx.RegistryOps, Ctx.HostValueTypeTag);
+    verifyMetrics(Ctx.Metrics);
+    verifySink(Ctx.Sink);
 }
-
-pub const NativeCtx = struct {
-    pub const HostValueTypeTag = *anyopaque;
-    pub const host_value_type_tags_enabled = native_host_value_type_tags_enabled;
-    pub const RegistryOps = hv.RegistryOps;
-    pub const Metrics = RuntimeMetrics;
-
-    pub fn zeroMetrics() Metrics {
-        return zeroRuntimeMetrics();
-    }
-
-    pub fn allocator(ctx: anytype) std.mem.Allocator {
-        return ctx.gpa.allocator();
-    }
-
-    pub fn cloneHostValue(ctx: anytype, value: HostValue) HostValue {
-        return ctx.cloneHostValue(value);
-    }
-
-    pub fn stateValueByNodeId(ctx: anytype, node_id: u64) HostValue {
-        return ctx.stateValueByNodeId(node_id);
-    }
-
-    pub fn stateEqCallable(ctx: anytype, node_id: u64) abi.RocErasedCallable {
-        return ctx.stateEqCallable(node_id);
-    }
-
-    pub fn stateDropCallable(ctx: anytype, node_id: u64) abi.RocErasedCallable {
-        return ctx.stateDropCallable(node_id);
-    }
-
-    pub fn sink(ctx: anytype) @TypeOf(ctx.sink()) {
-        return ctx.sink();
-    }
-};
 
 fn u64SliceContains(items: []const u64, target: u64) bool {
     for (items) |item| {
@@ -648,12 +670,6 @@ pub const EventPayloadKind = enum(u64) {
     unit = 1,
     str = 2,
     bool = 3,
-};
-
-pub const EventPayloadAccessor = enum(u64) {
-    none = 1,
-    target_value = 2,
-    target_checked = 3,
 };
 
 pub const SignalKind = enum(u64) {
@@ -2079,7 +2095,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.pending_roc_metrics = metrics;
         }
 
-        pub fn deinitRenderCache(self: *Self, ctx: anytype) void {
+        pub fn deinitRenderCache(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
             for (self.render_scalar_nodes.items) |*node| {
                 node.deinit(allocator);
@@ -2092,7 +2108,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.render_scalar_nodes.items.len != 0 and self.render_scalar_nodes.items[0].active;
         }
 
-        pub fn resetRenderTree(self: *Self, ctx: anytype) void {
+        pub fn resetRenderTree(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
             for (self.render_scalar_nodes.items) |*node| {
                 node.deinit(allocator);
@@ -2102,7 +2118,7 @@ pub fn Engine(comptime Ctx: type) type {
             Ctx.sink(ctx).reset();
         }
 
-        fn ensureRenderCacheNode(self: *Self, ctx: anytype, elem_id: u64, tag: []const u8) bool {
+        fn ensureRenderCacheNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, tag: []const u8) bool {
             const allocator = Ctx.allocator(ctx);
             const index: usize = @intCast(elem_id);
             if (index > self.render_scalar_nodes.items.len) {
@@ -2122,7 +2138,7 @@ pub fn Engine(comptime Ctx: type) type {
             return false;
         }
 
-        pub fn appendRenderNode(self: *Self, ctx: anytype, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
+        pub fn appendRenderNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, parent_elem_id: u64, tag: []const u8) void {
             const created = self.ensureRenderCacheNode(ctx, elem_id, tag);
             if (!created) @panic("initial render append reused an existing render cache identity");
             const parent = self.activeRenderScalarNode(parent_elem_id);
@@ -2132,13 +2148,13 @@ pub fn Engine(comptime Ctx: type) type {
             Ctx.sink(ctx).appendNode(elem_id, parent_elem_id, tag);
         }
 
-        pub fn ensureRenderNode(self: *Self, ctx: anytype, elem_id: u64, tag: []const u8, counts: *render.Counts) void {
+        pub fn ensureRenderNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, tag: []const u8, counts: *render.Counts) void {
             if (!self.ensureRenderCacheNode(ctx, elem_id, tag)) return;
             Ctx.sink(ctx).ensureNode(elem_id, tag);
             counts.addCreateElement();
         }
 
-        pub fn removeRenderNode(self: *Self, ctx: anytype, elem_id: u64, counts: *render.Counts) void {
+        pub fn removeRenderNode(self: *Self, ctx: Ctx.Handle, elem_id: u64, counts: *render.Counts) void {
             const allocator = Ctx.allocator(ctx);
             const index: usize = @intCast(elem_id);
             if (index >= self.render_scalar_nodes.items.len or !self.render_scalar_nodes.items[index].active) {
@@ -2168,7 +2184,7 @@ pub fn Engine(comptime Ctx: type) type {
             return &self.render_scalar_nodes.items[index];
         }
 
-        pub fn replaceRenderChildren(self: *Self, ctx: anytype, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
+        pub fn replaceRenderChildren(self: *Self, ctx: Ctx.Handle, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
             const allocator = Ctx.allocator(ctx);
             const parent = self.activeRenderScalarNode(parent_elem_id);
 
@@ -2191,7 +2207,7 @@ pub fn Engine(comptime Ctx: type) type {
             Ctx.sink(ctx).replaceChildren(parent_elem_id, next_child_ids);
         }
 
-        pub fn replaceRenderChildrenForMoves(self: *Self, ctx: anytype, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
+        pub fn replaceRenderChildrenForMoves(self: *Self, ctx: Ctx.Handle, parent_elem_id: u64, next_child_ids: []const u64, counts: *render.Counts) void {
             const allocator = Ctx.allocator(ctx);
             const parent = self.activeRenderScalarNode(parent_elem_id);
             if (parent.children.items.len != next_child_ids.len) @panic("pure structural move changed child count");
@@ -2230,7 +2246,7 @@ pub fn Engine(comptime Ctx: type) type {
             Ctx.sink(ctx).replaceChildrenForMoves(parent_elem_id, next_child_ids);
         }
 
-        pub fn applyRenderEventBinding(self: *Self, ctx: anytype, elem_id: u64, kind: RenderEventKind, binding: ?HostRequiredEventBinding, counts: *render.Counts) void {
+        pub fn applyRenderEventBinding(self: *Self, ctx: Ctx.Handle, elem_id: u64, kind: RenderEventKind, binding: ?HostRequiredEventBinding, counts: *render.Counts) void {
             const node = self.activeRenderScalarNode(elem_id);
             const event_slot = node.eventSlot(kind);
             const accessor_slot = node.eventAccessorSlot(kind);
@@ -2289,7 +2305,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn debugAssertRenderCacheMatchesStream(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream) void {
+        pub fn debugAssertRenderCacheMatchesStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream) void {
             if (comptime builtin.mode != .Debug) return;
 
             const allocator = Ctx.allocator(ctx);
@@ -2333,7 +2349,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn debugAssertRenderCacheMatchesSink(self: *Self, ctx: anytype) void {
+        pub fn debugAssertRenderCacheMatchesSink(self: *Self, ctx: Ctx.Handle) void {
             if (comptime builtin.mode != .Debug) return;
 
             for (self.render_scalar_nodes.items, 0..) |cached, index| {
@@ -2350,7 +2366,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn applyRenderTextField(self: *Self, ctx: anytype, elem_id: u64, field: RenderTextField, value: []const u8) bool {
+        pub fn applyRenderTextField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderTextField, value: []const u8) bool {
             const allocator = Ctx.allocator(ctx);
             const slot = self.activeRenderScalarNode(elem_id).textSlot(field);
             if (slot.*) |existing| {
@@ -2364,7 +2380,7 @@ pub fn Engine(comptime Ctx: type) type {
             return true;
         }
 
-        pub fn applyRenderBoolField(self: *Self, ctx: anytype, elem_id: u64, field: RenderBoolField, value: bool) bool {
+        pub fn applyRenderBoolField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderBoolField, value: bool) bool {
             const slot = self.activeRenderScalarNode(elem_id).boolSlot(field);
             if (slot.*) |existing| {
                 if (existing == value) return false;
@@ -2375,7 +2391,7 @@ pub fn Engine(comptime Ctx: type) type {
             return true;
         }
 
-        pub fn clearRenderTextField(self: *Self, ctx: anytype, elem_id: u64, field: RenderTextField) bool {
+        pub fn clearRenderTextField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderTextField) bool {
             const allocator = Ctx.allocator(ctx);
             const slot = self.activeRenderScalarNode(elem_id).textSlot(field);
             const existing = slot.* orelse return false;
@@ -2385,7 +2401,7 @@ pub fn Engine(comptime Ctx: type) type {
             return true;
         }
 
-        pub fn clearRenderBoolField(self: *Self, ctx: anytype, elem_id: u64, field: RenderBoolField) bool {
+        pub fn clearRenderBoolField(self: *Self, ctx: Ctx.Handle, elem_id: u64, field: RenderBoolField) bool {
             const slot = self.activeRenderScalarNode(elem_id).boolSlot(field);
             const existing = slot.* orelse return false;
             slot.* = null;
@@ -2705,7 +2721,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.pending_roc_metrics = metrics;
         }
 
-        pub fn cloneCachedSignalValue(self: *Self, ctx: anytype, cache_slot: *const HostSignalCacheSlot) HostValue {
+        pub fn cloneCachedSignalValue(self: *Self, ctx: Ctx.Handle, cache_slot: *const HostSignalCacheSlot) HostValue {
             _ = self;
             return switch (cache_slot.*) {
                 .absent => @panic("cached signal expression value was requested before initialization"),
@@ -2713,7 +2729,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn updateDirtySignalExprCache(self: *Self, ctx: anytype, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) HostSignalEvalResult {
+        pub fn updateDirtySignalExprCache(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) HostSignalEvalResult {
             switch (cache_slot.*) {
                 .absent => @panic("dirty signal expression was evaluated before its initial value was cached"),
                 .present => |*cached| {
@@ -2747,7 +2763,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn cloneMemoizedDirtySignalResult(self: *Self, ctx: anytype, record: *HostSignalRecord, dirty_generation: u64) ?HostSignalEvalResult {
+        pub fn cloneMemoizedDirtySignalResult(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord, dirty_generation: u64) ?HostSignalEvalResult {
             if (record.last_dirty_generation != dirty_generation) return null;
 
             return switch (record.payload) {
@@ -2785,7 +2801,7 @@ pub fn Engine(comptime Ctx: type) type {
             return result;
         }
 
-        pub fn hostSignalRecordEqCallable(_: *Self, ctx: anytype, record: *const HostSignalRecord) abi.RocErasedCallable {
+        pub fn hostSignalRecordEqCallable(_: *Self, ctx: Ctx.Handle, record: *const HostSignalRecord) abi.RocErasedCallable {
             return switch (record.payload) {
                 .ref => |node_id| Ctx.stateEqCallable(ctx, node_id),
                 .const_value => |payload| payload.eq,
@@ -2797,11 +2813,11 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn hostSignalBindingEqCallable(self: *Self, ctx: anytype, signal: *const HostSignalBinding) abi.RocErasedCallable {
+        pub fn hostSignalBindingEqCallable(self: *Self, ctx: Ctx.Handle, signal: *const HostSignalBinding) abi.RocErasedCallable {
             return self.hostSignalRecordEqCallable(ctx, signal.record);
         }
 
-        pub fn hostSignalRecordDropCallable(_: *Self, ctx: anytype, record: *const HostSignalRecord) abi.RocErasedCallable {
+        pub fn hostSignalRecordDropCallable(_: *Self, ctx: Ctx.Handle, record: *const HostSignalRecord) abi.RocErasedCallable {
             return switch (record.payload) {
                 .ref => |node_id| Ctx.stateDropCallable(ctx, node_id),
                 .const_value => |payload| payload.drop,
@@ -2813,15 +2829,15 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn hostSignalBindingDropCallable(self: *Self, ctx: anytype, signal: *const HostSignalBinding) abi.RocErasedCallable {
+        pub fn hostSignalBindingDropCallable(self: *Self, ctx: Ctx.Handle, signal: *const HostSignalBinding) abi.RocErasedCallable {
             return self.hostSignalRecordDropCallable(ctx, signal.record);
         }
 
-        pub fn dropHostSignalRecordValue(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *const HostSignalRecord, value: HostValue) void {
+        pub fn dropHostSignalRecordValue(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, record: *const HostSignalRecord, value: HostValue) void {
             erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalRecordDropCallable(ctx, record), value);
         }
 
-        pub fn ensureStateFromDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
+        pub fn ensureStateFromDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
             if (self.stateIndexByNodeId(desc.node_id) != null) return;
 
             const initial = erased_calls.callValueInitThunk(roc_host, desc.initial);
@@ -3025,12 +3041,12 @@ pub fn Engine(comptime Ctx: type) type {
             return false;
         }
 
-        pub fn cloneHostSignalCacheSlot(self: *Self, ctx: anytype, slot: HostSignalCacheSlot, metrics: anytype) HostSignalCacheSlot {
+        pub fn cloneHostSignalCacheSlot(self: *Self, ctx: Ctx.Handle, slot: HostSignalCacheSlot, metrics: anytype) HostSignalCacheSlot {
             _ = self;
             return slot.cloneRetained(ctx, metrics);
         }
 
-        pub fn copyActiveScopeSubtreeDescriptors(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
+        pub fn copyActiveScopeSubtreeDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
             const allocator = Ctx.allocator(ctx);
             const previous = &self.active_stream;
             const previous_render_base = self.firstRenderIndexInScopeSubtree(previous, root_scope_id);
@@ -3125,7 +3141,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn deinitPendingTask(self: *Self, ctx: anytype, task: *HostPendingTask) void {
+        pub fn deinitPendingTask(self: *Self, ctx: Ctx.Handle, task: *HostPendingTask) void {
             const allocator = Ctx.allocator(ctx);
             abi.decrefBox(@ptrCast(task.task_token), self.roc_host.?);
             allocator.free(task.task_name);
@@ -3133,21 +3149,21 @@ pub fn Engine(comptime Ctx: type) type {
             task.* = undefined;
         }
 
-        pub fn cancelPendingTask(self: *Self, ctx: anytype, task: *HostPendingTask) void {
+        pub fn cancelPendingTask(self: *Self, ctx: Ctx.Handle, task: *HostPendingTask) void {
             if (task.active) {
                 Ctx.sink(ctx).cancelTask(task.request_id);
             }
             self.deinitPendingTask(ctx, task);
         }
 
-        pub fn clearPendingTasks(self: *Self, ctx: anytype) void {
+        pub fn clearPendingTasks(self: *Self, ctx: Ctx.Handle) void {
             for (self.pending_tasks.items) |*task| {
                 self.cancelPendingTask(ctx, task);
             }
             self.pending_tasks.items.len = 0;
         }
 
-        pub fn cancelPendingTasksInScopeSubtree(self: *Self, ctx: anytype, scope_id: u64) void {
+        pub fn cancelPendingTasksInScopeSubtree(self: *Self, ctx: Ctx.Handle, scope_id: u64) void {
             var write_index: usize = 0;
             for (self.pending_tasks.items) |*task| {
                 if (self.scopeIsDescendantOrSelf(task.owner_scope_id, scope_id) catch @panic("scope descriptor referenced an unknown parent scope")) {
@@ -3160,7 +3176,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.pending_tasks.items.len = write_index;
         }
 
-        pub fn appendCleanupEvent(self: *Self, ctx: anytype, name: []const u8) void {
+        pub fn appendCleanupEvent(self: *Self, ctx: Ctx.Handle, name: []const u8) void {
             const allocator = Ctx.allocator(ctx);
             const copy = allocator.dupe(u8, name) catch @panic("out of memory");
             self.cleanup_events.append(allocator, copy) catch {
@@ -3169,7 +3185,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn disposeScopeSubtree(self: *Self, ctx: anytype, roc_host: *abi.RocHost, scope_id: u64) void {
+        pub fn disposeScopeSubtree(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, scope_id: u64) void {
             self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
 
             var child_index: usize = 0;
@@ -3210,7 +3226,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.pending_roc_metrics = metrics;
         }
 
-        pub fn createEachRowScope(self: *Self, ctx: anytype, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
+        pub fn createEachRowScope(self: *Self, ctx: Ctx.Handle, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
             self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
 
             const key_cell = HostValueCell.initRetained(key, key_eq, key_drop, &self.pending_roc_metrics);
@@ -3253,7 +3269,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn syncEachRowScopes(self: *Self, ctx: anytype, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) HostKeyedRowDiffResult {
+        pub fn syncEachRowScopes(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) HostKeyedRowDiffResult {
             self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
             if (keys.len != items.len) @panic("Ui.each keyed scope received mismatched key and item lists");
 
@@ -3318,7 +3334,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn syncActiveEachRowScopes(self: *Self, ctx: anytype, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc) HostKeyedRowDiffResult {
+        pub fn syncActiveEachRowScopes(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc) HostKeyedRowDiffResult {
             if (site.kind != .each) {
                 @panic("active row sync requires an each scope site");
             }
@@ -3344,7 +3360,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.syncEachRowScopes(ctx, roc_host, site.scope_id, site.ordinal, keys, item_values, each.key_hash, each.key_eq, each.key_drop, each.item_eq, each.item_drop);
         }
 
-        pub fn collectNodeAttrDescriptor(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
+        pub fn collectNodeAttrDescriptor(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
             const allocator = Ctx.allocator(ctx);
             switch (attr.tag) {
                 .StaticText => {
@@ -3386,7 +3402,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn collectActiveWhenBranchDescriptors(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, dirty_source_node_ids: []const u64) u64 {
+        pub fn collectActiveWhenBranchDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, dirty_source_node_ids: []const u64) u64 {
             if (site.kind != .when) {
                 @panic("active branch collection requires a when scope site");
             }
@@ -3414,14 +3430,14 @@ pub fn Engine(comptime Ctx: type) type {
             return branch_scope_id;
         }
 
-        pub fn collectActiveEachRowDescriptors(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, dirty_source_node_ids: []const u64) void {
+        pub fn collectActiveEachRowDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, dirty_source_node_ids: []const u64) void {
             const allocator = Ctx.allocator(ctx);
             const diff = self.syncActiveEachRowScopes(ctx, roc_host, site, each);
             defer diff.deinit(allocator);
             self.collectActiveEachRowDescriptorsFromDiff(ctx, roc_host, stream, site, each, diff, dirty_source_node_ids);
         }
 
-        pub fn collectActiveEachRowDescriptorsFromDiff(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) void {
+        pub fn collectActiveEachRowDescriptorsFromDiff(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) void {
             const allocator = Ctx.allocator(ctx);
             var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
             defer binder_stack.deinit(allocator);
@@ -3443,7 +3459,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn collectActiveEachSingleRowDescriptors(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, dirty_source_node_ids: []const u64) void {
+        pub fn collectActiveEachSingleRowDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, dirty_source_node_ids: []const u64) void {
             const allocator = Ctx.allocator(ctx);
             var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
             defer binder_stack.deinit(allocator);
@@ -3458,7 +3474,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
         }
 
-        pub fn collectActiveElemDescriptors(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), dirty_source_node_ids: []const u64) void {
+        pub fn collectActiveElemDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), dirty_source_node_ids: []const u64) void {
             self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
 
             const allocator = Ctx.allocator(ctx);
@@ -3602,7 +3618,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn collectActiveElemRootDescriptors(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem, dirty_source_node_ids: []const u64) void {
+        pub fn collectActiveElemRootDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem, dirty_source_node_ids: []const u64) void {
             const root_scope_id = self.internRootScope(Ctx.allocator(ctx)) catch @panic("scope id has no host scope descriptor");
             const allocator = Ctx.allocator(ctx);
             var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
@@ -3612,7 +3628,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.collectActiveElemDescriptors(ctx, roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
         }
 
-        pub fn clearActiveSignalGraph(self: *Self, ctx: anytype) void {
+        pub fn clearActiveSignalGraph(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
             const roc_host = self.roc_host orelse {
                 if (self.active_signal_graph.items.len != 0) @panic("active signal graph cannot release records without a Roc host");
@@ -3630,7 +3646,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_signal_graph.items.len = 0;
         }
 
-        pub fn clearActiveIntervals(self: *Self, ctx: anytype) void {
+        pub fn clearActiveIntervals(self: *Self, ctx: Ctx.Handle) void {
             const roc_host = self.roc_host orelse {
                 if (self.active_intervals.items.len != 0) @panic("active intervals cannot release tokens without a Roc host");
                 self.active_intervals.items.len = 0;
@@ -3661,7 +3677,7 @@ pub fn Engine(comptime Ctx: type) type {
             return found;
         }
 
-        fn ensureActiveInterval(self: *Self, ctx: anytype, source_token: HostSignalToken, period_ms: u64) void {
+        fn ensureActiveInterval(self: *Self, ctx: Ctx.Handle, source_token: HostSignalToken, period_ms: u64) void {
             if (self.activeIntervalBySourceToken(source_token)) |interval| {
                 if (interval.period_ms != period_ms) @panic("interval source token changed period");
                 interval.active = true;
@@ -3684,7 +3700,7 @@ pub fn Engine(comptime Ctx: type) type {
             Ctx.sink(ctx).startInterval(token, period_ms);
         }
 
-        fn syncActiveIntervalsFromGraph(self: *Self, ctx: anytype) void {
+        fn syncActiveIntervalsFromGraph(self: *Self, ctx: Ctx.Handle) void {
             self.markActiveIntervalsInactive();
 
             for (self.active_signal_graph.items) |node| {
@@ -3714,7 +3730,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_intervals.items.len = write_index;
         }
 
-        pub fn clearActiveSignalRoutes(self: *Self, ctx: anytype) void {
+        pub fn clearActiveSignalRoutes(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
             for (self.active_source_signal_routes.items) |*route| {
                 route.deinit(allocator);
@@ -3742,7 +3758,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_structural_signal_routes.items.len = 0;
         }
 
-        pub fn clearActiveSinkSignalRoutes(self: *Self, ctx: anytype) void {
+        pub fn clearActiveSinkSignalRoutes(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
             for (self.active_text_signal_routes.items) |*route| {
                 route.deinit(allocator);
@@ -3778,7 +3794,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.activeSignalRecordId(record) orelse @panic("active signal graph referenced a record that was not registered");
         }
 
-        pub fn appendActiveSignalGraphNode(self: *Self, ctx: anytype, record: *HostSignalRecord, rank: u64) u64 {
+        pub fn appendActiveSignalGraphNode(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord, rank: u64) u64 {
             const allocator = Ctx.allocator(ctx);
             const record_id: u64 = @intCast(self.active_signal_graph.items.len);
             self.active_signal_graph.append(allocator, .{
@@ -3790,7 +3806,7 @@ pub fn Engine(comptime Ctx: type) type {
             return record_id;
         }
 
-        pub fn appendActiveSignalDependentId(self: *Self, ctx: anytype, input_record_id: u64, dependent_record_id: u64) void {
+        pub fn appendActiveSignalDependentId(self: *Self, ctx: Ctx.Handle, input_record_id: u64, dependent_record_id: u64) void {
             signal_graph.appendDependent(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| switch (err) {
                 error.OutOfMemory => @panic("out of memory"),
                 error.UnknownNode => @panic("active signal dependent referenced an unknown input record"),
@@ -3798,14 +3814,14 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn appendActiveSourceSignalRoute(self: *Self, ctx: anytype, source_node_id: u64, record_id: u64) void {
+        pub fn appendActiveSourceSignalRoute(self: *Self, ctx: Ctx.Handle, source_node_id: u64, record_id: u64) void {
             const route = self.ensureActiveSourceSignalRoute(ctx, source_node_id);
             if (!u64SliceContains(route.items, record_id)) {
                 route.append(Ctx.allocator(ctx), record_id) catch @panic("out of memory");
             }
         }
 
-        pub fn retainActiveSignalRecord(self: *Self, ctx: anytype, record: *HostSignalRecord) void {
+        pub fn retainActiveSignalRecord(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord) void {
             if (record.active_use_count != 0) {
                 record.active_use_count += 1;
                 return;
@@ -3864,7 +3880,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn ensureActiveSourceSignalRoute(self: *Self, ctx: anytype, source_node_id: u64) *std.ArrayListUnmanaged(u64) {
+        pub fn ensureActiveSourceSignalRoute(self: *Self, ctx: Ctx.Handle, source_node_id: u64) *std.ArrayListUnmanaged(u64) {
             if (source_node_id >= self.node_identities.items.len) @panic("active source signal route referenced an unknown source node");
             const allocator = Ctx.allocator(ctx);
             const route_index: usize = @intCast(source_node_id);
@@ -3874,7 +3890,7 @@ pub fn Engine(comptime Ctx: type) type {
             return &self.active_source_signal_routes.items[route_index];
         }
 
-        pub fn ensureActiveTextSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
+        pub fn ensureActiveTextSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveTextSignalSink) {
             if (record_id >= self.active_signal_graph.items.len) @panic("active text signal route referenced an unknown signal record");
             const allocator = Ctx.allocator(ctx);
             const route_index: usize = @intCast(record_id);
@@ -3884,7 +3900,7 @@ pub fn Engine(comptime Ctx: type) type {
             return &self.active_text_signal_routes.items[route_index];
         }
 
-        pub fn ensureActiveBoolSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
+        pub fn ensureActiveBoolSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveBoolSignalSink) {
             if (record_id >= self.active_signal_graph.items.len) @panic("active bool signal route referenced an unknown signal record");
             const allocator = Ctx.allocator(ctx);
             const route_index: usize = @intCast(record_id);
@@ -3894,7 +3910,7 @@ pub fn Engine(comptime Ctx: type) type {
             return &self.active_bool_signal_routes.items[route_index];
         }
 
-        pub fn ensureActiveChangeSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveChangeSignalSink) {
+        pub fn ensureActiveChangeSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveChangeSignalSink) {
             if (record_id >= self.active_signal_graph.items.len) @panic("active change signal route referenced an unknown signal record");
             const allocator = Ctx.allocator(ctx);
             const route_index: usize = @intCast(record_id);
@@ -3904,7 +3920,7 @@ pub fn Engine(comptime Ctx: type) type {
             return &self.active_change_signal_routes.items[route_index];
         }
 
-        pub fn ensureActiveStructuralSignalRoute(self: *Self, ctx: anytype, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
+        pub fn ensureActiveStructuralSignalRoute(self: *Self, ctx: Ctx.Handle, record_id: u64) *std.ArrayListUnmanaged(HostActiveStructuralSignal) {
             if (record_id >= self.active_signal_graph.items.len) @panic("active structural signal route referenced an unknown signal record");
             const allocator = Ctx.allocator(ctx);
             const route_index: usize = @intCast(record_id);
@@ -3914,7 +3930,7 @@ pub fn Engine(comptime Ctx: type) type {
             return &self.active_structural_signal_routes.items[route_index];
         }
 
-        pub fn rebuildActiveSinkSignalRoutesFromStream(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream) void {
+        pub fn rebuildActiveSinkSignalRoutesFromStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream) void {
             const allocator = Ctx.allocator(ctx);
             self.clearActiveSinkSignalRoutes(ctx);
 
@@ -3965,7 +3981,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn rebuildActiveSignalGraphFromStream(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream) void {
+        pub fn rebuildActiveSignalGraphFromStream(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream) void {
             self.clearActiveSignalRoutes(ctx);
             self.clearActiveSignalGraph(ctx);
 
@@ -3992,7 +4008,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.syncActiveIntervalsFromGraph(ctx);
         }
 
-        fn removeActiveSignalDependentId(self: *Self, ctx: anytype, input_record_id: u64, dependent_record_id: u64) void {
+        fn removeActiveSignalDependentId(self: *Self, ctx: Ctx.Handle, input_record_id: u64, dependent_record_id: u64) void {
             signal_graph.removeDependent(HostSignalRecord, Ctx.allocator(ctx), self.active_signal_graph.items, input_record_id, dependent_record_id) catch |err| switch (err) {
                 error.OutOfMemory => @panic("out of memory"),
                 error.UnknownNode => @panic("active signal dependent removal referenced an unknown input record"),
@@ -4029,13 +4045,13 @@ pub fn Engine(comptime Ctx: type) type {
             @panic("active source signal route rewrite missed its record");
         }
 
-        fn appendUniqueActiveInputRecord(ctx: anytype, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
+        fn appendUniqueActiveInputRecord(ctx: Ctx.Handle, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
             if (!recordSliceContains(records.items, record)) {
                 records.append(Ctx.allocator(ctx), record) catch @panic("out of memory");
             }
         }
 
-        fn appendActiveSignalInputRecords(ctx: anytype, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
+        fn appendActiveSignalInputRecords(ctx: Ctx.Handle, records: *std.ArrayListUnmanaged(*HostSignalRecord), record: *HostSignalRecord) void {
             switch (record.payload) {
                 .ref, .const_value, .task_source, .interval_source => {},
                 .map => |payload| appendUniqueActiveInputRecord(ctx, records, payload.input),
@@ -4071,7 +4087,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        fn removeActiveSignalGraphNode(self: *Self, ctx: anytype, record_id: u64, record: *HostSignalRecord) void {
+        fn removeActiveSignalGraphNode(self: *Self, ctx: Ctx.Handle, record_id: u64, record: *HostSignalRecord) void {
             const allocator = Ctx.allocator(ctx);
             const record_index: usize = @intCast(record_id);
             if (record_index >= self.active_signal_graph.items.len) @panic("active signal graph removal referenced an unknown record");
@@ -4093,7 +4109,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn releaseActiveSignalRecord(self: *Self, ctx: anytype, record: *HostSignalRecord) void {
+        pub fn releaseActiveSignalRecord(self: *Self, ctx: Ctx.Handle, record: *HostSignalRecord) void {
             if (record.active_use_count == 0) @panic("active signal graph record use count underflow");
             record.active_use_count -= 1;
             if (record.active_use_count != 0) return;
@@ -4121,28 +4137,28 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        fn deinitActiveSignalTextNodeDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeSignalTextNodeDesc) void {
+        fn deinitActiveSignalTextNodeDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalTextNodeDesc) void {
             desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
             self.pending_roc_metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.read, roc_host);
         }
 
-        fn deinitActiveSignalTextAttrDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeSignalTextAttrDesc) void {
+        fn deinitActiveSignalTextAttrDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalTextAttrDesc) void {
             desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
             self.pending_roc_metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.read, roc_host);
         }
 
-        fn deinitActiveSignalBoolAttrDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeSignalBoolAttrDesc) void {
+        fn deinitActiveSignalBoolAttrDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalBoolAttrDesc) void {
             desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
             self.pending_roc_metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(desc.read, roc_host);
         }
 
-        fn deinitActiveOnChangeDesc(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
+        fn deinitActiveOnChangeDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
             desc.cached_value.deinit(roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), roc_host, &self.pending_roc_metrics);
             self.pending_roc_metrics.bump(.closure_releases, 1);
@@ -4173,7 +4189,7 @@ pub fn Engine(comptime Ctx: type) type {
             return false;
         }
 
-        fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+        fn removeActiveElementDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.elements.items.len);
@@ -4190,7 +4206,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.elements.items.len = write_index;
         }
 
-        fn removeActiveTextNodeDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+        fn removeActiveTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.text_nodes.items.len);
@@ -4207,7 +4223,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.text_nodes.items.len = write_index;
         }
 
-        fn removeActiveSignalTextNodeDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveSignalTextNodeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.signal_text_nodes.items.len);
             for (self.active_stream.signal_text_nodes.items, 0..) |desc, read_index| {
@@ -4225,7 +4241,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.signal_text_nodes.items.len = write_index;
         }
 
-        fn removeActiveStaticTextAttrDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+        fn removeActiveStaticTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.static_text_attrs.items.len);
@@ -4242,7 +4258,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.static_text_attrs.items.len = write_index;
         }
 
-        fn removeActiveSignalTextAttrDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveSignalTextAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.signal_text_attrs.items.len);
             for (self.active_stream.signal_text_attrs.items, 0..) |desc, read_index| {
@@ -4275,7 +4291,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.static_bool_attrs.items.len = write_index;
         }
 
-        fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveSignalBoolAttrDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.signal_bool_attrs.items.len);
             for (self.active_stream.signal_bool_attrs.items, 0..) |desc, read_index| {
@@ -4293,7 +4309,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.signal_bool_attrs.items.len = write_index;
         }
 
-        fn removeActiveOnChangeDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveOnChangeDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.on_changes.items.len);
             for (self.active_stream.on_changes.items) |desc| {
@@ -4309,7 +4325,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.on_changes.items.len = write_index;
         }
 
-        fn removeActiveCleanupDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+        fn removeActiveCleanupDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.cleanups.items.len);
@@ -4354,7 +4370,7 @@ pub fn Engine(comptime Ctx: type) type {
             if (self.active_events.items.len != 0) self.active_events.items.len = write_index;
         }
 
-        fn removeActiveScopeSiteDescriptorsInTarget(self: *Self, ctx: anytype, target: HostStructuralReplacementTarget) void {
+        fn removeActiveScopeSiteDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.scope_sites.items.len);
@@ -4386,7 +4402,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.states.items.len = write_index;
         }
 
-        fn removeActiveWhenDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveWhenDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.whens.items.len);
             for (self.active_stream.whens.items) |desc| {
@@ -4407,7 +4423,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.whens.items.len = write_index;
         }
 
-        fn removeActiveEachDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveEachDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             var write_index: usize = 0;
             self.recordStreamNodesScanned(self.active_stream.eaches.items.len);
             for (self.active_stream.eaches.items) |desc| {
@@ -4433,7 +4449,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.eaches.items.len = write_index;
         }
 
-        fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+        fn removeActiveNonRenderDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
             self.removeActiveStaticTextAttrDescriptorsInTarget(ctx, target);
             self.removeActiveSignalTextAttrDescriptorsInTarget(ctx, roc_host, target);
             self.removeActiveStaticBoolAttrDescriptorsInTarget(target);
@@ -4456,7 +4472,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        fn appendReplacementEventsMoved(self: *Self, ctx: anytype, replacement: *HostNodeDescriptorStream) void {
+        fn appendReplacementEventsMoved(self: *Self, ctx: Ctx.Handle, replacement: *HostNodeDescriptorStream) void {
             const allocator = Ctx.allocator(ctx);
             if (self.active_events.items.len != self.active_stream.events.items.len) {
                 if (self.active_stream.events.items.len != 0) @panic("active event descriptor table is out of sync before replacement event splice");
@@ -4485,7 +4501,7 @@ pub fn Engine(comptime Ctx: type) type {
             replacement.events.items.len = 0;
         }
 
-        fn appendReplacementNonRenderDescriptorsMoved(self: *Self, ctx: anytype, replacement: *HostNodeDescriptorStream, render_insert_offset: usize) void {
+        fn appendReplacementNonRenderDescriptorsMoved(self: *Self, ctx: Ctx.Handle, replacement: *HostNodeDescriptorStream, render_insert_offset: usize) void {
             const allocator = Ctx.allocator(ctx);
 
             const element_base = self.active_stream.elements.items.len;
@@ -4579,7 +4595,7 @@ pub fn Engine(comptime Ctx: type) type {
             replacement.eaches.items.len = 0;
         }
 
-        fn rebuildActiveStreamSignalRecordTable(self: *Self, ctx: anytype) void {
+        fn rebuildActiveStreamSignalRecordTable(self: *Self, ctx: Ctx.Handle) void {
             const allocator = Ctx.allocator(ctx);
             self.active_stream.signal_records_by_token.items.len = 0;
 
@@ -4622,7 +4638,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn spliceActiveStreamReplacingTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
+        pub fn spliceActiveStreamReplacingTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
             const allocator = Ctx.allocator(ctx);
             if (render_insert_index > self.active_stream.render_nodes.items.len) @panic("structural replacement render insertion point is outside the active stream");
 
@@ -4693,16 +4709,16 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn spliceActiveStreamReplacingScope(self: *Self, ctx: anytype, roc_host: *abi.RocHost, replaced_scope_id: u64, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
+        pub fn spliceActiveStreamReplacingScope(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, replaced_scope_id: u64, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
             return self.spliceActiveStreamReplacingTarget(ctx, roc_host, .{ .scope = replaced_scope_id }, render_insert_index, replacement);
         }
 
-        pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: anytype, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
+        pub fn replaceSignalExprCacheAndClone(self: *Self, ctx: Ctx.Handle, cache_slot: *HostSignalCacheSlot, roc_host: *abi.RocHost, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) HostValue {
             cache_slot.replace(roc_host, &self.pending_roc_metrics, value, eq, drop);
             return self.cloneCachedSignalValue(ctx, cache_slot);
         }
 
-        pub fn evalHostSignalRecord(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *HostSignalRecord) HostValue {
+        pub fn evalHostSignalRecord(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, record: *HostSignalRecord) HostValue {
             switch (record.payload) {
                 .ref => |node_id| return Ctx.stateValueByNodeId(ctx, node_id),
                 .const_value => |*payload| {
@@ -4768,11 +4784,11 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn evalHostSignalBinding(self: *Self, ctx: anytype, roc_host: *abi.RocHost, signal: *HostSignalBinding) HostValue {
+        pub fn evalHostSignalBinding(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, signal: *HostSignalBinding) HostValue {
             return self.evalHostSignalRecord(ctx, roc_host, signal.record);
         }
 
-        pub fn evalSignalTextField(self: *Self, ctx: anytype, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
+        pub fn evalSignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
             const value = self.evalHostSignalBinding(ctx, roc_host, signal);
             const text = erased_calls.callErasedHostValueToStr(roc_host, read, value);
             defer text.decref(roc_host);
@@ -4781,7 +4797,7 @@ pub fn Engine(comptime Ctx: type) type {
             return changed;
         }
 
-        pub fn evalSignalBoolField(self: *Self, ctx: anytype, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
+        pub fn evalSignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
             const value = self.evalHostSignalBinding(ctx, roc_host, signal);
             const bool_value = erased_calls.callErasedHostValueToBool(roc_host, read, value);
             const changed = self.applyRenderBoolField(ctx, elem_id, field, bool_value);
@@ -4789,7 +4805,7 @@ pub fn Engine(comptime Ctx: type) type {
             return changed;
         }
 
-        pub fn evalDirtySignalTextField(self: *Self, ctx: anytype, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+        pub fn evalDirtySignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
             const result = self.evalDirtyHostSignalBinding(ctx, roc_host, signal, dirty_source_node_ids, dirty_generation);
             if (!result.changed) {
                 erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalBindingDropCallable(ctx, signal), result.value);
@@ -4801,7 +4817,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.applyRenderTextField(ctx, elem_id, field, text.asSlice());
         }
 
-        pub fn evalDirtySignalBoolField(self: *Self, ctx: anytype, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+        pub fn evalDirtySignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
             const result = self.evalDirtyHostSignalBinding(ctx, roc_host, signal, dirty_source_node_ids, dirty_generation);
             if (!result.changed) {
                 erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalBindingDropCallable(ctx, signal), result.value);
@@ -4811,7 +4827,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.applyRenderBoolField(ctx, elem_id, field, erased_calls.callErasedHostValueToBool(roc_host, read, result.value));
         }
 
-        pub fn evalDirtyHostSignalRecord(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *HostSignalRecord, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
+        pub fn evalDirtyHostSignalRecord(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, record: *HostSignalRecord, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
             if (dirty_generation == 0) @panic("dirty signal evaluation used generation 0");
             if (self.cloneMemoizedDirtySignalResult(ctx, record, dirty_generation)) |result| return result;
 
@@ -4894,17 +4910,17 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn evalDirtyHostSignalBinding(self: *Self, ctx: anytype, roc_host: *abi.RocHost, signal: *HostSignalBinding, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
+        pub fn evalDirtyHostSignalBinding(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, signal: *HostSignalBinding, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
             return self.evalDirtyHostSignalRecord(ctx, roc_host, signal.record, dirty_source_node_ids, dirty_generation);
         }
 
-        pub fn propagateDirtyActiveSignals(self: *Self, ctx: anytype, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
+        pub fn propagateDirtyActiveSignals(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
             const dirty_record_ids = self.dirtyActiveSignalRecordIdsForSources(allocator, dirty_source_node_ids);
             defer allocator.free(dirty_record_ids);
             return self.propagateDirtyActiveSignalRecordIds(ctx, roc_host, allocator, dirty_record_ids, dirty_source_node_ids, dirty_generation);
         }
 
-        pub fn propagateDirtyActiveSignalRecordIds(self: *Self, ctx: anytype, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_record_ids: []const u64, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
+        pub fn propagateDirtyActiveSignalRecordIds(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_record_ids: []const u64, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
             var changed_record_ids: std.ArrayListUnmanaged(u64) = .empty;
             errdefer changed_record_ids.deinit(allocator);
 
@@ -4920,7 +4936,7 @@ pub fn Engine(comptime Ctx: type) type {
             return changed_record_ids.toOwnedSlice(allocator) catch @panic("out of memory");
         }
 
-        pub fn collectDirtyStructuralSignals(self: *Self, ctx: anytype, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) []HostDirtyStructuralSignal {
+        pub fn collectDirtyStructuralSignals(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) []HostDirtyStructuralSignal {
             var dirty_structural_signals: std.ArrayListUnmanaged(HostDirtyStructuralSignal) = .empty;
             errdefer dirty_structural_signals.deinit(allocator);
 
@@ -5188,7 +5204,7 @@ pub fn Engine(comptime Ctx: type) type {
             return true;
         }
 
-        pub fn applyDirtyEachPermutationMoves(self: *Self, ctx: anytype, site: HostNodeScopeSiteDesc, next_scope_ids: []const u64) render.Counts {
+        pub fn applyDirtyEachPermutationMoves(self: *Self, ctx: Ctx.Handle, site: HostNodeScopeSiteDesc, next_scope_ids: []const u64) render.Counts {
             if (site.kind != .each) @panic("dirty each permutation move received a non-each site");
 
             const allocator = Ctx.allocator(ctx);
@@ -5302,7 +5318,7 @@ pub fn Engine(comptime Ctx: type) type {
             return site.render_insert_index;
         }
 
-        pub fn applyDirtyEachRowScopeSplices(self: *Self, ctx: anytype, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) render.Counts {
+        pub fn applyDirtyEachRowScopeSplices(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) render.Counts {
             const allocator = Ctx.allocator(ctx);
             var removed_elem_ids: std.ArrayListUnmanaged(u64) = .empty;
             defer removed_elem_ids.deinit(allocator);
@@ -5367,18 +5383,18 @@ pub fn Engine(comptime Ctx: type) type {
             });
         }
 
-        pub fn applyDirtyEachMixedRowSplicesAndMoves(self: *Self, ctx: anytype, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) render.Counts {
+        pub fn applyDirtyEachMixedRowSplicesAndMoves(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) render.Counts {
             var counts = self.applyDirtyEachRowScopeSplices(ctx, roc_host, site, each, diff, dirty_source_node_ids);
             counts.addAll(self.applyDirtyEachPermutationMoves(ctx, site, diff.scope_ids));
             return counts;
         }
 
-        pub fn evalOnChangeInitial(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
+        pub fn evalOnChangeInitial(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
             const value = self.evalHostSignalBinding(ctx, roc_host, &desc.signal);
             desc.cached_value.replace(roc_host, &self.pending_roc_metrics, value, self.hostSignalBindingEqCallable(ctx, &desc.signal), self.hostSignalBindingDropCallable(ctx, &desc.signal));
         }
 
-        pub fn applyStructuralEventBindings(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream, seen: []const bool, counts: *render.Counts) void {
+        pub fn applyStructuralEventBindings(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream, seen: []const bool, counts: *render.Counts) void {
             const allocator = Ctx.allocator(ctx);
             var required = allocator.alloc(HostRequiredEventBindings, seen.len) catch @panic("out of memory");
             defer allocator.free(required);
@@ -5406,7 +5422,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn applyStructuralEventBindingsForSeen(self: *Self, ctx: anytype, stream: *const HostNodeDescriptorStream, seen: []const bool, counts: *render.Counts) void {
+        pub fn applyStructuralEventBindingsForSeen(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream, seen: []const bool, counts: *render.Counts) void {
             const allocator = Ctx.allocator(ctx);
             var required = allocator.alloc(HostRequiredEventBindings, seen.len) catch @panic("out of memory");
             defer allocator.free(required);
@@ -5441,7 +5457,7 @@ pub fn Engine(comptime Ctx: type) type {
             return .{ .event_id = @intCast(event_index + 1), .payload_accessor = desc.payload_accessor };
         }
 
-        pub fn applyStructuralEventBindingsForElem(self: *Self, ctx: anytype, elem_id: u64, counts: *render.Counts) void {
+        pub fn applyStructuralEventBindingsForElem(self: *Self, ctx: Ctx.Handle, elem_id: u64, counts: *render.Counts) void {
             const kinds = [_]RenderEventKind{ .click, .input, .check };
             for (kinds) |kind| {
                 const next_binding = self.activeEventBindingForElemKind(elem_id, kind);
@@ -5449,7 +5465,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn applyActiveStreamTextAttrForElem(self: *Self, ctx: anytype, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, descriptor_index: HostElemDescriptorIndex, counts: *render.Counts) void {
+        pub fn applyActiveStreamTextAttrForElem(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, descriptor_index: HostElemDescriptorIndex, counts: *render.Counts) void {
             if (descriptor_index.static_text_attrs.get(field)) |attr_index| {
                 if (attr_index >= self.active_stream.static_text_attrs.items.len) @panic("active static text attr index exceeded descriptor table");
                 const desc = self.active_stream.static_text_attrs.items[attr_index];
@@ -5469,7 +5485,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn applyActiveStreamBoolAttrForElem(self: *Self, ctx: anytype, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, descriptor_index: HostElemDescriptorIndex, counts: *render.Counts) void {
+        pub fn applyActiveStreamBoolAttrForElem(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, descriptor_index: HostElemDescriptorIndex, counts: *render.Counts) void {
             if (descriptor_index.static_bool_attrs.get(field)) |attr_index| {
                 if (attr_index >= self.active_stream.static_bool_attrs.items.len) @panic("active static bool attr index exceeded descriptor table");
                 const desc = self.active_stream.static_bool_attrs.items[attr_index];
@@ -5489,7 +5505,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn applyActiveStreamFieldsForElem(self: *Self, ctx: anytype, roc_host: *abi.RocHost, elem_id: u64, counts: *render.Counts) void {
+        pub fn applyActiveStreamFieldsForElem(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, counts: *render.Counts) void {
             const descriptor_index = self.active_stream.elemDescriptorIndex(elem_id) orelse @panic("active render node had no descriptor index");
             const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
             const bool_fields = [_]RenderBoolField{ .checked, .disabled };
@@ -5531,7 +5547,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
         }
 
-        pub fn applyStructuralNodeDescriptorTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, targets: HostStructuralPatchTargets) render.Counts {
+        pub fn applyStructuralNodeDescriptorTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, targets: HostStructuralPatchTargets) render.Counts {
             if (!self.hasRenderRoot()) @panic("structural DOM patch requested before initial DOM root creation");
 
             const allocator = Ctx.allocator(ctx);
@@ -5645,7 +5661,7 @@ pub fn Engine(comptime Ctx: type) type {
             return counts;
         }
 
-        pub fn applyNodeDescriptorStream(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) render.Counts {
+        pub fn applyNodeDescriptorStream(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) render.Counts {
             var counts: render.Counts = .{};
             counts.addHostReset();
             self.resetRenderTree(ctx);
@@ -5713,7 +5729,7 @@ pub fn Engine(comptime Ctx: type) type {
             return counts;
         }
 
-        pub fn applySplicedStructuralNodeDescriptorTarget(self: *Self, ctx: anytype, roc_host: *abi.RocHost, splice: HostStructuralSplice, targets: HostStructuralPatchTargets) render.Counts {
+        pub fn applySplicedStructuralNodeDescriptorTarget(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, splice: HostStructuralSplice, targets: HostStructuralPatchTargets) render.Counts {
             _ = targets;
             if (!self.hasRenderRoot()) @panic("structural DOM patch requested before initial DOM root creation");
 
@@ -5782,7 +5798,7 @@ pub fn Engine(comptime Ctx: type) type {
             return counts;
         }
 
-        pub fn applyStructuralNodeDescriptorStream(self: *Self, ctx: anytype, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) render.Counts {
+        pub fn applyStructuralNodeDescriptorStream(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) render.Counts {
             if (!self.hasRenderRoot()) @panic("structural DOM patch requested before initial DOM root creation");
 
             const allocator = Ctx.allocator(ctx);
@@ -5891,7 +5907,7 @@ pub fn Engine(comptime Ctx: type) type {
             return counts;
         }
 
-        pub fn applyDirtyStructuralSignalsLocally(self: *Self, ctx: anytype, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changes: []const HostDirtyStructuralSignal) render.Counts {
+        pub fn applyDirtyStructuralSignalsLocally(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changes: []const HostDirtyStructuralSignal) render.Counts {
             var total_counts: render.Counts = .{};
             var applied_any = false;
 
@@ -5990,14 +6006,14 @@ pub fn Engine(comptime Ctx: type) type {
             return total_counts;
         }
 
-        pub fn applyDirtyWhenStructuralSignals(self: *Self, ctx: anytype, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changes: []const HostDirtyStructuralSignal) render.Counts {
+        pub fn applyDirtyWhenStructuralSignals(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changes: []const HostDirtyStructuralSignal) render.Counts {
             for (changes) |change| {
                 if (change.kind != .when) @panic("non-when structural change reached when-only test helper");
             }
             return self.applyDirtyStructuralSignalsLocally(ctx, roc_host, dirty_source_node_ids, changes);
         }
 
-        pub fn appendPendingTask(self: *Self, ctx: anytype, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) u64 {
+        pub fn appendPendingTask(self: *Self, ctx: Ctx.Handle, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) u64 {
             const allocator = Ctx.allocator(ctx);
             if (self.next_task_request_id == std.math.maxInt(u64)) @panic("host task request id overflowed");
             const request_id = self.next_task_request_id;
@@ -6077,7 +6093,7 @@ pub fn Engine(comptime Ctx: type) type {
             return found;
         }
 
-        pub fn rebuildActiveEventsFromStream(self: *Self, ctx: anytype, stream: *HostNodeDescriptorStream) void {
+        pub fn rebuildActiveEventsFromStream(self: *Self, ctx: Ctx.Handle, stream: *HostNodeDescriptorStream) void {
             const allocator = Ctx.allocator(ctx);
             self.clearActiveEvents() catch @panic("active event table cannot release retained payloads without a Roc host");
 
@@ -6125,7 +6141,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn applyDirtySignalBatch(self: *Self, ctx: anytype, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) render.Counts {
+        pub fn applyDirtySignalBatch(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) render.Counts {
             const dirty_structural_signals = self.collectDirtyStructuralSignals(ctx, roc_host, Ctx.allocator(ctx), dirty_source_node_ids, changed_record_ids, dirty_generation);
             defer Ctx.allocator(ctx).free(dirty_structural_signals);
 
@@ -6136,7 +6152,7 @@ pub fn Engine(comptime Ctx: type) type {
             return counts;
         }
 
-        pub fn dispatchEffectSourceValue(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) render.Counts {
+        pub fn dispatchEffectSourceValue(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) render.Counts {
             if (!self.updateEffectSourceCache(roc_host, record, value)) return .{};
 
             self.recordDispatch();
@@ -6157,7 +6173,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.applyDirtySignalBatch(ctx, roc_host, &.{}, changed_record_ids, dirty_generation);
         }
 
-        pub fn startTaskCommand(self: *Self, ctx: anytype, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct76) render.Counts {
+        pub fn startTaskCommand(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct76) render.Counts {
             const record = self.activeTaskRecordByToken(cmd.task_token) orelse @panic("StartTask referenced a task source that is not active");
             const task_payload = switch (record.payload) {
                 .task_source => |payload| payload,
@@ -6179,7 +6195,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.dispatchEffectSourceValue(ctx, roc_host, record, loading);
         }
 
-        pub fn tickIntervalSource(self: *Self, ctx: anytype, roc_host: *abi.RocHost, period_ms: u64) render.Counts {
+        pub fn tickIntervalSource(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, period_ms: u64) render.Counts {
             const record = self.activeIntervalRecordByPeriod(period_ms) orelse @panic("tick_interval matched no active interval source");
             const interval_payload = switch (record.payload) {
                 .interval_source => |payload| payload,
@@ -6192,7 +6208,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.dispatchEffectSourceValue(ctx, roc_host, record, next);
         }
 
-        pub fn tickIntervalSourceByRuntimeToken(self: *Self, ctx: anytype, roc_host: *abi.RocHost, token: u64) render.Counts {
+        pub fn tickIntervalSourceByRuntimeToken(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, token: u64) render.Counts {
             const source_token = self.activeIntervalSourceTokenByRuntimeToken(token) orelse @panic("timer tick referenced an inactive interval token");
             const record = self.activeIntervalRecordByToken(source_token) orelse @panic("timer tick matched no active interval source");
             const interval_payload = switch (record.payload) {
@@ -6206,7 +6222,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.dispatchEffectSourceValue(ctx, roc_host, record, next);
         }
 
-        pub fn evalDirtyOnChange(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {
+        pub fn evalDirtyOnChange(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {
             const result = self.evalDirtyHostSignalBinding(ctx, roc_host, &desc.signal, dirty_source_node_ids, dirty_generation);
             if (!result.changed) {
                 erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalBindingDropCallable(ctx, &desc.signal), result.value);
@@ -6219,7 +6235,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 
-        pub fn applyDirtyRenderSinks(self: *Self, ctx: anytype, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) render.Counts {
+        pub fn applyDirtyRenderSinks(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) render.Counts {
             var counts: render.Counts = .{};
 
             for (changed_record_ids) |record_id| {
@@ -6266,8 +6282,67 @@ pub fn Engine(comptime Ctx: type) type {
     };
 }
 
+const VerifyCtxHost = struct {};
+
+const VerifySink = struct {
+    pub fn reset(_: VerifySink) void {}
+    pub fn appendNode(_: VerifySink, _: u64, _: u64, _: []const u8) void {}
+    pub fn ensureNode(_: VerifySink, _: u64, _: []const u8) void {}
+    pub fn removeNode(_: VerifySink, _: u64) void {}
+    pub fn replaceChildren(_: VerifySink, _: u64, _: []const u64) void {}
+    pub fn replaceChildrenForMoves(_: VerifySink, _: u64, _: []const u64) void {}
+    pub fn applyTextField(_: VerifySink, _: u64, _: RenderTextField, _: []const u8) void {}
+    pub fn applyBoolField(_: VerifySink, _: u64, _: RenderBoolField, _: bool) void {}
+    pub fn clearTextField(_: VerifySink, _: u64, _: RenderTextField) void {}
+    pub fn clearBoolField(_: VerifySink, _: u64, _: RenderBoolField) void {}
+    pub fn bindEventKind(_: VerifySink, _: u64, _: RenderEventKind, _: u64, _: EventPayloadAccessor) void {}
+    pub fn clearEvent(_: VerifySink, _: u64, _: RenderEventKind) void {}
+    pub fn startInterval(_: VerifySink, _: u64, _: u64) void {}
+    pub fn cancelInterval(_: VerifySink, _: u64) void {}
+    pub fn startTask(_: VerifySink, _: u64, _: []const u8, _: []const u8) void {}
+    pub fn cancelTask(_: VerifySink, _: u64) void {}
+    pub fn debugAssertNode(_: VerifySink, _: u64, _: bool, _: ?[]const u8, _: ?u64, _: []const u64, _: ?u64, _: ?u64, _: ?u64) void {}
+};
+
+const VerifyCtx = struct {
+    pub const Handle = *VerifyCtxHost;
+    pub const HostValueTypeTag = *anyopaque;
+    pub const host_value_type_tags_enabled = true;
+    pub const RegistryOps = hv.RegistryOps(@This().HostValueTypeTag);
+    pub const Metrics = RuntimeMetrics;
+    pub const Sink = VerifySink;
+
+    pub fn zeroMetrics() Metrics {
+        return zeroRuntimeMetrics();
+    }
+
+    pub fn allocator(_: Handle) std.mem.Allocator {
+        return std.heap.page_allocator;
+    }
+
+    pub fn cloneHostValue(_: Handle, value: HostValue) HostValue {
+        return value;
+    }
+
+    pub fn stateValueByNodeId(_: Handle, _: u64) HostValue {
+        return 0;
+    }
+
+    pub fn stateEqCallable(_: Handle, _: u64) abi.RocErasedCallable {
+        return undefined;
+    }
+
+    pub fn stateDropCallable(_: Handle, _: u64) abi.RocErasedCallable {
+        return undefined;
+    }
+
+    pub fn sink(_: Handle) Sink {
+        return .{};
+    }
+};
+
 comptime {
-    verifyCtx(NativeCtx);
+    verifyCtx(VerifyCtx);
     std.debug.assert(@sizeOf(NoMetrics) == 0);
-    _ = Engine(NativeCtx);
+    _ = Engine(VerifyCtx);
 }

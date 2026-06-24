@@ -31,38 +31,40 @@ const EventPayloadKind = engine.EventPayloadKind;
 const HostActiveEventDesc = SharedEngine.ActiveEventDesc;
 
 const WasmCtx = struct {
+    pub const Handle = WasmCtx;
     pub const HostValueTypeTag = WasmHostValueTypeTag;
     pub const host_value_type_tags_enabled = false;
-    pub const RegistryOps = hv.RegistryOps;
+    pub const RegistryOps = hv.RegistryOps(@This().HostValueTypeTag);
     pub const Metrics = engine.NoMetrics;
+    pub const Sink = WasmSink;
 
     pub fn zeroMetrics() Metrics {
         return .{};
     }
 
-    pub fn allocator(_: anytype) std.mem.Allocator {
+    pub fn allocator(_: Handle) std.mem.Allocator {
         return std.heap.wasm_allocator;
     }
 
-    pub fn cloneHostValue(_: anytype, value: HostValue) HostValue {
+    pub fn cloneHostValue(_: Handle, value: HostValue) HostValue {
         return shared_engine.host_values.clone(std.heap.wasm_allocator, value, registryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
     }
 
-    pub fn stateValueByNodeId(_: anytype, node_id: u64) HostValue {
+    pub fn stateValueByNodeId(_: Handle, node_id: u64) HostValue {
         return currentStateValue(node_id);
     }
 
-    pub fn stateEqCallable(_: anytype, node_id: u64) abi.RocErasedCallable {
+    pub fn stateEqCallable(_: Handle, node_id: u64) abi.RocErasedCallable {
         return shared_engine.stateEqCallable(node_id) catch failHost();
     }
 
-    pub fn stateDropCallable(_: anytype, node_id: u64) abi.RocErasedCallable {
+    pub fn stateDropCallable(_: Handle, node_id: u64) abi.RocErasedCallable {
         return shared_engine.stateDropCallable(node_id) catch failHost();
     }
 
-    pub fn sink(_: WasmCtx) WasmSink {
+    pub fn sink(_: Handle) Sink {
         return .{};
     }
 };
@@ -238,7 +240,7 @@ const callErasedHostValueToUnit = erased_calls.callErasedHostValueToUnit;
 
 // --- Host value registry glue (all routed through the engine's registry) ---
 
-fn registryOps() hv.RegistryOps {
+fn registryOps() hv.RegistryOps(HostValueTypeTag) {
     return .{ .roc_host = &roc_host };
 }
 

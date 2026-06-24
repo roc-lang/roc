@@ -5,11 +5,13 @@
 //! slices move render decisions into the engine while each host keeps its own
 //! concrete sink implementation.
 
+const std = @import("std");
 const render = @import("render_commands.zig");
 
 pub const TextField = render.TextField;
 pub const BoolField = render.BoolField;
 pub const EventKind = render.EventKind;
+pub const EventPayloadAccessor = render.EventPayloadAccessor;
 pub const Counts = render.Counts;
 
 pub fn DomSink(comptime Host: type) type {
@@ -56,11 +58,7 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkClearBoolField(elem_id, field);
         }
 
-        pub fn bindEvent(self: @This(), desc: anytype, event_id: u64) void {
-            self.host.sinkBindEvent(desc, event_id);
-        }
-
-        pub fn bindEventKind(self: @This(), elem_id: u64, kind: EventKind, event_id: u64, payload_accessor: anytype) void {
+        pub fn bindEventKind(self: @This(), elem_id: u64, kind: EventKind, event_id: u64, payload_accessor: EventPayloadAccessor) void {
             self.host.sinkBindEventKind(elem_id, kind, event_id, payload_accessor);
         }
 
@@ -88,4 +86,121 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkDebugAssertNode(elem_id, active, tag, parent_id, children, click_event, input_event, check_event);
         }
     };
+}
+
+test "DomSink forwards every render seam method to the host" {
+    const TestHost = struct {
+        seen: u32 = 0,
+        last_event_accessor: EventPayloadAccessor = .none,
+        last_task_name: []const u8 = "",
+        last_task_request: []const u8 = "",
+        last_children_len: usize = 0,
+        last_debug_children_len: usize = 0,
+
+        fn mark(self: *@This(), bit: u5) void {
+            self.seen |= @as(u32, 1) << bit;
+        }
+
+        pub fn sinkReset(self: *@This()) void {
+            self.mark(0);
+        }
+
+        pub fn sinkAppendNode(self: *@This(), _: u64, _: u64, _: []const u8) void {
+            self.mark(1);
+        }
+
+        pub fn sinkEnsureNode(self: *@This(), _: u64, _: []const u8) void {
+            self.mark(2);
+        }
+
+        pub fn sinkRemoveNode(self: *@This(), _: u64) void {
+            self.mark(3);
+        }
+
+        pub fn sinkReplaceChildren(self: *@This(), _: u64, children: []const u64) void {
+            self.mark(4);
+            self.last_children_len = children.len;
+        }
+
+        pub fn sinkReplaceChildrenForMoves(self: *@This(), _: u64, _: []const u64) void {
+            self.mark(5);
+        }
+
+        pub fn sinkApplyTextField(self: *@This(), _: u64, _: TextField, _: []const u8) void {
+            self.mark(6);
+        }
+
+        pub fn sinkApplyBoolField(self: *@This(), _: u64, _: BoolField, _: bool) void {
+            self.mark(7);
+        }
+
+        pub fn sinkClearTextField(self: *@This(), _: u64, _: TextField) void {
+            self.mark(8);
+        }
+
+        pub fn sinkClearBoolField(self: *@This(), _: u64, _: BoolField) void {
+            self.mark(9);
+        }
+
+        pub fn sinkBindEventKind(self: *@This(), _: u64, _: EventKind, _: u64, payload_accessor: EventPayloadAccessor) void {
+            self.mark(10);
+            self.last_event_accessor = payload_accessor;
+        }
+
+        pub fn sinkClearEvent(self: *@This(), _: u64, _: EventKind) void {
+            self.mark(11);
+        }
+
+        pub fn sinkStartInterval(self: *@This(), _: u64, _: u64) void {
+            self.mark(12);
+        }
+
+        pub fn sinkCancelInterval(self: *@This(), _: u64) void {
+            self.mark(13);
+        }
+
+        pub fn sinkStartTask(self: *@This(), _: u64, task_name: []const u8, request: []const u8) void {
+            self.mark(14);
+            self.last_task_name = task_name;
+            self.last_task_request = request;
+        }
+
+        pub fn sinkCancelTask(self: *@This(), _: u64) void {
+            self.mark(15);
+        }
+
+        pub fn sinkDebugAssertNode(self: *@This(), _: u64, _: bool, _: ?[]const u8, _: ?u64, children: []const u64, _: ?u64, _: ?u64, _: ?u64) void {
+            self.mark(16);
+            self.last_debug_children_len = children.len;
+        }
+    };
+
+    var host: TestHost = .{};
+    const sink: DomSink(TestHost) = .{ .host = &host };
+    const children = [_]u64{ 3, 4 };
+
+    sink.reset();
+    sink.appendNode(1, 0, "div");
+    sink.ensureNode(1, "div");
+    sink.removeNode(9);
+    sink.replaceChildren(1, &children);
+    sink.replaceChildrenForMoves(1, &children);
+    sink.applyTextField(1, .text, "hello");
+    sink.applyBoolField(1, .disabled, true);
+    sink.clearTextField(1, .label);
+    sink.clearBoolField(1, .checked);
+    sink.bindEventKind(1, .input, 7, .target_value);
+    sink.clearEvent(1, .input);
+    sink.startInterval(8, 1000);
+    sink.cancelInterval(8);
+    sink.startTask(9, "lookup", "roc");
+    sink.cancelTask(9);
+    sink.debugAssertNode(1, true, "div", 0, &children, 7, null, null);
+
+    try std.testing.expectEqual((@as(u32, 1) << 17) - 1, host.seen);
+    try std.testing.expectEqual(@as(usize, 2), host.last_children_len);
+    try std.testing.expectEqual(@as(usize, 2), host.last_debug_children_len);
+    try std.testing.expectEqual(EventPayloadAccessor.target_value, host.last_event_accessor);
+    try std.testing.expectEqualStrings("lookup", host.last_task_name);
+    try std.testing.expectEqualStrings("roc", host.last_task_request);
 }
