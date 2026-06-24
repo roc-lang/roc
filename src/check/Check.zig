@@ -143,6 +143,17 @@ reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
 expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 /// Region of the expect body currently being checked, if any.
 current_expect_region: ?Region,
+/// Effect slots owned by the checker. These are sparse semantic slots, not a
+/// per-expression table.
+effect_slots: std.ArrayListUnmanaged(EffectSlot),
+/// Directed dependencies between effect slots. This is populated by the
+/// long-term effect solver; current call paths still use the legacy bool while
+/// slots are being introduced.
+effect_edges: std.ArrayListUnmanaged(EffectEdge),
+/// Stack of currently active effect slots.
+active_effect_slots: std.ArrayListUnmanaged(EffectSlotId),
+/// Static-dispatch function variables watched by active effect slots.
+dispatch_effect_watches: std.ArrayListUnmanaged(DispatchEffectWatch),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// Local block-statement (`s_decl`) function patterns whose body is currently
@@ -403,6 +414,34 @@ const LocalRecursiveRef = struct {
     pat_var: Var,
     expr_var: Var,
     def_name: ?Ident.Idx,
+};
+
+const EffectSlotId = enum(u32) { _ };
+
+const EffectSlotKind = union(enum) {
+    function_body: CIR.Expr.Idx,
+    top_level_value: CIR.Def.Idx,
+    expect_body: CIR.Node.Idx,
+    const_root_candidate: u32,
+};
+
+const EffectSlot = struct {
+    kind: EffectSlotKind,
+    direct_effect: bool = false,
+    outgoing_start: u32 = 0,
+    outgoing_len: u32 = 0,
+    resolved_effectful: ?bool = null,
+    reported: bool = false,
+};
+
+const EffectEdge = struct {
+    from: EffectSlotId,
+    to: EffectSlotId,
+};
+
+const DispatchEffectWatch = struct {
+    fn_var: Var,
+    slot: EffectSlotId,
 };
 
 const HoistFrame = struct {
@@ -1082,6 +1121,10 @@ fn initAssumePrepared(
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
+        .effect_slots = .empty,
+        .effect_edges = .empty,
+        .active_effect_slots = .empty,
+        .dispatch_effect_watches = .empty,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
@@ -1222,6 +1265,10 @@ pub fn deinit(self: *Self) void {
     self.interpolation_constraint_metadata.deinit(self.gpa);
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
+    self.effect_slots.deinit(self.gpa);
+    self.effect_edges.deinit(self.gpa);
+    self.active_effect_slots.deinit(self.gpa);
+    self.dispatch_effect_watches.deinit(self.gpa);
     self.top_level_ptrns.deinit();
     self.local_processing_ptrns.deinit(self.gpa);
     self.local_recursive_refs.deinit(self.gpa);
@@ -1241,6 +1288,81 @@ pub fn deinit(self: *Self) void {
 /// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
     return self.selected_hoisted_roots.items;
+}
+
+fn beginEffectSlot(self: *Self, kind: EffectSlotKind) Allocator.Error!EffectSlotId {
+    const id: EffectSlotId = @enumFromInt(self.effect_slots.items.len);
+    try self.effect_slots.append(self.gpa, .{ .kind = kind });
+    try self.active_effect_slots.append(self.gpa, id);
+    return id;
+}
+
+fn endEffectSlot(self: *Self, slot: EffectSlotId) void {
+    if (self.active_effect_slots.items.len == 0) {
+        std.debug.panic("check invariant violated: ending effect slot with an empty active stack", .{});
+    }
+    const top = self.active_effect_slots.items[self.active_effect_slots.items.len - 1];
+    if (top != slot) {
+        std.debug.panic("check invariant violated: ending non-top effect slot", .{});
+    }
+    _ = self.active_effect_slots.pop();
+}
+
+fn currentEffectSlot(self: *const Self) ?EffectSlotId {
+    if (self.active_effect_slots.items.len == 0) return null;
+    return self.active_effect_slots.items[self.active_effect_slots.items.len - 1];
+}
+
+fn effectSlotPtr(self: *Self, slot: EffectSlotId) *EffectSlot {
+    return &self.effect_slots.items[@intFromEnum(slot)];
+}
+
+fn effectSlotIsEffectful(self: *Self, slot: EffectSlotId) bool {
+    const slot_ptr = self.effectSlotPtr(slot);
+    return slot_ptr.resolved_effectful orelse slot_ptr.direct_effect;
+}
+
+fn markActiveEffectSlotEffectful(self: *Self) void {
+    const slot = self.currentEffectSlot() orelse return;
+    self.effectSlotPtr(slot).direct_effect = true;
+}
+
+fn recordDispatchEffectWatch(self: *Self, fn_var: Var) Allocator.Error!void {
+    const slot = self.currentEffectSlot() orelse return;
+    try self.dispatch_effect_watches.append(self.gpa, .{
+        .fn_var = fn_var,
+        .slot = slot,
+    });
+}
+
+fn reportTopLevelEffectSlot(self: *Self, slot: EffectSlotId, env: ?*Env) Allocator.Error!void {
+    const slot_ptr = self.effectSlotPtr(slot);
+    const def_idx = switch (slot_ptr.kind) {
+        .top_level_value => |def_idx| def_idx,
+        .function_body,
+        .expect_body,
+        .const_root_candidate,
+        => return,
+    };
+    const def = self.cir.store.getDef(def_idx);
+    if (!slot_ptr.reported) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
+            .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
+        } });
+        slot_ptr.reported = true;
+    }
+    if (env) |active_env| {
+        try self.unifyWith(ModuleEnv.varFrom(def.expr), .err, active_env);
+    }
+}
+
+fn markDispatchEffectWatchers(self: *Self, fn_var: Var) Allocator.Error!void {
+    for (self.dispatch_effect_watches.items) |watch| {
+        if (watch.fn_var != fn_var) continue;
+        const slot_ptr = self.effectSlotPtr(watch.slot);
+        slot_ptr.direct_effect = true;
+        try self.reportTopLevelEffectSlot(watch.slot, null);
+    }
 }
 
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator.Error!HoistFrameGuard {
@@ -6378,6 +6500,9 @@ fn checkExpectBody(
     self.current_expect_region = expect_region;
     defer self.current_expect_region = saved_expect_region;
 
+    const effect_slot = try self.beginEffectSlot(.{ .expect_body = ModuleEnv.nodeIdxFrom(body) });
+    defer self.endEffectSlot(effect_slot);
+
     return try self.checkExpr(body, env, expected);
 }
 
@@ -6989,12 +7114,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     }
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
+    const effect_slot = try self.beginEffectSlot(.{ .top_level_value = def_idx });
+    defer self.endEffectSlot(effect_slot);
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
-    if (def_does_fx) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
-            .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
-        } });
-        try self.unifyWith(expr_var, .err, env);
+    if (def_does_fx or self.effectSlotIsEffectful(effect_slot)) {
+        try self.reportTopLevelEffectSlot(effect_slot, env);
     }
     if (def.annotation == null and self.exprAlwaysCrashes(def.expr)) {
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
@@ -10073,7 +10197,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             self.empirical_exhaustiveness_depth = 0;
             defer self.empirical_exhaustiveness_depth = saved_empirical_exhaustiveness_depth;
 
-            const body_does_fx = if (mb_anno_func) |expected_func| blk: {
+            const effect_slot = try self.beginEffectSlot(.{ .function_body = lambda.body });
+            defer self.endEffectSlot(effect_slot);
+
+            const legacy_body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
@@ -10083,6 +10210,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 break :blk lambda_body_does_fx;
             };
+            const body_does_fx = legacy_body_does_fx or self.effectSlotIsEffectful(effect_slot);
 
             // Process any pending return constraints (from early returns / ? operator) before
             // creating the function type. This must happen after the body is fully checked
@@ -10220,6 +10348,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // If the function being called is effectful, mark this expression as effectful
                         if (mb_func_info) |info| {
                             if (info.is_effectful) {
+                                self.markActiveEffectSlotEffectful();
                                 does_fx = true;
                             }
                         }
@@ -10561,6 +10690,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
             delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
+                self.markActiveEffectSlotEffectful();
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
             }
@@ -10673,6 +10803,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
             delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
+                self.markActiveEffectSlotEffectful();
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
             }
@@ -10848,6 +10979,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     try self.checkStaticDispatchConstraints(env, false);
     if (delayed_dispatch_effect_fn_var) |fn_var| {
         if (self.varIsEffectfulFunction(fn_var)) {
+            self.markActiveEffectSlotEffectful();
             self.markCurrentHoistObservableEffect();
             if (self.current_expect_region == null) {
                 does_fx = true;
@@ -13058,6 +13190,7 @@ fn reportMissingNominalMethodForBinopConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -13118,6 +13251,7 @@ fn mkBinopConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     // Create the static dispatch constraint
     const constraint = StaticDispatchConstraint{
@@ -13200,6 +13334,7 @@ fn mkUnaryOp(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     // Create the static dispatch constraint
     const constraint = StaticDispatchConstraint{
@@ -13356,6 +13491,7 @@ fn mkReceiverDispatchConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -13396,6 +13532,7 @@ fn mkTypeMethodCallConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -13435,6 +13572,7 @@ fn mkInterpolationConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -15471,7 +15609,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.unifyWith(resolved_func.ret, .err, env);
                         } else {
                             try self.linkConstraintMetadata(rigid_var, constraint.fn_var);
-                            try self.reportEffectfulDispatchInExpect(constraint);
+                            try self.reportEffectfulDispatch(constraint, rigid_var);
 
                             // The body provably forces this where-clause method: a
                             // body dispatch matched it and unified successfully. Mark
@@ -15771,7 +15909,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.reportEffectfulDispatch(constraint, method_var);
                     }
                 }
                 break :dispatch_resolution;
@@ -16014,7 +16152,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.reportEffectfulDispatch(constraint, method_var);
                     }
                 }
                 break :dispatch_resolution;
@@ -16177,11 +16315,17 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     );
 }
 
-fn reportEffectfulDispatchInExpect(
+fn reportEffectfulDispatch(
     self: *Self,
     constraint: StaticDispatchConstraint,
+    selected_fn_var: Var,
 ) std.mem.Allocator.Error!void {
-    if (!self.varIsEffectfulFunction(constraint.fn_var)) return;
+    if (!self.varIsEffectfulFunction(constraint.fn_var) and
+        !self.varIsEffectfulFunction(selected_fn_var))
+    {
+        return;
+    }
+    try self.markDispatchEffectWatchers(constraint.fn_var);
     if (self.expect_region_by_constraint_fn_var.fetchRemove(constraint.fn_var)) |entry| {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
             .region = entry.value,

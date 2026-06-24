@@ -143,6 +143,55 @@ test "effect propagation - expect rejects delayed effectful dispatch" {
     , "EFFECTFUL EXPECT");
 }
 
+test "effect propagation - effectful binop dispatch reports top-level effect" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\Num := [Num].{
+        \\    plus : Num, Num => Num
+        \\    plus = |_, _| Num
+        \\}
+        \\
+        \\top = Num.Num + Num.Num
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - effectful unary dispatch reports top-level effect" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\Num := [Num].{
+        \\    negate : Num => Num
+        \\    negate = |_| Num
+        \\}
+        \\
+        \\top = -Num.Num
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - imported effectful nominal method reports top-level effect" {
+    var imported = try TestEnv.init("A",
+        \\A := [A].{
+        \\    tick! : A => U64
+        \\    tick! = |_| 1
+        \\}
+    );
+    defer imported.deinit();
+    try imported.assertNoErrors();
+    try imported.assertDefType("A.tick!", "A => U64");
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import A
+        \\
+        \\value = A.A
+        \\
+        \\top = value.tick!()
+    , "A", &imported);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("EFFECTFUL TOP-LEVEL VALUE");
+}
+
 test "effect propagation - dbg expect and crash are not effectful calls" {
     try expectNoErrors(
         \\package [] {}
