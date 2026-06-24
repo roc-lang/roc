@@ -646,7 +646,7 @@ zig build -Doptimize=ReleaseSmall
 - [x] Function-containing aggregates are allowed stored hoisted constants.
 - [x] Bare function roots still use callable-root handling, not data roots.
 - [x] Root selection has no invalid leaf/source-shape/observable filters.
-- [ ] Imported eligible top-level diagnostics run during checking.
+- [x] Imported eligible top-level diagnostics run during checking.
 - [ ] Unreachable successful evaluated constants do not emit target static data.
 - [x] Maximal root subsumption is tested for callable-containing aggregates.
 - [ ] Static-data selection consumes explicit value and type/layout data.

@@ -105,6 +105,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/type_printing_bug_test.zig"));
     std.testing.refAllDecls(@import("test/embedding_smoke.zig"));
     std.testing.refAllDecls(@import("test/hoisted_constants_test.zig"));
+    std.testing.refAllDecls(@import("test/comptime_diagnostics_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9614_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9634_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9703_test.zig"));

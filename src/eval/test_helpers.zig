@@ -901,6 +901,30 @@ pub fn publishProgramForComptimeProblems(
         .comptime_problems;
 }
 
+/// Publish a program with compile-time evaluation problems routed into each
+/// module's checker problem store and return the full resources for tests that
+/// need to inspect which module received which diagnostic. Unlike
+/// `publishProgramForComptimeProblems`, this only returns resources when
+/// publishing completes without a blocking compile-time problem; crashing roots
+/// and failed expects still return `error.CompileTimeProblem`.
+pub fn publishProgramKeepingReportedComptimeProblems(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .published_roots_only,
+        null,
+        .report_comptime_problems,
+    );
+}
+
 const PublishedRootMode = union(enum) {
     eval_root: bool,
     published_roots_only,
