@@ -3350,7 +3350,12 @@ fn runExprStatementKernel(
                 continue :expr_kernel .record_fields_next;
             }
 
-            if (tok == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
+            // `Type.(args)` nominal value/tuple construction. Only treat `.(` as
+            // construction when the mapper is a tag/type path (`Distance`,
+            // `Module.Type`); for any other mapper (e.g. `0.(`) leave the tokens
+            // unconsumed so it surfaces as a parse error instead of a construction
+            // node canonicalization would only reject.
+            if (tok == .Dot and self.peekN(1) == .NoSpaceOpenRound and self.store.getExpr(expr_finish_state.expr) == .tag) {
                 self.advance();
                 self.advance();
                 try expr_collections.enter(open_allocator, .{
