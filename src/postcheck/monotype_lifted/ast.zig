@@ -38,6 +38,7 @@ pub const ComptimeSiteId = Mono.ComptimeSiteId;
 pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
 /// Compile-time site metadata shared with Monotype IR.
 pub const ComptimeSite = Mono.ComptimeSite;
+pub const LocalProcContext = Mono.LocalProcContext;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;
 /// Record destructuring field pattern.
@@ -142,6 +143,7 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
+    local_proc_contexts: std.ArrayList(LocalProcContext),
     proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
@@ -185,6 +187,7 @@ pub const Program = struct {
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
         string_literals: std.ArrayList(Mono.StringLiteral),
+        local_proc_contexts: std.ArrayList(LocalProcContext),
         proc_debug_names: ProcDebugNameMap,
         source_files: std.ArrayList([]const u8),
         expr_locs: std.ArrayList(base.SourceLoc),
@@ -216,6 +219,7 @@ pub const Program = struct {
             .branches = branches,
             .if_branches = if_branches,
             .string_literals = string_literals,
+            .local_proc_contexts = local_proc_contexts,
             .proc_debug_names = proc_debug_names,
             .roots = .empty,
             .layout_requests = .empty,
@@ -253,6 +257,7 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
+        self.local_proc_contexts.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -285,6 +290,10 @@ pub const Program = struct {
 
     pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
         return self.proc_debug_names.get(symbol);
+    }
+
+    pub fn localProcContextSpan(self: *const Program, span: Span(LocalProcContext)) []const LocalProcContext {
+        return self.local_proc_contexts.items[span.start .. span.start + span.len];
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {

@@ -14,6 +14,8 @@ const Type = @import("type.zig");
 const checked = check.CheckedModule;
 const names = check.CheckedNames;
 
+pub const LocalProcContext = check.ConstStore.LocalProcContext;
+
 /// Identifier for an expression in Monotype IR.
 pub const ExprId = enum(u32) { _ };
 /// Identifier for a pattern in Monotype IR.
@@ -94,6 +96,7 @@ pub const FnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
+    local_proc_contexts: Span(LocalProcContext) = Span(LocalProcContext).empty(),
 };
 
 /// Monotype function-specialization metadata.
@@ -606,6 +609,7 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(StringLiteral),
+    local_proc_contexts: std.ArrayList(LocalProcContext),
     proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
@@ -656,6 +660,7 @@ pub const Program = struct {
             .branches = .empty,
             .if_branches = .empty,
             .string_literals = .empty,
+            .local_proc_contexts = .empty,
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
@@ -693,6 +698,7 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
+        self.local_proc_contexts.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -719,6 +725,16 @@ pub const Program = struct {
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         try self.fns.append(self.allocator, .{ .source = source });
         return id;
+    }
+
+    pub fn addLocalProcContextSpan(self: *Program, contexts: []const LocalProcContext) std.mem.Allocator.Error!Span(LocalProcContext) {
+        const start: u32 = @intCast(self.local_proc_contexts.items.len);
+        try self.local_proc_contexts.appendSlice(self.allocator, contexts);
+        return .{ .start = start, .len = @intCast(contexts.len) };
+    }
+
+    pub fn localProcContextSpan(self: *const Program, span: Span(LocalProcContext)) []const LocalProcContext {
+        return self.local_proc_contexts.items[span.start .. span.start + span.len];
     }
 
     pub fn fnSource(self: *const Program, id: FnId) FnTemplate {

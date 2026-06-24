@@ -41,6 +41,7 @@ pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    local_proc_contexts: []const const_store.LocalProcContext = &.{},
 };
 
 /// Capture field copied from a checked binder into a callable payload.
@@ -245,6 +246,7 @@ pub fn deinitFnSets(allocator: Allocator, fn_sets: []const FnSet) void {
     for (fn_sets) |fn_set| {
         for (fn_set.variants) |variant| {
             if (variant.captures.len > 0) allocator.free(variant.captures);
+            if (variant.template.local_proc_contexts.len > 0) allocator.free(variant.template.local_proc_contexts);
         }
         if (fn_set.variants.len > 0) allocator.free(fn_set.variants);
     }
@@ -255,6 +257,7 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
     for (erased_fns) |set| {
         for (set.entries) |entry| {
             if (entry.captures.len > 0) allocator.free(entry.captures);
+            if (entry.template.local_proc_contexts.len > 0) allocator.free(entry.template.local_proc_contexts);
         }
         if (set.entries.len > 0) allocator.free(set.entries);
     }

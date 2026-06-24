@@ -348,6 +348,10 @@ const StaticDataUse = struct {
     checked_type: checked.CheckedTypeId,
 };
 
+fn localProcContextLessThan(_: void, lhs: Ast.LocalProcContext, rhs: Ast.LocalProcContext) bool {
+    return @intFromEnum(lhs.binder) < @intFromEnum(rhs.binder);
+}
+
 const Builder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
@@ -1321,6 +1325,26 @@ const Builder = struct {
         };
     }
 
+    fn localProcContextSpanFromMap(
+        self: *Builder,
+        local_proc_contexts: *const std.AutoHashMap(checked.PatternBinderId, names.TypeDigest),
+    ) Allocator.Error!Ast.Span(Ast.LocalProcContext) {
+        if (local_proc_contexts.count() == 0) return Ast.Span(Ast.LocalProcContext).empty();
+        const contexts = try self.allocator.alloc(Ast.LocalProcContext, local_proc_contexts.count());
+        defer self.allocator.free(contexts);
+
+        var iter = local_proc_contexts.iterator();
+        var index: usize = 0;
+        while (iter.next()) |entry| : (index += 1) {
+            contexts[index] = .{
+                .binder = entry.key_ptr.*,
+                .context_fn_key = entry.value_ptr.*,
+            };
+        }
+        std.mem.sort(Ast.LocalProcContext, contexts, {}, localProcContextLessThan);
+        return try self.program.addLocalProcContextSpan(contexts);
+    }
+
     fn registerProcDebugNameForTemplate(
         self: *Builder,
         symbol: Common.Symbol,
@@ -2094,6 +2118,8 @@ const Builder = struct {
                 defer self.active_graph = saved_graph;
                 var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_template.fn_def), graph);
                 defer fn_ctx.deinit();
+                try fn_ctx.seedStoredLocalProcContexts(fn_template.local_proc_contexts);
+                try fn_ctx.seedRestoredLocalProcContext(fn_template.fn_def);
                 const fn_id = try self.lowerNestedFnFromContext(&fn_ctx, checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def), fn_template);
                 try self.drainSpecRequests(graph);
                 return fn_id;
@@ -2175,12 +2201,14 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
         context_fn_key: names.TypeDigest,
+        local_proc_contexts: Ast.Span(Ast.LocalProcContext),
     ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = .{ .nested = try self.nestedFnForExpr(view, owner, expr_id, context_fn_key) },
             .source_fn_ty = checked_fn_ty,
             .source_fn_key = source_fn_key,
             .mono_fn_ty = mono_fn_ty,
+            .local_proc_contexts = local_proc_contexts,
         };
     }
 
@@ -2313,6 +2341,7 @@ const Builder = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = mono_fn_ty,
+            .local_proc_contexts = try self.program.addLocalProcContextSpan(fn_value.local_proc_contexts),
         };
     }
 
@@ -2320,7 +2349,7 @@ const Builder = struct {
         return switch (fn_def) {
             .local_template => |template| .{ .local_template = template },
             .imported_template => |template| .{ .imported_template = template },
-            .nested => |nested| .{ .nested = .{ .owner = nested.owner, .site = nested.site, .context_fn_key = .{} } },
+            .nested => |nested| .{ .nested = .{ .owner = nested.owner, .site = nested.site, .context_fn_key = nested.context_fn_key } },
             .local_hosted => |template| .{ .local_hosted = self.hostedFn(template) },
             .imported_hosted => |template| .{ .imported_hosted = self.hostedFn(template) },
             .checked_generated => |template| .{ .checked_generated = template },
@@ -2369,6 +2398,8 @@ const Builder = struct {
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph);
         defer fn_ctx.deinit();
         try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
+        try fn_ctx.seedStoredLocalProcContexts(template.local_proc_contexts);
+        try fn_ctx.seedRestoredLocalProcContext(template.fn_def);
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
         const lambda_expr = fn_view.bodies.expr(lambda_expr_id);
@@ -4282,7 +4313,16 @@ const BodyContext = struct {
             .lambda => blk: {
                 break :blk try self.lowerLambdaExpr(
                     expr_id,
-                    try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, expr.ty, self.view.types.rootKey(expr.ty), ty, self.current_fn_key),
+                    try self.builder.fnTemplateForNestedExprWithMono(
+                        self.view,
+                        self.owner_template,
+                        expr_id,
+                        expr.ty,
+                        self.view.types.rootKey(expr.ty),
+                        ty,
+                        self.current_fn_key,
+                        try self.builder.localProcContextSpanFromMap(&self.local_proc_contexts),
+                    ),
                 );
             },
             .call => Common.invariant("call expression reached ordinary expression lowering after call-site lowering"),
@@ -8772,6 +8812,7 @@ const BodyContext = struct {
             source_fn_key,
             mono_fn_ty,
             context_fn_key,
+            try self.builder.localProcContextSpanFromMap(&self.local_proc_contexts),
         );
         return try self.builder.lowerNestedFnFromContext(self, local.expr, fn_template);
     }
@@ -9844,7 +9885,16 @@ const BodyContext = struct {
         const lambda = self.view.bodies.expr(closure.lambda);
         return switch (lambda.data) {
             .lambda => blk: {
-                const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
+                const nested = try self.builder.fnTemplateForNestedExprWithMono(
+                    self.view,
+                    self.owner_template,
+                    expr_id,
+                    lambda.ty,
+                    self.view.types.rootKey(lambda.ty),
+                    closure_ty,
+                    self.current_fn_key,
+                    try self.builder.localProcContextSpanFromMap(&self.local_proc_contexts),
+                );
                 break :blk try self.lowerLambdaExpr(expr_id, nested);
             },
             else => Common.invariant("checked closure did not point at a lambda expression"),
@@ -14568,13 +14618,45 @@ const BodyContext = struct {
 
     fn registerLocalProc(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
         const binder = self.localProcBinder(pattern_id);
+        try self.putLocalProcContext(binder, self.current_fn_key);
+    }
+
+    fn seedRestoredLocalProcContext(self: *BodyContext, fn_def: Ast.FnDef) Allocator.Error!void {
+        const nested = switch (fn_def) {
+            .nested => |nested| nested,
+            else => return,
+        };
+        const site = checkedNestedSite(self.view, nested);
+        const expr_id = site.checked_expr orelse return;
+        const lambda_expr_id = switch (self.view.bodies.expr(expr_id).data) {
+            .lambda => expr_id,
+            .closure => |closure| closure.lambda,
+            else => return,
+        };
+        const binder = localProcBinderForExpr(self.view, expr_id) orelse
+            localProcBinderForExpr(self.view, lambda_expr_id) orelse
+            return;
+        try self.putLocalProcContext(binder, nested.context_fn_key);
+    }
+
+    fn seedStoredLocalProcContexts(self: *BodyContext, contexts: Ast.Span(Ast.LocalProcContext)) Allocator.Error!void {
+        for (self.builder.program.localProcContextSpan(contexts)) |context| {
+            try self.putLocalProcContext(context.binder, context.context_fn_key);
+        }
+    }
+
+    fn putLocalProcContext(
+        self: *BodyContext,
+        binder: checked.PatternBinderId,
+        context_fn_key: names.TypeDigest,
+    ) Allocator.Error!void {
         if (self.local_proc_contexts.get(binder)) |existing| {
-            if (!std.mem.eql(u8, existing.bytes[0..], self.current_fn_key.bytes[0..])) {
+            if (!std.mem.eql(u8, existing.bytes[0..], context_fn_key.bytes[0..])) {
                 Common.invariant("local procedure binder had two declaration contexts");
             }
             return;
         }
-        try self.local_proc_contexts.put(binder, self.current_fn_key);
+        try self.local_proc_contexts.put(binder, context_fn_key);
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {
@@ -15552,6 +15634,16 @@ fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
         return site;
     }
     Common.invariant("stored nested function referenced a missing checked nested site");
+}
+
+fn localProcBinderForExpr(view: ModuleView, expr_id: checked.CheckedExprId) ?checked.PatternBinderId {
+    for (view.resolved_refs.records) |record| {
+        switch (record.ref) {
+            .local_proc => |local| if (local.expr == expr_id) return local.binder,
+            else => {},
+        }
+    }
+    return null;
 }
 
 fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {

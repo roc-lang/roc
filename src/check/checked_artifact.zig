@@ -795,10 +795,6 @@ pub const RootRequestTable = struct {
         }
 
         for (compile_time_roots.roots) |root| {
-            const concrete = root.kind == .expect or try checkedTypeIsConcreteCompileTimeRoot(allocator, &checked_types.store, root.checked_type);
-            if (!concrete) {
-                continue;
-            }
             if (compileTimeRootDependsOnUnboundPlatformRequirement(
                 checked_bodies,
                 resolved_value_refs,
@@ -1301,102 +1297,6 @@ fn verifyCompileTimeRequestsScheduled(
             }
         }
     }
-}
-
-fn checkedTypeIsConcreteCompileTimeRoot(
-    allocator: Allocator,
-    checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
-) Allocator.Error!bool {
-    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    return try checkedTypeIsConcreteCompileTimeRootInner(checked_types, root, &active);
-}
-
-fn checkedTypeIsConcreteCompileTimeRootInner(
-    checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    if (active.contains(root)) return true;
-    try active.put(root, {});
-    defer _ = active.remove(root);
-
-    const index = @intFromEnum(root);
-    if (index >= checked_types.payloads.items.len) {
-        checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
-    }
-    return switch (checked_types.payload(@enumFromInt(index))) {
-        .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
-        .flex,
-        .rigid,
-        => false,
-        .empty_record,
-        .empty_tag_union,
-        => true,
-        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, alias.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, alias.backing, active),
-        .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(checked_types, record.fields, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, record.ext, active),
-        .record_unbound => |fields| checkedFieldTypesAreConcreteCompileTimeRoots(checked_types, fields, active),
-        .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, items, active),
-        .nominal => |nominal| blk: {
-            if (!try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, nominal.args, active)) break :blk false;
-            switch (nominal.representation) {
-                .builtin => |builtin_type| switch (builtinRuntimeEncoding(builtin_type)) {
-                    .primitive,
-                    .list,
-                    .box,
-                    .parse_tag_union_spec,
-                    .fields,
-                    .field,
-                    => break :blk true,
-                    .bool_tag_union => {},
-                },
-                .opaque_without_backing => break :blk true,
-                else => {},
-            }
-            break :blk try checkedTypeIsConcreteCompileTimeRootInner(checked_types, nominal.backing, active);
-        },
-        .function => |function| !function.needs_instantiation and
-            (try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, function.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, function.ret, active),
-        .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(checked_types, tag_union.tags, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, tag_union.ext, active),
-    };
-}
-
-fn checkedTypeSpanIsConcreteCompileTimeRoot(
-    checked_types: *const CheckedTypeStore,
-    items: []const CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (items) |item| {
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(checked_types, item, active)) return false;
-    }
-    return true;
-}
-
-fn checkedFieldTypesAreConcreteCompileTimeRoots(
-    checked_types: *const CheckedTypeStore,
-    fields: []const CheckedRecordField,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (fields) |field| {
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(checked_types, field.ty, active)) return false;
-    }
-    return true;
-}
-
-fn checkedTagsAreConcreteCompileTimeRoots(
-    checked_types: *const CheckedTypeStore,
-    tags: []const CheckedTag,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (tags) |tag| {
-        if (!try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, tag.argsSlice(checked_types), active)) return false;
-    }
-    return true;
 }
 
 fn compileTimeRootHasRootRequest(
@@ -18230,6 +18130,7 @@ pub const CompileTimeRootTable = struct {
         checked_types: *const CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
         procedure_templates: *const CheckedProcedureTemplateTable,
+        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     ) Allocator.Error!CompileTimeRootTable {
         const checked_bodies = checked_body_builder.storePtr();
         var roots = std.ArrayList(CompileTimeRoot).empty;
@@ -18312,6 +18213,10 @@ pub const CompileTimeRootTable = struct {
                 .num_from_numeral, .typed_num_from_numeral => {},
                 else => continue,
             }
+            const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
+            const plan_id = static_dispatch_plans.lookupNumeralByNode(node) orelse
+                checkedArtifactInvariant("from_numeral conversion root had no static-dispatch plan", .{});
+            if (!staticDispatchPlanIsResolved(static_dispatch_plans, plan_id)) continue;
             const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var));
             const try_ty = switch (checked_types.store.payload(fn_ty)) {
                 .function => |function| function.ret,
@@ -18338,6 +18243,10 @@ pub const CompileTimeRootTable = struct {
                 .str_from_quote => {},
                 else => continue,
             }
+            const node: CIR.Node.Idx = @enumFromInt(quote_plan.node_idx);
+            const plan_id = static_dispatch_plans.lookupQuoteByNode(node) orelse
+                checkedArtifactInvariant("from_quote conversion root had no static-dispatch plan", .{});
+            if (!staticDispatchPlanIsResolved(static_dispatch_plans, plan_id)) continue;
             const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
             const try_ty = switch (checked_types.store.payload(fn_ty)) {
                 .function => |function| function.ret,
@@ -18510,6 +18419,20 @@ pub const CompileTimeRootTable = struct {
         };
     }
 };
+
+fn staticDispatchPlanIsResolved(
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    plan_id: static_dispatch.StaticDispatchPlanId,
+) bool {
+    const raw = @intFromEnum(plan_id);
+    if (raw >= static_dispatch_plans.plans.len) {
+        checkedArtifactInvariant("static-dispatch plan id is out of range", .{});
+    }
+    return switch (static_dispatch_plans.plans[raw].resolution) {
+        .resolved_target => true,
+        .unresolved_checked_plan => false,
+    };
+}
 
 fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) void {
     for (roots) |*root| {
@@ -22712,7 +22635,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 175);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 176);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -24985,6 +24908,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
         &checked_body_builder,
         &checked_procedure_templates,
+        &static_dispatch_plans,
     );
     errdefer compile_time_roots.deinit(allocator);
 
@@ -25505,6 +25429,7 @@ fn expectProvidedExportKind(
         &checked_type_publication,
         &checked_body_builder,
         &checked_procedure_templates,
+        &static_dispatch_plans,
     );
     defer compile_time_roots.deinit(allocator);
 
@@ -26693,8 +26618,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD1, 0xAE, 0x05, 0x98, 0x70, 0xBC, 0x8B, 0x36, 0x1D, 0xED, 0xF8, 0x5D, 0xD5, 0x1E, 0x79, 0x43,
-        0xD5, 0xC6, 0x75, 0xFE, 0xED, 0x6F, 0x15, 0x37, 0x19, 0x3F, 0x1C, 0x53, 0x42, 0x4B, 0xE9, 0x29,
+        0x9A, 0xA1, 0xE1, 0xBE, 0xD2, 0xE9, 0x57, 0xE6, 0x15, 0x6E, 0xF8, 0x5F, 0x3D, 0x26, 0xEF, 0x62,
+        0x16, 0x52, 0x25, 0x30, 0xC2, 0x0A, 0x1B, 0x6C, 0xD6, 0xBB, 0x93, 0x35, 0xD6, 0x22, 0x42, 0xAA,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

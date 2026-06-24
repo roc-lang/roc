@@ -31,6 +31,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\top_a = 40.I64
         \\top_b = top_a + 1.I64
         \\
+        \\top_callable : I64 -> I64
         \\top_callable = if 1.I64 == 1.I64 {
         \\    |n| n + 1.I64
         \\} else {
@@ -844,6 +845,88 @@ test "reachable function-valued constant restores without static data literal" {
 
     try std.testing.expectEqual(@as(usize, 0), lowered.lir_result.static_data_values.items.len);
     try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
+}
+
+test "reachable local List.iter hoist stores iterator const data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\main! = |args| {
+        \\    base = [{ x: 1.I64, y: 2.I64 }, { x: 3.I64, y: 4.I64 }].iter()
+        \\    total = Iter.fold(base, 0.I64, |acc, point| acc + point.x + point.y + List.len(args).to_i64_wrap())
+        \\    if total == -1 {
+        \\        Ok({})
+        \\    } else {
+        \\        Ok({})
+        \\    }
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_view = check.CheckedArtifact.importedView(app_artifact);
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const root_const_view = check.CheckedArtifact.importedView(root_view.module);
+    const stored_list_count =
+        countStoredHoistedListLength(app_view, 2) +
+        countStoredHoistedListLength(root_const_view, 2) +
+        countStoredHoistedListLengthInModules(root_view.relation_modules, 2) +
+        countStoredHoistedListLengthInModules(imports, 2);
+    const stored_fn_count =
+        countStoredHoistedFnValue(app_view) +
+        countStoredHoistedFnValue(root_const_view) +
+        countStoredHoistedFnValueInModules(root_view.relation_modules) +
+        countStoredHoistedFnValueInModules(imports);
+    const stored_fn_context_count =
+        countStoredHoistedFnContext(app_view) +
+        countStoredHoistedFnContext(root_const_view) +
+        countStoredHoistedFnContextInModules(root_view.relation_modules) +
+        countStoredHoistedFnContextInModules(imports);
+    try std.testing.expect(stored_list_count >= 1);
+    try std.testing.expect(stored_fn_count >= 1);
+    try std.testing.expect(stored_fn_context_count >= 1);
 }
 
 test "inline sub_or_crash cells inside runtime record become shared static data" {
@@ -3378,6 +3461,86 @@ fn constNodeContainsListLength(module: StaticConstModule, node: check.CheckedArt
             return false;
         },
         .nominal => |nominal| constNodeContainsListLength(module, nominal.backing, len),
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsListLength(module, capture.value, len)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn constNodeContainsFnValue(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId) bool {
+    return switch (module.store.get(node)) {
+        .fn_value => true,
+        .list => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnValue(module, item)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsFnValue(module, payload),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnValue(module, item)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnValue(module, item)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsFnValue(module, payload)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsFnValue(module, nominal.backing),
+        else => false,
+    };
+}
+
+fn constNodeContainsFnContext(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId) bool {
+    return switch (module.store.get(node)) {
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            if (fn_value.local_proc_contexts.len > 0) return true;
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsFnContext(module, capture.value)) return true;
+            }
+            return false;
+        },
+        .list => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnContext(module, item)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsFnContext(module, payload),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnContext(module, item)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnContext(module, item)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsFnContext(module, payload)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsFnContext(module, nominal.backing),
         else => false,
     };
 }
@@ -3600,6 +3763,58 @@ fn countStoredHoistedListLengthInModules(artifacts: anytype, len: usize) usize {
     var count: usize = 0;
     for (artifacts) |artifact| {
         count += countStoredHoistedListLength(artifact, len);
+    }
+    return count;
+}
+
+fn countStoredHoistedFnValue(artifact: anytype) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        if (constNodeContainsFnValue(.{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        }, node)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredHoistedFnValueInModules(artifacts: anytype) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedFnValue(artifact);
+    }
+    return count;
+}
+
+fn countStoredHoistedFnContext(artifact: anytype) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        if (constNodeContainsFnContext(.{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        }, node)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredHoistedFnContextInModules(artifacts: anytype) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedFnContext(artifact);
     }
     return count;
 }

@@ -44,12 +44,20 @@ pub const ConstCapture = struct {
     value: ConstNodeId,
 };
 
+/// Local procedure declaration context needed to restore direct calls inside a
+/// stored function value.
+pub const LocalProcContext = struct {
+    binder: checked_ids.PatternBinderId,
+    context_fn_key: names.TypeDigest,
+};
+
 /// Function value stored by compile-time evaluation.
 pub const ConstFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     captures: []const ConstCapture = &.{},
+    local_proc_contexts: []const LocalProcContext = &.{},
 };
 
 /// Named type owner for a stored nominal constant.
@@ -65,6 +73,7 @@ pub const FnDef = union(enum) {
     nested: struct {
         owner: names.ProcTemplate,
         site: names.ProcSiteId,
+        context_fn_key: names.TypeDigest,
     },
     local_hosted: names.ProcTemplate,
     imported_hosted: names.ProcTemplate,
@@ -133,12 +142,14 @@ const StoredValue = union(enum) {
     fn_value: ConstFnId,
 };
 
-/// POD form of `ConstFn`: captures slice → range into `capture_pool`.
+/// POD form of `ConstFn`: captures and local procedure contexts are ranges into
+/// the store's flat side pools.
 const StoredFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     captures: ConstRange = .{},
+    local_proc_contexts: ConstRange = .{},
 };
 
 /// Store of compile-time constants completed by checking finalization.
@@ -154,6 +165,8 @@ pub const ConstStore = struct {
     tag_name_pool: std.ArrayList(u8),
     /// Flat pool of function captures.
     capture_pool: std.ArrayList(ConstCapture),
+    /// Flat pool of function local procedure contexts.
+    local_proc_context_pool: std.ArrayList(LocalProcContext),
     /// Flat pool of all string backing bytes; `str_views` indexes into it.
     str_backing: std.ArrayList(u8),
     /// `ConstStrDataId` -> range into `str_backing`.
@@ -170,6 +183,7 @@ pub const ConstStore = struct {
             .node_pool = .empty,
             .tag_name_pool = .empty,
             .capture_pool = .empty,
+            .local_proc_context_pool = .empty,
             .str_backing = .empty,
             .str_views = .empty,
         };
@@ -230,11 +244,13 @@ pub const ConstStore = struct {
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         const id: ConstFnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
+        const local_proc_contexts_range = try artifact_serialize.appendSpan(ConstRange, LocalProcContext, &self.local_proc_context_pool, self.allocator, fn_value.local_proc_contexts);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .captures = captures_range,
+            .local_proc_contexts = local_proc_contexts_range,
         });
         return id;
     }
@@ -277,6 +293,7 @@ pub const ConstStore = struct {
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
+            .local_proc_contexts = self.local_proc_context_pool.items[stored.local_proc_contexts.start .. stored.local_proc_contexts.start + stored.local_proc_contexts.len],
         };
     }
 
@@ -297,12 +314,13 @@ pub const ConstStore = struct {
         node_pool: artifact_serialize.SerializedSlice(ConstNodeId) = .{},
         tag_name_pool: artifact_serialize.SerializedSlice(u8) = .{},
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
+        local_proc_context_pool: artifact_serialize.SerializedSlice(LocalProcContext) = .{},
         str_backing: artifact_serialize.SerializedSlice(u8) = .{},
         str_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
-            // 7 side lists → 7 base-pointer fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 7);
+            // 8 side lists → 8 base-pointer fixups, independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 8);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -351,6 +369,7 @@ pub const ConstStore = struct {
             self.node_pool.deinit(self.allocator);
             self.tag_name_pool.deinit(self.allocator);
             self.capture_pool.deinit(self.allocator);
+            self.local_proc_context_pool.deinit(self.allocator);
             self.str_backing.deinit(self.allocator);
             self.str_views.deinit(self.allocator);
         }

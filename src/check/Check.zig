@@ -1697,6 +1697,51 @@ fn callableExprHasRuntimeSource(
     };
 }
 
+fn capturePatternIsCompileTimeKnownForHoist(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!bool {
+    if (self.patternIsTopLevel(pattern_idx)) return true;
+
+    const local_summary = self.local_check_summaries.get(pattern_idx);
+    const summary_says_compile_time_known = if (local_summary) |summary| known_summary: {
+        if (summary.runtime_dep) |dep| {
+            break :known_summary dep == .compile_time_known;
+        }
+        break :known_summary false;
+    } else false;
+
+    if (self.hoist_selection_suppressed_depth != 0) {
+        if (self.hoist_known_values.get(pattern_idx)) |known_value| {
+            switch (known_value) {
+                .pattern_extraction => {
+                    if (try self.ensureHoistedBindingRootIndex(pattern_idx)) |root_index| {
+                        try self.appendCurrentHoistDependencyRoot(root_index);
+                        return true;
+                    }
+                },
+                .binding_rhs,
+                .selected_root,
+                .unavailable_runtime,
+                => {},
+            }
+        }
+    }
+
+    if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(pattern_idx)) {
+        try self.hoist_deferred_binding_dependencies.append(self.gpa, pattern_idx);
+        return true;
+    }
+
+    if (try self.ensureHoistedBindingRootIndex(pattern_idx)) |root_index| {
+        try self.appendCurrentHoistDependencyRoot(root_index);
+        return true;
+    }
+
+    if (self.markHoistContextualDependencyForLookup(pattern_idx)) {
+        return summary_says_compile_time_known;
+    }
+
+    return summary_says_compile_time_known;
+}
+
 fn recordDispatchRuntimeSourceIfNeeded(
     self: *Self,
     constraint_fn_var: Var,
@@ -5515,10 +5560,6 @@ fn filterSelectedHoistedRootsForConstStorage(self: *Self) Allocator.Error!void {
     var kept_pattern_count: u32 = 0;
     root_loop: for (self.selected_hoisted_roots.items, 0..) |root, i| {
         if (root.has_runtime_source) continue;
-        if (!try self.hoistedRootHasStorableConstType(root)) continue;
-        for (root.required_concrete_patterns) |pattern| {
-            if (!try self.varIsStorableConstType(ModuleEnv.varFrom(pattern))) continue :root_loop;
-        }
         for (root.dependencies) |dependency| {
             const dependency_index: usize = @intCast(dependency);
             if (dependency_index >= i) {
@@ -5569,107 +5610,6 @@ fn filterSelectedHoistedRootsForConstStorage(self: *Self) Allocator.Error!void {
     std.debug.assert(kept == kept_count);
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
-}
-
-fn hoistedRootHasStorableConstType(
-    self: *Self,
-    root: hoist_roots.SelectedHoistedRoot,
-) Allocator.Error!bool {
-    const type_var = if (root.pattern) |pattern|
-        ModuleEnv.varFrom(pattern)
-    else
-        ModuleEnv.varFrom(root.expr);
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
-    if (self.varIsFunctionType(type_var)) return false;
-    return try self.varIsStorableConstType(type_var);
-}
-
-fn varIsStorableConstType(self: *Self, var_: Var) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varIsStorableConstTypeInternal(var_, &self.var_set);
-}
-
-fn varIsStorableConstTypeInternal(
-    self: *Self,
-    var_: Var,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return true;
-    try visited.put(resolved.var_, {});
-
-    return switch (resolved.desc.content) {
-        .err,
-        .flex,
-        .rigid,
-        => false,
-        .alias => |alias| (try self.varsAreStorableConstTypes(self.types.sliceAliasArgs(alias), visited)) and
-            try self.varIsStorableConstTypeInternal(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat| try self.flatTypeIsStorableConst(flat, visited),
-    };
-}
-
-fn varsAreStorableConstTypes(
-    self: *Self,
-    vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    for (vars) |var_| {
-        if (!try self.varIsStorableConstTypeInternal(var_, visited)) return false;
-    }
-    return true;
-}
-
-fn flatTypeIsStorableConst(
-    self: *Self,
-    flat: FlatType,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    return switch (flat) {
-        .empty_record,
-        .empty_tag_union,
-        => true,
-        .fn_pure,
-        .fn_effectful,
-        .fn_unbound,
-        => true,
-        .record => |record| blk: {
-            const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (!try self.varsAreStorableConstTypes(fields.items(.var_), visited)) break :blk false;
-            break :blk try self.varIsStorableConstTypeInternal(record.ext, visited);
-        },
-        .record_unbound => |fields| blk: {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            break :blk try self.varsAreStorableConstTypes(fields_slice.items(.var_), visited);
-        },
-        .tuple => |tuple| try self.varsAreStorableConstTypes(self.types.sliceVars(tuple.elems), visited),
-        .tag_union => |tag_union| blk: {
-            const tags = self.types.getTagsSlice(tag_union.tags);
-            for (tags.items(.args)) |tag_args| {
-                if (!try self.varsAreStorableConstTypes(self.types.sliceVars(tag_args), visited)) break :blk false;
-            }
-            break :blk try self.varIsStorableConstTypeInternal(tag_union.ext, visited);
-        },
-        .nominal_type => |nominal| blk: {
-            if (!try self.varsAreStorableConstTypes(self.types.sliceNominalArgs(nominal), visited)) break :blk false;
-            if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| {
-                switch (builtin_decl) {
-                    .list,
-                    .box,
-                    .str,
-                    .fields,
-                    .field,
-                    .num,
-                    => break :blk true,
-                    .try_type,
-                    .numeral,
-                    => {},
-                }
-            }
-            if (nominal.isOpaque()) break :blk true;
-            break :blk try self.varIsStorableConstTypeInternal(self.types.getNominalBackingVar(nominal), visited);
-        },
-    };
 }
 
 fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
@@ -10448,6 +10388,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             self.checking_call_arg = is_call_arg;
             defer self.checking_call_arg = saved_checking_call_arg;
             check_result.include(try self.checkExpr(closure.lambda_idx, env, expected));
+
+            for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
+                const capture = self.cir.store.getCapture(capture_idx);
+                if (!try self.capturePatternIsCompileTimeKnownForHoist(capture.pattern_idx)) {
+                    check_result.markRuntimeDependent();
+                    break;
+                }
+            }
+
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
             // For intermediate cycle participants, the inner lambda skipped

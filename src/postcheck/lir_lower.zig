@@ -514,6 +514,7 @@ const Lowerer = struct {
         errdefer {
             for (variants[0..initialized]) |variant| {
                 if (variant.captures.len > 0) self.allocator.free(variant.captures);
+                if (variant.template.local_proc_contexts.len > 0) self.allocator.free(variant.template.local_proc_contexts);
             }
             self.allocator.free(variants);
         }
@@ -525,6 +526,9 @@ const Lowerer = struct {
                 &.{};
             var captures_owned = captures.len > 0;
             errdefer if (captures_owned) self.allocator.free(captures);
+            const template = try constFnTemplateFromMono(self, self.fnTemplateForFn(variant.target));
+            var template_owned = true;
+            errdefer if (template_owned and template.local_proc_contexts.len > 0) self.allocator.free(template.local_proc_contexts);
 
             variants[index] = .{
                 .id = @enumFromInt(@as(u32, @intCast(index))),
@@ -534,9 +538,10 @@ const Lowerer = struct {
                     try self.callablePayloadLayout(value_layout, type_variants.len, @intCast(index), capture_ty)
                 else
                     .zst,
-                .template = constFnTemplateFromMono(self.fnTemplateForFn(variant.target)),
+                .template = template,
                 .captures = captures,
             };
+            template_owned = false;
             captures_owned = false;
             initialized += 1;
         }
@@ -560,6 +565,7 @@ const Lowerer = struct {
         errdefer {
             for (entries[0..initialized]) |entry| {
                 if (entry.captures.len > 0) self.allocator.free(entry.captures);
+                if (entry.template.local_proc_contexts.len > 0) self.allocator.free(entry.template.local_proc_contexts);
             }
             self.allocator.free(entries);
         }
@@ -571,13 +577,17 @@ const Lowerer = struct {
                 &.{};
             var captures_owned = captures.len > 0;
             errdefer if (captures_owned) self.allocator.free(captures);
+            const template = try constFnTemplateFromMono(self, self.fnTemplateForFn(member.target));
+            var template_owned = true;
+            errdefer if (template_owned and template.local_proc_contexts.len > 0) self.allocator.free(template.local_proc_contexts);
 
             entries[index] = .{
                 .entry = self.fn_map[@intFromEnum(member.target)],
                 .capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst,
-                .template = constFnTemplateFromMono(self.fnTemplateForFn(member.target)),
+                .template = template,
                 .captures = captures,
             };
+            template_owned = false;
             captures_owned = false;
             initialized += 1;
         }
@@ -3578,11 +3588,13 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(@intCast(@intFromEnum(symbol)));
 }
 
-fn constFnTemplateFromMono(template: Mono.FnTemplate) LirProgram.FnTemplate {
+fn constFnTemplateFromMono(self: *Lowerer, template: Mono.FnTemplate) Common.LowerError!LirProgram.FnTemplate {
+    const local_proc_contexts = self.program.localProcContextSpan(template.local_proc_contexts);
     return .{
         .fn_def = constFnDefFromMono(template.fn_def),
         .source_fn_ty = template.source_fn_ty,
         .source_fn_key = template.source_fn_key,
+        .local_proc_contexts = if (local_proc_contexts.len == 0) &.{} else try self.allocator.dupe(check.ConstStore.LocalProcContext, local_proc_contexts),
     };
 }
 
@@ -3593,6 +3605,7 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
         .nested => |nested| .{ .nested = .{
             .owner = nested.owner,
             .site = nested.site,
+            .context_fn_key = nested.context_fn_key,
         } },
         .local_hosted => |hosted| .{ .local_hosted = hosted.template },
         .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },
