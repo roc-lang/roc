@@ -12,7 +12,10 @@ The goal of this phase is to bring all our apps online — running in the browse
 alongside the native spec test runner — on top of a fully host-agnostic engine.
 We deliberately defer further optimisation of the implementation until:
 
-1. the refactor that finishes the engine extraction is complete,
+1. the refactor that finishes the engine extraction is complete (**done** —
+   `engine.zig` now owns the structural collection/splice/apply/rebind and
+   effect-source dispatch path; no reactive or structural logic remains in either
+   host file, only host-specific glue),
 2. the architecture and abstractions have been reviewed (are the seams good, do
    we have good unit tests), and
 3. baseline measurements have been updated and reviewed to inform decisions.
@@ -20,44 +23,7 @@ We deliberately defer further optimisation of the implementation until:
 Only then do we re-prioritise the optimisation backlog. The phases below are in
 order; take the earliest unfinished one.
 
-## Phase 1 — Finish the engine extraction (refactor, no behaviour change)
-
-The engine is already factored on the native side for the non-structural path,
-scheduler, dirty propagation, keyed-row plan, render sink, and scalar/topology
-caches; the wasm host drives the engine for the non-structural path. The
-remaining gap is the **structural orchestration still living in
-`native_host.zig`**, which is the seam that must be settled before the browser
-can drive structural behaviour without duplicating algorithms or rebuilding whole
-trees (both forbidden by `AGENTS.md`).
-
-This is a refactor with no behaviour change. The native specs are the regression
-guard; `Engine(WasmCtx)` must keep compiling under `wasm32`. There is not much
-code, so this is a quick, mechanical move done as small green commits.
-
-Move behind `Engine(comptime Ctx)` + `Ctx.sink()`:
-
-- [ ] Structural descriptor collection — root/active collection, `Ui.when`,
-      `Ui.each`, components, cleanup, on-change branch/row descriptor gathering.
-- [ ] Active-stream splice/copy — replacing scopes, each-site targets, subtree
-      descriptor copying, active-stream splicing.
-- [ ] Structural apply orchestration — dirty structural signal handling,
-      each-row splice/move decisions, structural node application.
-- [ ] Structural event rebinding — rebinding row/branch events by changed slot.
-- [ ] Effect-source dispatch — routing effect/timer source updates through the
-      one propagation queue.
-
-Leave host-specific only:
-
-- [ ] Native: the spec runner, simulated-DOM sink, allocation ledger, telemetry
-      surfaces, lldb-friendly debug affordances.
-- [ ] Wasm: linear memory, command-buffer exports, event-payload marshalling, the
-      JS runtime contract.
-
-Done when: `engine.zig` owns the structural collection/splice/apply/rebind path;
-no reactive or structural logic remains in either host file; native specs and the
-wasm build stay green.
-
-## Phase 2 — Bring the app suite online in both hosts
+## Phase 1 — Bring the app suite online in both hosts
 
 With the engine fully extracted, enable structural behaviour in the wasm host and
 get every app in the suite running in the browser *and* under the native spec
@@ -88,7 +54,7 @@ us — and the JS runtime is a thin wrapper whose only meaningful contract is th
 cmd/patch codec. A headless-browser harness would re-test DOM behaviour we do not
 own and engine semantics already covered natively, for no added signal.
 
-### JS test surface cleanup (part of Phase 2)
+### JS test surface cleanup (part of Phase 1)
 
 The current browser tests re-prove engine semantics through a DOM double, which
 duplicates native coverage across the boundary. Keep only the JS↔WASM contract
@@ -105,7 +71,7 @@ guards.
 - [ ] Ensure the remaining JS guards cover the codec contract: op-code →
       DOM-op mapping, payload marshalling round-trip, and the view-refresh rule.
 
-## Phase 3 — Architecture and abstractions review
+## Phase 2 — Architecture and abstractions review
 
 A deliberate review pass, once the app suite is online, before any optimisation.
 
@@ -120,7 +86,7 @@ A deliberate review pass, once the app suite is online, before any optimisation.
 - [ ] Record the review outcome and any seam changes; fix seam defects here rather
       than carrying them into the optimisation phase.
 
-## Phase 4 — Update and review baseline measurements
+## Phase 3 — Update and review baseline measurements
 
 - [ ] Re-run `run-signals-bench` across all six apps and record fresh baselines.
 - [ ] Capture the current values of the work counters (`nodes_recomputed`,
@@ -134,22 +100,22 @@ A deliberate review pass, once the app suite is online, before any optimisation.
       (not just captured numbers) on a representative event — at minimum
       `active_graph_records_rebuilt` on a non-structural event and a single-row
       splice. These budgets currently pass silently because nothing asserts them;
-      turning the budget into a gate is what makes the Phase 5 design-gap items
+      turning the budget into a gate is what makes the Phase 4 design-gap items
       falsifiable rather than hopeful.
 
-## Phase 5 — Re-prioritise the optimisation backlog
+## Phase 4 — Re-prioritise the optimisation backlog
 
 After the baseline review, re-prioritise the items below using the measured
 evidence. Each is stated as a falsifiable hypothesis: what we believe it helps,
 why we suspect it, and how we will know. Do not promote an item to active work
-until the Phase 4 baseline supports its hypothesis; an optimisation without
+until the Phase 3 baseline supports its hypothesis; an optimisation without
 measured evidence is speculation.
 
 Two of the items below (the persistent rank-ordered propagation queue and
 incremental sink-route maintenance on splice) are **not pure optimisations**:
 they are gaps against `DESIGN.md`'s mandated propagation core and Complexity
 Discipline budget. They are listed here because they are still measured against
-the Phase 4 baselines, but they may be promoted ahead of the discretionary items
+the Phase 3 baselines, but they may be promoted ahead of the discretionary items
 when the baseline confirms the budget is being violated rather than merely
 suboptimal. The remaining items are genuine optimisations and stay strictly
 evidence-gated.
@@ -296,7 +262,7 @@ evidence-gated.
 ## Green Gates
 
 Use the smallest gate that proves the slice, then run the full signal gate before
-committing. For a refactor slice (Phase 1) the existing native specs are the
+committing. For a pure refactor slice the existing native specs are the
 regression guard; a behaviour-changing slice must also land the assertion that
 locks it in.
 
