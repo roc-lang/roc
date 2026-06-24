@@ -77,11 +77,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "test1"))
-		(e-call (constraint-fn-var 107)
+		(e-call (constraint-fn-var 108)
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 72)
+				(e-dispatch-call (method "plus") (constraint-fn-var 73)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
@@ -90,7 +90,7 @@ NO CHANGE
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "test2"))
-		(e-call (constraint-fn-var 140)
+		(e-call (constraint-fn-var 141)
 			(e-lambda
 				(args
 					(p-underscore))
@@ -100,14 +100,14 @@ NO CHANGE
 				(e-literal (string "hello")))))
 	(d-let
 		(p-assign (ident "test3"))
-		(e-call (constraint-fn-var 194)
+		(e-call (constraint-fn-var 195)
 			(e-lambda
 				(args
 					(p-assign (ident "s")))
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_empty") (constraint-fn-var 141)
+							(e-dispatch-call (method "is_empty") (constraint-fn-var 142)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "s"))))

@@ -84,7 +84,7 @@ main! = |_| processList(["one", "two"])
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 50)
+			(e-dispatch-call (method "len") (constraint-fn-var 51)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -99,7 +99,7 @@ main! = |_| processList(["one", "two"])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 102)
+			(e-call (constraint-fn-var 103)
 				(e-lookup-local
 					(p-assign (ident "processList")))
 				(e-list
