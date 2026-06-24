@@ -11528,6 +11528,183 @@ fn checkFileWithBuildEnvPreserved(
     };
 }
 
+/// Check a Roc file using the ordinary BuildEnv path.
+fn checkFileWithBuildEnv(
+    ctx: *CliCtx,
+    filepath: []const u8,
+    main_filepath: ?[]const u8,
+    _: bool,
+    cache_config: CacheConfig,
+    max_threads: ?usize,
+    resolution_config: compile.package_resolution.Config,
+) CheckFileWithBuildEnvPreservedError!CheckResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.resolution_config = resolution_config;
+    build_env.compiler_version = build_options.compiler_version;
+    build_env.setPostCheckPublicationMode(.platform_relations);
+    defer build_env.deinit();
+
+    if (cache_config.enabled) {
+        const cache_manager = try ctx.gpa.create(CacheManager);
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+        build_env.setCacheManager(cache_manager);
+    }
+
+    if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
+        build_env.setRootModuleRole(.builtin);
+    }
+
+    buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
+
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReportsPathsOnly(drained);
+
+        var error_count: u32 = 0;
+        var warning_count: u32 = 0;
+        for (drained) |mod| {
+            for (mod.reports) |report| {
+                switch (report.severity) {
+                    .info => {},
+                    .runtime_error, .fatal => error_count += 1,
+                    .warning => warning_count += 1,
+                }
+            }
+        }
+
+        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
+        for (drained, 0..) |mod, i| {
+            reports[i] = .{
+                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
+                .reports = mod.reports,
+            };
+        }
+
+        const cache_stats = build_env.getBuildStats();
+        return CheckResult{
+            .reports = reports,
+            .error_count = error_count,
+            .warning_count = warning_count,
+            .modules_total = cache_stats.modules_total,
+            .cache_hits = cache_stats.cache_hits,
+            .cache_misses = cache_stats.cache_misses,
+            .modules_compiled = cache_stats.modules_compiled,
+            .module_time_min_ns = cache_stats.module_time_min_ns,
+            .module_time_max_ns = cache_stats.module_time_max_ns,
+            .module_time_sum_ns = cache_stats.module_time_sum_ns,
+        };
+    };
+
+    const drained = try build_env.drainReports();
+    defer build_env.freeDrainedReportsPathsOnly(drained);
+
+    var error_count: u32 = 0;
+    var warning_count: u32 = 0;
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            switch (report.severity) {
+                .info => {},
+                .runtime_error, .fatal => error_count += 1,
+                .warning => warning_count += 1,
+            }
+        }
+    }
+
+    var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
+    for (drained, 0..) |mod, i| {
+        reports[i] = .{
+            .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
+            .reports = mod.reports,
+        };
+    }
+
+    const timing = if (builtin.target.cpu.arch == .wasm32)
+        CheckTimingInfo{}
+    else
+        build_env.getTimingInfo();
+    const cache_stats = build_env.getBuildStats();
+
+    return CheckResult{
+        .reports = reports,
+        .timing = timing,
+        .error_count = error_count,
+        .warning_count = warning_count,
+        .modules_total = cache_stats.modules_total,
+        .cache_hits = cache_stats.cache_hits,
+        .cache_misses = cache_stats.cache_misses,
+        .modules_compiled = cache_stats.modules_compiled,
+        .module_time_min_ns = cache_stats.module_time_min_ns,
+        .module_time_max_ns = cache_stats.module_time_max_ns,
+        .module_time_sum_ns = cache_stats.module_time_sum_ns,
+    };
+}
+
+fn finishRocCheck(
+    ctx: *CliCtx,
+    args: cli_args.CheckArgs,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+    timer_start_ns: i128,
+    check_result: *CheckResult,
+) RocCheckError!void {
+    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
+
+    for (check_result.reports) |module| {
+        for (module.reports) |*report| {
+            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+        }
+    }
+
+    ctx.io.flush();
+
+    if (check_result.error_count > 0 or check_result.warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) in ", .{
+            check_result.error_count,
+            check_result.warning_count,
+        }) catch {};
+        formatElapsedTimeMs(stderr, elapsed) catch {};
+        stderr.print(" for {s}.\n", .{args.path}) catch {};
+
+        if (args.verbose) {
+            printVerboseStats(stderr, check_result);
+        }
+
+        ctx.io.flush();
+
+        if (check_result.error_count > 0) {
+            return error.CheckFailed;
+        } else {
+            std.process.exit(2);
+        }
+    } else {
+        stdout.print("No errors found in ", .{}) catch {};
+        formatElapsedTimeMs(stdout, elapsed) catch {};
+        stdout.print(" for {s}\n", .{args.path}) catch {};
+
+        if (args.verbose) {
+            printVerboseStats(stdout, check_result);
+        }
+
+        ctx.io.flush();
+    }
+
+    if (args.time) {
+        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
+    }
+}
+
 fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -11552,12 +11729,41 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
         .roc_ctx = ctx.coreCtx(),
     };
 
-    var extra_buf: [2][]const u8 = undefined;
-    const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
-
     // Use BuildEnv to check the file
     reporter.begin("Type Checking");
-    var result_with_env = checkFileWithBuildEnvPreserved(
+    if (args.watch_inputs_file) |file_path| {
+        var extra_buf: [2][]const u8 = undefined;
+        const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
+
+        var result_with_env = checkFileWithBuildEnvPreserved(
+            ctx,
+            args.path,
+            args.main,
+            args.time,
+            cache_config,
+            args.max_threads,
+            resolutionConfigFromLimits(args.resolve_limits),
+            true,
+        ) catch |err| {
+            reporter.fail();
+            try writeWatchInputsFile(ctx, file_path, null, extra_paths);
+            return handleProcessFileError(err, stderr, args.path);
+        };
+        defer result_with_env.deinit(ctx.gpa);
+        const check_result = &result_with_env.check_result;
+
+        if (builtin.target.cpu.arch == .wasm32) {
+            reporter.end();
+        } else {
+            reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+        }
+        reporter.finish();
+
+        try writeWatchInputsFile(ctx, file_path, &result_with_env.build_env, extra_paths);
+        return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
+    }
+
+    var check_result = checkFileWithBuildEnv(
         ctx,
         args.path,
         args.main,
@@ -11565,16 +11771,11 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
-        args.watch_inputs_file != null,
     ) catch |err| {
         reporter.fail();
-        if (args.watch_inputs_file) |file_path| {
-            try writeWatchInputsFile(ctx, file_path, null, extra_paths);
-        }
         return handleProcessFileError(err, stderr, args.path);
     };
-    defer result_with_env.deinit(ctx.gpa);
-    const check_result = &result_with_env.check_result;
+    defer check_result.deinit(ctx.gpa);
 
     if (builtin.target.cpu.arch == .wasm32) {
         reporter.end();
@@ -11583,64 +11784,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
     }
     reporter.finish();
 
-    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
-
-    if (args.watch_inputs_file) |file_path| {
-        try writeWatchInputsFile(ctx, file_path, &result_with_env.build_env, extra_paths);
-    }
-
-    // Render reports grouped by module
-    for (check_result.reports) |module| {
-        for (module.reports) |*report| {
-
-            // Render the diagnostic report to stderr
-            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
-        }
-    }
-
-    // Flush stderr to ensure all error output is visible
-    ctx.io.flush();
-
-    if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            check_result.error_count,
-            check_result.warning_count,
-        }) catch {};
-        formatElapsedTimeMs(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
-
-        // Print verbose stats if requested
-        if (args.verbose) {
-            printVerboseStats(stderr, check_result);
-        }
-
-        // Flush before exit
-        ctx.io.flush();
-
-        // Exit with code 1 for errors, code 2 for warnings only
-        if (check_result.error_count > 0) {
-            return error.CheckFailed;
-        } else {
-            std.process.exit(2);
-        }
-    } else {
-        stdout.print("No errors found in ", .{}) catch {};
-        formatElapsedTimeMs(stdout, elapsed) catch {};
-        stdout.print(" for {s}\n", .{args.path}) catch {};
-
-        // Print verbose stats if requested
-        if (args.verbose) {
-            printVerboseStats(stdout, check_result);
-        }
-
-        ctx.io.flush();
-    }
-
-    // Print timing breakdown if requested
-    if (args.time) {
-        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
-    }
+    return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, &check_result);
 }
 
 fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {

@@ -224,10 +224,14 @@ fn hashByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
 }
 
 fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
+    const deps = module_env.file_dependencies.items.items;
+    if (deps.len == 0) {
+        return hashBytes(module_env.getSourceAll());
+    }
+
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hashByteSlice(&hasher, "roc-module-source-inputs-v2");
     hashByteSlice(&hasher, module_env.getSourceAll());
-    const deps = module_env.file_dependencies.items.items;
     hashU32(&hasher, @intCast(deps.len));
     for (deps) |dep| {
         hashByteSlice(&hasher, module_env.fileDependencyRelativePath(dep));
