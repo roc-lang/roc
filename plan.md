@@ -629,7 +629,7 @@ wasm-objdump -x -d rocci-bird.wasm > rocci-bird.disasm.txt
 - [x] Effect slots exist for function bodies.
 - [x] Effect slots exist for top-level value right-hand sides.
 - [x] Effect slots exist for `expect` bodies.
-- [ ] Effect slots exist for delayed-effect root candidates.
+- [x] Effect slots exist for delayed-effect root candidates.
 - [x] Active effect-slot stack exists.
 - [x] Direct effectful calls mark active slots.
 - [x] Calls to known local functions add directed effect edges.

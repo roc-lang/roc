@@ -1395,9 +1395,14 @@ pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoist
 }
 
 fn beginEffectSlot(self: *Self, kind: EffectSlotKind) Allocator.Error!EffectSlotId {
+    const id = try self.allocEffectSlot(kind);
+    try self.active_effect_slots.append(self.gpa, id);
+    return id;
+}
+
+fn allocEffectSlot(self: *Self, kind: EffectSlotKind) Allocator.Error!EffectSlotId {
     const id: EffectSlotId = @enumFromInt(self.effect_slots.items.len);
     try self.effect_slots.append(self.gpa, .{ .kind = kind });
-    try self.active_effect_slots.append(self.gpa, id);
     return id;
 }
 
@@ -1596,6 +1601,10 @@ fn markActiveEffectSlotEffectful(self: *Self) void {
 
 fn recordActiveEffectSlotDependency(self: *Self, callee_slot: EffectSlotId) Allocator.Error!void {
     const caller_slot = self.currentEffectSlot() orelse return;
+    try self.recordEffectSlotDependency(caller_slot, callee_slot);
+}
+
+fn recordEffectSlotDependency(self: *Self, caller_slot: EffectSlotId, callee_slot: EffectSlotId) Allocator.Error!void {
     try self.effect_edges.append(self.gpa, .{
         .from = caller_slot,
         .to = callee_slot,
@@ -1619,10 +1628,56 @@ fn recordDirectCalleeEffectDependency(self: *Self, callee: CIR.Expr.Idx) Allocat
 
 fn recordDispatchEffectWatch(self: *Self, fn_var: Var) Allocator.Error!void {
     const slot = self.currentEffectSlot() orelse return;
+    try self.recordDispatchEffectWatchForSlot(fn_var, slot);
+}
+
+fn recordDispatchEffectWatchForSlot(self: *Self, fn_var: Var, slot: EffectSlotId) Allocator.Error!void {
     try self.dispatch_effect_watches.append(self.gpa, .{
         .fn_var = fn_var,
         .slot = slot,
     });
+}
+
+fn dispatchEffectIsDeferred(self: *Self, env: *const Env, fn_var: Var) bool {
+    for (env.deferred_static_dispatch_constraints.items.items) |deferred_constraint| {
+        for (self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints)) |constraint| {
+            if (constraint.fn_var == fn_var) return true;
+        }
+    }
+    return false;
+}
+
+fn markExprResultDelayedOnDispatch(
+    self: *Self,
+    result: *ExprCheckResult,
+    expr_idx: CIR.Expr.Idx,
+    fn_var: Var,
+    env: *const Env,
+) Allocator.Error!void {
+    if (!self.dispatchEffectIsDeferred(env, fn_var)) return;
+    try self.markExprResultDelayedOnDispatchSlot(result, expr_idx, fn_var);
+}
+
+fn markExprResultDelayedOnDispatchSlot(
+    self: *Self,
+    result: *ExprCheckResult,
+    expr_idx: CIR.Expr.Idx,
+    fn_var: Var,
+) Allocator.Error!void {
+    const slot = try self.allocEffectSlot(.{ .const_root_candidate = @intFromEnum(expr_idx) });
+    errdefer {
+        _ = self.effect_slots.pop();
+    }
+    if (result.root_effect) |existing_effect| {
+        switch (existing_effect) {
+            .delayed => |child_slot| try self.recordEffectSlotDependency(slot, child_slot),
+            .effect_free,
+            .effectful,
+            => {},
+        }
+    }
+    try self.recordDispatchEffectWatchForSlot(fn_var, slot);
+    result.root_effect = .{ .delayed = slot };
 }
 
 fn reportTopLevelEffectSlot(self: *Self, slot: EffectSlotId, env: ?*Env) Allocator.Error!void {
@@ -2379,6 +2434,9 @@ const HoistSelectionTestState = struct {
     fn init(allocator: Allocator) HoistSelectionTestState {
         var checker: Self = undefined;
         checker.gpa = allocator;
+        checker.effect_slots = .empty;
+        checker.effect_edges = .empty;
+        checker.dispatch_effect_watches = .empty;
         checker.hoist_frames = .empty;
         checker.hoist_expr_candidates = .empty;
         checker.hoist_deferred_binding_dependencies = .empty;
@@ -2403,6 +2461,9 @@ const HoistSelectionTestState = struct {
     }
 
     fn deinit(self: *HoistSelectionTestState) void {
+        self.checker.effect_slots.deinit(self.allocator);
+        self.checker.effect_edges.deinit(self.allocator);
+        self.checker.dispatch_effect_watches.deinit(self.allocator);
         self.checker.hoist_frames.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
         self.checker.hoist_deferred_binding_dependencies.deinit(self.allocator);
@@ -2598,6 +2659,34 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
         try std.testing.expectEqual(dependency_pattern, state.checker.selected_hoisted_roots.items[0].pattern.?);
     }
     try std.testing.expect(saw_late_oom);
+}
+
+test "delayed dispatch root candidates allocate effect slots" {
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+
+    const fn_var: Var = @enumFromInt(42);
+    var result = ExprCheckResult.compileTimeKnown();
+    const child_slot = try state.checker.allocEffectSlot(.{ .const_root_candidate = 7 });
+    result.root_effect = .{ .delayed = child_slot };
+    const expr_idx: CIR.Expr.Idx = @enumFromInt(123);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&result, expr_idx, fn_var);
+    const parent_slot = switch (result.root_effect.?) {
+        .delayed => |slot| slot,
+        .effect_free,
+        .effectful,
+        => return error.ExpectedDelayedRootEffect,
+    };
+
+    try std.testing.expectEqual(@as(usize, 2), state.checker.effect_slots.items.len);
+    try std.testing.expectEqual(EffectSlotKind{ .const_root_candidate = 7 }, state.checker.effect_slots.items[@intCast(@intFromEnum(child_slot))].kind);
+    try std.testing.expectEqual(EffectSlotKind{ .const_root_candidate = 123 }, state.checker.effect_slots.items[@intCast(@intFromEnum(parent_slot))].kind);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.effect_edges.items.len);
+    try std.testing.expectEqual(parent_slot, state.checker.effect_edges.items[0].from);
+    try std.testing.expectEqual(child_slot, state.checker.effect_edges.items[0].to);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.dispatch_effect_watches.items.len);
+    try std.testing.expectEqual(fn_var, state.checker.dispatch_effect_watches.items[0].fn_var);
+    try std.testing.expectEqual(parent_slot, state.checker.dispatch_effect_watches.items[0].slot);
 }
 
 test "hoisted binding root selection is atomic when binding map allocation fails" {
@@ -11492,6 +11581,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (self.current_expect_region == null) {
                 check_result.markEffectful();
             }
+        } else {
+            try self.markExprResultDelayedOnDispatch(&check_result, expr_idx, fn_var, env);
         }
     }
 
