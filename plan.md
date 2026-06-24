@@ -363,7 +363,7 @@ Tests:
 - [x] effectful call inside compile-time-known expression is not evaluated
 - [x] all modules in an import graph run eligible top-level diagnostics
 - [ ] duplicate diagnostics are not emitted for shared top-level/root sources
-- [ ] successful unreachable top-level value is not emitted as target data
+- [x] successful unreachable top-level value is not emitted as target data
 
 ## Phase 5: Static Data Output
 
@@ -385,11 +385,11 @@ Tasks:
 
 Tests:
 
-- [ ] static list bytes are emitted once when shared
+- [x] static list bytes are emitted once when shared
 - [ ] static record points at static list bytes
-- [ ] repeated records sharing a list share the list bytes
-- [ ] tuple containing list points at static list bytes
-- [ ] tag payload containing list points at static list bytes
+- [x] repeated records sharing a list share the list bytes
+- [x] tuple containing list points at static list bytes
+- [x] tag payload containing list points at static list bytes
 - [ ] opaque backed by static-storable data emits only through allowed checked
   output
 - [ ] repeated sprite sheets share bytes
@@ -400,7 +400,7 @@ Tests:
 - [ ] inline animation cells and named animation cells emit equivalent data
 - [ ] child roots removed by parent root do not emit duplicate data
 - [ ] effectful parent does not prevent independent static child data
-- [ ] unreachable successfully evaluated value is not emitted as target data
+- [x] unreachable successfully evaluated value is not emitted as target data
 - [ ] non-storable reachable evaluated value is represented explicitly
 
 ## Phase 6: Cleanup Old Machinery
