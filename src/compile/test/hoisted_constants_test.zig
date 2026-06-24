@@ -764,6 +764,88 @@ test "tuple and tag static data share named and inline list payloads" {
     try std.testing.expect(!exportsContainSequence(exports, &.{ 211, 212, 213, 214 }));
 }
 
+test "reachable function-valued constant restores without static data literal" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\add_one = |n| n + 1.I64
+        \\add_two = |n| n + 2.I64
+        \\
+        \\chosen = if 1.I64 == 1.I64 {
+        \\    add_one
+        \\} else {
+        \\    add_two
+        \\}
+        \\
+        \\main! = |args| {
+        \\    value = chosen(List.len(args).to_i64_wrap())
+        \\    _ = value
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), lowered.lir_result.static_data_values.items.len);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
+}
+
 test "inline sub_or_crash cells inside runtime record become shared static data" {
     const gpa = std.testing.allocator;
 
