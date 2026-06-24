@@ -440,6 +440,12 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_structural_hash = .{
+            .value = rand_idx(CIR.Expr.Idx),
+            .hasher = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_method_eq = .{
             .lhs = rand_idx(CIR.Expr.Idx),
             .rhs = rand_idx(CIR.Expr.Idx),
@@ -1119,6 +1125,13 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .file_import_io_error = .{
+            .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_absolute_path = .{
             .path = rand_idx(StringLiteral.Idx),
             .region = rand_region(),
         },

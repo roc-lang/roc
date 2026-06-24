@@ -21,6 +21,20 @@ const Io = compile.CoreCtx;
 const RocTarget = roc_target.RocTarget;
 const HostedFn = echo_platform.host_abi.HostedFn;
 
+/// Errors that can occur while building and running the echo platform.
+pub const RunEchoError = Allocator.Error ||
+    compile.build.InitError ||
+    compile.build.BuildError ||
+    compile.build.CompileDiscoveredError ||
+    lir.CheckedPipeline.LowerResourceError ||
+    lir.LirImage.ImageError ||
+    eval.LirInterpreter.Error ||
+    error{
+        CompilationFailed,
+        EvaluationFailed,
+        EntrypointNotFound,
+    };
+
 /// Diagnostic-emission interface. The wasm host renders HTML to `js_stderr`;
 /// the native host renders plain text to its real stderr.
 pub const Diagnostics = struct {
@@ -43,7 +57,7 @@ pub const Diagnostics = struct {
     }
 
     /// Format a labelled step-failure message and emit it.
-    pub fn step(self: Diagnostics, comptime label: []const u8, err: anyerror) void {
+    pub fn step(self: Diagnostics, comptime label: []const u8, err: RunEchoError) void {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "echo: step '" ++ label ++ "' failed: {s}\n", .{@errorName(err)}) catch {
             self.write("echo: step '" ++ label ++ "' failed (and message formatting failed)\n");
@@ -116,7 +130,7 @@ pub const RunOptions = struct {
 /// while the program otherwise returned 0). On compilation/runtime error,
 /// emits a labelled diagnostic through `opts.diagnostics` and propagates
 /// the error so the caller can decide on an exit code.
-pub fn runEcho(opts: RunOptions) anyerror!u8 {
+pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     const allocator = opts.runtime_fba.allocator();
     const diag = opts.diagnostics;
 
@@ -258,7 +272,7 @@ fn runEchoView(
     view: *const lir.LirImage.ProgramView,
     diag: Diagnostics,
     std_io: std.Io,
-) (Allocator.Error || error{ EvaluationFailed, EntrypointNotFound, Crash, DivisionByZero, RuntimeError })!u8 {
+) RunEchoError!u8 {
     // HostedFn array order matters: the interpreter calls
     // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
     // alphabetically by fully-qualified `Module.fn_name` (with trailing `!`

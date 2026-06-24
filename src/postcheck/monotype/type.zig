@@ -208,6 +208,17 @@ pub const Store = struct {
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
                 .{ .builtin = owner }
+            else if (named.kind == .alias)
+                // Aliases are transparent for static dispatch: the owner is the
+                // backing's owner, mirroring the alias-transparent digest path
+                // above. This unwraps alias-over-alias and alias-over-nominal
+                // uniformly (the backing of an alias-over-nominal is itself a
+                // `named` node carrying the nominal's owner). The recursion
+                // terminates because alias chains in checked output are finite.
+                (if (named.backing) |backing|
+                    self.ownerHead(backing.ty)
+                else
+                    .none)
             else
                 .{ .named_type = named.def },
             else => .none,

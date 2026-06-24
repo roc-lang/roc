@@ -85,6 +85,7 @@ const ComptimeEvalError = problem_mod.ComptimeEvalError;
 
 // Number errors
 const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
+const TupleAccessNeedsAnnotation = problem_mod.TupleAccessNeedsAnnotation;
 const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
@@ -871,6 +872,7 @@ pub const ReportBuilder = struct {
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
+            .tuple_access_needs_annotation => |data| return self.buildTupleAccessNeedsAnnotationReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
@@ -2451,6 +2453,41 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(expected_type);
+
+        return report;
+    }
+
+    fn buildTupleAccessNeedsAnnotationReport(
+        self: *Self,
+        data: TupleAccessNeedsAnnotation,
+    ) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "TUPLE ACCESS NEEDS ANNOTATION", .runtime_error);
+        errdefer report.deinit();
+
+        const field_text = try std.fmt.allocPrint(self.gpa, ".{d}", .{data.elem_index});
+        defer self.gpa.free(field_text);
+        const owned_field = try report.addOwnedString(field_text);
+
+        try D.renderSlice(&.{
+            D.bytes("I can't infer the full tuple type from this"),
+            D.bytes(owned_field).withAnnotation(.inline_code),
+            D.bytes("access alone:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Add a type annotation that fixes the tuple's arity before accessing this element."),
+        }, self, &report);
 
         return report;
     }

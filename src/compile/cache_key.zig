@@ -86,7 +86,7 @@ fn testInput() CacheKeyInput {
     };
 }
 
-fn expectDifferent(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) anyerror!void {
+fn expectDifferent(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) error{TestUnexpectedResult}!void {
     try std.testing.expect(!eql(a, b));
 }
 

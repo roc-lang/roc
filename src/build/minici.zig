@@ -71,6 +71,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-snapshot-tool" },
     .{ .name = "run-test-zig-builtin-doc" },
     .{ .name = "run-test-zig-cli-main" },
+    .{ .name = "run-test-zig-machine-code-shim" },
     .{ .name = "run-test-zig-watch-cli" },
     .{ .name = "run-test-zig-fx-platform" },
     .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },

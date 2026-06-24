@@ -17,6 +17,7 @@ const ConstStoreWriter = @import("const_store_writer.zig");
 const interpreter_mod = @import("interpreter.zig");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
+const FinalizeError = checked.CompileTimeFinalizer.Error;
 
 const ComptimeCoverage = struct {
     allocator: Allocator,
@@ -112,7 +113,7 @@ fn finalize(
     available_modules: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     problem_store: ?*check.problem.Store,
-) anyerror!void {
+) FinalizeError!void {
     const requests = module.root_requests.compile_time_requests;
     var had_problem = false;
 
@@ -445,7 +446,7 @@ fn lowerEvalAndFinishRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
-) anyerror!bool {
+) FinalizeError!bool {
     if (requests.len != root_ids.len) {
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
     }
@@ -552,7 +553,7 @@ fn finishLiteralConversionRoot(
     problem_store: ?*check.problem.Store,
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
-) anyerror!checked.CompileTimeRootPayload {
+) FinalizeError!checked.CompileTimeRootPayload {
     const try_node = switch (payload) {
         .const_node => |node| node,
         else => finalizationInvariant("numeral conversion root did not store a constant"),
@@ -638,7 +639,7 @@ fn reportCompileTimeExpectFailures(
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     failures: []const ExpectFailure,
-) anyerror!bool {
+) FinalizeError!bool {
     if (failures.len == 0) return false;
     const problem_store = maybe_problem_store orelse return false;
     const region = module.checked_bodies.expr(root.expr).source_region;
@@ -661,7 +662,7 @@ fn evalCompileTimeRoot(
     lir_result: *const lir.Program.Result,
     proc: lir.LIR.LirProcSpecId,
     ret_layout: @import("layout").Idx,
-) anyerror!Interpreter.EvalResult {
+) FinalizeError!Interpreter.EvalResult {
     return interpreter.eval(.{
         .proc_id = proc,
         .ret_layout = ret_layout,
@@ -720,7 +721,7 @@ fn reportCompileTimeExhaustiveness(
     lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
     root_proc: lir.LIR.LirProcSpecId,
-) anyerror!Interpreter.EvalResult {
+) FinalizeError!Interpreter.EvalResult {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
     };
@@ -811,7 +812,7 @@ fn reportCompileTimeCrash(
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
     message: []const u8,
-) anyerror!Interpreter.EvalResult {
+) FinalizeError!Interpreter.EvalResult {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };

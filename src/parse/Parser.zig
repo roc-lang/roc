@@ -259,6 +259,7 @@ const ExprParentKind = enum(u16) {
     expr_match_guard = 0x0f6b,
     expr_match_body = 0xe148,
     expr_dbg = 0x68b5,
+    expr_crash_statement = 0x23a1,
     expr_return = 0xf86e,
     expr_for_list = 0xb739,
     expr_for_body = 0x247c,
@@ -3217,6 +3218,14 @@ fn runExprStatementKernel(
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
+                if (tok == .KwCrash) {
+                    const start = self.pos;
+                    try self.pushDiagnostic(.crash_statement_in_expr_position, .{ .start = start, .end = start + 1 });
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_crash_statement, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
                 if (tok == .KwFor) {
                     const start = self.pos;
                     self.advance();
@@ -3718,6 +3727,13 @@ fn runExprStatementKernel(
                             .region = .{ .start = state.start, .end = self.pos },
                             .expr = completed,
                         } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_crash_statement => {
+                        const state = open_syntax.popExprPayload(.expr_crash_statement, ExprAfterExprState);
+                        last_expr = null;
+                        const expr = try self.store.addMalformed(AST.Expr.Idx, .crash_statement_in_expr_position, .{ .start = state.start, .end = self.pos });
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
@@ -6318,10 +6334,14 @@ const bin_op_bp_table = blk: {
     const start = @intFromEnum(Token.Tag.OpPlus);
     const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
     var table = [_]BinOpBp{no_bin_op_bp} ** len;
+    // `*`, `/`, `//`, and `%` form a single multiplicative precedence group,
+    // left-associative among each other (`right > left` makes a following
+    // same-group operator fail `left >= min_bp`, so `1 % 10 // 100` parses as
+    // `(1 % 10) // 100`). The group binds tighter than additive (`+`/`-`).
     table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 32, .right = 33 };
-    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 30, .right = 31 };
-    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 28, .right = 29 };
-    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 26, .right = 27 };
+    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 32, .right = 33 };
     table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 20, .right = 21 };

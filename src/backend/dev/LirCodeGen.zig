@@ -248,6 +248,10 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_free,
+    hot_reload_enter,
+    hot_reload_leave,
+    hot_reload_retain_current,
+    hot_reload_erased_callable_drop,
 
     // Numeric operations
     dec_to_str,
@@ -255,6 +259,14 @@ pub const BuiltinFn = enum {
     dec_mul_saturated,
     dec_div,
     dec_div_trunc,
+    dec_pow,
+    dec_sqrt,
+    dec_sin,
+    dec_cos,
+    dec_tan,
+    dec_asin,
+    dec_acos,
+    dec_atan,
     dec_to_f64,
     i128_to_f64,
     u128_to_f64,
@@ -282,6 +294,15 @@ pub const BuiltinFn = enum {
     num_shr_u128,
     int_to_str,
     float_to_str,
+    float_floor,
+    float_ceiling,
+    float_pow,
+    float_sin,
+    float_cos,
+    float_tan,
+    float_asin,
+    float_acos,
+    float_atan,
     int_from_str,
     dec_from_str,
     float_from_str,
@@ -368,6 +389,10 @@ pub const BuiltinFn = enum {
             .erased_callable_decref => "roc_builtins_erased_callable_decref",
             .erased_callable_decref_single_thread => "roc_builtins_erased_callable_decref_single_thread",
             .erased_callable_free => "roc_builtins_erased_callable_free",
+            .hot_reload_enter => "roc_builtins_hot_reload_enter",
+            .hot_reload_leave => "roc_builtins_hot_reload_leave",
+            .hot_reload_retain_current => "roc_builtins_hot_reload_retain_current",
+            .hot_reload_erased_callable_drop => "roc_builtins_hot_reload_erased_callable_drop",
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
@@ -375,6 +400,14 @@ pub const BuiltinFn = enum {
             .dec_mul_saturated => "roc_builtins_dec_mul_saturated",
             .dec_div => "roc_builtins_dec_div",
             .dec_div_trunc => "roc_builtins_dec_div_trunc",
+            .dec_pow => "roc_builtins_dec_pow",
+            .dec_sqrt => "roc_builtins_dec_sqrt",
+            .dec_sin => "roc_builtins_dec_sin",
+            .dec_cos => "roc_builtins_dec_cos",
+            .dec_tan => "roc_builtins_dec_tan",
+            .dec_asin => "roc_builtins_dec_asin",
+            .dec_acos => "roc_builtins_dec_acos",
+            .dec_atan => "roc_builtins_dec_atan",
             .dec_to_f64 => "roc_builtins_dec_to_f64",
             .i128_to_f64 => "roc_builtins_i128_to_f64",
             .u128_to_f64 => "roc_builtins_u128_to_f64",
@@ -402,6 +435,15 @@ pub const BuiltinFn = enum {
             .num_shr_u128 => "roc_builtins_num_shr_u128",
             .int_to_str => "roc_builtins_int_to_str",
             .float_to_str => "roc_builtins_float_to_str",
+            .float_floor => "roc_builtins_float_floor",
+            .float_ceiling => "roc_builtins_float_ceiling",
+            .float_pow => "roc_builtins_float_pow",
+            .float_sin => "roc_builtins_float_sin",
+            .float_cos => "roc_builtins_float_cos",
+            .float_tan => "roc_builtins_float_tan",
+            .float_asin => "roc_builtins_float_asin",
+            .float_acos => "roc_builtins_float_acos",
+            .float_atan => "roc_builtins_float_atan",
             .int_from_str => "roc_builtins_int_from_str",
             .dec_from_str => "roc_builtins_dec_from_str",
             .float_from_str => "roc_builtins_float_from_str",
@@ -866,6 +908,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// - native_execution: Code runs in-process (dev evaluator), direct function pointers work
         /// - object_file: Generating relocatable object files, use symbol references for builtins
         generation_mode: GenerationMode = .native_execution,
+
+        /// Whether shim-executed host-callable functions and boxed callbacks
+        /// participate in the hot-reload code reference protocol.
+        enable_hot_reload: bool = false,
 
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
@@ -2383,6 +2429,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.emitValueLocal(args[0]);
                     return .{ .float_reg = try self.ensureInFloatReg(src_loc) };
+                },
+
+                // ── Float bit reinterpretations ──
+                .f32_to_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const reg = try self.materializeF32BitsInGeneralReg(src_loc);
+                    return .{ .general_reg = reg };
+                },
+                .f32_from_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const bits_reg = try self.ensureInGeneralReg(src_loc);
+                    const stack_offset = self.codegen.allocStackSlot(4);
+                    try self.codegen.emitStoreStack(.w32, stack_offset, bits_reg);
+                    self.codegen.freeGeneral(bits_reg);
+                    return .{ .stack = .{ .offset = stack_offset, .size = .dword, .layout_idx = .f32 } };
+                },
+                .f64_to_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const reg = try self.ensureInGeneralReg(src_loc);
+                    return .{ .general_reg = reg };
+                },
+                .f64_from_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const bits_reg = try self.ensureInGeneralReg(src_loc);
+                    const stack_offset = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStack(.w64, stack_offset, bits_reg);
+                    self.codegen.freeGeneral(bits_reg);
+                    return .{ .stack = .{ .offset = stack_offset, .size = .qword, .layout_idx = .f64 } };
                 },
 
                 // ── Float-to-signed-integer truncating conversions ──
@@ -3948,6 +4026,155 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                 },
 
+                .num_sqrt => {
+                    if (args.len != 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    if (ll.ret_layout == .dec) {
+                        const adj_src = if (src_loc == .stack) ValueLocation{ .stack_i128 = src_loc.stack.offset } else src_loc;
+                        return self.callDecUnaryMathBuiltin(
+                            adj_src,
+                            @intFromPtr(&dev_wrappers.roc_builtins_dec_sqrt),
+                            .dec_sqrt,
+                        );
+                    }
+
+                    const src_reg = try self.ensureInFloatReg(src_loc);
+                    const result_reg = try self.codegen.allocFloatFor(0);
+
+                    switch (ll.ret_layout) {
+                        .f32 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, src_reg, .double, src_reg);
+                                try self.codegen.emit.fsqrtRegReg(.single, result_reg, src_reg);
+                                try self.codegen.emit.fcvtFloatFloat(.double, result_reg, .single, result_reg);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(src_reg, src_reg);
+                                try self.codegen.emit.sqrtssRegReg(result_reg, src_reg);
+                                try self.codegen.emit.cvtss2sdRegReg(result_reg, result_reg);
+                            }
+                        },
+                        .f64 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fsqrtRegReg(.double, result_reg, src_reg);
+                            } else {
+                                try self.codegen.emit.sqrtsdRegReg(result_reg, src_reg);
+                            }
+                        },
+                        else => std.debug.panic(
+                            "LirCodeGen invariant violated: num_sqrt received non-float return layout {s}",
+                            .{@tagName(ll.ret_layout)},
+                        ),
+                    }
+
+                    self.codegen.freeFloat(src_reg);
+                    return .{ .float_reg = result_reg };
+                },
+                .num_pow => {
+                    if (args.len != 2) unreachable;
+                    const lhs_loc = try self.emitValueLocal(args[0]);
+                    const rhs_loc = try self.emitValueLocal(args[1]);
+                    if (ll.ret_layout == .dec) {
+                        const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        const adj_rhs = if (rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                        return self.callDecBinaryMathBuiltin(
+                            adj_lhs,
+                            adj_rhs,
+                            @intFromPtr(&dev_wrappers.roc_builtins_dec_pow),
+                            .dec_pow,
+                        );
+                    }
+
+                    return self.callFloatBinaryBuiltin(
+                        lhs_loc,
+                        rhs_loc,
+                        ll.ret_layout,
+                        @intFromPtr(&dev_wrappers.roc_builtins_float_pow),
+                        .float_pow,
+                    );
+                },
+                .num_sin,
+                .num_cos,
+                .num_tan,
+                .num_asin,
+                .num_acos,
+                .num_atan,
+                => {
+                    if (args.len != 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    if (ll.ret_layout == .dec) {
+                        const math_builtin = decUnaryMathBuiltin(ll.op);
+                        const adj_src = if (src_loc == .stack) ValueLocation{ .stack_i128 = src_loc.stack.offset } else src_loc;
+                        return self.callDecUnaryMathBuiltin(
+                            adj_src,
+                            math_builtin.addr,
+                            math_builtin.func,
+                        );
+                    }
+
+                    const math_builtin = floatUnaryMathBuiltin(ll.op);
+                    return self.callFloatUnaryBuiltin(
+                        src_loc,
+                        ll.ret_layout,
+                        math_builtin.addr,
+                        math_builtin.func,
+                    );
+                },
+                .num_floor => {
+                    if (args.len != 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    return self.callFloatUnaryBuiltin(
+                        src_loc,
+                        ll.ret_layout,
+                        @intFromPtr(&dev_wrappers.roc_builtins_float_floor),
+                        .float_floor,
+                    );
+                },
+                .num_ceiling => {
+                    if (args.len != 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    return self.callFloatUnaryBuiltin(
+                        src_loc,
+                        ll.ret_layout,
+                        @intFromPtr(&dev_wrappers.roc_builtins_float_ceiling),
+                        .float_ceiling,
+                    );
+                },
+                .compare => {
+                    if (args.len != 2) unreachable;
+                    const operand_layout = self.valueLayout(args[0]);
+
+                    const gt_loc = if (operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128) blk: {
+                        const lhs_loc = try self.emitValueLocal(args[0]);
+                        const rhs_loc = try self.emitValueLocal(args[1]);
+                        const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        const adj_rhs = if (rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                        break :blk try self.generateI128Binop(.num_is_gt, adj_lhs, adj_rhs, operand_layout);
+                    } else blk: {
+                        const lhs_loc = try self.emitValueLocal(args[0]);
+                        const rhs_loc = try self.emitValueLocal(args[1]);
+                        break :blk try self.generateIntBinop(.num_is_gt, lhs_loc, rhs_loc, operand_layout);
+                    };
+
+                    const lt_loc = if (operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128) blk: {
+                        const lhs_loc = try self.emitValueLocal(args[0]);
+                        const rhs_loc = try self.emitValueLocal(args[1]);
+                        const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        const adj_rhs = if (rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                        break :blk try self.generateI128Binop(.num_is_lt, adj_lhs, adj_rhs, operand_layout);
+                    } else blk: {
+                        const lhs_loc = try self.emitValueLocal(args[0]);
+                        const rhs_loc = try self.emitValueLocal(args[1]);
+                        break :blk try self.generateIntBinop(.num_is_lt, lhs_loc, rhs_loc, operand_layout);
+                    };
+
+                    const gt_reg = try self.ensureInGeneralReg(gt_loc);
+                    const lt_reg = try self.ensureInGeneralReg(lt_loc);
+                    try self.emitShlImm(.w64, lt_reg, lt_reg, 1);
+                    try self.emitAddRegs(.w64, gt_reg, gt_reg, lt_reg);
+                    self.codegen.freeGeneral(lt_reg);
+                    return .{ .general_reg = gt_reg };
+                },
+
                 // Resolved before backend codegen: builtin `from_numeral` is
                 // folded to a constant during Monotype lowering, so the op must
                 // never reach a backend. Reaching here is an invariant failure,
@@ -3956,13 +4183,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     std.debug.panic("num_from_numeral reached the dev backend; it must be folded to a constant during Monotype lowering", .{});
                 },
                 // Unimplemented ops
-                .num_pow,
-                .num_sqrt,
                 .num_log,
                 .num_round,
-                .num_floor,
-                .num_ceiling,
-                .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
                 },
@@ -6097,8 +6319,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.allocTempGeneral();
 
             switch (op) {
-                .num_plus => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
-                .num_minus => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_plus => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.addsRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
+                    try self.emitCheckedIntAddSubOverflow(op, result_reg, operand_layout, is_unsigned);
+                },
+                .num_minus => {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.subsRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
+                    try self.emitCheckedIntAddSubOverflow(op, result_reg, operand_layout, is_unsigned);
+                },
                 .num_times => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_div_by, .num_div_trunc_by => {
                     // For integers, div and div_trunc are the same (integer division truncates)
@@ -6174,6 +6410,90 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
+        fn emitCheckedIntAddSubOverflow(
+            self: *Self,
+            op: lir.LowLevel,
+            result_reg: GeneralReg,
+            operand_layout: layout.Idx,
+            is_unsigned: bool,
+        ) Allocator.Error!void {
+            const message = switch (op) {
+                .num_plus => "Integer addition overflowed!",
+                .num_minus => "Integer subtraction overflowed!",
+                else => unreachable,
+            };
+
+            switch (operand_layout) {
+                .u8 => try self.emitUnsignedIntRangeCheck(result_reg, 255, message),
+                .u16 => try self.emitUnsignedIntRangeCheck(result_reg, 65_535, message),
+                .u32 => try self.emitUnsignedIntRangeCheck(result_reg, 4_294_967_295, message),
+                .i8 => try self.emitSignedIntRangeCheck(result_reg, -128, 127, message),
+                .i16 => try self.emitSignedIntRangeCheck(result_reg, -32_768, 32_767, message),
+                .i32 => try self.emitSignedIntRangeCheck(result_reg, -2_147_483_648, 2_147_483_647, message),
+                .u64 => try self.emitCrashOnCond(switch (op) {
+                    .num_plus => condUnsignedAddOverflow(),
+                    .num_minus => condUnsignedSubOverflow(),
+                    else => unreachable,
+                }, message),
+                .i64 => try self.emitCrashOnCond(condOverflow(), message),
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.assert(!is_unsigned or operand_layout == .u128);
+                    }
+                },
+            }
+        }
+
+        fn emitUnsignedIntRangeCheck(self: *Self, result_reg: GeneralReg, max_value: i64, message: []const u8) Allocator.Error!void {
+            try self.emitCmpRegImm64(result_reg, max_value);
+            try self.emitCrashOnCond(condAbove(), message);
+        }
+
+        fn emitSignedIntRangeCheck(self: *Self, result_reg: GeneralReg, min_value: i64, max_value: i64, message: []const u8) Allocator.Error!void {
+            try self.emitCmpRegImm64(result_reg, min_value);
+            try self.emitCrashOnCond(condLess(), message);
+            try self.emitCmpRegImm64(result_reg, max_value);
+            try self.emitCrashOnCond(condGreater(), message);
+        }
+
+        fn emitCmpRegImm64(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
+            const temp = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(temp);
+            try self.codegen.emitLoadImm(temp, value);
+            try self.emitCmpReg(reg, temp);
+        }
+
+        fn emitCrashOnCond(self: *Self, cond: Condition, message: []const u8) Allocator.Error!void {
+            const crash_patch = try self.codegen.emitCondJump(cond);
+            const done_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(crash_patch, self.codegen.currentOffset());
+            try self.emitRocCrash(message);
+            try self.emitTrap();
+            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+        }
+
+        fn emitCheckedI128AddSubOverflow(
+            self: *Self,
+            op: lir.LowLevel,
+            operand_layout: layout.Idx,
+        ) Allocator.Error!void {
+            const message = switch (op) {
+                .num_plus => "Integer addition overflowed!",
+                .num_minus => "Integer subtraction overflowed!",
+                else => unreachable,
+            };
+
+            switch (operand_layout) {
+                .u128 => try self.emitCrashOnCond(switch (op) {
+                    .num_plus => condUnsignedAddOverflow(),
+                    .num_minus => condUnsignedSubOverflow(),
+                    else => unreachable,
+                }, message),
+                .i128 => try self.emitCrashOnCond(condOverflow(), message),
+                else => {},
+            }
+        }
+
         // Condition code helpers for cross-architecture support
         fn condEqual() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .eq else .equal;
@@ -6215,6 +6535,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn condAboveOrEqual() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .cs else .above_or_equal;
+        }
+
+        fn condOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .vs else .overflow;
+        }
+
+        fn condUnsignedAddOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cs else .below;
+        }
+
+        fn condUnsignedSubOverflow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cc else .below;
         }
 
         /// Generate 128-bit integer binary operation
@@ -6264,9 +6596,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_plus => {
                     // 128-bit add: low = lhs_low + rhs_low, high = lhs_high + rhs_high + carry
                     if (comptime target.toCpuArch() == .aarch64) {
-                        // ADDS sets carry flag, ADC adds with carry
+                        // ADDS sets carry; ADCS adds it into the high word and leaves final flags.
                         try self.codegen.emit.addsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
-                        try self.codegen.emit.adcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                        try self.codegen.emit.adcsRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
                     } else {
                         // x86_64: ADD sets carry, ADC uses it
                         try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
@@ -6274,13 +6606,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
                         try self.codegen.emit.adcRegReg(.w64, result_high, rhs_parts.high);
                     }
+                    try self.emitCheckedI128AddSubOverflow(op, operand_layout);
                 },
                 .num_minus => {
                     // 128-bit sub: low = lhs_low - rhs_low, high = lhs_high - rhs_high - borrow
                     if (comptime target.toCpuArch() == .aarch64) {
                         // SUBS sets borrow flag, SBC subtracts with borrow
                         try self.codegen.emit.subsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
-                        try self.codegen.emit.sbcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                        try self.codegen.emit.sbcsRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
                     } else {
                         // x86_64: SUB sets borrow, SBB uses it
                         try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
@@ -6288,6 +6621,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
                         try self.codegen.emit.sbbRegReg(.w64, result_high, rhs_parts.high);
                     }
+                    try self.emitCheckedI128AddSubOverflow(op, operand_layout);
                 },
                 .num_times => {
                     if (operand_layout == .dec) {
@@ -6533,6 +6867,122 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeFloat(freg);
 
             return .{ .stack_i128 = stack_offset };
+        }
+
+        fn callFloatUnaryBuiltin(self: *Self, src_loc: ValueLocation, ret_layout: layout.Idx, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const freg = try self.ensureInFloatReg(src_loc);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (freg != .V0) {
+                    try self.codegen.emit.fmovRegReg(.double, .V0, freg);
+                }
+            } else {
+                try builder.addF64RegArg(freg);
+            }
+
+            const float_width: i64 = switch (ret_layout) {
+                .f32 => 4,
+                .f64 => 8,
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: float unary builtin received non-float return layout {s}",
+                    .{@tagName(ret_layout)},
+                ),
+            };
+            try builder.addImmArg(float_width);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+            self.codegen.freeFloat(freg);
+
+            const result_reg = self.codegen.allocFloat() orelse unreachable;
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (result_reg != .V0) {
+                    try self.codegen.emit.fmovRegReg(.double, result_reg, .V0);
+                }
+            } else {
+                if (result_reg != .XMM0) {
+                    try self.codegen.emit.movsdRegReg(result_reg, .XMM0);
+                }
+            }
+            return .{ .float_reg = result_reg };
+        }
+
+        const FloatUnaryMathBuiltin = struct {
+            addr: usize,
+            func: BuiltinFn,
+        };
+
+        fn floatUnaryMathBuiltin(op: lir.LowLevel) FloatUnaryMathBuiltin {
+            return switch (op) {
+                .num_sin => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_sin), .func = .float_sin },
+                .num_cos => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_cos), .func = .float_cos },
+                .num_tan => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_tan), .func = .float_tan },
+                .num_asin => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_asin), .func = .float_asin },
+                .num_acos => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_acos), .func = .float_acos },
+                .num_atan => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_atan), .func = .float_atan },
+                else => unreachable,
+            };
+        }
+
+        const DecUnaryMathBuiltin = struct {
+            addr: usize,
+            func: BuiltinFn,
+        };
+
+        fn decUnaryMathBuiltin(op: lir.LowLevel) DecUnaryMathBuiltin {
+            return switch (op) {
+                .num_sin => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_sin), .func = .dec_sin },
+                .num_cos => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_cos), .func = .dec_cos },
+                .num_tan => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_tan), .func = .dec_tan },
+                .num_asin => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_asin), .func = .dec_asin },
+                .num_acos => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_acos), .func = .dec_acos },
+                .num_atan => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_atan), .func = .dec_atan },
+                else => unreachable,
+            };
+        }
+
+        fn callFloatBinaryBuiltin(self: *Self, lhs_loc: ValueLocation, rhs_loc: ValueLocation, ret_layout: layout.Idx, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const lhs_reg = try self.ensureInFloatReg(lhs_loc);
+            const rhs_reg = try self.ensureInFloatReg(rhs_loc);
+            const lhs_slot = self.codegen.allocStackSlot(8);
+            const rhs_slot = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStackF64(lhs_slot, lhs_reg);
+            try self.codegen.emitStoreStackF64(rhs_slot, rhs_reg);
+            self.codegen.freeFloat(lhs_reg);
+            if (rhs_reg != lhs_reg) {
+                self.codegen.freeFloat(rhs_reg);
+            }
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emitLoadStackF64(.V0, lhs_slot);
+                try self.codegen.emitLoadStackF64(.V1, rhs_slot);
+            } else {
+                try builder.addF64MemArg(frame_ptr, lhs_slot);
+                try builder.addF64MemArg(frame_ptr, rhs_slot);
+            }
+
+            const float_width: i64 = switch (ret_layout) {
+                .f32 => 4,
+                .f64 => 8,
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: float binary builtin received non-float return layout {s}",
+                    .{@tagName(ret_layout)},
+                ),
+            };
+            try builder.addImmArg(float_width);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            const result_reg = self.codegen.allocFloat() orelse unreachable;
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (result_reg != .V0) {
+                    try self.codegen.emit.fmovRegReg(.double, result_reg, .V0);
+                }
+            } else {
+                if (result_reg != .XMM0) {
+                    try self.codegen.emit.movsdRegReg(result_reg, .XMM0);
+                }
+            }
+            return .{ .float_reg = result_reg };
         }
 
         // ── Integer try conversion info ──
@@ -6897,14 +7347,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(parts.low);
                         self.codegen.freeGeneral(parts.high);
                     } else {
-                        // Float source (f32 or f64): all floats stored as f64 internally
+                        // Float source (f32 or f64): all floats stored as f64 internally.
+                        // The float `val` is argument position 1 (after `out`). On x86-64
+                        // it must flow through the CallBuilder so it lands in the right
+                        // register: Windows x64 shares positional slots between float and
+                        // integer args (val -> XMM1, target_bits -> R8), and only the
+                        // builder tracks that. On aarch64 (AAPCS) FP args use v0-v7
+                        // independently, so the single float arg goes in V0 directly.
                         const freg = try self.ensureInFloatReg(src_loc);
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_int_try_unsafe);
                         const base_reg = frame_ptr;
 
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
+                        }
+
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addF64RegArg(freg);
+                        if (comptime target.toCpuArch() != .aarch64) {
+                            try builder.addF64RegArg(freg);
+                        }
                         try builder.addImmArg(@intCast(target_bits));
                         try builder.addImmArg(@intCast(target_is_signed));
                         try builder.addImmArg(@intCast(val_size));
@@ -6933,14 +7395,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(parts.low);
                         self.codegen.freeGeneral(parts.high);
                     } else {
-                        // f64 to f32
+                        // f64 to f32. `val` is argument position 1 (after `out`); route it
+                        // through the CallBuilder on x86-64 to honor Windows x64 positional
+                        // float/int slot sharing, and place it in V0 directly on aarch64
+                        // (see the int branch above for details).
                         const freg = try self.ensureInFloatReg(src_loc);
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_f32_try_unsafe);
                         const base_reg = frame_ptr;
 
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
+                        }
+
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addF64RegArg(freg);
+                        if (comptime target.toCpuArch() != .aarch64) {
+                            try builder.addF64RegArg(freg);
+                        }
                         try builder.addImmArg(@intCast(offsets.success));
                         try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, fn_addr, .f64_to_f32_try_unsafe);
@@ -6995,6 +7466,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Load results from stack slot
             try self.codegen.emitLoadStack(.w64, result_low, result_slot);
             try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
+        }
+
+        fn callDecUnaryMathBuiltin(self: *Self, src_loc: ValueLocation, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const src_parts = try self.getI128Parts(src_loc, .signed);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg = frame_ptr;
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot);
+            try builder.addLeaArg(base_reg, result_slot + 8);
+            try builder.addRegArg(src_parts.low);
+            try builder.addRegArg(src_parts.high);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            self.codegen.freeGeneral(src_parts.low);
+            self.codegen.freeGeneral(src_parts.high);
+
+            return .{ .stack_i128 = result_slot };
+        }
+
+        fn callDecBinaryMathBuiltin(self: *Self, lhs_loc: ValueLocation, rhs_loc: ValueLocation, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const lhs_parts = try self.getI128Parts(lhs_loc, .signed);
+            const rhs_parts = try self.getI128Parts(rhs_loc, .signed);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg = frame_ptr;
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot);
+            try builder.addLeaArg(base_reg, result_slot + 8);
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(rhs_parts.low);
+            try builder.addRegArg(rhs_parts.high);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            self.codegen.freeGeneral(lhs_parts.low);
+            self.codegen.freeGeneral(lhs_parts.high);
+            self.codegen.freeGeneral(rhs_parts.low);
+            self.codegen.freeGeneral(rhs_parts.high);
+
+            return .{ .stack_i128 = result_slot };
         }
 
         /// Call Dec division builtin via decomposed wrapper.
@@ -10509,7 +11025,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
-            const payload_size = builtins.erased_callable.payloadSize(capture_size);
+            const capture_prefix_size: u32 = if (self.enable_hot_reload)
+                builtins.erased_callable.hot_reload_capture_prefix_size
+            else
+                0;
+            const payload_size = builtins.erased_callable.payloadSize(capture_prefix_size + capture_size);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
@@ -10523,6 +11043,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
+            const hot_reload_code_ref_slot: ?i32 = if (self.enable_hot_reload) blk: {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_retain_current), .hot_reload_retain_current);
+
+                const slot = self.codegen.allocStackSlot(8);
+                try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                break :blk slot;
+            } else null;
+
             const heap_ptr = try self.allocTempGeneral();
             try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
@@ -10535,9 +11065,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
-            const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
-            try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
-            self.codegen.freeGeneral(on_drop_reg);
+            if (self.enable_hot_reload) {
+                const hot_drop_reg = try self.allocTempGeneral();
+                try self.emitBuiltinAddress(
+                    hot_drop_reg,
+                    @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_erased_callable_drop),
+                    .hot_reload_erased_callable_drop,
+                );
+                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
+                self.codegen.freeGeneral(hot_drop_reg);
+
+                if (hot_reload_code_ref_slot) |slot| {
+                    const code_ref_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, code_ref_reg, frame_ptr, slot);
+                    try self.emitStore(
+                        .w64,
+                        heap_ptr,
+                        @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "code_ref")),
+                        code_ref_reg,
+                    );
+                    self.codegen.freeGeneral(code_ref_reg);
+                }
+
+                const original_on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
+                try self.emitStore(
+                    .w64,
+                    heap_ptr,
+                    @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_drop")),
+                    original_on_drop_reg,
+                );
+                self.codegen.freeGeneral(original_on_drop_reg);
+            } else {
+                const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
+                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
+                self.codegen.freeGeneral(on_drop_reg);
+            }
 
             if (capture) |capture_local| {
                 const layout_idx = capture_layout orelse unreachable;
@@ -10555,7 +11117,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         frame_ptr,
                         capture_stack,
                         heap_ptr,
-                        @intCast(builtins.erased_callable.capture_offset),
+                        @intCast(builtins.erased_callable.capture_offset + capture_prefix_size),
                         capture_size,
                     );
                     self.codegen.freeGeneral(temp);
@@ -11231,6 +11793,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
                 },
             }
+        }
+
+        fn emitBuiltinAddress(self: *Self, dst_reg: GeneralReg, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!void {
+            switch (self.generation_mode) {
+                .native_execution => {
+                    try self.codegen.emitLoadImm(dst_reg, @bitCast(@as(u64, fn_addr)));
+                },
+                .shim_execution, .object_file => {
+                    try self.codegen.emitLoadDataAddress(dst_reg, builtin_fn.symbolName());
+                },
+            }
+        }
+
+        fn emitHotReloadEnterForHostCallable(self: *Self) Allocator.Error!?i32 {
+            if (!self.enable_hot_reload) return null;
+
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const code_ref_slot = self.codegen.allocStackSlot(8);
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_enter), .hot_reload_enter);
+            }
+            try self.emitStore(.w64, frame_ptr, code_ref_slot, ret_reg_0);
+            return code_ref_slot;
+        }
+
+        fn emitHotReloadLeaveForHostCallable(self: *Self, code_ref_slot: i32) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(frame_ptr, code_ref_slot);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hot_reload_leave), .hot_reload_leave);
         }
 
         /// Ensure a value location is on the stack, spilling if needed. Returns stack offset.
@@ -12879,11 +13472,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(proc.ret_layout);
+            var hot_reload_code_ref_slot: ?i32 = null;
             if (proc.abi == .erased_callable) {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
                 try self.bindErasedCallableAdapterParams(proc.args);
+                hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else {
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
@@ -12912,6 +13507,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Emit shared epilogue using DeferredFrameBuilder with actual stack usage
             const body_epilogue_offset = self.codegen.currentOffset();
+            if (hot_reload_code_ref_slot) |slot| {
+                try self.emitHotReloadLeaveForHostCallable(slot);
+            }
             {
                 const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
                     @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
@@ -13739,6 +14337,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_stack = self.codegen.allocStackSlot(8);
             const capture_arg_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, capture_arg_reg, frame_ptr, capture_ptr_slot);
+            if (self.enable_hot_reload) {
+                try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, builtins.erased_callable.hot_reload_capture_prefix_size);
+            }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
             try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));

@@ -5,6 +5,50 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        // https://github.com/roc-lang/roc/issues/9686
+        // A type alias (`Score : U64`) defined in an imported type module is used
+        // as a List element type. The comparator passed to List.sort_with desugars
+        // `a < b`/`a > b` to is_lt/is_gt static dispatches on `Score`. Across the
+        // module boundary the alias must be unwrapped to its U64 backing for static
+        // dispatch; otherwise the comparator fails to resolve / selects the wrong
+        // target and the list is not sorted (the issue's wrong `[70, 75, 40]`).
+        // Inline (single module) the alias collapses to U64 and sorts correctly.
+        // Correct top-3 descending of the input is [100, 90, 75].
+        .name = "issue 9686: imported type-module alias element sorts correctly",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "HighScores",
+            .source =
+            \\HighScores :: {}.{
+            \\    Score : U64
+            \\
+            \\    personal_top_three : List(Score) -> List(Score)
+            \\    personal_top_three = |scores| {
+            \\        scores->sort_desc().take_first(3)
+            \\    }
+            \\}
+            \\
+            \\sort_desc = |list| {
+            \\    list.sort_with(
+            \\        |a, b| if a < b {
+            \\            GT
+            \\        } else if a > b {
+            \\            LT
+            \\        } else {
+            \\            EQ
+            \\        },
+            \\    )
+            \\}
+            ,
+        }},
+        .source =
+        \\import HighScores
+        \\
+        \\main = HighScores.personal_top_three([10, 30, 90, 30, 100, 20, 10, 0, 30, 40, 40, 75, 70])
+        ,
+        .expected = .{ .inspect_str = "[100, 90, 75]" },
+    },
+    .{
         .name = "issue 8949: wasm evaluates to_str after boxed closure allocation",
         .source_kind = .module,
         .source =
@@ -217,5 +261,71 @@ pub const tests = [_]TestCase{
         \\main = describe(sample)
         ,
         .expected = .{ .inspect_str = "7099" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9725
+        // An anonymous record must work as a Dict key. Dict.insert requires
+        // `k.to_hash`, which the checker derives structurally for records (as it
+        // already does for `is_eq`). Inserting under a record key then reading it
+        // back with an equal record key must round-trip: the structural hash makes
+        // both keys land in the same bucket and structural is_eq confirms the match.
+        .name = "issue 9725: record as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert({ a: 1, b: 2 }, 99).get({ a: 1, b: 2 })
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
+        // A small (SSO) string key exercises the wasm backend's str hashing path
+        // (hasher_write_str), which must decode small-string inline storage the
+        // same way every other backend does, so cross-backend hashes stay equal
+        // and the key round-trips on every backend (incl. wasm).
+        .name = "issue 9725: small-string Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert("ab", 99).get("ab")
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
+        // The structural `to_hash` derivation generalizes beyond records: a tuple
+        // key must work the same way, hashing each element in order.
+        .name = "issue 9725: tuple as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert((1, 2), 99).get((1, 2))
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
+        // A record key whose field is itself a structural type (a tuple). The
+        // derived `to_hash` must recurse into the nested tuple to hash all of it.
+        .name = "issue 9725: record with nested tuple as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\main = Dict.empty().insert({ pair: (1, 2), tag: 3 }, 99).get({ pair: (1, 2), tag: 3 })
+        ,
+        .expected = .{ .inspect_str = "Ok(99.0)" },
+    },
+    .{
+        // The structural `to_hash` derivation also covers tag unions: the
+        // discriminant is hashed first, then the active variant's payloads. Two
+        // tags with payloads exercise both the discriminant and the payload paths.
+        .name = "issue 9725: tag-union value as a Dict key round-trips",
+        .source_kind = .module,
+        .source =
+        \\Key : [A(U64), B(U64)]
+        \\
+        \\main = {
+        \\    key_a : Key
+        \\    key_a = A(1)
+        \\    key_b : Key
+        \\    key_b = B(1)
+        \\    d = Dict.empty().insert(key_a, 11).insert(key_b, 22)
+        \\    d.get(B(1))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(22.0)" },
     },
 };

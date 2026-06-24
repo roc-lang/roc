@@ -10,6 +10,8 @@ const DocModel = @import("DocModel.zig");
 const render_markdown = @import("render_markdown.zig");
 const collections = @import("collections");
 const DocType = DocModel.DocType;
+/// Errors that can occur while rendering HTML documentation.
+pub const RenderError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.OpenError || std.Io.Dir.WriteFileError || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.Writer.Error;
 
 /// Synthetic `data-module-name` used for the Language Reference sidebar entry,
 /// chosen so it cannot collide with a real module name.
@@ -397,7 +399,7 @@ pub fn renderPackageDocs(
     output_dir_path: []const u8,
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
     langref: ?*const render_markdown.LangRef,
-) anyerror!void {
+) RenderError!void {
     // Ensure the output directory exists
     std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -449,7 +451,7 @@ fn writeLangRefPages(
     io: std.Io,
     dir: std.Io.Dir,
     langref: *const render_markdown.LangRef,
-) anyerror!void {
+) RenderError!void {
     dir.createDirPath(io, "langref") catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
@@ -472,7 +474,7 @@ fn writeLangRefArticlePage(
     langref: *const render_markdown.LangRef,
     article: *const render_markdown.Article,
     file_name: []const u8,
-) anyerror!void {
+) RenderError!void {
     const file = try dir.createFile(io, file_name, .{});
     defer file.close(io);
     var buf: [4096]u8 = undefined;
@@ -499,13 +501,13 @@ fn writeLangRefArticlePage(
     try bw.interface.flush();
 }
 
-fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) anyerror!void {
+fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) RenderError!void {
     try dir.writeFile(io, .{ .sub_path = "styles.css", .data = embedded_css });
     try dir.writeFile(io, .{ .sub_path = "search.js", .data = embedded_js });
     try dir.writeFile(io, .{ .sub_path = "favicon.svg", .data = embedded_favicon });
 }
 
-fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) anyerror!void {
+fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) RenderError!void {
     const file = try dir.createFile(io, "index.html", .{});
     defer file.close(io);
     var buf: [4096]u8 = undefined;
@@ -541,7 +543,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     try bw.interface.flush();
 }
 
-fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) anyerror!void {
+fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) RenderError!void {
     // Create module subdirectory
     dir.createDirPath(io, mod.name) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -556,7 +558,7 @@ fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: s
 
 /// Write a module's documentation page as index.html in the given directory.
 /// `base` is the relative path prefix for static assets (e.g. "" for root, "../" for subdirs).
-fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) anyerror!void {
+fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) RenderError!void {
     const file = try dir.createFile(io, "index.html", .{});
     defer file.close(io);
     var buf: [4096]u8 = undefined;

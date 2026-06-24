@@ -13,6 +13,29 @@ const roc_target = @import("roc_target");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
+const HoistedConstantsTestError = std.mem.Allocator.Error ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.File.Writer.Error ||
+    error{
+        AfterRootHadNoRequest,
+        BeforeRootHadNoRequest,
+        ExportedRuntimeEntrypointNotFound,
+        HoistedConstWasNotI64,
+        HoistedConstWasNotScalar,
+        HoistedRootDidNotStoreConstNode,
+        HoistedRootKindMismatch,
+        HoistedTemplateWasNotStored,
+        OutOfMemory,
+        PatternExtractionMissingCheckedRootPattern,
+        PatternExtractionMissingSourcePattern,
+        PatternExtractionRootValueWasNotSyntheticLookup,
+        PatternExtractionRootWasNotSyntheticMatch,
+        RootDidNotStoreConstNode,
+        TestExpectedEqual,
+        TestUnexpectedResult,
+    };
+
 test "hoisted local constants are finalized and restored during runtime lowering" {
     const gpa = std.testing.allocator;
 
@@ -1072,7 +1095,7 @@ fn findHoistedArtifact(
 
 fn expectCompileTimeRootKindsPresent(
     artifact: check.CheckedArtifact.ImportedModuleView,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     var saw_top_level_constant = false;
     var saw_top_level_callable = false;
     var saw_hoisted_constant = false;
@@ -1102,7 +1125,7 @@ fn expectCompileTimeRootKindsPresent(
 
 fn expectExportedRuntimeEntrypoint(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     for (artifact.root_requests.runtime_requests) |root| {
         if (root.kind == .runtime_entrypoint and
             root.abi == .roc and
@@ -1119,7 +1142,7 @@ fn expectRootRequestBefore(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     before: check.CheckedArtifact.ComptimeRootId,
     after: check.CheckedArtifact.ComptimeRootId,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     const before_index = compileTimeRequestIndexForRoot(artifact, before) orelse return error.BeforeRootHadNoRequest;
     const after_index = compileTimeRequestIndexForRoot(artifact, after) orelse return error.AfterRootHadNoRequest;
     try std.testing.expect(before_index < after_index);
@@ -1173,7 +1196,7 @@ fn rootSourceMatches(
 
 fn expectPatternExtractionSyntheticRegions(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     const ModuleEnv = can.ModuleEnv;
     const module_env = artifact.moduleEnvConst();
     var extraction_count: usize = 0;
@@ -1235,6 +1258,7 @@ fn expectPatternExtractionSyntheticRegions(
             .dispatch_call,
             .interpolation,
             .structural_eq,
+            .structural_hash,
             .method_eq,
             .type_dispatch_call,
             .tuple_access,
@@ -1317,6 +1341,7 @@ fn expectPatternExtractionSyntheticRegions(
             .dispatch_call,
             .interpolation,
             .structural_eq,
+            .structural_hash,
             .method_eq,
             .type_dispatch_call,
             .tuple_access,
@@ -1341,12 +1366,12 @@ fn expectPatternExtractionSyntheticRegions(
     try std.testing.expect(extraction_count >= 4);
 }
 
-fn expectRegionEqual(expected: base.Region, actual: base.Region) anyerror!void {
+fn expectRegionEqual(expected: base.Region, actual: base.Region) HoistedConstantsTestError!void {
     try std.testing.expectEqual(expected.start.offset, actual.start.offset);
     try std.testing.expectEqual(expected.end.offset, actual.end.offset);
 }
 
-fn writeEchoPlatform(dir: anytype) anyerror!void {
+fn writeEchoPlatform(dir: anytype) HoistedConstantsTestError!void {
     try dir.createDirPath(std.testing.io, ".roc_echo_platform");
     try dir.writeFile(std.testing.io, .{
         .sub_path = ".roc_echo_platform/main.roc",
@@ -1386,7 +1411,7 @@ fn expectReportDoesNotContain(
     allocator: std.mem.Allocator,
     report: *const @import("reporting").Report,
     needle: []const u8,
-) anyerror!void {
+) HoistedConstantsTestError!void {
     var rendered = std.array_list.Managed(u8).init(allocator);
     defer rendered.deinit();
 
@@ -1471,7 +1496,7 @@ fn countCompileTimeRootKind(
 fn storedI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     entry: check.CheckedArtifact.HoistedConstEntry,
-) anyerror!i64 {
+) HoistedConstantsTestError!i64 {
     const root = artifact.compile_time_roots.root(entry.root);
     if (root.kind != .hoisted_constant) return error.HoistedRootKindMismatch;
 
@@ -1497,7 +1522,7 @@ fn storedI64(
 fn rootStoredI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     root: check.CheckedArtifact.CompileTimeRoot,
-) anyerror!i64 {
+) HoistedConstantsTestError!i64 {
     const node = switch (root.payload) {
         .const_node => |const_node| const_node,
         .pending,
@@ -1511,7 +1536,7 @@ fn rootStoredI64(
 fn scalarConstNodeI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     node: check.CheckedArtifact.ConstNodeId,
-) anyerror!i64 {
+) HoistedConstantsTestError!i64 {
     const value = artifact.const_store.get(node);
     const actual = switch (value) {
         .scalar => |scalar| switch (scalar) {
@@ -1544,4 +1569,71 @@ fn scalarConstNodeI64(
         => return error.HoistedConstWasNotScalar,
     };
     return actual;
+}
+
+test "issue 9733: nested expect statements are collected as test roots" {
+    // https://github.com/roc-lang/roc/issues/9733
+    // The module has two `expect`s: the outer one and the one nested inside its
+    // block body. Both must be collected as compile-time `expect` roots so that
+    // `roc test` evaluates the nested `expect 3 == 4` (which must fail). Today
+    // only the top-level expect is collected, so this count is 1 and `roc test`
+    // wrongly reports "All (1) tests passed".
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\expect {
+        \\    expect 3.I64 == 4.I64
+        \\    5.I64 == 5.I64
+        \\}
+        \\
+        \\main! = |_args| Ok({})
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_artifact = coord.rootCheckedArtifact("app");
+
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        countCompileTimeRootKind(app_artifact, .expect),
+    );
 }

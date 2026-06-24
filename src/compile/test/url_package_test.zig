@@ -73,4 +73,21 @@ test "URL dependency resolves from a warm cache with no network, and its modules
     const cached_local_path = try std.fs.path.join(gpa, &.{ cache_dir, fake_hash, "Util.roc" });
     defer gpa.free(cached_local_path);
     try std.testing.expect(!build_env.isBundleableModule("module", cached_local_path));
+
+    const watch_inputs = try build_env.collectWatchInputs();
+    defer build_env.freeWatchInputs(watch_inputs);
+
+    var found_consumer = false;
+    var found_url_package_file = false;
+    for (watch_inputs) |path| {
+        if (std.mem.eql(u8, path, consumer_main)) {
+            found_consumer = true;
+        }
+        if (std.mem.startsWith(u8, path, util_pkg.root_dir)) {
+            found_url_package_file = true;
+        }
+    }
+
+    try std.testing.expect(found_consumer);
+    try std.testing.expect(!found_url_package_file);
 }

@@ -10,12 +10,16 @@ const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const testing = std.testing;
 
+const ScopingTestError = std.mem.Allocator.Error || error{
+    TestExpectedEqual,
+};
+
 const Counts = struct {
     forward_ref: usize = 0,
     mutual: usize = 0,
 };
 
-fn scopingDiagnosticCounts(source: []const u8) anyerror!Counts {
+fn scopingDiagnosticCounts(source: []const u8) ScopingTestError!Counts {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 

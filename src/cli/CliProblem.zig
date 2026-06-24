@@ -13,6 +13,107 @@ const Allocator = std.mem.Allocator;
 const reporting = @import("reporting");
 const Report = reporting.Report;
 const Severity = reporting.Severity;
+const backend = @import("backend");
+const linker = @import("linker.zig");
+const lir = @import("lir");
+const unbundle = @import("unbundle");
+
+/// Errors that can be attached to structured CLI problem reports.
+pub const ReportedError =
+    Allocator.Error ||
+    backend.wasm.WasmModule.MergeError ||
+    backend.wasm.WasmModule.ParseError ||
+    backend.wasm.ObjectArchive.ParseError ||
+    linker.LinkError ||
+    lir.LirImage.ImageError ||
+    std.zig.system.DetectError ||
+    unbundle.download.DownloadError ||
+    std.Io.Dir.AccessError ||
+    std.Io.Dir.CreateDirError ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.CopyFileError ||
+    std.Io.Dir.DeleteFileError ||
+    std.Io.Dir.OpenError ||
+    std.Io.Dir.ReadFileAllocError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    std.Io.Dir.StatFileError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.File.OpenError ||
+    std.Io.File.ReadPositionalError ||
+    std.Io.File.Reader.Error ||
+    std.Io.File.StatError ||
+    std.Io.File.SyncError ||
+    std.Io.File.Writer.Error ||
+    std.process.Child.WaitError ||
+    std.process.RunError ||
+    std.process.SpawnError ||
+    error{
+        ArchiveWriteFailed,
+        BrokenDocLinks,
+        BuiltinsExtractionFailed,
+        CheckFailed,
+        CliError,
+        CompilationFailed,
+        ComptimeExhaustiveness,
+        Crash,
+        DivisionByZero,
+        DocsFailed,
+        EmptyArchive,
+        EndOfStream,
+        EntrypointNotFound,
+        ExpectErr,
+        ExpectedAppHeader,
+        ExpectedPlatformString,
+        ExpectedString,
+        FailedToCreateUniqueTempDir,
+        FdConfigFailed,
+        FileNotFound,
+        FormattingFailed,
+        HandleInheritanceFailed,
+        HashMismatch,
+        Internal,
+        InvalidArguments,
+        InvalidDependency,
+        InvalidFilename,
+        InvalidHash,
+        InvalidLirImage,
+        InvalidMagic,
+        InvalidPackageName,
+        InvalidPath,
+        InvalidTarget,
+        InvalidUtf8,
+        LLVMCompilationFailed,
+        LLVMNotAvailable,
+        MissingBundleFiles,
+        MissingFilesDirectory,
+        MissingTargetFile,
+        MissingTargetsSection,
+        NativeCompilationFailed,
+        NoCacheDir,
+        NoPlatformSource,
+        NotAnAppHeader,
+        PathAlreadyExists,
+        PathOutsideWorkspace,
+        PlatformNotSupported,
+        ProcessCreationFailed,
+        ProcessExitCodeFailed,
+        ProcessWaitFailed,
+        ReadFailed,
+        ResolutionFailed,
+        RuntimeError,
+        TempDirCreation,
+        TestsFailed,
+        TypeCheckingFailed,
+        UnbundleFailed,
+        Unexpected,
+        UnexpectedResult,
+        UnsupportedCrossCompilation,
+        UnsupportedHeader,
+        UnsupportedLowLevel,
+        UnsupportedTarget,
+        UnsupportedWatchMode,
+        WasmOutputWriteFailed,
+    };
 
 /// Structured CLI errors with context for helpful error messages
 pub const CliProblem = union(enum) {
@@ -27,19 +128,19 @@ pub const CliProblem = union(enum) {
     /// Failed to read file contents
     file_read_failed: struct {
         path: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Failed to write file
     file_write_failed: struct {
         path: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Failed to create directory
     directory_create_failed: struct {
         path: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Directory does not exist
@@ -49,7 +150,7 @@ pub const CliProblem = union(enum) {
 
     /// Failed to create temporary directory
     temp_dir_failed: struct {
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Cache directory unavailable
@@ -129,7 +230,7 @@ pub const CliProblem = union(enum) {
 
     /// Linker failed
     linker_failed: struct {
-        err: anyerror,
+        err: ReportedError,
         target: []const u8,
     },
 
@@ -142,12 +243,12 @@ pub const CliProblem = union(enum) {
     /// Object compilation failed
     object_compilation_failed: struct {
         path: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Shim generation failed
     shim_generation_failed: struct {
-        err: anyerror,
+        err: ReportedError,
     },
 
     // URL/Download Problems
@@ -161,7 +262,7 @@ pub const CliProblem = union(enum) {
     /// Download failed
     download_failed: struct {
         url: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Package not found in cache
@@ -175,7 +276,7 @@ pub const CliProblem = union(enum) {
     /// Child process failed to spawn
     child_process_spawn_failed: struct {
         command: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Child process exited with error
@@ -193,13 +294,13 @@ pub const CliProblem = union(enum) {
     /// Child process wait failed
     child_process_wait_failed: struct {
         command: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// Shared memory operation failed
     shared_memory_failed: struct {
         operation: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     // Module/Header Problems
@@ -218,7 +319,7 @@ pub const CliProblem = union(enum) {
     /// Module initialization failed
     module_init_failed: struct {
         path: []const u8,
-        err: anyerror,
+        err: ReportedError,
     },
 
     /// No exports found in module

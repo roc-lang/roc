@@ -5,6 +5,12 @@ const std = @import("std");
 const fmt = @import("fmt.zig");
 
 pub const FormattingResult = fmt.FormattingResult;
+pub const FormatAstError = fmt.FormatAstError;
+pub const FormatFileError = fmt.FormatFileError;
+pub const FormatPathError = fmt.FormatPathError;
+pub const FormatStdinError = fmt.FormatStdinError;
+pub const FormatParseError = fmt.FormatParseError;
+pub const FormatTestError = fmt.FormatTestError;
 pub const formatPath = fmt.formatPath;
 pub const formatFilePath = fmt.formatFilePath;
 pub const formatStdin = fmt.formatStdin;

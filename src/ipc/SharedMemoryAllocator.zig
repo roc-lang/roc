@@ -16,7 +16,8 @@
 //! to the child process. Uses anonymous file mapping objects with handle inheritance.
 //!
 //! **POSIX (Linux/macOS/BSD)**: Creates a coordination file next to the child executable
-//! containing the file descriptor and size.
+//! containing the file descriptor and size. Linux uses `memfd_create`, while
+//! macOS and BSDs use `shm_open` for ordinary shared memory.
 //!
 //! An important detail is that it provides access to the child process via a file
 //! descriptor rather than using named shared memory. As it turns out, macOS has a
@@ -25,6 +26,11 @@
 //! to call shm_open(). (If it tries to, shm_open always fails with errno 13.) If the
 //! parent process instead gives a fd to the child for the shared memory, the child
 //! process is allowed to use that to map in the shared memory and access it that way.
+//!
+//! macOS POSIX shm objects cannot back the dev shim's executable code pages, so
+//! callers that need to `mprotect` generated code use the explicit executable
+//! creation path. On macOS that path uses an unlinked temporary file as the fd
+//! backing; ordinary shared-memory users stay on `shm_open`.
 //!
 //! The coordination logic is handled by `src/ipc/coordination.zig`, while the
 //! low-level platform operations are abstracted in `src/ipc/platform.zig`.
@@ -36,10 +42,13 @@ const coordination = @import("coordination.zig");
 
 const SharedMemoryAllocator = @This();
 
+const HEADER_MAGIC: u32 = 0x524F4353;
+const HEADER_VERSION: u32 = 1;
+
 /// Header stored at the beginning of shared memory to communicate metadata
 pub const Header = extern struct {
-    magic: u32 = 0x524F4353, // "ROCS"
-    version: u32 = 1,
+    magic: u32 = HEADER_MAGIC, // "ROCS"
+    version: u32 = HEADER_VERSION,
     used_size: u64 = 0,
     total_size: u64 = 0,
     data_offset: u64 = @sizeOf(Header),
@@ -68,14 +77,33 @@ pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
 
 /// Creates a new anonymous shared memory region with the given size
 pub fn create(io: std.Io, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
-    return createWithMapFailureLogging(io, size, page_size, true);
+    return createWithMapFailureLogging(io, size, page_size, true, .normal);
 }
 
-fn createWithMapFailureLogging(io: std.Io, size: usize, page_size: usize, log_map_failure: bool) platform.SharedMemoryError!SharedMemoryAllocator {
+/// Creates a shared memory region whose pages can later be marked executable.
+pub fn createExecutable(io: std.Io, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
+    return createWithMapFailureLogging(io, size, page_size, true, .executable);
+}
+
+const MappingKind = enum {
+    normal,
+    executable,
+};
+
+fn createWithMapFailureLogging(
+    io: std.Io,
+    size: usize,
+    page_size: usize,
+    log_map_failure: bool,
+    mapping_kind: MappingKind,
+) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Create the shared memory mapping
-    const handle = try platform.createMapping(io, aligned_size);
+    const handle = switch (mapping_kind) {
+        .normal => try platform.createMapping(io, aligned_size),
+        .executable => try platform.createExecutableMapping(io, aligned_size),
+    };
     errdefer platform.closeHandle(handle, true);
 
     // Map the memory
@@ -139,13 +167,33 @@ pub fn createWithMinSize(
     min_size: usize,
     page_size: usize,
 ) platform.SharedMemoryError!SharedMemoryAllocator {
+    return createWithMinSizeKind(io, preferred_size, min_size, page_size, .normal);
+}
+
+/// Like `createWithMinSize`, but uses backing whose pages can later be marked executable.
+pub fn createExecutableWithMinSize(
+    io: std.Io,
+    preferred_size: usize,
+    min_size: usize,
+    page_size: usize,
+) platform.SharedMemoryError!SharedMemoryAllocator {
+    return createWithMinSizeKind(io, preferred_size, min_size, page_size, .executable);
+}
+
+fn createWithMinSizeKind(
+    io: std.Io,
+    preferred_size: usize,
+    min_size: usize,
+    page_size: usize,
+    mapping_kind: MappingKind,
+) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_preferred = std.mem.alignForward(usize, preferred_size, page_size);
     const aligned_min = std.mem.alignForward(usize, @min(min_size, preferred_size), page_size);
 
     var current_size = aligned_preferred;
     while (true) {
         const log_map_failure = platform.is_windows or current_size <= aligned_min;
-        if (createWithMapFailureLogging(io, current_size, page_size, log_map_failure)) |shm| {
+        if (createWithMapFailureLogging(io, current_size, page_size, log_map_failure, mapping_kind)) |shm| {
             if (current_size < aligned_preferred) {
                 std.log.warn(
                     "shared memory: OS rejected preferred reservation of {} bytes; using {} bytes instead",
@@ -254,6 +302,57 @@ pub fn fromFd(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryEr
         .is_owner = false,
         .page_size = page_size,
     };
+}
+
+/// Creates a SharedMemoryAllocator from an existing file descriptor and resumes
+/// allocation at the used size recorded in the shared-memory header.
+pub fn fromFdWithHeaderOffset(
+    fd: Handle,
+    size: usize,
+    page_size: usize,
+) (platform.SharedMemoryError || error{InvalidSharedMemory})!SharedMemoryAllocator {
+    var shm = try fromFd(fd, size, page_size);
+    errdefer shm.deinit(std.heap.page_allocator);
+
+    const used_size = try mappedHeaderUsedSize(shm.base_ptr, shm.total_size);
+
+    shm.offset.store(used_size, .monotonic);
+    return shm;
+}
+
+/// Read a mapped shared-memory header's used size after validating it.
+pub fn mappedHeaderUsedSize(
+    base_ptr: [*]align(1) const u8,
+    total_size: usize,
+) error{InvalidSharedMemory}!usize {
+    const header_ptr: *const Header = @ptrCast(@alignCast(base_ptr));
+    if (header_ptr.magic != HEADER_MAGIC or header_ptr.version != HEADER_VERSION) {
+        return error.InvalidSharedMemory;
+    }
+    const used_size: usize = @intCast(header_ptr.used_size);
+    if (used_size < @sizeOf(Header) or used_size > total_size) {
+        return error.InvalidSharedMemory;
+    }
+    return used_size;
+}
+
+/// Rewind a mapped shared-memory header's used size. This is for parent-owned
+/// coordination code that no longer has a `SharedMemoryAllocator` value but
+/// still owns a live mapping. It is only safe when no process can read the
+/// discarded bytes again.
+pub fn rewindMappedHeader(
+    base_ptr: [*]align(1) u8,
+    total_size: usize,
+    used_size: usize,
+) error{InvalidSharedMemory}!void {
+    const header_ptr: *Header = @ptrCast(@alignCast(base_ptr));
+    if (header_ptr.magic != HEADER_MAGIC or header_ptr.version != HEADER_VERSION) {
+        return error.InvalidSharedMemory;
+    }
+    if (used_size < @sizeOf(Header) or used_size > total_size) {
+        return error.InvalidSharedMemory;
+    }
+    header_ptr.used_size = used_size;
 }
 
 /// Updates the header with the current used size.
@@ -477,6 +576,15 @@ pub fn reset(self: *SharedMemoryAllocator) void {
     self.updateHeader();
 }
 
+/// Reset the bump cursor to a previously recorded used-size boundary.
+pub fn resetToUsedSize(self: *SharedMemoryAllocator, used_size: usize) error{InvalidSharedMemory}!void {
+    if (used_size < @sizeOf(Header) or used_size > self.total_size) {
+        return error.InvalidSharedMemory;
+    }
+    self.offset.store(used_size, .monotonic);
+    self.updateHeader();
+}
+
 test "shared memory allocator basic operations" {
     const testing = std.testing;
     const io = testing.io;
@@ -508,6 +616,31 @@ test "shared memory allocator basic operations" {
     try testing.expect(shm.getAvailableSize() <= shm.total_size - used);
 }
 
+test "shared memory allocator rewinds mapped header to a used-size boundary" {
+    const testing = std.testing;
+    const io = testing.io;
+
+    const page_size = try getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(io, 1024 * 1024, page_size);
+    defer shm.deinit(testing.allocator);
+
+    const shm_allocator = shm.allocator();
+    _ = try shm_allocator.alloc(u8, 128);
+    const reusable_boundary = shm.getUsedSize();
+    shm.updateHeader();
+
+    _ = try shm_allocator.alloc(u8, 256);
+    shm.updateHeader();
+    try testing.expect(shm.getUsedSize() > reusable_boundary);
+    try testing.expectEqual(reusable_boundary + 256, try mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+
+    try rewindMappedHeader(shm.base_ptr, shm.total_size, reusable_boundary);
+    const header_ptr: *const Header = @ptrCast(@alignCast(shm.base_ptr));
+    try testing.expectEqual(@as(u64, @intCast(reusable_boundary)), header_ptr.used_size);
+    try testing.expectEqual(reusable_boundary, try mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+    try testing.expectError(error.InvalidSharedMemory, rewindMappedHeader(shm.base_ptr, shm.total_size, @sizeOf(Header) - 1));
+}
+
 test "shared memory allocator cross-process" {
     const testing = std.testing;
     const io = testing.io;
@@ -525,6 +658,25 @@ test "shared memory allocator cross-process" {
             item.* = @intCast(i * 2);
         }
     }
+}
+
+test "fromFd maps pages that can be marked executable" {
+    const page_size = try getSystemPageSize();
+    var owner = try SharedMemoryAllocator.createExecutable(std.testing.io, page_size * 2, page_size);
+    defer owner.deinit(std.testing.allocator);
+
+    const executable_handle = if (comptime platform.is_windows)
+        owner.handle
+    else blk: {
+        const duped = std.c.dup(owner.handle);
+        if (duped < 0) return error.DuplicateSharedMemoryHandleFailed;
+        break :blk duped;
+    };
+    var executable = try SharedMemoryAllocator.fromFd(executable_handle, page_size * 2, page_size);
+    defer executable.deinit(std.testing.allocator);
+
+    try platform.protectMappedMemory(executable.base_ptr, page_size, .read_execute);
+    try platform.protectMappedMemory(executable.base_ptr, page_size, .read_write);
 }
 
 test "shared memory allocator thread safety" {
@@ -546,7 +698,7 @@ test "shared memory allocator thread safety" {
     };
 
     const thread_fn = struct {
-        fn run(ctx: ThreadContext) anyerror!void {
+        fn run(ctx: ThreadContext) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
             var i: usize = 0;
             while (i < ctx.allocations_per_thread) : (i += 1) {
                 // Allocate various sizes
