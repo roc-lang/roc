@@ -54,6 +54,7 @@ pub const Problem = union(enum) {
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
+    tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -194,6 +195,12 @@ pub const InvalidNumericLiteral = struct {
     expected_type: SnapshotContentIdx,
     is_fractional: bool,
     region: base.Region,
+};
+
+/// Tuple access on an unconstrained value cannot infer the tuple's full arity.
+pub const TupleAccessNeedsAnnotation = struct {
+    region: base.Region,
+    elem_index: u32,
 };
 
 /// Warning (the Haskell §4.3.4 / `-Wtype-defaults` analogue): an open literal

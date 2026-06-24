@@ -107,6 +107,7 @@ const llvm_available = builder.isLLVMAvailable();
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const CoreCtx = ctx_mod.CoreCtx;
+const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const Coordinator = compile.coordinator.Coordinator;
@@ -7369,6 +7370,246 @@ fn testRootRegion(
     };
 }
 
+const CliTestFailureDetail = struct {
+    message: []const u8,
+    visibility: CliTestFailureDetailVisibility,
+};
+
+fn appendExprSpanForExpectBindings(
+    env: *const ModuleEnv,
+    allocator: Allocator,
+    stack: *std.ArrayList(CIR.Expr.Idx),
+    span: CIR.Expr.Span,
+) Allocator.Error!void {
+    for (env.store.sliceExpr(span)) |expr_idx| {
+        try stack.append(allocator, expr_idx);
+    }
+}
+
+fn collectExpectBindingPatterns(
+    env: *const ModuleEnv,
+    allocator: Allocator,
+    root: check.CheckedArtifact.RootRequest,
+) Allocator.Error![]CIR.Pattern.Idx {
+    const statement_idx = switch (root.source) {
+        .statement => |statement| statement,
+        else => return allocator.alloc(CIR.Pattern.Idx, 0),
+    };
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
+
+    var stack = std.ArrayList(CIR.Expr.Idx).empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, statement.s_expect.body);
+
+    var patterns = std.ArrayList(CIR.Pattern.Idx).empty;
+    errdefer patterns.deinit(allocator);
+
+    while (stack.pop()) |expr_idx| {
+        switch (env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (std.mem.findScalar(CIR.Pattern.Idx, patterns.items, lookup.pattern_idx) == null) {
+                    try patterns.append(allocator, lookup.pattern_idx);
+                }
+            },
+            .e_list => |list| try appendExprSpanForExpectBindings(env, allocator, &stack, list.elems),
+            .e_tuple => |tuple| try appendExprSpanForExpectBindings(env, allocator, &stack, tuple.elems),
+            .e_str => |str| try appendExprSpanForExpectBindings(env, allocator, &stack, str.span),
+            .e_tag => |tag| try appendExprSpanForExpectBindings(env, allocator, &stack, tag.args),
+            .e_call => |call| {
+                try stack.append(allocator, call.func);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
+            },
+            .e_record => |record| {
+                if (record.ext) |ext| try stack.append(allocator, ext);
+                for (env.store.sliceRecordFields(record.fields)) |field_idx| {
+                    try stack.append(allocator, env.store.getRecordField(field_idx).value);
+                }
+            },
+            .e_block => |block| {
+                try stack.append(allocator, block.final_expr);
+                for (0..block.stmts.span.len) |stmt_offset| {
+                    const stmt_idx = env.store.statementAt(block.stmts, stmt_offset);
+                    switch (env.store.getStatement(stmt_idx)) {
+                        .s_decl => |decl| try stack.append(allocator, decl.expr),
+                        .s_var => |decl| try stack.append(allocator, decl.expr),
+                        .s_reassign => |assign| try stack.append(allocator, assign.expr),
+                        .s_expr => |stmt| try stack.append(allocator, stmt.expr),
+                        .s_expect => |stmt| try stack.append(allocator, stmt.body),
+                        .s_dbg => |stmt| try stack.append(allocator, stmt.expr),
+                        .s_return => |stmt| try stack.append(allocator, stmt.expr),
+                        .s_for => |stmt| {
+                            try stack.append(allocator, stmt.expr);
+                            try stack.append(allocator, stmt.body);
+                        },
+                        .s_crash,
+                        .s_var_uninitialized,
+                        .s_import,
+                        .s_alias_decl,
+                        .s_nominal_decl,
+                        .s_type_anno,
+                        .s_type_var_alias,
+                        .s_runtime_error,
+                        .s_break,
+                        .s_while,
+                        .s_infinite_loop,
+                        .s_breakable_loop,
+                        => {},
+                    }
+                }
+            },
+            .e_if => |if_expr| {
+                try stack.append(allocator, if_expr.final_else);
+                for (env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = env.store.getIfBranch(branch_idx);
+                    try stack.append(allocator, branch.cond);
+                    try stack.append(allocator, branch.body);
+                }
+            },
+            .e_match => |match_expr| {
+                try stack.append(allocator, match_expr.cond);
+                for (env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = env.store.getMatchBranch(branch_idx);
+                    try stack.append(allocator, branch.value);
+                    if (branch.guard) |guard| try stack.append(allocator, guard);
+                }
+            },
+            .e_lambda => |lambda| try stack.append(allocator, lambda.body),
+            .e_closure => |closure| try stack.append(allocator, closure.lambda_idx),
+            .e_nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
+            .e_nominal_external => |nominal| try stack.append(allocator, nominal.backing_expr),
+            .e_binop => |binop| {
+                try stack.append(allocator, binop.lhs);
+                try stack.append(allocator, binop.rhs);
+            },
+            .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
+            .e_unary_not => |unary| try stack.append(allocator, unary.expr),
+            .e_field_access => |field| try stack.append(allocator, field.receiver),
+            .e_method_call => |call| {
+                try stack.append(allocator, call.receiver);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
+            },
+            .e_dispatch_call => |call| {
+                try stack.append(allocator, call.receiver);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
+            },
+            .e_interpolation => |interpolation| {
+                try stack.append(allocator, interpolation.first);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, interpolation.parts);
+            },
+            .e_structural_eq => |eq| {
+                try stack.append(allocator, eq.lhs);
+                try stack.append(allocator, eq.rhs);
+            },
+            .e_structural_hash => |hash| {
+                try stack.append(allocator, hash.value);
+                try stack.append(allocator, hash.hasher);
+            },
+            .e_method_eq => |eq| {
+                try stack.append(allocator, eq.lhs);
+                try stack.append(allocator, eq.rhs);
+            },
+            .e_type_method_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
+            .e_type_dispatch_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
+            .e_tuple_access => |access| try stack.append(allocator, access.tuple),
+            .e_dbg => |dbg| try stack.append(allocator, dbg.expr),
+            .e_expect_err => |expect_err| try stack.append(allocator, expect_err.expr),
+            .e_expect => |expect_expr| try stack.append(allocator, expect_expr.body),
+            .e_return => |ret| try stack.append(allocator, ret.expr),
+            .e_for => |for_expr| {
+                try stack.append(allocator, for_expr.expr);
+                try stack.append(allocator, for_expr.body);
+            },
+            .e_run_low_level => |run| try appendExprSpanForExpectBindings(env, allocator, &stack, run.args),
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_break,
+            .e_hosted_lambda,
+            => {},
+        }
+    }
+
+    return try patterns.toOwnedSlice(allocator);
+}
+
+fn sourceBindingForPattern(env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?[]const u8 {
+    const src = env.getSourceAll();
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        if (def.pattern != pattern_idx) continue;
+
+        switch (env.store.getExpr(def.expr)) {
+            .e_lambda,
+            .e_closure,
+            .e_hosted_lambda,
+            => return null,
+            else => {},
+        }
+
+        const pattern_region = env.store.getPatternRegion(def.pattern);
+        const expr_region = env.store.getExprRegion(def.expr);
+        const start: usize = @intCast(pattern_region.start.offset);
+        const end: usize = @intCast(expr_region.end.offset);
+        if (start >= end or end > src.len) return null;
+        return std.mem.trim(u8, src[start..end], " \t\r\n");
+    }
+    return null;
+}
+
+fn buildExpectFailureDetail(
+    allocator: Allocator,
+    env: *const ModuleEnv,
+    root: check.CheckedArtifact.RootRequest,
+) Allocator.Error!CliTestFailureDetail {
+    const patterns = try collectExpectBindingPatterns(env, allocator, root);
+    defer allocator.free(patterns);
+
+    var message = std.ArrayList(u8).empty;
+    errdefer message.deinit(allocator);
+
+    var count: usize = 0;
+    for (patterns) |pattern_idx| {
+        const binding = sourceBindingForPattern(env, pattern_idx) orelse continue;
+        if (count == 0) {
+            try message.appendSlice(allocator, "Mentioned values:\n");
+        }
+        try message.appendSlice(allocator, binding);
+        try message.append(allocator, '\n');
+        count += 1;
+    }
+
+    if (count == 0) {
+        message.deinit(allocator);
+        return .{
+            .message = try allocator.dupe(u8, "TEST FAILURE: expect failed"),
+            .visibility = .verbose_only,
+        };
+    }
+
+    return .{
+        .message = try message.toOwnedSlice(allocator),
+        .visibility = .always,
+    };
+}
+
 fn testRootByOrder(
     roots: []const check.CheckedArtifact.RootRequest,
     order: u32,
@@ -7437,6 +7678,7 @@ fn debugEffectsForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.DebugEffectMod
 
 const CliTestRootRun = struct {
     root: check.CheckedArtifact.RootRequest,
+    env: *const ModuleEnv,
     root_proc: lir.LirProcSpecId,
     region: base.Region,
     arg_layouts: []const layout.Idx,
@@ -7486,6 +7728,7 @@ fn collectCliTestRootRuns(
         errdefer ctx.gpa.free(symbol_name);
         try runs.append(ctx.gpa, .{
             .root = root,
+            .env = module.semantic.env,
             .root_proc = root_proc,
             .region = testRootRegion(module.semantic.env, root),
             .arg_layouts = arg_layouts,
@@ -7599,13 +7842,14 @@ fn runInterpreterTestRoots(
             try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
         } else {
             summary.failed += 1;
+            const detail = try buildExpectFailureDetail(ctx.gpa, run.env, run.root);
             try appendFailedCliTestResult(
                 ctx,
                 results,
                 run,
                 .failed,
-                try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
-                .verbose_only,
+                detail.message,
+                detail.visibility,
             );
         }
     }
@@ -7691,13 +7935,14 @@ fn runCompiledTestRoots(
                     try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
                 } else {
                     summary.failed += 1;
+                    const detail = try buildExpectFailureDetail(ctx.gpa, run.env, run.root);
                     try appendFailedCliTestResult(
                         ctx,
                         results,
                         run,
                         .failed,
-                        try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
-                        .verbose_only,
+                        detail.message,
+                        detail.visibility,
                     );
                 }
             },
@@ -8465,6 +8710,123 @@ const DrainedReport = struct {
     }
 };
 
+fn countNewlines(bytes: []const u8) u32 {
+    var count: u32 = 0;
+    for (bytes) |byte| {
+        if (byte == '\n') count += 1;
+    }
+    return count;
+}
+
+fn remapDefaultAppSourceRegion(
+    allocator: Allocator,
+    region: *reporting.SourceCodeDisplayRegion,
+    original_path: []const u8,
+    original_source: []const u8,
+    original_line_starts: []const u32,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    if (region.start_line <= synthetic_header_lines or region.end_line <= synthetic_header_lines) return;
+    if (original_line_starts.len == 0) return;
+
+    const original_start_line = region.start_line - synthetic_header_lines;
+    const original_end_line = region.end_line - synthetic_header_lines;
+    const region_info = base.RegionInfo{
+        .start_line_idx = original_start_line - 1,
+        .start_col_idx = region.start_column - 1,
+        .end_line_idx = original_end_line - 1,
+        .end_col_idx = region.end_column - 1,
+    };
+
+    const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
+    errdefer allocator.free(line_text);
+    const filename = try allocator.dupe(u8, original_path);
+    errdefer allocator.free(filename);
+
+    allocator.free(region.line_text);
+    if (region.filename) |old_filename| allocator.free(old_filename);
+
+    region.line_text = line_text;
+    region.filename = filename;
+    region.start_line = original_start_line;
+    region.end_line = original_end_line;
+}
+
+fn remapDefaultAppDocumentElement(
+    allocator: Allocator,
+    element: *reporting.DocumentElement,
+    original_path: []const u8,
+    original_source: []const u8,
+    original_line_starts: []const u32,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    switch (element.*) {
+        .source_code_region => |*region| try remapDefaultAppSourceRegion(
+            allocator,
+            region,
+            original_path,
+            original_source,
+            original_line_starts,
+            synthetic_header_lines,
+        ),
+        .source_code_with_underlines => |*underlines| {
+            const old_start_line = underlines.display_region.start_line;
+            try remapDefaultAppSourceRegion(
+                allocator,
+                &underlines.display_region,
+                original_path,
+                original_source,
+                original_line_starts,
+                synthetic_header_lines,
+            );
+            if (old_start_line <= synthetic_header_lines) return;
+            for (underlines.underline_regions) |*underline| {
+                if (underline.start_line > synthetic_header_lines) {
+                    underline.start_line -= synthetic_header_lines;
+                }
+                if (underline.end_line > synthetic_header_lines) {
+                    underline.end_line -= synthetic_header_lines;
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+fn remapDefaultAppCheckReports(
+    ctx: *CliCtx,
+    check_result: *CheckResult,
+    synthetic_app_path: []const u8,
+    original_path: []const u8,
+    original_source: []const u8,
+    synthetic_header_lines: u32,
+) Allocator.Error!void {
+    var original_line_starts = try base.RegionInfo.findLineStarts(ctx.gpa, original_source);
+    defer original_line_starts.deinit(ctx.gpa);
+
+    for (check_result.reports) |*module| {
+        if (!std.mem.eql(u8, module.file_path, synthetic_app_path)) continue;
+
+        const remapped_file_path = try ctx.gpa.dupe(u8, original_path);
+        errdefer ctx.gpa.free(remapped_file_path);
+        ctx.gpa.free(module.file_path);
+        module.file_path = remapped_file_path;
+
+        for (module.reports) |*report| {
+            for (report.document.elements.items) |*element| {
+                try remapDefaultAppDocumentElement(
+                    report.document.allocator,
+                    element,
+                    original_path,
+                    original_source,
+                    original_line_starts.items.items,
+                    synthetic_header_lines,
+                );
+            }
+        }
+    }
+}
+
 /// Timing information for check phases
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
@@ -8660,6 +9022,7 @@ fn checkFileWithBuildEnv(
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
+    source_dir_override: ?[]const u8,
 ) anyerror!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -8673,6 +9036,9 @@ fn checkFileWithBuildEnv(
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
     build_env.resolution_config = resolution_config;
+    if (source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
 
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -8810,6 +9176,61 @@ fn checkFileWithBuildEnv(
     };
 }
 
+fn rocCheckDefaultApp(
+    ctx: *CliCtx,
+    args: cli_args.CheckArgs,
+    original_source: []const u8,
+    cache_config: CacheConfig,
+) anyerror!CheckResult {
+    defer ctx.gpa.free(original_source);
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
+
+    const app_filename = std.fs.path.basename(args.path);
+    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, app_filename });
+    const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
+    const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
+
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n" ++
+        "echo! = |msg| Echo.line!(msg)\n\n";
+    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ header, original_source });
+    defer ctx.gpa.free(synthetic_source);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
+
+    var check_result = try checkFileWithBuildEnv(
+        ctx,
+        app_path,
+        args.time,
+        cache_config,
+        args.max_threads,
+        resolutionConfigFromLimits(args.resolve_limits),
+        std.fs.path.dirname(args.path) orelse ".",
+    );
+    errdefer check_result.deinit(ctx.gpa);
+
+    try remapDefaultAppCheckReports(
+        ctx,
+        &check_result,
+        app_path,
+        args.path,
+        original_source,
+        countNewlines(header),
+    );
+
+    return check_result;
+}
+
 fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -8832,18 +9253,26 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
 
     // Use BuildEnv to check the file
     reporter.begin("Type Checking");
-    var check_result = checkFileWithBuildEnv(
-        ctx,
-        args.path,
-        args.time,
-        cache_config,
-        args.max_threads,
-        resolutionConfigFromLimits(args.resolve_limits),
-    ) catch |err| {
-        reporter.fail();
-        try handleProcessFileError(err, stderr, args.path);
-        return;
-    };
+    var check_result = if (try readDefaultAppSource(ctx, args.path)) |source|
+        rocCheckDefaultApp(ctx, args, source, cache_config) catch |err| {
+            reporter.fail();
+            try handleProcessFileError(err, stderr, args.path);
+            return;
+        }
+    else
+        checkFileWithBuildEnv(
+            ctx,
+            args.path,
+            args.time,
+            cache_config,
+            args.max_threads,
+            resolutionConfigFromLimits(args.resolve_limits),
+            null,
+        ) catch |err| {
+            reporter.fail();
+            try handleProcessFileError(err, stderr, args.path);
+            return;
+        };
     defer check_result.deinit(ctx.gpa);
 
     if (builtin.target.cpu.arch == .wasm32) {
