@@ -363,7 +363,7 @@ const Lowerer = struct {
         for (self.program.roots.items) |root| {
             try self.result.root_procs.append(self.allocator, self.fn_map[@intFromEnum(root.fn_id)]);
             try self.result.root_metadata.append(self.allocator, RootMetadata.fromCheckedRoot(root.request));
-            if (root.request.abi == .compile_time) {
+            if (root.request.abi == .compile_time or root.request.kind == .test_expect) {
                 const fn_ = self.program.fns.items[@intFromEnum(root.fn_id)];
                 try self.result.const_roots.append(self.allocator, .{
                     .root_order = root.request.order,

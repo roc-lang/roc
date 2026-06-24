@@ -916,7 +916,7 @@ fn collectCompileTimeRootRequests(
     defer entries.deinit(allocator);
 
     for (requests) |request| {
-        if (request.abi != .compile_time) continue;
+        if (request.abi != .compile_time and request.kind != .test_expect) continue;
         const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
         try entries.append(allocator, .{
             .request = request,
@@ -1290,8 +1290,8 @@ fn verifyCompileTimeRequestsScheduled(
 ) void {
     if (builtin.mode != .Debug) return;
     for (requests, 0..) |request, i| {
-        if (request.abi != .compile_time) {
-            std.debug.panic("checked artifact invariant violated: scheduled compile-time requests contained a non compile-time request", .{});
+        if (!requestRunsInCompileTimeFinalizer(request)) {
+            std.debug.panic("checked artifact invariant violated: scheduled compile-time requests contained a request that cannot run in the finalizer", .{});
         }
         const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
         for (requests[0..i]) |previous| {
@@ -1404,7 +1404,7 @@ fn compileTimeRootHasRootRequest(
     root: CompileTimeRoot,
 ) bool {
     for (requests) |request| {
-        if (request.abi != .compile_time) continue;
+        if (!requestRunsInCompileTimeFinalizer(request)) continue;
         if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) continue;
         if (!rootSourceMatches(root.source, request.source)) continue;
         return true;
@@ -1424,6 +1424,10 @@ fn compileTimeRootKindMatchesRequest(
     };
 }
 
+fn requestRunsInCompileTimeFinalizer(request: RootRequest) bool {
+    return request.abi == .compile_time or request.kind == .test_expect;
+}
+
 fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
     if (builtin.mode != .Debug) return;
 
@@ -1431,9 +1435,10 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
     var compile_time_count: usize = 0;
 
     for (root_requests.requests) |request| {
-        if (request.abi == .compile_time) {
+        if (requestRunsInCompileTimeFinalizer(request)) {
             compile_time_count += 1;
-        } else {
+        }
+        if (request.abi != .compile_time) {
             if (runtime_index >= root_requests.runtime_requests.len) {
                 std.debug.panic("checked artifact invariant violated: runtime root request subset is missing an entry", .{});
             }
@@ -1451,8 +1456,8 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
         std.debug.panic("checked artifact invariant violated: compile-time root request subset has extra entries", .{});
     }
     for (root_requests.compile_time_requests) |request| {
-        if (request.abi != .compile_time) {
-            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains a runtime request", .{});
+        if (!requestRunsInCompileTimeFinalizer(request)) {
+            std.debug.panic("checked artifact invariant violated: compile-time root request subset contains a request that cannot run in the finalizer", .{});
         }
         if (!rootRequestSliceContains(root_requests.requests, request)) {
             std.debug.panic("checked artifact invariant violated: compile-time root request subset contains an unknown request", .{});
@@ -18189,6 +18194,7 @@ pub const CompileTimeRoot = struct {
     module_idx: u32,
     kind: CompileTimeRootKind,
     source: RootSource,
+    source_region: base.Region,
     source_pattern: ?CIR.Pattern.Idx = null,
     hoisted_body: ?hoist_roots.Body = null,
     pattern: ?CheckedPatternId,
@@ -18243,6 +18249,7 @@ pub const CompileTimeRootTable = struct {
                     .module_idx = module.moduleIndex(),
                     .kind = .callable_binding,
                     .source = .{ .def = def_idx },
+                    .source_region = module.regionAt(ModuleEnv.nodeIdxFrom(def.expr.idx)),
                     .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
                     .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
                     .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
@@ -18253,6 +18260,7 @@ pub const CompileTimeRootTable = struct {
                     .module_idx = module.moduleIndex(),
                     .kind = .constant,
                     .source = .{ .def = def_idx },
+                    .source_region = module.regionAt(ModuleEnv.nodeIdxFrom(def.expr.idx)),
                     .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
                     .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
                     .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
@@ -18285,6 +18293,7 @@ pub const CompileTimeRootTable = struct {
                     .index = @intCast(selected_index),
                     .expr = selected.expr,
                 } },
+                .source_region = module.regionAt(ModuleEnv.nodeIdxFrom(selected.expr)),
                 .source_pattern = selected.pattern,
                 .hoisted_body = hoisted_body,
                 .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
@@ -18312,6 +18321,7 @@ pub const CompileTimeRootTable = struct {
                 .module_idx = module.moduleIndex(),
                 .kind = .numeral_conversion,
                 .source = .{ .expr = expr_idx },
+                .source_region = module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
                 .pattern = null,
                 .expr = checked_expr,
                 .checked_type = try_ty,
@@ -18337,6 +18347,7 @@ pub const CompileTimeRootTable = struct {
                 .module_idx = module.moduleIndex(),
                 .kind = .quote_conversion,
                 .source = .{ .expr = expr_idx },
+                .source_region = module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
                 .pattern = null,
                 .expr = checked_expr,
                 .checked_type = try_ty,
@@ -18422,6 +18433,7 @@ pub const CompileTimeRootTable = struct {
         module_idx: u32,
         kind: CompileTimeRootKind,
         source: RootSource,
+        source_region: base.Region,
         source_pattern: ?CIR.Pattern.Idx = null,
         hoisted_body: ?hoist_roots.Body = null,
         pattern: ?CheckedPatternId,
@@ -18449,6 +18461,7 @@ pub const CompileTimeRootTable = struct {
             .module_idx = module.moduleIndex(),
             .kind = .expect,
             .source = .{ .statement = statement_idx },
+            .source_region = module.regionAt(ModuleEnv.nodeIdxFrom(statement_idx)),
             .pattern = null,
             .expr = checkedExprIdForSource(checked_bodies, body_expr),
             .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(body_expr)),
@@ -18484,6 +18497,7 @@ pub const CompileTimeRootTable = struct {
             .module_idx = entry.module_idx,
             .kind = entry.kind,
             .source = entry.source,
+            .source_region = entry.source_region,
             .source_pattern = entry.source_pattern,
             .hoisted_body = entry.hoisted_body,
             .pattern = entry.pattern,
@@ -22818,7 +22832,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 3;
+    const serialized_layout_version: u32 = 4;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -22980,15 +22994,21 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.items.len);
-            if (request.abi == .compile_time) {
+            if (requestRunsInCompileTimeFinalizer(request)) {
                 const template_ref = request.procedure_template orelse {
                     std.debug.panic("checked artifact invariant violated: compile-time root has no private wrapper template", .{});
                 };
                 std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.len);
                 const template = self.checked_procedure_templates.get(template_ref.template);
-                switch (template.target) {
-                    .comptime_only => {},
-                    else => std.debug.panic("checked artifact invariant violated: compile-time root wrapper was not marked comptime_only", .{}),
+                switch (request.kind) {
+                    .test_expect => switch (template.target) {
+                        .entry => {},
+                        else => std.debug.panic("checked artifact invariant violated: test expect root wrapper was not marked entry", .{}),
+                    },
+                    else => switch (template.target) {
+                        .comptime_only => {},
+                        else => std.debug.panic("checked artifact invariant violated: compile-time root wrapper was not marked comptime_only", .{}),
+                    },
                 }
             }
         }
@@ -26673,8 +26693,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xDC, 0xEE, 0xC1, 0xAC, 0xB4, 0xCE, 0x7E, 0xFD, 0x41, 0xFC, 0xDC, 0x67, 0x7A, 0x26, 0x0B, 0x8B,
-        0x41, 0xF6, 0x4C, 0x0A, 0x48, 0xEA, 0x2C, 0x23, 0x50, 0x9E, 0x28, 0xE3, 0x12, 0xFA, 0x16, 0xA0,
+        0xD1, 0xAE, 0x05, 0x98, 0x70, 0xBC, 0x8B, 0x36, 0x1D, 0xED, 0xF8, 0x5D, 0xD5, 0x1E, 0x79, 0x43,
+        0xD5, 0xC6, 0x75, 0xFE, 0xED, 0x6F, 0x15, 0x37, 0x19, 0x3F, 0x1C, 0x53, 0x42, 0x4B, 0xE9, 0x29,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

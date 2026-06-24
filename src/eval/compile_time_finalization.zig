@@ -99,6 +99,59 @@ const ComptimeCoverage = struct {
     }
 };
 
+const ComptimeDiagnosticDeduper = struct {
+    allocator: Allocator,
+    entries: std.ArrayList(Entry),
+
+    const Kind = enum {
+        dbg,
+        expect_failed,
+        crash,
+    };
+
+    const Entry = struct {
+        kind: Kind,
+        region: base.Region,
+        message: []u8,
+    };
+
+    fn init(allocator: Allocator) ComptimeDiagnosticDeduper {
+        return .{
+            .allocator = allocator,
+            .entries = .empty,
+        };
+    }
+
+    fn deinit(self: *ComptimeDiagnosticDeduper) void {
+        for (self.entries.items) |entry| {
+            self.allocator.free(entry.message);
+        }
+        self.entries.deinit(self.allocator);
+    }
+
+    fn seenOrRecord(
+        self: *ComptimeDiagnosticDeduper,
+        kind: Kind,
+        region: base.Region,
+        message: []const u8,
+    ) Allocator.Error!bool {
+        for (self.entries.items) |entry| {
+            if (entry.kind != kind) continue;
+            if (!regionsEqual(entry.region, region)) continue;
+            if (std.mem.eql(u8, entry.message, message)) return true;
+        }
+
+        const owned = try self.allocator.dupe(u8, message);
+        errdefer self.allocator.free(owned);
+        try self.entries.append(self.allocator, .{
+            .kind = kind,
+            .region = region,
+            .message = owned,
+        });
+        return false;
+    }
+};
+
 /// Return the checking finalizer that evaluates compile-time roots.
 pub fn finalizer() checked.CompileTimeFinalizer {
     return .{ .finalize = finalize };
@@ -119,6 +172,8 @@ fn finalize(
     if (requests.len != 0) {
         var coverage = ComptimeCoverage.init(allocator);
         defer coverage.deinit();
+        var diagnostics = ComptimeDiagnosticDeduper.init(allocator);
+        defer diagnostics.deinit();
 
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
@@ -147,6 +202,7 @@ fn finalize(
                     &state,
                     problem_store,
                     &coverage,
+                    &diagnostics,
                 )) had_problem = true;
                 batch_requests.clearRetainingCapacity();
                 batch_root_ids.clearRetainingCapacity();
@@ -170,6 +226,7 @@ fn finalize(
                 &state,
                 problem_store,
                 &coverage,
+                &diagnostics,
             )) had_problem = true;
         }
 
@@ -445,6 +502,7 @@ fn lowerEvalAndFinishRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    diagnostics: *ComptimeDiagnosticDeduper,
 ) anyerror!bool {
     if (requests.len != root_ids.len) {
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
@@ -514,18 +572,27 @@ fn lowerEvalAndFinishRoots(
                 break :blk try writer.storeRoot(root, eval_result.value);
             }
 
-            const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
+            const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, diagnostics);
             try recordComptimeSiteHits(problem_store, coverage, module, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
 
+        try reportCompileTimeDbgMessages(
+            allocator,
+            problem_store,
+            compile_time_root,
+            host.debugMessages(),
+            diagnostics,
+        );
+        host.clearDebugMessages();
+
         if (try reportCompileTimeExpectFailures(
             allocator,
             problem_store,
-            module,
             compile_time_root,
             interpreter.getExpectFailures(),
+            diagnostics,
         )) had_problem = true;
 
         switch (compile_time_root.kind) {
@@ -581,7 +648,7 @@ fn finishLiteralConversionRoot(
     const message = module.const_store.strBytes(message_str);
     if (problem_store) |store| {
         const message_idx = try store.putExtraString(message);
-        const region = module.checked_bodies.expr(root.expr).source_region;
+        const region = root.source_region;
         switch (root.kind) {
             .numeral_conversion => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
                 .message = message_idx,
@@ -620,6 +687,26 @@ fn constTagNameIs(name: []const u8, expected: []const u8) bool {
     return true;
 }
 
+fn reportCompileTimeDbgMessages(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    root: checked.CompileTimeRoot,
+    messages: []const []const u8,
+    diagnostics: *ComptimeDiagnosticDeduper,
+) anyerror!void {
+    if (messages.len == 0) return;
+    const problem_store = maybe_problem_store orelse return;
+    const region = root.source_region;
+    for (messages) |message| {
+        if (try diagnostics.seenOrRecord(.dbg, region, message)) continue;
+        const message_idx = try problem_store.putExtraString(message);
+        _ = try problem_store.appendProblem(allocator, .{ .comptime_dbg = .{
+            .message = message_idx,
+            .region = region,
+        } });
+    }
+}
+
 fn appendCrashConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
@@ -635,21 +722,27 @@ fn appendCrashConst(
 fn reportCompileTimeExpectFailures(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     failures: []const ExpectFailure,
+    diagnostics: *ComptimeDiagnosticDeduper,
 ) anyerror!bool {
     if (failures.len == 0) return false;
     const problem_store = maybe_problem_store orelse return false;
-    const region = module.checked_bodies.expr(root.expr).source_region;
+    var reported = false;
     for (failures) |failure| {
+        const region = if (failure.region.isEmpty())
+            root.source_region
+        else
+            failure.region;
+        if (try diagnostics.seenOrRecord(.expect_failed, region, failure.message)) continue;
         const message_idx = try problem_store.putExtraString(failure.message);
         _ = try problem_store.appendProblem(allocator, .{ .comptime_expect_failed = .{
             .message = message_idx,
             .region = region,
         } });
+        reported = true;
     }
-    return true;
+    return reported;
 }
 
 fn evalCompileTimeRoot(
@@ -661,18 +754,40 @@ fn evalCompileTimeRoot(
     lir_result: *const lir.Program.Result,
     proc: lir.LIR.LirProcSpecId,
     ret_layout: @import("layout").Idx,
+    diagnostics: *ComptimeDiagnosticDeduper,
 ) anyerror!Interpreter.EvalResult {
     return interpreter.eval(.{
         .proc_id = proc,
         .ret_layout = ret_layout,
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        error.RuntimeError => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed"),
+        error.RuntimeError => try reportCompileTimeCrash(allocator, problem_store, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed", diagnostics),
         error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
-        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
-        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),
-        error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
+        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero", diagnostics),
+        error.Crash => try reportCompileTimeCrash(allocator, problem_store, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed", diagnostics),
+        error.ExpectErr => try reportCompileTimeExpectErr(allocator, problem_store, root, interpreter, diagnostics),
     };
+}
+
+fn reportCompileTimeExpectErr(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    root: checked.CompileTimeRoot,
+    interpreter: *const Interpreter,
+    diagnostics: *ComptimeDiagnosticDeduper,
+) anyerror!Interpreter.EvalResult {
+    const problem_store = maybe_problem_store orelse {
+        finalizationInvariant("compile-time root reached expect_err without a checking problem store");
+    };
+    const message = interpreter.getExpectErrMessage() orelse "expect failed";
+    const region = interpreter.getExpectErrRegion() orelse root.source_region;
+    if (try diagnostics.seenOrRecord(.expect_failed, region, message)) return error.CompileTimeProblem;
+    const message_idx = try problem_store.putExtraString(message);
+    _ = try problem_store.appendProblem(allocator, .{ .comptime_expect_failed = .{
+        .message = message_idx,
+        .region = region,
+    } });
+    return error.CompileTimeProblem;
 }
 
 fn recordComptimeSiteHits(
@@ -807,16 +922,17 @@ fn comptimeSiteEmpiricalKind(
 fn reportCompileTimeCrash(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
     message: []const u8,
+    diagnostics: *ComptimeDiagnosticDeduper,
 ) anyerror!Interpreter.EvalResult {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
+    const region = compileTimeCrashRegion(root, interpreter);
+    if (try diagnostics.seenOrRecord(.crash, region, message)) return error.CompileTimeProblem;
     const message_idx = try problem_store.putExtraString(message);
-    const region = compileTimeCrashRegion(module, root, interpreter);
     _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,
         .region = region,
@@ -825,12 +941,11 @@ fn reportCompileTimeCrash(
 }
 
 fn compileTimeCrashRegion(
-    module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
 ) base.Region {
     if (interpreter.getFailedCheckedRegion()) |region| return region;
-    return module.checked_bodies.expr(root.expr).source_region;
+    return root.source_region;
 }
 
 fn finalizationImports(
@@ -881,11 +996,11 @@ fn compileTimeRootForRequest(
         const kind_matches = switch (request.kind) {
             .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
             .compile_time_callable => root.kind == .callable_binding,
+            .test_expect => root.kind == .expect,
             .runtime_entrypoint,
             .provided_export,
             .platform_required_binding,
             .hosted_export,
-            .test_expect,
             .repl_expr,
             .dev_expr,
             => finalizationInvariant("non compile-time request reached compile-time root lookup"),

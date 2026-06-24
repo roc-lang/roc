@@ -3823,10 +3823,14 @@ const BodyContext = struct {
                         .body = try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty),
                         .ret = ret_ty,
                     },
+                    .expect => return .{
+                        .args = .empty(),
+                        .body = try self.lowerExpectRootBody(wrapper.body_expr, ret_ty, root.source_region),
+                        .ret = ret_ty,
+                    },
                     .constant,
                     .hoisted_constant,
                     .callable_binding,
-                    .expect,
                     => {},
                 }
                 return .{
@@ -4052,6 +4056,41 @@ const BodyContext = struct {
         self.comptime_exhaustiveness_depth += 1;
         defer self.comptime_exhaustiveness_depth -= 1;
         return try self.lowerExprAtType(expr_id, ty);
+    }
+
+    fn lowerExpectRootBody(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+        source_region: base.Region,
+    ) Allocator.Error!Ast.ExprId {
+        self.comptime_exhaustiveness_depth += 1;
+        defer self.comptime_exhaustiveness_depth -= 1;
+
+        const condition = try self.lowerExprAtType(expr_id, ty);
+
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
+        self.builder.program.current_loc = try self.sourceLocFor(source_region);
+        self.builder.program.current_region = source_region;
+
+        const condition_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ty);
+        const bind_condition = try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(condition_local, ty),
+            .value = condition,
+        } });
+        const expect_condition = try self.builder.localExpr(condition_local, ty);
+        const expect_condition_stmt = try self.builder.program.addStmt(.{ .expect = expect_condition });
+        const final_condition = try self.builder.localExpr(condition_local, ty);
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .block = .{
+                .statements = try self.builder.program.addStmtSpan(&.{ bind_condition, expect_condition_stmt }),
+                .final_expr = final_condition,
+            } },
+        });
     }
 
     fn inComptimeExhaustivenessContext(self: *const BodyContext) bool {

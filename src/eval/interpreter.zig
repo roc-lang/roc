@@ -81,7 +81,7 @@ const longjmp = sljmp.longjmp;
 /// Failed inline `expect` observed during one interpreter evaluation.
 pub const ExpectFailure = struct {
     message: []const u8,
-    loc: base.SourceLoc,
+    region: base.Region,
 };
 
 /// Environment for interpreter-managed RocOps forwarding.
@@ -164,12 +164,12 @@ const InterpreterRocEnv = struct {
         self.expect_failures.clearRetainingCapacity();
     }
 
-    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, loc: base.SourceLoc) Allocator.Error!void {
+    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region) Allocator.Error!void {
         const owned_msg = try self.allocator.dupe(u8, msg);
         errdefer self.allocator.free(owned_msg);
         try self.expect_failures.append(self.allocator, .{
             .message = owned_msg,
-            .loc = loc,
+            .region = region,
         });
     }
 
@@ -1958,7 +1958,7 @@ pub const Interpreter = struct {
                         self.store.getLocal(cond_local).layout_idx,
                     );
                     if (cond_value == 0) {
-                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtLoc(current));
+                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current));
                         self.roc_ops.expectFailed("expect failed");
                     }
                     current = expect_stmt.next;

@@ -1034,7 +1034,7 @@ const Lowerer = struct {
             const proc = try self.markReachableFn(root.fn_id);
             try self.result.root_procs.append(self.allocator, proc);
             try self.result.root_metadata.append(self.allocator, RootMetadata.fromCheckedRoot(root.request));
-            if (root.request.abi == .compile_time) {
+            if (root.request.abi == .compile_time or root.request.kind == .test_expect) {
                 try self.result.const_roots.append(self.allocator, .{
                     .root_order = root.request.order,
                     .request = root.request,

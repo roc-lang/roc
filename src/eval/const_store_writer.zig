@@ -80,6 +80,7 @@ pub const Writer = struct {
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
                 else => writerInvariant("compile-time callable root did not have a function const plan"),
             },
+            .test_expect => .expect,
             else => writerInvariant("non compile-time root reached ConstStore writer"),
         };
     }

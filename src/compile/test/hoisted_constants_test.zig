@@ -663,6 +663,206 @@ test "inlined hoisted constant crash reports hoisted source region" {
     try std.testing.expect(found);
 }
 
+test "unreachable top-level dbg reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\unused = {
+        \\    dbg "unreachable top-level"
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        found = true;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "\"unreachable top-level\"");
+    }
+    try std.testing.expect(found);
+}
+
+test "unreachable imported top-level dbg reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\import Helper
+        \\
+        \\main! = |_args| {
+        \\    _ = Helper.value
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "Helper.roc",
+        .data =
+        \\module [value]
+        \\
+        \\unused = {
+        \\    dbg "unreachable imported top-level"
+        \\    41.I64
+        \\}
+        \\
+        \\value = 1.I64
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        found = true;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("Helper", entry.module_name);
+        try expectReportContains(gpa, entry.report, "\"unreachable imported top-level\"");
+    }
+    try std.testing.expect(found);
+}
+
+test "top-level expect failure reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\expect 1.I64 == 2.I64
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
 test "hoisted pattern extraction failure reports original destructure region" {
     const gpa = std.testing.allocator;
 
@@ -1509,6 +1709,29 @@ fn expectReportDoesNotContain(
     try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) == null);
 }
 
+fn expectReportContains(
+    allocator: std.mem.Allocator,
+    report: *const @import("reporting").Report,
+    needle: []const u8,
+) anyerror!void {
+    var rendered = std.array_list.Managed(u8).init(allocator);
+    defer rendered.deinit();
+
+    var unmanaged = rendered.moveToUnmanaged();
+    defer rendered = unmanaged.toManaged(allocator);
+
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(allocator, &unmanaged);
+    defer unmanaged = writer_alloc.toArrayList();
+
+    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+        error.OutOfMemory,
+        error.WriteFailed,
+        => return error.OutOfMemory,
+    };
+
+    try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) != null);
+}
+
 fn countStaticDataLiteralAssignments(store: *const lir.LirStore) usize {
     var count: usize = 0;
     for (store.cf_stmts.items) |stmt| {
@@ -1702,9 +1925,68 @@ test "issue 9733: nested expect statements are collected as test roots" {
     // https://github.com/roc-lang/roc/issues/9733
     // The module has two `expect`s: the outer one and the one nested inside its
     // block body. Both must be collected as compile-time `expect` roots so that
-    // `roc test` evaluates the nested `expect 3 == 4` (which must fail). Today
-    // only the top-level expect is collected, so this count is 1 and `roc test`
-    // wrongly reports "All (1) tests passed".
+    // `roc check` evaluates the nested expect instead of only the outer one.
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\expect {
+        \\    expect 3.I64 == 3.I64
+        \\    5.I64 == 5.I64
+        \\}
+        \\
+        \\main! = |_args| Ok({})
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_artifact = coord.rootCheckedArtifact("app");
+
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        countCompileTimeRootKind(app_artifact, .expect),
+    );
+}
+
+test "nested expect failure is reported once" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1752,15 +2034,15 @@ test "issue 9733: nested expect statements are collected as test roots" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    try std.testing.expect(!coord.hasUserErrors());
+    try std.testing.expect(coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
-    try std.testing.expect(!coord.hasUserErrors());
-
-    const app_artifact = coord.rootCheckedArtifact("app");
-
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        countCompileTimeRootKind(app_artifact, .expect),
-    );
+    var failures: usize = 0;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        failures += 1;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "expect failed");
+    }
+    try std.testing.expectEqual(@as(usize, 1), failures);
 }

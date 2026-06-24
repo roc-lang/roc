@@ -49,6 +49,7 @@ pub const Problem = union(enum) {
     platform_hosted_section: PlatformHostedSection,
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
+    comptime_dbg: ComptimeDbg,
     comptime_invalid_numeral: ComptimeInvalidNumeral,
     comptime_invalid_quote: ComptimeInvalidQuote,
     comptime_expect_failed: ComptimeExpectFailed,
@@ -132,6 +133,12 @@ pub const EffectfulExpect = struct {
 
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
+    message: ExtraStringIdx,
+    region: base.Region,
+};
+
+/// A dbg that ran during compile-time evaluation
+pub const ComptimeDbg = struct {
     message: ExtraStringIdx,
     region: base.Region,
 };

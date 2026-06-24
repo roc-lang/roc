@@ -680,16 +680,16 @@ wasm-objdump -x -d rocci-bird.wasm > rocci-bird.disasm.txt
 ### Compile-Time Evaluation
 
 - [x] Compile-time evaluation consumes final selected roots from checking.
-- [ ] Eligible top-level expressions are evaluated in every module.
-- [ ] Eligible top-level expressions are evaluated even when unreachable.
+- [x] Eligible top-level expressions are evaluated in every module.
+- [x] Eligible top-level expressions are evaluated even when unreachable.
 - [x] Eligible selected roots are evaluated.
 - [x] Removed child roots are not evaluated separately.
 - [x] `crash` runs during compile-time evaluation.
-- [ ] `dbg` runs during compile-time evaluation.
-- [ ] `expect` runs during compile-time evaluation.
-- [ ] `roc check` reports compile-time `crash`, `dbg`, and failed `expect`
+- [x] `dbg` runs during compile-time evaluation.
+- [x] `expect` runs during compile-time evaluation.
+- [x] `roc check` reports compile-time `crash`, `dbg`, and failed `expect`
       diagnostics.
-- [ ] Duplicate diagnostics from shared top-level/root sources are avoided.
+- [x] Duplicate diagnostics from shared top-level/root sources are avoided.
 - [ ] Effectful calls are rejected before compile-time evaluation can run them.
 
 ### Static Data
