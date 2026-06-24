@@ -639,14 +639,14 @@ zig build -Doptimize=ReleaseSmall
 
 ## Final Checklist
 
-- [ ] Failing tests capture local `List.iter` root selection.
+- [x] Failing tests capture local `List.iter` root selection.
 - [ ] Failing tests capture local `List.iter` static-data emission.
 - [x] Function-containing aggregates are allowed stored hoisted constants.
 - [x] Bare function roots still use callable-root handling, not data roots.
-- [ ] Root selection has no invalid leaf/source-shape/observable filters.
+- [x] Root selection has no invalid leaf/source-shape/observable filters.
 - [ ] Imported eligible top-level diagnostics run during checking.
 - [ ] Unreachable successful evaluated constants do not emit target static data.
-- [ ] Maximal root subsumption is tested for callable-containing aggregates.
+- [x] Maximal root subsumption is tested for callable-containing aggregates.
 - [ ] Static-data selection consumes explicit value and type/layout data.
 - [ ] Erased callable static data is covered by tests.
 - [ ] Finite callable static data is implemented and covered by tests.
