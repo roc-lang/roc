@@ -511,17 +511,17 @@ test "bundle and unbundle over socket stream" {
     try bundle_writer.interface.flush();
     defer allocator.free(filename);
 
-    // Create socket in temp directory
-    var socket_tmp = testing.tmpDir(.{});
-    defer socket_tmp.cleanup();
+    var socket_id_bytes: [8]u8 = undefined;
+    io.random(&socket_id_bytes);
+    const socket_id = std.mem.readInt(u64, &socket_id_bytes, .little);
 
-    // Get the real path of the temp directory
-    var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const real_path_len = try socket_tmp.dir.realPathFile(io, ".", &real_path_buf);
-    const real_path = real_path_buf[0..real_path_len];
-
-    var socket_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const socket_path = try std.fmt.bufPrint(&socket_path_buf, "{s}/test.sock", .{real_path});
+    var socket_path_buf: [108]u8 = undefined;
+    const socket_path = try std.fmt.bufPrint(
+        &socket_path_buf,
+        "/tmp/roc-bundle-{x}.sock",
+        .{socket_id},
+    );
+    defer std.Io.Dir.deleteFileAbsolute(io, socket_path) catch {};
 
     // Create server thread
     const ServerContext = struct {
@@ -530,8 +530,18 @@ test "bundle and unbundle over socket stream" {
         bundle_dir: std.Io.Dir,
         ready: std.Io.Semaphore = .{},
         done: std.Io.Semaphore = .{},
+        error_name: ?[]const u8 = null,
 
-        fn run(ctx: *@This()) anyerror!void {
+        fn run(ctx: *@This()) void {
+            const thread_io = std.testing.io;
+            ctx.runImpl() catch |err| {
+                ctx.error_name = @errorName(err);
+                ctx.ready.post(thread_io);
+                ctx.done.post(thread_io);
+            };
+        }
+
+        fn runImpl(ctx: *@This()) anyerror!void {
             const thread_io = std.testing.io;
             const unix_addr = try std.Io.net.UnixAddress.init(ctx.socket_path);
             var listener = try unix_addr.listen(thread_io, .{});
@@ -575,6 +585,10 @@ test "bundle and unbundle over socket stream" {
 
     // Wait for server to be ready
     try server_ctx.ready.wait(io);
+    if (server_ctx.error_name) |error_name| {
+        std.debug.print("socket bundle server failed before accepting a connection: {s}\n", .{error_name});
+        return error.SocketBundleServerFailed;
+    }
 
     // Create destination temp directory
     var dst_tmp = testing.tmpDir(.{});
@@ -594,6 +608,10 @@ test "bundle and unbundle over socket stream" {
 
     // Wait for server to finish
     try server_ctx.done.wait(io);
+    if (server_ctx.error_name) |error_name| {
+        std.debug.print("socket bundle server failed while streaming: {s}\n", .{error_name});
+        return error.SocketBundleServerFailed;
+    }
 
     // Verify all files exist with correct content
     const file1_content = try dst_dir.readFileAlloc(io, "test1.txt", allocator, .limited(1024));
