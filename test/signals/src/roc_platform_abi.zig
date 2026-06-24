@@ -1325,14 +1325,12 @@ pub const HostValueTake_taggedArgs = extern struct {
     arg1: *u64,
 };
 
-// =============================================================================
 // Generated Refcount Helpers
 //
 // These helpers recursively retain or release Roc-owned fields using the explicit
 // TypeRepr layout supplied to glue generation. For RocList(T), element release
 // only runs when the list allocation is uniquely owned, immediately before the
 // outer list allocation is decremented and potentially freed.
-// =============================================================================
 
 /// Recursively decrement Roc-owned payloads in Elem.
 pub fn decrefElem(value: Elem, roc_host: *RocHost) void {
@@ -1810,11 +1808,9 @@ fn decrefBoxPayloadType31(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c
     decrefNodeSignalExpr(payload.*, roc_host);
 }
 
-// =============================================================================
 // Runtime Symbols
 //
 // The host defines these linker symbols. Compiled Roc code calls them directly.
-// =============================================================================
 
 pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;
 pub extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void;
@@ -1823,12 +1819,10 @@ pub extern fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void;
 pub extern fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void;
 pub extern fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void;
 
-// =============================================================================
 // Hosted Symbols
 //
 // The platform host must export these symbols with the exact direct C ABI signatures.
 // Refcounted arguments are owned by the hosted function.
-// =============================================================================
 
 /// Hosted symbol for HostValue.clone
 /// Roc signature: HostValue -> HostValue
@@ -1993,11 +1987,9 @@ pub fn makeRocHost(env: *RocEnv) RocHost {
     };
 }
 
-// =============================================================================
 // Provided Symbols
 //
 // Roc exports these symbols from the app with their natural C ABI signatures.
-// =============================================================================
 
 /// Entrypoint: ui_init
 pub extern fn roc_ui_init() callconv(.c) *Elem;

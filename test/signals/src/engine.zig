@@ -625,7 +625,7 @@ pub const HostSignalBinding = struct {
     }
 };
 
-// --- Descriptor layer ---------------------------------------------------------
+// Descriptor layer
 //
 // The host's ingested view of the Roc `Elem` tree: one descriptor per element,
 // text node, attribute, event binding, scope site, state, when, and each.
@@ -978,7 +978,7 @@ pub const HostSignalRecordTokenEntry = struct {
     record: *HostSignalRecord,
 };
 
-// --- Descriptor stream -------------------------------------------------------
+// Descriptor stream
 //
 // The retained stream of node descriptors plus the per-elem index that makes
 // descriptor lookup O(1). Its append* methods ingest the Roc Elem tree; the
