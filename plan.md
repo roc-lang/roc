@@ -355,13 +355,13 @@ Tasks:
 Tests:
 
 - [ ] unreachable top-level `crash` reports during `roc check`
-- [ ] unreachable top-level `dbg` reports during `roc check`
+- [x] unreachable top-level `dbg` reports during `roc check`
 - [ ] unreachable failed `expect` reports during `roc check`
-- [ ] reachable selected-root `crash` reports during `roc check`
+- [x] reachable selected-root `crash` reports during `roc check`
 - [ ] reachable selected-root `dbg` reports during `roc check`
 - [ ] reachable selected-root failed `expect` reports during `roc check`
-- [ ] effectful call inside compile-time-known expression is not evaluated
-- [ ] all modules in an import graph run eligible top-level diagnostics
+- [x] effectful call inside compile-time-known expression is not evaluated
+- [x] all modules in an import graph run eligible top-level diagnostics
 - [ ] duplicate diagnostics are not emitted for shared top-level/root sources
 - [ ] successful unreachable top-level value is not emitted as target data
 
