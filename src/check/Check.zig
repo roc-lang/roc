@@ -447,6 +447,30 @@ const EffectDfsFrame = struct {
     next_child: usize,
 };
 
+const RuntimeDep = enum {
+    compile_time_known,
+    runtime_dependent,
+    poisoned,
+};
+
+const RootEffect = union(enum) {
+    effect_free,
+    effectful,
+    delayed: EffectSlotId,
+};
+
+const ExprCheckResult = struct {
+    does_fx: bool = false,
+    runtime_dep: ?RuntimeDep = null,
+    root_effect: ?RootEffect = null,
+
+    fn fromDoesFx(does_fx: bool) ExprCheckResult {
+        return .{
+            .does_fx = does_fx,
+        };
+    }
+};
+
 const HoistFrame = struct {
     expr: CIR.Expr.Idx,
     suppressed: bool,
@@ -1711,7 +1735,7 @@ fn markCurrentHoistRuntimeDependency(self: *Self) void {
 fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!bool {
     self.hoist_selection_suppressed_depth += 1;
     defer self.hoist_selection_suppressed_depth -= 1;
-    return try self.checkExpr(expr, env, expected);
+    return (try self.checkExpr(expr, env, expected)).does_fx;
 }
 
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
@@ -6702,7 +6726,7 @@ fn checkExpectBody(
     const effect_slot = try self.beginEffectSlot(.{ .expect_body = expect_region });
     defer self.endEffectSlot(effect_slot);
 
-    const body_does_fx = try self.checkExpr(body, env, expected);
+    const body_does_fx = (try self.checkExpr(body, env, expected)).does_fx;
     const slot_does_fx = try self.effectSlotIsEffectful(effect_slot);
     if (slot_does_fx) {
         _ = try self.reportExpectEffectSlot(effect_slot);
@@ -7320,7 +7344,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     self.checking_binding_rhs_pattern = def.pattern;
     const effect_slot = try self.beginEffectSlot(.{ .top_level_value = def_idx });
     defer self.endEffectSlot(effect_slot);
-    const def_does_fx = try self.checkExpr(def.expr, env, expectation);
+    const def_does_fx = (try self.checkExpr(def.expr, env, expectation)).does_fx;
     if (def_does_fx or try self.effectSlotIsEffectful(effect_slot)) {
         try self.reportTopLevelEffectSlot(effect_slot, env);
     }
@@ -9344,7 +9368,7 @@ fn unifyMatchAltPatternBindings(
 
 // expr //
 
-fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -9470,11 +9494,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // String literal segments are already Str type
                 switch (seg_expr) {
                     .e_str_segment => {
-                        does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
+                        does_fx = (try self.checkExpr(seg_expr_idx, env, Expected.none())).does_fx or does_fx;
                     },
                     else => {
                         has_interpolation = true;
-                        does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
+                        does_fx = (try self.checkExpr(seg_expr_idx, env, Expected.none())).does_fx or does_fx;
                         const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
                         // Interpolated expressions must be of type Str
@@ -9719,13 +9743,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // constrain the rest of the list
 
                 // Check the first elem
-                does_fx = try self.checkExpr(elems[0], env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(elems[0], env, Expected.none())).does_fx or does_fx;
 
                 // Iterate over the remaining elements
                 const elem_var = ModuleEnv.varFrom(elems[0]);
                 var last_elem_expr_idx = elems[0];
                 for (elems[1..], 1..) |elem_expr_idx, i| {
-                    does_fx = try self.checkExpr(elem_expr_idx, env, Expected.none()) or does_fx;
+                    does_fx = (try self.checkExpr(elem_expr_idx, env, Expected.none())).does_fx or does_fx;
                     const cur_elem_var = ModuleEnv.varFrom(elem_expr_idx);
 
                     // Unify each element's var with the list's elem var
@@ -9739,7 +9763,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // to the elem_var to catch their individual errors
                     if (!result.isOk()) {
                         for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            does_fx = try self.checkExpr(remaining_elem_expr_idx, env, Expected.none()) or does_fx;
+                            does_fx = (try self.checkExpr(remaining_elem_expr_idx, env, Expected.none())).does_fx or does_fx;
                         }
 
                         // Break to avoid cascading errors
@@ -9759,7 +9783,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check tuple elements
             const elems_slice = self.cir.store.exprSlice(tuple.elems);
             for (elems_slice) |single_elem_expr_idx| {
-                does_fx = try self.checkExpr(single_elem_expr_idx, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(single_elem_expr_idx, env, Expected.none())).does_fx or does_fx;
             }
 
             // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
@@ -9772,7 +9796,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_tuple_access => |tuple_access| {
             // Check the tuple expression
-            does_fx = try self.checkExpr(tuple_access.tuple, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(tuple_access.tuple, env, Expected.none())).does_fx or does_fx;
 
             const tuple_var = ModuleEnv.varFrom(tuple_access.tuple);
             const resolved = self.types.resolveVar(tuple_var);
@@ -9869,7 +9893,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Create a record type in the type system and assign it the expr_var
 
                 // Check the record being updated
-                does_fx = try self.checkExpr(record_being_updated_expr, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(record_being_updated_expr, env, Expected.none())).does_fx or does_fx;
 
                 const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
                 const record_being_updated_name: ?Ident.Idx = self.getExprPatternIdent(record_being_updated_expr);
@@ -9879,7 +9903,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field = self.cir.store.getRecordField(field_idx);
 
                     // Check the field value expression
-                    does_fx = try self.checkExpr(field.value, env, Expected.none()) or does_fx;
+                    does_fx = (try self.checkExpr(field.value, env, Expected.none())).does_fx or does_fx;
 
                     // Create an unbound record with this field
                     const single_field_record = try self.freshFromContent(.{ .structure = .{
@@ -9910,7 +9934,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field = self.cir.store.getRecordField(field_idx);
 
                     // Check the field value expression
-                    does_fx = try self.checkExpr(field.value, env, Expected.none()) or does_fx;
+                    does_fx = (try self.checkExpr(field.value, env, Expected.none())).does_fx or does_fx;
 
                     // Append it to the scratch records array
                     try self.scratch_record_fields.append(types_mod.RecordField{
@@ -9955,7 +9979,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Process each tag arg
             const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
             for (arg_expr_idx_slice) |arg_expr_idx| {
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(arg_expr_idx, env, Expected.none())).does_fx or does_fx;
             }
 
             // Create the type
@@ -9970,7 +9994,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // nominal //
         .e_nominal => |nominal| {
             // Check the backing expression first
-            does_fx = try self.checkExpr(nominal.backing_expr, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(nominal.backing_expr, env, Expected.none())).does_fx or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Use shared nominal type checking logic
@@ -9985,7 +10009,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_nominal_external => |nominal| {
             // Check the backing expression first
-            does_fx = try self.checkExpr(nominal.backing_expr, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(nominal.backing_expr, env, Expected.none())).does_fx or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Resolve the external type declaration
@@ -10256,7 +10280,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = stmt_result.does_fx or does_fx;
 
             // Check the final expression
-            const final_expr_does_fx = try self.checkExpr(block.final_expr, env, expected);
+            const final_expr_does_fx = (try self.checkExpr(block.final_expr, env, expected)).does_fx;
             does_fx = final_expr_does_fx or does_fx;
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
@@ -10407,12 +10431,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             const legacy_body_does_fx = if (mb_anno_func) |expected_func| blk: {
-                const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
+                const lambda_body_does_fx = (try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret))).does_fx;
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
                 break :blk lambda_body_does_fx;
             } else blk: {
-                const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none());
+                const lambda_body_does_fx = (try self.checkExpr(lambda.body, env, Expected.none())).does_fx;
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 break :blk lambda_body_does_fx;
             };
@@ -10453,7 +10477,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const saved_checking_call_arg = self.checking_call_arg;
             self.checking_call_arg = is_call_arg;
             defer self.checking_call_arg = saved_checking_call_arg;
-            does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
+            does_fx = (try self.checkExpr(closure.lambda_idx, env, expected)).does_fx or does_fx;
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
             // For intermediate cycle participants, the inner lambda skipped
@@ -10483,7 +10507,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
                     self.checking_call_arg = true;
-                    does_fx = try self.checkExpr(call.func, env, Expected.none()) or does_fx;
+                    does_fx = (try self.checkExpr(call.func, env, Expected.none())).does_fx or does_fx;
                     const call_func_expr_var = ModuleEnv.varFrom(call.func);
 
                     // If the function was generalized (e.g. an immediately-invoked
@@ -10512,7 +10536,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
                     for (call_arg_expr_idxs) |call_arg_idx| {
                         self.checking_call_arg = true;
-                        does_fx = try self.checkExpr(call_arg_idx, env, Expected.none()) or does_fx;
+                        does_fx = (try self.checkExpr(call_arg_idx, env, Expected.none())).does_fx or does_fx;
 
                         // Check if this arg errored
                         did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(call_arg_idx)).desc.content == .err);
@@ -10754,7 +10778,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary) or does_fx;
         },
         .e_field_access => |field_access| {
-            does_fx = try self.checkExpr(field_access.receiver, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(field_access.receiver, env, Expected.none())).does_fx or does_fx;
             const receiver_var = ModuleEnv.varFrom(field_access.receiver);
 
             const record_field_var = try self.fresh(env, expr_region);
@@ -10775,7 +10799,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_interpolation => |interpolation| {
             self.checking_call_arg = true;
-            does_fx = try self.checkExpr(interpolation.first, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(interpolation.first, env, Expected.none())).does_fx or does_fx;
             const first_var = ModuleEnv.varFrom(interpolation.first);
             const str_var = try self.freshStr(env, expr_region);
             _ = try self.unify(first_var, str_var, env);
@@ -10787,12 +10811,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var part_i: usize = 0;
             while (part_i < parts.len) : (part_i += 2) {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(parts[part_i], env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(parts[part_i], env, Expected.none())).does_fx or does_fx;
                 const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
                 did_err = did_err or (self.types.resolveVar(interpolated_var).desc.content == .err);
 
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(parts[part_i + 1], env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(parts[part_i + 1], env, Expected.none())).does_fx or does_fx;
                 const following_segment_var = ModuleEnv.varFrom(parts[part_i + 1]);
                 _ = try self.unify(str_var, following_segment_var, env);
                 did_err = did_err or (self.types.resolveVar(following_segment_var).desc.content == .err);
@@ -10841,7 +10865,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_method_call => |method_call| {
-            does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(method_call.receiver, env, Expected.none())).does_fx or does_fx;
             const receiver_var = ModuleEnv.varFrom(method_call.receiver);
             var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
 
@@ -10853,7 +10877,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(arg_expr_idx, env, Expected.none())).does_fx or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
                 did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
@@ -10884,12 +10908,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_dispatch_call => |method_call| {
-            does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(method_call.receiver, env, Expected.none())).does_fx or does_fx;
             var did_err = self.types.resolveVar(ModuleEnv.varFrom(method_call.receiver)).desc.content == .err;
 
             for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(arg_expr_idx, env, Expected.none())).does_fx or does_fx;
                 did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
             }
 
@@ -10903,8 +10927,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_structural_eq => |eq| {
-            does_fx = try self.checkExpr(eq.lhs, env, Expected.none()) or does_fx;
-            does_fx = try self.checkExpr(eq.rhs, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(eq.lhs, env, Expected.none())).does_fx or does_fx;
+            does_fx = (try self.checkExpr(eq.rhs, env, Expected.none())).does_fx or does_fx;
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             const rhs_var = ModuleEnv.varFrom(eq.rhs);
@@ -10912,8 +10936,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
         },
         .e_structural_hash => |h| {
-            does_fx = try self.checkExpr(h.value, env, Expected.none()) or does_fx;
-            does_fx = try self.checkExpr(h.hasher, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(h.value, env, Expected.none())).does_fx or does_fx;
+            does_fx = (try self.checkExpr(h.hasher, env, Expected.none())).does_fx or does_fx;
 
             // `to_hash : self, Hasher -> Hasher` threads the Hasher through, so the
             // result has the same type as the incoming Hasher argument.
@@ -10927,9 +10951,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             defer arg_vars_alloc.free(arg_vars);
 
             self.checking_call_arg = true;
-            does_fx = try self.checkExpr(eq.lhs, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(eq.lhs, env, Expected.none())).does_fx or does_fx;
             self.checking_call_arg = true;
-            does_fx = try self.checkExpr(eq.rhs, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(eq.rhs, env, Expected.none())).does_fx or does_fx;
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             arg_vars[0] = ModuleEnv.varFrom(eq.rhs);
@@ -10967,7 +10991,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var did_err = false;
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(arg_expr_idx, env, Expected.none())).does_fx or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
                 did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
@@ -11001,7 +11025,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var did_err = false;
             for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(arg_expr_idx, env, Expected.none())).does_fx or does_fx;
                 did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
             }
 
@@ -11020,12 +11044,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_expect_err => |expect_err| {
             // The Err payload is consumed at runtime when the enclosing expect
             // fails; this expression itself never returns, so its type is free.
-            does_fx = try self.checkExpr(expect_err.expr, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(expect_err.expr, env, Expected.none())).does_fx or does_fx;
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_dbg => |dbg| {
             // dbg evaluates its inner expression but returns {} (like expect)
-            does_fx = try self.checkExpr(dbg.expr, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(dbg.expr, env, Expected.none())).does_fx or does_fx;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_expect => |expect| {
@@ -11074,7 +11098,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_return => |ret| {
-            does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
+            does_fx = (try self.checkExpr(ret.expr, env, Expected.none())).does_fx or does_fx;
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
             // Write down this constraint for later validation.
@@ -11126,7 +11150,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check each argument expression in the run_low_level node
             for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_idx, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(arg_idx, env, Expected.none())).does_fx or does_fx;
             }
         },
         .e_runtime_error => {
@@ -11238,7 +11262,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     try hoist_frame.finish(does_fx);
-    return does_fx;
+    return ExprCheckResult.fromDoesFx(does_fx);
 }
 
 fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
@@ -12118,7 +12142,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
-                const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
+                const decl_expr_does_fx = (try self.checkExpr(decl_stmt.expr, env, expectation)).does_fx;
                 does_fx = decl_expr_does_fx or does_fx;
                 try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
@@ -12172,7 +12196,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
-                const var_expr_does_fx = try self.checkExpr(var_stmt.expr, env, expectation);
+                const var_expr_does_fx = (try self.checkExpr(var_stmt.expr, env, expectation)).does_fx;
                 does_fx = var_expr_does_fx or does_fx;
                 self.discardHoistBindingCandidate(var_stmt.pattern_idx);
                 if (var_stmt.anno == null and self.erroneous_value_exprs.contains(var_stmt.expr)) {
@@ -12225,7 +12249,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
-                const reassign_expr_does_fx = try self.checkExpr(reassign.expr, env, Expected.none());
+                const reassign_expr_does_fx = (try self.checkExpr(reassign.expr, env, Expected.none())).does_fx;
                 does_fx = reassign_expr_does_fx or does_fx;
                 const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
                 try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
@@ -12259,7 +12283,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // Check the condition
                 // while $count < 10 {
                 //       ^^^^^^^^^^^
-                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(while_stmt.cond, env, Expected.none())).does_fx or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
@@ -12272,36 +12296,36 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 //     print!($count.toStr())  <<<<
                 //     $count = $count + 1
                 // }
-                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(while_stmt.body, env, Expected.none())).does_fx or does_fx;
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_breakable_loop => |while_stmt| {
-                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(while_stmt.cond, env, Expected.none())).does_fx or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(while_stmt.body, env, Expected.none())).does_fx or does_fx;
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_infinite_loop => |while_stmt| {
-                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(while_stmt.cond, env, Expected.none())).does_fx or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(while_stmt.body, env, Expected.none())).does_fx or does_fx;
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
             .s_expr => |expr| {
-                const expr_does_fx = try self.checkExpr(expr.expr, env, Expected.none());
+                const expr_does_fx = (try self.checkExpr(expr.expr, env, Expected.none())).does_fx;
                 does_fx = expr_does_fx or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
@@ -12318,7 +12342,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
             },
             .s_dbg => |expr| {
-                does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(expr.expr, env, Expected.none())).does_fx or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 _ = try self.unify(stmt_var, expr_var, env);
@@ -12339,7 +12363,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_return => |ret| {
                 // Type check the return expression
-                does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
+                does_fx = (try self.checkExpr(ret.expr, env, Expected.none())).does_fx or does_fx;
                 const ret_var = ModuleEnv.varFrom(ret.expr);
 
                 // Write down this constraint for later validation
@@ -12484,13 +12508,13 @@ fn checkIfElseExpr(
     const first_branch = self.cir.store.getIfBranch(first_branch_idx);
 
     // Check the condition of the 1st branch
-    var does_fx = try self.checkExpr(first_branch.cond, env, Expected.none());
+    var does_fx = (try self.checkExpr(first_branch.cond, env, Expected.none())).does_fx;
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(env, expr_region);
     _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
 
     // Then we check the 1st branch's body
-    does_fx = try self.checkExpr(first_branch.body, env, expected.forBranchBody()) or does_fx;
+    does_fx = (try self.checkExpr(first_branch.body, env, expected.forBranchBody())).does_fx or does_fx;
 
     if (expected_branch_ret) |expected_ret| {
         const branch_ctx = problem.Context{ .if_branch = .{
@@ -12514,13 +12538,13 @@ fn checkIfElseExpr(
         const branch = self.cir.store.getIfBranch(branch_idx);
 
         // Check the branches condition
-        does_fx = try self.checkExpr(branch.cond, env, Expected.none()) or does_fx;
+        does_fx = (try self.checkExpr(branch.cond, env, Expected.none())).does_fx or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
         const branch_bool_var = try self.freshBool(env, expr_region);
         _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
 
         // Check the branch body
-        does_fx = try self.checkExpr(branch.body, env, expected.forBranchBody()) or does_fx;
+        does_fx = (try self.checkExpr(branch.body, env, expected.forBranchBody())).does_fx or does_fx;
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
@@ -12547,13 +12571,13 @@ fn checkIfElseExpr(
                 for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
                     const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
 
-                    does_fx = try self.checkExpr(remaining_branch.cond, env, Expected.none()) or does_fx;
+                    does_fx = (try self.checkExpr(remaining_branch.cond, env, Expected.none())).does_fx or does_fx;
                     const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
                     const fresh_bool = try self.freshBool(env, expr_region);
                     _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
-                    does_fx = try self.checkExpr(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
+                    does_fx = (try self.checkExpr(remaining_branch.body, env, expected.forBranchBody())).does_fx or does_fx;
                     try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
                 }
 
@@ -12566,7 +12590,7 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    does_fx = try self.checkExpr(if_.final_else, env, expected.forBranchBody()) or does_fx;
+    does_fx = (try self.checkExpr(if_.final_else, env, expected.forBranchBody())).does_fx or does_fx;
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
@@ -12627,7 +12651,7 @@ fn checkMatchExpr(
     const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
 
     // Check the match's condition
-    var does_fx = try self.checkExpr(match.cond, env, Expected.none());
+    var does_fx = (try self.checkExpr(match.cond, env, Expected.none())).does_fx;
     const cond_var = ModuleEnv.varFrom(match.cond);
     const cond_always_crashes = self.exprAlwaysCrashes(match.cond);
     if (!match.is_try_suffix) {
@@ -12717,7 +12741,7 @@ fn checkMatchExpr(
         }
 
         // Check the first branch's value, then use that at the branch_var
-        does_fx = try self.checkExpr(first_branch.value, env, expected.forBranchBody()) or does_fx;
+        does_fx = (try self.checkExpr(first_branch.value, env, expected.forBranchBody())).does_fx or does_fx;
         val_var = ModuleEnv.varFrom(first_branch.value);
 
         // Check first branch body against expected return type
@@ -12772,7 +12796,7 @@ fn checkMatchExpr(
         }
 
         // Then, check the body
-        does_fx = try self.checkExpr(branch.value, env, expected.forBranchBody()) or does_fx;
+        does_fx = (try self.checkExpr(branch.value, env, expected.forBranchBody())).does_fx or does_fx;
 
         // Check branch body against expected return type BEFORE pairwise unification.
         // Pairwise unification poisons ALL connected vars via union-find on failure,
@@ -12942,7 +12966,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = try self.checkExpr(unary.expr, env, Expected.none());
+    const does_fx = (try self.checkExpr(unary.expr, env, Expected.none())).does_fx;
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -12971,7 +12995,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = try self.checkExpr(unary.expr, env, Expected.none());
+    const does_fx = (try self.checkExpr(unary.expr, env, Expected.none())).does_fx;
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -13008,8 +13032,8 @@ fn checkBinopExpr(
 
     // Check operands first
     var does_fx = false;
-    does_fx = try self.checkExpr(binop.lhs, env, Expected.none()) or does_fx;
-    does_fx = try self.checkExpr(binop.rhs, env, Expected.none()) or does_fx;
+    does_fx = (try self.checkExpr(binop.lhs, env, Expected.none())).does_fx or does_fx;
+    does_fx = (try self.checkExpr(binop.rhs, env, Expected.none())).does_fx or does_fx;
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
@@ -13552,7 +13576,7 @@ fn checkIteratorForLoop(
     try self.checkPattern(pattern, .for_, env);
     const item_var: Var = ModuleEnv.varFrom(pattern);
 
-    does_fx = try self.checkExpr(iterable, env, Expected.none()) or does_fx;
+    does_fx = (try self.checkExpr(iterable, env, Expected.none())).does_fx or does_fx;
     const iterable_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(iterable));
     const iterable_var: Var = ModuleEnv.varFrom(iterable);
 
@@ -13580,7 +13604,7 @@ fn checkIteratorForLoop(
 
     try self.cir.recordForLoopDispatchPlan(loop_node, ModuleEnv.nodeIdxFrom(pattern), ModuleEnv.nodeIdxFrom(iterable), iter_fn_var, next_fn_var);
 
-    does_fx = try self.checkExpr(body, env, Expected.none()) or does_fx;
+    does_fx = (try self.checkExpr(body, env, Expected.none())).does_fx or does_fx;
     return does_fx;
 }
 

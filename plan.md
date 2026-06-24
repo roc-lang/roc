@@ -802,7 +802,7 @@ wc -c rocci-bird.wasm
 
 ### Root Selection
 
-- [ ] `checkExpr` returns `ExprCheckResult`.
+- [x] `checkExpr` returns `ExprCheckResult`.
 - [ ] Blocks and statements combine `ExprCheckResult`.
 - [ ] Expression effect propagation no longer depends on old `does_fx`.
 - [ ] Immutable local binding summaries are stored only when later lookups need
