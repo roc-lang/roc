@@ -22,6 +22,22 @@ test "hoist roots selected for referenced closed local binding chain" {
     try std.testing.expect(roots[1].pattern != null);
 }
 
+test "hoist roots selected for local alias of compile-time-known local" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    x = 41.I64
+        \\    y = x
+        \\    y + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expect(roots.len >= 1);
+    try std.testing.expect(roots[0].pattern != null);
+}
+
 test "hoist roots selected for closed ordinary call binding RHS" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64

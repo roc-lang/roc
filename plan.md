@@ -251,18 +251,18 @@ Tasks:
 
 Tests:
 
-- [ ] closed top-level list literal returns compile-time-known
-- [ ] closed top-level record containing a list returns compile-time-known
-- [ ] immutable local independent of a lambda argument is compile-time-known
-- [ ] immutable local depending directly on a lambda argument is runtime-dependent
-- [ ] immutable local depending indirectly on a lambda argument is runtime-dependent
-- [ ] local alias of compile-time-known local stays compile-time-known
-- [ ] match-bound value blocks a containing parent root
+- [x] closed top-level list literal returns compile-time-known
+- [x] closed top-level record containing a list returns compile-time-known
+- [x] immutable local independent of a lambda argument is compile-time-known
+- [x] immutable local depending directly on a lambda argument is runtime-dependent
+- [x] immutable local depending indirectly on a lambda argument is runtime-dependent
+- [x] local alias of compile-time-known local stays compile-time-known
+- [x] match-bound value blocks a containing parent root
 - [x] loop-bound value blocks a containing parent root
-- [ ] mutable local blocks a containing parent root
+- [x] mutable local blocks a containing parent root
 - [x] reassignment blocks a containing parent root
-- [ ] top-level checked value lookup stays compile-time-known
-- [ ] imported checked value lookup stays compile-time-known
+- [x] top-level checked value lookup stays compile-time-known
+- [x] imported checked value lookup stays compile-time-known
 - [x] forward top-level constant lookup does not poison the forcing expression
   with the initializer's transient runtime dependency
 - [x] order of first and later top-level constant lookups does not change
