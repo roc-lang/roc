@@ -430,6 +430,8 @@ test "reachable top-level data lowers to internal static data exports" {
     const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
 
     try std.testing.expect(countStoredHoistedListLength(app_view, 6) >= 1);
+    try std.testing.expectEqual(@as(usize, 1), countStoredTopLevelListU8(app_view, &.{ 17, 34, 51, 68, 85, 102 }));
+    try std.testing.expectEqual(@as(usize, 1), countStoredTopLevelListU8(app_view, &.{ 201, 202, 203, 204, 205, 206 }));
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
@@ -447,6 +449,8 @@ test "reachable top-level data lowers to internal static data exports" {
 
     try std.testing.expect(lowered.lir_result.static_data_values.items.len >= 1);
     try std.testing.expect(countStaticDataLiteralAssignments(&lowered.lir_result.store) >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataValuesContainingListU8(root_view, imports, &lowered, &.{ 201, 202, 203, 204, 205, 206 }));
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignmentsToListU8(root_view, imports, &lowered, &.{ 201, 202, 203, 204, 205, 206 }));
 
     const exports = try static_data_exports.buildProvidedDataExports(
         gpa,
@@ -3382,6 +3386,43 @@ fn countStaticDataLiteralAssignmentsToListLength(
     return count;
 }
 
+fn countStaticDataValuesContainingListU8(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    bytes: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.static_data_values.items) |static_data| {
+        const node = constNodeForStaticData(root, imports, static_data.const_ref);
+        if (constNodeContainsListU8(node.module, node.id, bytes)) count += 1;
+    }
+    return count;
+}
+
+fn countStaticDataLiteralAssignmentsToListU8(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    bytes: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => |id| {
+                    const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref);
+                    if (constNodeContainsListU8(node.module, node.id, bytes)) count += 1;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
 const StaticConstModule = struct {
     templates: *const check.CheckedArtifact.ConstTemplateTable,
     store: *const check.CheckedArtifact.ConstStore,
@@ -3468,6 +3509,69 @@ fn constNodeContainsListLength(module: StaticConstModule, node: check.CheckedArt
         },
         else => false,
     };
+}
+
+fn constNodeContainsListU8(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, bytes: []const u8) bool {
+    return switch (module.store.get(node)) {
+        .list => |items| {
+            if (constNodeIsListU8Items(module, items, bytes)) return true;
+            for (items) |item| {
+                if (constNodeContainsListU8(module, item, bytes)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsListU8(module, payload, bytes),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsListU8(module, item, bytes)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsListU8(module, item, bytes)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsListU8(module, payload, bytes)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsListU8(module, nominal.backing, bytes),
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsListU8(module, capture.value, bytes)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn constNodeIsListU8(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, bytes: []const u8) bool {
+    return switch (module.store.get(node)) {
+        .list => |items| constNodeIsListU8Items(module, items, bytes),
+        .nominal => |nominal| constNodeIsListU8(module, nominal.backing, bytes),
+        else => false,
+    };
+}
+
+fn constNodeIsListU8Items(module: StaticConstModule, items: []const check.CheckedArtifact.ConstNodeId, bytes: []const u8) bool {
+    if (items.len != bytes.len) return false;
+    for (items, bytes) |item, expected| {
+        const actual = switch (module.store.get(item)) {
+            .scalar => |scalar| switch (scalar) {
+                .u8 => |byte| byte,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (actual != expected) return false;
+    }
+    return true;
 }
 
 fn constNodeContainsFnValue(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId) bool {
@@ -3753,6 +3857,26 @@ fn countStoredHoistedListLength(artifact: anytype, len: usize) usize {
             .templates = artifact.const_templates,
             .store = artifact.const_store,
         }, node, len)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredTopLevelListU8(artifact: anytype, bytes: []const u8) usize {
+    var count: usize = 0;
+    const module = StaticConstModule{
+        .templates = artifact.const_templates,
+        .store = artifact.const_store,
+    };
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .constant) continue;
+        const node = switch (root.payload) {
+            .const_node => |const_node| const_node,
+            .pending,
+            .fn_value,
+            .expect,
+            => continue,
+        };
+        if (constNodeIsListU8(module, node, bytes)) count += 1;
     }
     return count;
 }

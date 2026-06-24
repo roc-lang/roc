@@ -647,7 +647,7 @@ zig build -Doptimize=ReleaseSmall
 - [x] Bare function roots still use callable-root handling, not data roots.
 - [x] Root selection has no invalid leaf/source-shape/observable filters.
 - [x] Imported eligible top-level diagnostics run during checking.
-- [ ] Unreachable successful evaluated constants do not emit target static data.
+- [x] Unreachable successful evaluated constants do not emit target static data.
 - [x] Maximal root subsumption is tested for callable-containing aggregates.
 - [ ] Static-data selection consumes explicit value and type/layout data.
 - [ ] Erased callable static data is covered by tests.
