@@ -321,9 +321,9 @@ Tests:
 - [x] delayed parent resolving pure replaces children
 - [x] delayed parent resolving effectful preserves children
 - [x] nested delayed parents finalize in stable order
-- [ ] named top-level constant and equivalent inline expression select
+- [x] named top-level constant and equivalent inline expression select
   equivalent roots
-- [ ] closed local constant and equivalent inline expression select equivalent
+- [x] closed local constant and equivalent inline expression select equivalent
   roots
 - [x] inline `sub_or_crash` animation cells inside a runtime-dependent record
   select the cells list as a compile-time root

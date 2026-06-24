@@ -198,6 +198,65 @@ test "hoist roots preserve list child inside runtime-dependent record" {
     try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
 }
 
+test "hoist roots are equivalent for named top-level data and inline data" {
+    {
+        var test_env = try TestEnv.init("Test",
+            \\nums : List(U64)
+            \\nums = [1, 2]
+            \\
+            \\main = |_| { nums: nums }
+        );
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_record));
+        try std.testing.expectEqual(@as(usize, 0), countListRootsByLength(&test_env, 2));
+    }
+
+    {
+        var test_env = try TestEnv.init("Test",
+            \\main = |_| { nums: [1.U64, 2.U64] }
+        );
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_record));
+        try std.testing.expectEqual(@as(usize, 0), countListRootsByLength(&test_env, 2));
+    }
+}
+
+test "hoist roots are equivalent for closed local data and inline data" {
+    {
+        var test_env = try TestEnv.init("Test",
+            \\main = |arg| {
+            \\    nums : List(U64)
+            \\    nums = [1, 2]
+            \\    record = { nums, runtime: arg }
+            \\    record.runtime
+            \\}
+        );
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_record));
+        try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
+    }
+
+    {
+        var test_env = try TestEnv.init("Test",
+            \\main = |arg| {
+            \\    record = { nums: [1.U64, 2.U64], runtime: arg }
+            \\    record.runtime
+            \\}
+        );
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_record));
+        try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
+    }
+}
+
 test "hoist roots select closed ordinary call dependencies first" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
