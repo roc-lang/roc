@@ -1,4 +1,4 @@
-//! Target-layout readonly data symbols for provided and internal constants.
+//! Target-layout readonly data symbols for compile-time constants.
 //!
 //! Static data exports are materialized from checked `ConstStore` nodes and the
 //! layout/const plans output by direct LIR lowering.
@@ -73,8 +73,8 @@ const ConstNodeSite = struct {
     node: u32,
 };
 
-/// Build readonly data exports for provided constants and reachable internal constants.
-pub fn buildProvidedDataExports(
+/// Build readonly data exports for provided constants and internal hoisted constants.
+pub fn buildStaticDataExports(
     allocator: Allocator,
     modules: ModuleViews,
     lowered: ?*const lir.CheckedPipeline.LoweredProgram,
@@ -85,7 +85,7 @@ pub fn buildProvidedDataExports(
         return try allocator.alloc(StaticDataExport, 0);
     };
     const lowered_program = lowered orelse {
-        if (moduleHasProvidedData(root.module)) staticDataInvariant("provided data exports require LIR layout output");
+        if (moduleHasProvidedData(root.module)) staticDataInvariant("static data exports require LIR layout output");
         return try allocator.alloc(StaticDataExport, 0);
     };
 
@@ -95,7 +95,7 @@ pub fn buildProvidedDataExports(
     return try builder.build();
 }
 
-pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExport) void {
+pub fn deinitStaticDataExports(allocator: Allocator, exports: []StaticDataExport) void {
     for (exports) |static_export| {
         allocator.free(static_export.symbol_name);
         allocator.free(static_export.bytes);
@@ -103,6 +103,19 @@ pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExpo
         allocator.free(static_export.relocations);
     }
     allocator.free(exports);
+}
+
+pub fn buildProvidedDataExports(
+    allocator: Allocator,
+    modules: ModuleViews,
+    lowered: ?*const lir.CheckedPipeline.LoweredProgram,
+    target: roc_target.RocTarget,
+) MaterializationError![]StaticDataExport {
+    return buildStaticDataExports(allocator, modules, lowered, target);
+}
+
+pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExport) void {
+    deinitStaticDataExports(allocator, exports);
 }
 
 fn deinitRelocationSlice(allocator: Allocator, relocations: []const StaticDataRelocation) void {
@@ -190,9 +203,9 @@ const StaticDataBuilder = struct {
             });
         }
 
-        for (self.lowered.lir_result.static_data_values.items) |value| {
+        for (self.lowered.lir_result.static_data_values.items, 0..) |value, index| {
             const const_node = self.constNode(value.const_ref);
-            const symbol_name = try self.allocator.dupe(u8, self.lowered.lir_result.store.getStaticDataSymbolName(value.id));
+            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, @enumFromInt(@as(u32, @intCast(index))));
             errdefer self.allocator.free(symbol_name);
 
             const materialized = try self.materializeValue(const_node, value.plan, value.layout_idx);
@@ -202,7 +215,7 @@ const StaticDataBuilder = struct {
                 .symbol_name = symbol_name,
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
-                .is_global = true,
+                .is_global = false,
                 .is_exported = false,
                 .relocations = materialized.relocations,
             });
@@ -268,7 +281,15 @@ const StaticDataBuilder = struct {
                 .store = imported.const_store,
             };
         }
-        staticDataInvariant("provided data export referenced a const outside the lowering module set");
+        for (self.root.relation_modules) |relation| {
+            if (moduleBytesEqual(relation.key.bytes, ref.artifact.bytes)) return .{
+                .key = relation.key,
+                .names = relation.canonical_names,
+                .templates = relation.const_templates,
+                .store = relation.const_store,
+            };
+        }
+        staticDataInvariant("static data export referenced a const outside the lowering module set");
     }
 
     fn requestedLayout(self: *StaticDataBuilder, checked_type: CheckedModule.CheckedTypeId) lir.Program.RequestedLayout {
@@ -314,6 +335,26 @@ const StaticDataBuilder = struct {
     ) MaterializationError!void {
         const value = node.module.store.get(node.id);
         const plan = self.constPlan(plan_id);
+        if (value == .nominal) {
+            switch (plan) {
+                .named => {},
+                .pending,
+                .zst,
+                .scalar,
+                .str,
+                .list,
+                .box,
+                .tuple,
+                .record,
+                .tag_union,
+                .fn_value,
+                .erased_fn,
+                => {
+                    try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = value.nominal.backing }, plan_id, layout_idx);
+                    return;
+                },
+            }
+        }
         switch (plan) {
             .pending => staticDataInvariant("pending const plan reached static data export"),
             .zst => switch (value) {

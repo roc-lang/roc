@@ -25,6 +25,7 @@ platform ""
         assembled_strings : (Str, Str, Str),
         intermediate_final : Str,
         static_slices : (Str, Str),
+        hoisted_cells : I64 -> List({ frames: I64, sprite: { height: I64, src_x: I64, src_y: I64, width: I64 } }),
     }
     exposes []
     packages {}
@@ -41,6 +42,7 @@ platform ""
         "roc_assembled_strings": assembled_strings_for_host,
         "roc_intermediate_final": intermediate_final_for_host,
         "roc_static_slices": static_slices_for_host,
+        "roc_hoisted_cells": hoisted_cells_for_host,
     }
     targets: {
         inputs_dir: "targets/",
@@ -100,3 +102,9 @@ intermediate_final_for_host = intermediate_final
 
 static_slices_for_host : (Str, Str)
 static_slices_for_host = static_slices
+
+Sprite : { height: I64, src_x: I64, src_y: I64, width: I64 }
+Cell : { frames: I64, sprite: Sprite }
+
+hoisted_cells_for_host : I64 -> List(Cell)
+hoisted_cells_for_host = |last_updated| hoisted_cells(last_updated)

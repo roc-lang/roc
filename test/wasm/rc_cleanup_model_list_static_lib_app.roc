@@ -13,6 +13,7 @@ Model : {
 step : Box(Model) -> Box(Model)
 step = |boxed| {
     model = Box.unbox(boxed)
+    expect model.tick == model.tick
     moved = List.map(model.plants, |plant| { ..plant, x: plant.x - 1 })
     kept = List.drop_if(moved, |plant| plant.x < -12)
 

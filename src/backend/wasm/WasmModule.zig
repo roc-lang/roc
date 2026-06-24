@@ -739,7 +739,7 @@ pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) Symbol
     return self.linking.symbol_table.items[symbol.raw()].index;
 }
 
-fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
+pub fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
     for (self.linking.symbol_table.items, 0..) |sym, i| {
         if (sym.kind != kind) continue;
         const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
@@ -979,12 +979,9 @@ pub fn addDataSymbol(
     return SymbolIndex.fromRaw(raw_symbol);
 }
 
-/// Add an undefined data symbol that a later `addStaticDataExports` call can define.
-pub fn addUndefinedDataSymbol(
-    self: *Self,
-    name: []const u8,
-    flags: u32,
-) Allocator.Error!SymbolIndex {
+/// Add an undefined data symbol that relocations can target before the defining
+/// data-only static module has been merged.
+pub fn addUndefinedDataSymbol(self: *Self, name: []const u8) Allocator.Error!SymbolIndex {
     if (self.findSymbolByNameAndKind(name, .data)) |existing| {
         return SymbolIndex.fromRaw(existing);
     }
@@ -992,7 +989,7 @@ pub fn addUndefinedDataSymbol(
     const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
     try self.linking.symbol_table.append(self.allocator, .{
         .kind = .data,
-        .flags = flags | WasmLinking.SymFlag.UNDEFINED,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
         .name = name,
         .index = 0,
     });
@@ -6241,10 +6238,7 @@ test "addStaticDataExports defines forward data symbols used by code relocations
     defer module.deinit();
 
     _ = try module.addDataSegment(&.{ 0xaa, 0xbb, 0xcc }, 1);
-    const symbol = try module.addUndefinedDataSymbol(
-        "roc__static_value_0",
-        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
-    );
+    const symbol = try module.addUndefinedDataSymbol("roc__static_value_0");
 
     try module.code_bytes.append(allocator, Op.i32_const);
     try appendPaddedI32(allocator, &module.code_bytes, 0);
@@ -6282,10 +6276,7 @@ test "mergeModuleForObject resolves undefined static data symbols" {
     var app = Self.init(allocator);
     defer app.deinit();
 
-    const symbol = try app.addUndefinedDataSymbol(
-        "roc__static_value_0",
-        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
-    );
+    const symbol = try app.addUndefinedDataSymbol("roc__static_value_0");
 
     const exports = [_]StaticDataExport{.{
         .symbol_name = "roc__static_value_0",

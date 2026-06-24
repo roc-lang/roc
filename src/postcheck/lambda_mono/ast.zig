@@ -188,7 +188,7 @@ pub const ExprData = union(enum) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
-    static_const: Mono.StaticConst,
+    static_data: Common.StaticDataId,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
@@ -397,6 +397,8 @@ pub const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
+pub const StaticDataValue = Common.StaticDataRequest;
+
 /// Complete Lambda Mono program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
@@ -422,6 +424,7 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    static_data_values: std.ArrayList(StaticDataValue),
     comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
@@ -472,6 +475,7 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .static_data_values = .empty,
             .comptime_sites = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
@@ -499,6 +503,7 @@ pub const Program = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);

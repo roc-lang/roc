@@ -56,6 +56,8 @@ pub const LocalSpan = LIR.LocalSpan;
 pub const JoinPointId = LIR.JoinPointId;
 /// Literal RHS values assignable in statement-only LIR.
 pub const LiteralValue = LIR.LiteralValue;
+/// Identifier for a materialized readonly static-data value.
+pub const StaticDataId = LIR.StaticDataId;
 /// Platform-hosted proc metadata.
 pub const HostedProc = LIR.HostedProc;
 /// Ref-producing operations lowerable by `assign_ref`.

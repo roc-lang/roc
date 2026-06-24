@@ -43,6 +43,8 @@ pub fn run(
     string_literals = undefined;
     program.source_files = owned.lifted.source_files;
     owned.lifted.source_files = .empty;
+    program.static_data_values = owned.lifted.static_data_values;
+    owned.lifted.static_data_values = .empty;
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program, options);
@@ -482,7 +484,7 @@ const Lowerer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
-            .static_const => |value| .{ .static_const = value },
+            .static_data => |value| .{ .static_data = value },
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
                 .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys.items[@intFromEnum(payload.condition)])),

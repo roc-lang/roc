@@ -82,6 +82,18 @@ const TreeNodePayload = extern struct {
     right: *const Branch,
 };
 
+const Sprite = extern struct {
+    height: i64,
+    src_x: i64,
+    src_y: i64,
+    width: i64,
+};
+
+const Cell = extern struct {
+    frames: i64,
+    sprite: Sprite,
+};
+
 extern const roc_answer: i64;
 extern const roc_flag: u8;
 extern const roc_flags: RocList;
@@ -92,6 +104,7 @@ extern const roc_boxed_add_one: ?[*]u8;
 // The app's entrypoint, exported under its provides symbol with its natural
 // C ABI: main_for_host! takes no arguments and returns {}.
 extern fn roc_main() callconv(.c) void;
+extern fn roc_hoisted_cells(last_updated: i64) callconv(.c) RocList;
 
 // The host's private RocOps. The exported runtime symbols below and the
 // builtins helpers reach the host allocator through this global, set by main
@@ -209,6 +222,7 @@ fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) error{StaticDataHos
 
     try expectTree(roc_tree, roc_ops);
     try expectBoxedAddOne(roc_boxed_add_one, roc_ops);
+    try expectHoistedCells(roc_hoisted_cells(123), roc_ops);
 
     try expectEqualUsize(host_env.dealloc_count, 0, "static checks did not dealloc");
 }
@@ -275,6 +289,34 @@ fn expectListOfBool(list: RocList, expected: []const u8, roc_ops: *RocOps, label
         const item_label = std.fmt.bufPrint(&item_label_buf, "{s}[{d}]", .{ label, i }) catch label;
         try expectEqualU8(values[i], expected_discriminant, item_label);
     }
+}
+
+fn expectHoistedCells(list: RocList, roc_ops: *RocOps) error{StaticDataHostCheckFailed}!void {
+    try expectEqualUsize(list.len(), 2, "hoisted cells");
+
+    const cells = list.elements(Cell) orelse return fail("expected non-empty hoisted cells bytes");
+    try expectEqualI64(cells[0].frames, 17, "hoisted cells[0].frames");
+    try expectEqualI64(cells[0].sprite.src_x, 0, "hoisted cells[0].sprite.src_x");
+    try expectEqualI64(cells[0].sprite.src_y, 0, "hoisted cells[0].sprite.src_y");
+    try expectEqualI64(cells[0].sprite.width, 16, "hoisted cells[0].sprite.width");
+    try expectEqualI64(cells[0].sprite.height, 16, "hoisted cells[0].sprite.height");
+    try expectEqualI64(cells[1].frames, 11, "hoisted cells[1].frames");
+    try expectEqualI64(cells[1].sprite.src_x, 16, "hoisted cells[1].sprite.src_x");
+    try expectEqualI64(cells[1].sprite.src_y, 0, "hoisted cells[1].sprite.src_y");
+    try expectEqualI64(cells[1].sprite.width, 16, "hoisted cells[1].sprite.width");
+    try expectEqualI64(cells[1].sprite.height, 16, "hoisted cells[1].sprite.height");
+
+    const data_ptr = list.getAllocationDataPtr(roc_ops);
+    const before = try readRefcount(data_ptr);
+    if (before != builtins.utils.REFCOUNT_STATIC_DATA) {
+        list.decref(@alignOf(Cell), @sizeOf(Cell), false, null, builtins.utils.rcNone, roc_ops);
+        return expectEqualIsize(before, builtins.utils.REFCOUNT_STATIC_DATA, "hoisted cells");
+    }
+
+    list.incref(1, false, roc_ops);
+    try expectEqualIsize(try readRefcount(data_ptr), before, "hoisted cells");
+    list.decref(@alignOf(Cell), @sizeOf(Cell), false, null, builtins.utils.rcNone, roc_ops);
+    try expectEqualIsize(try readRefcount(data_ptr), before, "hoisted cells");
 }
 
 fn expectStr(str: RocStr, expected: []const u8, roc_ops: *RocOps, label: []const u8) error{StaticDataHostCheckFailed}!void {

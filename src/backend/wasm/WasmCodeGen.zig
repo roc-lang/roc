@@ -258,8 +258,8 @@ rc_helper_table_indices: std.AutoHashMap(u64, u32),
 proc_table_indices: std.AutoHashMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
 static_str_offsets: std.AutoHashMap(u32, DataAddress),
-/// Map from LIR static data id → wasm data symbol for materialized constants.
-static_data_offsets: std.AutoHashMap(u32, DataAddress),
+/// Map from LIR static-data id -> undefined/defined wasm data symbol.
+static_data_symbols: std.AutoHashMap(u32, SymbolIndex),
 /// Owned names used by generated data segments and local data symbols.
 static_data_names: std.ArrayList([]u8),
 static_data_name_counter: u32 = 0,
@@ -474,7 +474,7 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
         .rc_helper_table_indices = std.AutoHashMap(u64, u32).init(allocator),
         .proc_table_indices = std.AutoHashMap(u32, u32).init(allocator),
         .static_str_offsets = std.AutoHashMap(u32, DataAddress).init(allocator),
-        .static_data_offsets = std.AutoHashMap(u32, DataAddress).init(allocator),
+        .static_data_symbols = std.AutoHashMap(u32, SymbolIndex).init(allocator),
         .static_data_names = .empty,
         .func_type_cache = std.StringHashMap(u32).init(allocator),
         .func_type_key_scratch = .empty,
@@ -536,7 +536,7 @@ pub fn deinit(self: *Self) void {
     self.rc_helper_table_indices.deinit();
     self.proc_table_indices.deinit();
     self.static_str_offsets.deinit();
-    self.static_data_offsets.deinit();
+    self.static_data_symbols.deinit();
     for (self.static_data_names.items) |name| {
         self.allocator.free(name);
     }
@@ -1081,14 +1081,31 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
     }
 }
 
-fn emitStaticDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocator.Error!void {
+fn staticDataSymbol(self: *Self, id: LIR.StaticDataId) Allocator.Error!SymbolIndex {
+    const raw_id: u32 = @intFromEnum(id);
+    if (self.static_data_symbols.get(raw_id)) |symbol| return symbol;
+
+    const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+    errdefer self.allocator.free(symbol_name);
+
+    const symbol = if (self.module.findSymbolByNameAndKind(symbol_name, .data)) |existing|
+        SymbolIndex.fromRaw(existing)
+    else
+        try self.module.addUndefinedDataSymbol(symbol_name);
+
+    try self.static_data_names.append(self.allocator, symbol_name);
+    try self.static_data_symbols.put(raw_id, symbol);
+    return symbol;
+}
+
+fn emitStaticDataAddressConst(self: *Self, id: LIR.StaticDataId, addend: i32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     const code_pos: u32 = @intCast(self.currentCode().items.len);
     try self.currentBody().addOffsetRelocation(
         self.allocator,
         .memory_addr_sleb,
         code_pos,
-        address.symbol,
+        try self.staticDataSymbol(id),
         addend,
     );
     WasmModule.appendPaddedI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
@@ -1150,20 +1167,6 @@ fn addStaticDataSymbol(
         .offset = segment_offset + symbol_offset,
         .symbol = symbol,
     };
-}
-
-fn staticDataAddress(self: *Self, id: LIR.StaticDataId) Allocator.Error!DataAddress {
-    const key: u32 = @intFromEnum(id);
-    if (self.static_data_offsets.get(key)) |address| return address;
-
-    const symbol_name = self.store.getStaticDataSymbolName(id);
-    const symbol = self.module.addUndefinedDataSymbol(
-        symbol_name,
-        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
-    ) catch return error.OutOfMemory;
-    const address: DataAddress = .{ .offset = 0, .symbol = symbol };
-    try self.static_data_offsets.put(key, address);
-    return address;
 }
 
 fn appendStackPointerGlobalTo(
@@ -7384,7 +7387,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .assign_literal => |assign| {
-            try self.generateLiteral(assign.target, assign.value);
+            try self.generateLiteral(assign.value, self.procLocalLayoutIdx(assign.target));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -7786,7 +7789,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
     }
 }
 
-fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Allocator.Error!void {
+fn generateLiteral(self: *Self, value: LIR.LiteralValue, target_layout: layout.Idx) Allocator.Error!void {
     switch (value) {
         .i64_literal => |lit| {
             switch (try self.resolveValType(lit.layout_idx)) {
@@ -7816,7 +7819,7 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
         },
         .dec_literal => |lit| try self.generateI128Literal(lit),
         .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
-        .static_data => |id| try self.generateStaticDataLiteral(target, id),
+        .static_data => |id| try self.generateStaticDataLiteral(id, target_layout),
         .null_ptr => {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
@@ -7831,26 +7834,6 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
             };
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(table_idx)) catch return error.OutOfMemory;
-        },
-    }
-}
-
-fn generateStaticDataLiteral(self: *Self, target: ProcLocalId, id: LIR.StaticDataId) Allocator.Error!void {
-    const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(target));
-    const address = try self.staticDataAddress(id);
-    const repr = try WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore());
-    switch (repr) {
-        .primitive => {
-            try self.emitStaticDataAddressConst(address, 0);
-            try self.emitLoadOpForLayout(layout_idx, 0);
-        },
-        .stack_memory => |size| {
-            if (size == 0) {
-                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-            } else {
-                try self.emitStaticDataAddressConst(address, 0);
-            }
         },
     }
 }
@@ -7870,6 +7853,37 @@ fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx)
             .f32, .f64 => unreachable,
         },
         .stack_memory => try self.generateI128Literal(value),
+    }
+}
+
+fn generateStaticDataLiteral(self: *Self, id: LIR.StaticDataId, target_layout: layout.Idx) Allocator.Error!void {
+    const runtime_layout = self.runtimeRepresentationLayoutIdx(target_layout);
+    const size = try self.layoutStorageByteSize(runtime_layout);
+    if (size == 0) {
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        return;
+    }
+
+    const repr = try WasmLayout.wasmReprWithStore(runtime_layout, self.getLayoutStore());
+    switch (repr) {
+        .primitive => |vt| {
+            try self.emitStaticDataAddressConst(id, 0);
+            try self.emitLoadOpSized(vt, size, 0);
+        },
+        .stack_memory => {
+            const slot = try self.allocStackMemory(size, try self.layoutStorageByteAlign(runtime_layout));
+            const dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(slot);
+            try self.emitLocalSet(dst);
+
+            const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitStaticDataAddressConst(id, 0);
+            try self.emitLocalSet(src);
+
+            try self.emitMemCopy(dst, 0, src, size);
+            try self.emitLocalGet(dst);
+        },
     }
 }
 

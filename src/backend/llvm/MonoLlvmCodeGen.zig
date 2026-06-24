@@ -161,8 +161,8 @@ pub const MonoLlvmCodeGen = struct {
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
-    static_data_globals: std.StringHashMap(LlvmBuilder.Value),
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
+    static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     join_points: std.AutoHashMap(u32, JoinInfo),
@@ -304,8 +304,8 @@ pub const MonoLlvmCodeGen = struct {
             .store = store,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
-            .static_data_globals = std.StringHashMap(LlvmBuilder.Value).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
+            .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .join_points = std.AutoHashMap(u32, JoinInfo).init(allocator),
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
@@ -342,9 +342,9 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_types.deinit();
         self.proc_registry.deinit();
         self.builtin_functions.deinit();
-        self.static_data_globals.deinit();
         self.clearStaticBytes();
         self.static_bytes.deinit();
+        self.static_data_globals.deinit();
         self.rc_helpers.deinit();
         self.join_points.deinit();
         self.compiled_joins.deinit();
@@ -358,8 +358,8 @@ pub const MonoLlvmCodeGen = struct {
     pub fn reset(self: *MonoLlvmCodeGen) void {
         self.proc_registry.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
-        self.static_data_globals.clearRetainingCapacity();
         self.clearStaticBytes();
+        self.static_data_globals.clearRetainingCapacity();
         self.rc_helpers.clearRetainingCapacity();
         self.join_points.clearRetainingCapacity();
         self.compiled_joins.clearRetainingCapacity();
@@ -2299,7 +2299,7 @@ pub const MonoLlvmCodeGen = struct {
             .f32_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f32, lit),
             .dec_literal => |lit| try self.storeI128Literal(slot_v.ptr, .dec, lit),
             .str_literal => |str_idx| try self.emitStrLiteral(slot_v.ptr, str_idx),
-            .static_data => |id| try self.emitStaticDataLiteral(slot_v.ptr, slot_v.layout_idx, id),
+            .static_data => |id| try self.emitStaticDataLiteral(slot_v, id),
             .null_ptr => {
                 if (slot_v.size > 0) try self.zeroBytes(slot_v.ptr, slot_v.size);
             },
@@ -2308,13 +2308,6 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storePointer(slot_v.ptr, func.toValue(self.builder.?));
             },
         }
-    }
-
-    fn emitStaticDataLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, layout_idx: layout.Idx, id: lir.LIR.StaticDataId) Error!void {
-        const size = self.layoutByteSize(layout_idx);
-        if (size == 0) return;
-        const static_global = try self.staticDataGlobal(id, size);
-        try self.copyBytes(out, static_global, size, self.alignmentForLayout(layout_idx));
     }
 
     fn emitDirectCall(self: *MonoLlvmCodeGen, target: LocalId, proc_id: LirProcSpecId, args: LocalSpan, is_cold: bool) Error!void {
@@ -4636,6 +4629,28 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
+    fn emitStaticDataLiteral(self: *MonoLlvmCodeGen, out: LocalSlot, id: lir.LIR.StaticDataId) Error!void {
+        if (out.size == 0) return;
+        try self.copyBytes(out.ptr, try self.staticDataGlobal(id, out.size), out.size, out.alignment);
+    }
+
+    fn staticDataGlobal(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId, size: u32) Error!LlvmBuilder.Value {
+        const raw_id: u32 = @intFromEnum(id);
+        if (self.static_data_globals.get(raw_id)) |value| return value;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+        defer self.allocator.free(symbol_name);
+
+        const arr_ty = builder.arrayType(@max(size, 1), .i8) catch return error.OutOfMemory;
+        const variable = builder.addVariable(builder.strtabString(symbol_name) catch return error.OutOfMemory, arr_ty, .default) catch return error.OutOfMemory;
+        variable.ptrConst(builder).global.setLinkage(.external, builder);
+
+        const value = variable.toValue(builder);
+        try self.static_data_globals.put(raw_id, value);
+        return value;
+    }
+
     /// Exported global the test harness reads back after an expect_err
     /// unwind: [0] = set flag, [1] = region start offset, [2] = region end
     /// offset. Exported (rather than carried through the host's crash
@@ -4670,20 +4685,6 @@ pub const MonoLlvmCodeGen = struct {
         variable.setInitializer(builder.stringConst(builder.string(actual) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
         const value = variable.toValue(builder);
         try self.static_bytes.put(key, value);
-        return value;
-    }
-
-    fn staticDataGlobal(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId, size: u32) Error!LlvmBuilder.Value {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const symbol_name = self.store.getStaticDataSymbolName(id);
-        if (self.static_data_globals.get(symbol_name)) |value| return value;
-
-        const arr_ty = builder.arrayType(@max(size, 1), .i8) catch return error.OutOfMemory;
-        const name = builder.strtabString(symbol_name) catch return error.OutOfMemory;
-        const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
-        variable.ptrConst(builder).global.setLinkage(.external, builder);
-        const value = variable.toValue(builder);
-        try self.static_data_globals.put(symbol_name, value);
         return value;
     }
 

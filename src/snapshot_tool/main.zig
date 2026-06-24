@@ -4137,7 +4137,7 @@ fn processDevObjectSnapshot(
                 }
                 allocator.free(entrypoints);
             }
-            const static_data_exports = compile.static_data_exports.buildProvidedDataExports(
+            const static_data_exports = compile.static_data_exports.buildStaticDataExports(
                 allocator,
                 .{
                     .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
@@ -4151,7 +4151,7 @@ fn processDevObjectSnapshot(
                 hash_results[i].supported = false;
                 break :target_snapshot;
             };
-            defer compile.static_data_exports.deinitProvidedDataExports(allocator, static_data_exports);
+            defer compile.static_data_exports.deinitStaticDataExports(allocator, static_data_exports);
 
             if (object_compiler.compileToObjectFile(
                 &lowered.lir_result.store,

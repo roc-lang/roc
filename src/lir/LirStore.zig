@@ -19,7 +19,6 @@ const LirProcSpecId = lir_defs.LirProcSpecId;
 const Local = lir_defs.Local;
 const LocalId = lir_defs.LocalId;
 const LocalSpan = lir_defs.LocalSpan;
-const StaticDataId = lir_defs.StaticDataId;
 const StrMatchArm = lir_defs.StrMatchArm;
 const StrMatchArmSpan = lir_defs.StrMatchArmSpan;
 const StrMatchStep = lir_defs.StrMatchStep;
@@ -47,7 +46,6 @@ locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
 u64s: std.ArrayList(u64),
 proc_specs: std.ArrayList(LirProcSpec),
-static_data_symbols: std.ArrayList(base.StringLiteral.Idx),
 strings: base.StringLiteral.Store,
 allocator: Allocator,
 next_synthetic_symbol: u64,
@@ -89,7 +87,6 @@ pub fn init(allocator: Allocator) Self {
         .local_ids = std.ArrayList(LocalId).empty,
         .u64s = std.ArrayList(u64).empty,
         .proc_specs = std.ArrayList(LirProcSpec).empty,
-        .static_data_symbols = std.ArrayList(base.StringLiteral.Idx).empty,
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
@@ -118,7 +115,6 @@ pub fn deinit(self: *Self) void {
     self.local_ids.deinit(self.allocator);
     self.u64s.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
-    self.static_data_symbols.deinit(self.allocator);
     self.strings.deinit(self.allocator);
     self.patterns.deinit(self.allocator);
     self.pattern_ids.deinit(self.allocator);
@@ -281,19 +277,6 @@ pub fn insertStringView(
         .offset = offset,
         .len = len,
     };
-}
-
-/// Stores the linker symbol name for one emitted readonly data object.
-pub fn addStaticDataSymbolName(self: *Self, name: []const u8) Allocator.Error!StaticDataId {
-    const raw = self.static_data_symbols.items.len;
-    const string = try self.insertString(name);
-    try self.static_data_symbols.append(self.allocator, string);
-    return @enumFromInt(@as(u32, @intCast(raw)));
-}
-
-/// Returns the linker symbol name for one emitted readonly data object.
-pub fn getStaticDataSymbolName(self: *const Self, id: StaticDataId) []const u8 {
-    return self.getString(self.static_data_symbols.items[@intFromEnum(id)]);
 }
 
 /// Returns the text for an interned string literal.

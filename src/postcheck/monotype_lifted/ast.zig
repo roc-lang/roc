@@ -110,6 +110,8 @@ pub const LayoutRequest = struct {
 
 /// Runtime schema requested for a named runtime value shape.
 pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
+/// Checked value requested as readonly static data.
+pub const StaticDataValue = Mono.StaticDataValue;
 
 /// Return the lifted function id for a direct call after Monotype lifting.
 pub fn callProcCallee(call: Mono.CallProc) FnId {
@@ -144,6 +146,7 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    static_data_values: std.ArrayList(StaticDataValue),
     comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: std.ArrayList([]const u8),
@@ -189,6 +192,7 @@ pub const Program = struct {
         stmt_locs: std.ArrayList(base.SourceLoc),
         stmt_regions: std.ArrayList(base.Region),
         local_names: std.ArrayList([]const u8),
+        static_data_values: std.ArrayList(StaticDataValue),
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
     ) Program {
@@ -216,6 +220,7 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .static_data_values = static_data_values,
             .comptime_sites = comptime_sites,
             .source_files = source_files,
             .expr_locs = expr_locs,
@@ -243,6 +248,7 @@ pub const Program = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);

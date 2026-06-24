@@ -23,15 +23,6 @@ pub const RequestedLayout = struct {
     plan: ConstPlanId,
 };
 
-/// One reachable compile-time constant that must be emitted as readonly data.
-pub const StaticDataValue = struct {
-    id: LIR.StaticDataId,
-    const_ref: checked.ConstRef,
-    checked_type: checked.CheckedTypeId,
-    layout_idx: layout.Idx,
-    plan: ConstPlanId,
-};
-
 /// Identifier for a finite callable set in the LIR program.
 pub const FnSetId = enum(u32) { _ };
 /// Identifier for an erased callable entry set in the LIR program.
@@ -127,6 +118,19 @@ pub const ConstRootPlan = struct {
     ret_layout: layout.Idx,
     plan: ConstPlanId,
 };
+
+/// One checked value that is materialized as readonly target data.
+pub const StaticDataValue = struct {
+    const_ref: checked.ConstRef,
+    checked_type: checked.CheckedTypeId,
+    layout_idx: layout.Idx,
+    plan: ConstPlanId,
+};
+
+/// Deterministic symbol name for an internal static-data value.
+pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
+    return try std.fmt.allocPrint(allocator, "roc__static_const_value_{d}", .{@intFromEnum(id)});
+}
 
 /// Complete LIR program and side data consumed by ARC, backends, and eval.
 pub const Result = struct {
