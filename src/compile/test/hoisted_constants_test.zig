@@ -845,7 +845,7 @@ test "reachable function-valued constant restores without static data literal" {
     try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
 }
 
-test "provided boxed finite callable captures static list data" {
+test "provided boxed erased callable captures static list data" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -859,10 +859,16 @@ test "provided boxed finite callable captures static list data" {
         \\
         \\main! = || {}
         \\
-        \\base = [1.I64, 2.I64]
-        \\
         \\boxed : Box((I64 -> I64))
-        \\boxed = Box.box(|value| value + List.len(base).to_i64_wrap())
+        \\boxed = {
+        \\    base = [1.I64, 2.I64]
+        \\    Box.box(|value|
+        \\        match List.get(base, 0) {
+        \\            Ok(first) => value + first
+        \\            Err(_) => value
+        \\        }
+        \\    )
+        \\}
         ,
     });
     try tmp_dir.dir.writeFile(std.testing.io, .{
@@ -949,6 +955,8 @@ test "provided boxed finite callable captures static list data" {
     const shared_payload = findExportContainingSequence(exports, &captured_list_payload) orelse return error.CapturedListPayloadNotFound;
     try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &captured_list_payload));
     try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
+    _ = findExportWithFunctionPointerAndRelocationTo(exports, shared_payload.symbol_name) orelse return error.ErasedCallableAllocationNotFound;
+    try std.testing.expect(countFunctionPointerRelocations(exports) >= 1);
 }
 
 test "reachable local List.iter hoist stores iterator const data" {
@@ -3909,6 +3917,32 @@ fn findStaticDataExportBySymbol(
         if (std.mem.eql(u8, static_export.symbol_name, symbol_name)) return static_export;
     }
     return null;
+}
+
+fn findExportWithFunctionPointerAndRelocationTo(
+    exports: []const @import("backend").StaticDataExport,
+    symbol_name: []const u8,
+) ?@import("backend").StaticDataExport {
+    for (exports) |static_export| {
+        var has_function_pointer = false;
+        var has_symbol_relocation = false;
+        for (static_export.relocations) |relocation| {
+            if (relocation.kind == .function_pointer) has_function_pointer = true;
+            if (std.mem.eql(u8, relocation.target_symbol_name, symbol_name)) has_symbol_relocation = true;
+        }
+        if (has_function_pointer and has_symbol_relocation) return static_export;
+    }
+    return null;
+}
+
+fn countFunctionPointerRelocations(exports: []const @import("backend").StaticDataExport) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        for (static_export.relocations) |relocation| {
+            if (relocation.kind == .function_pointer) count += 1;
+        }
+    }
+    return count;
 }
 
 fn countInternalStaticValueRelocationsTo(exports: []const @import("backend").StaticDataExport, symbol_name: []const u8) usize {

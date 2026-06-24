@@ -106,8 +106,8 @@ fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNo
   path, but still needs complete focused coverage for zero-capture,
   scalar-capture, nested-callable-capture, and multi-variant callable-set
   layouts
-- erased callable static data exists, but needs focused tests in the
-  callable-containing aggregate path
+- erased callable static data is covered in the callable-containing aggregate
+  path
 - cross-module compile-time diagnostics need tests proving every eligible
   module-level root is evaluated even when unreachable from runtime roots
 - Rocci Bird has not yet been rebuilt and disassembled after the full static
@@ -686,7 +686,7 @@ zig build -Doptimize=ReleaseSmall
 - [x] Maximal root subsumption is tested for callable-containing aggregates.
 - [x] Finite callable static data materializes a captured static list.
 - [ ] Static-data selection consumes explicit value and type/layout data.
-- [ ] Erased callable static data is covered by tests.
+- [x] Erased callable static data is covered by tests.
 - [ ] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
 - [ ] Reachability marks callable static-data procedures and capture plans.
 - [ ] Rocci Bird with `base_points.iter()` builds with `--opt=size`.

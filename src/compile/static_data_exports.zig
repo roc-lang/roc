@@ -17,6 +17,7 @@ const CanonicalNameStore = check.CanonicalNames.CanonicalNameStore;
 const Checked = check.CheckedArtifact;
 const CheckedModule = check.CheckedModule;
 const ConstFn = check.ConstStore.ConstFn;
+const ConstFnDef = check.ConstStore.FnDef;
 const ConstStrDataId = check.ConstStore.ConstStrDataId;
 const ConstValue = CheckedModule.ConstValue;
 const StaticDataExport = backend.StaticDataExport;
@@ -371,11 +372,11 @@ const StaticDataBuilder = struct {
             .record => |fields| try self.writeRecord(bytes, relocations, base_offset, node, value, fields, layout_idx),
             .tag_union => |variants| try self.writeTagUnion(bytes, relocations, base_offset, node, value, variants, layout_idx),
             .named => |named| {
-                const backing = switch (value) {
-                    .nominal => |nominal| nominal.backing,
-                    else => staticDataInvariant("named const plan received non-nominal ConstStore node"),
+                const backing_node = switch (value) {
+                    .nominal => |nominal| ConstNode{ .module = node.module, .id = nominal.backing },
+                    else => node,
                 };
-                try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = backing }, named.backing, layout_idx);
+                try self.writeValue(bytes, relocations, base_offset, backing_node, named.backing, layout_idx);
             },
             .fn_value => |set| try self.writeFnValue(bytes, relocations, base_offset, node.module, value, set, layout_idx),
             .erased_fn => |set| try self.writeErasedFn(bytes, relocations, base_offset, node.module, value, set, layout_idx),
@@ -1201,9 +1202,35 @@ fn staticDataPtrOffset(word_size: u32, element_alignment: u32, contains_refcount
 }
 
 fn sameFnTemplate(fn_value: ConstFn, template: lir.Program.FnTemplate) bool {
-    return std.meta.eql(fn_value.fn_def, template.fn_def) and
+    return sameFnDef(fn_value.fn_def, template.fn_def) and
         fn_value.source_fn_ty == template.source_fn_ty and
         std.mem.eql(u8, fn_value.source_fn_key.bytes[0..], template.source_fn_key.bytes[0..]);
+}
+
+fn sameFnDef(a: ConstFnDef, b: ConstFnDef) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .local_template => |template| sameProcTemplate(template, b.local_template),
+        .imported_template => |template| sameProcTemplate(template, b.imported_template),
+        // ConstStore and post-check callable sets can carry different owner
+        // context keys for the same nested source site. The function's own
+        // checked source type key is compared by sameFnTemplate.
+        .nested => |nested| sameProcTemplate(nested.owner, b.nested.owner) and
+            nested.site == b.nested.site,
+        .local_hosted => |template| sameProcTemplate(template, b.local_hosted),
+        .imported_hosted => |template| sameProcTemplate(template, b.imported_hosted),
+        .checked_generated => |template| sameProcTemplate(template, b.checked_generated),
+        .parser_runtime => |runtime| sameProcTemplate(runtime.owner, b.parser_runtime.owner) and
+            runtime.expr == b.parser_runtime.expr,
+        .encode_to_runtime => |runtime| sameProcTemplate(runtime.owner, b.encode_to_runtime.owner) and
+            runtime.expr == b.encode_to_runtime.expr,
+    };
+}
+
+fn sameProcTemplate(a: check.CanonicalNames.ProcTemplate, b: check.CanonicalNames.ProcTemplate) bool {
+    return std.mem.eql(u8, a.artifact.bytes[0..], b.artifact.bytes[0..]) and
+        a.proc_base == b.proc_base and
+        a.template == b.template;
 }
 
 fn alignForwardU32(value: u32, alignment: u32) u32 {
