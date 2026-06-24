@@ -527,7 +527,7 @@ test "hoist roots are not selected for many unused closed locals" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) anyerror!void {
+fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ TestUnexpectedResult, TestExpectedEqual, ExpectedPatternExtractionRoot }!void {
     try std.testing.expect(root.pattern != null);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
@@ -538,7 +538,7 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) anyerror!v
     try std.testing.expect(extraction.scrutinee_pattern != extraction.result_pattern);
 }
 
-fn expectExprTag(test_env: *const TestEnv, expr: CIR.Expr.Idx, expected: std.meta.Tag(CIR.Expr)) anyerror!void {
+fn expectExprTag(test_env: *const TestEnv, expr: CIR.Expr.Idx, expected: std.meta.Tag(CIR.Expr)) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected, std.meta.activeTag(test_env.checker.cir.store.getExpr(expr)));
 }
 

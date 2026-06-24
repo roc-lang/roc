@@ -232,12 +232,34 @@ pub const LinkError = error{
     DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
 
+const SelfExePathError = std.Io.Dir.ReadLinkError || error{
+    NameTooLong,
+    UnsupportedOs,
+};
+
+const SelfExeDirError = Allocator.Error || SelfExePathError;
+
+const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
+    NotMacho64,
+    UnexpectedEof,
+};
+
+const ResignMachoError = Allocator.Error || CodeSignature.WriteError || std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
+    CodeSignatureNotAtEnd,
+    InvalidCodeSignatureSize,
+    MissingLinkeditSegment,
+    MissingTextSegment,
+    NonResizable,
+    NotMacho64,
+    UnexpectedEof,
+};
+
 /// Resolve the path of the currently running executable, host-OS specific.
 ///
 /// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
 /// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
 /// because the linker runs on Linux/macOS/Windows but may target any OS.
-fn selfExePath(std_io: std.Io, buf: []u8) anyerror![]const u8 {
+fn selfExePath(std_io: std.Io, buf: []u8) SelfExePathError![]const u8 {
     switch (comptime builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .visionos => {
             var n: u32 = @intCast(buf.len);
@@ -260,7 +282,7 @@ fn selfExePath(std_io: std.Io, buf: []u8) anyerror![]const u8 {
 }
 
 /// Get the directory containing the currently running executable.
-fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) anyerror![]const u8 {
+fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) SelfExeDirError![]const u8 {
     var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const symlink_path = try selfExePath(std_io, &symlink_path_buf);
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -386,7 +408,6 @@ fn appendPlatformFile(
 
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
-/// This is used both by link() and formatLinkCommand().
 fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
@@ -844,7 +865,7 @@ const deterministic_macho_code_signature_identifier = "roc";
 
 /// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
 /// callsite in `link` for why this is needed.
-fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!void {
+fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) PatchMachoStackSizeError!void {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
     defer file.close(io);
 
@@ -874,7 +895,7 @@ fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!vo
 /// blob is the last content in the file, recorded by LC_CODE_SIGNATURE; we
 /// recompute the page hashes over everything before it and write a fresh
 /// linker-style ad-hoc signature into that extent.
-fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
+fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) ResignMachoError!void {
     const io = ctx.io.std_io;
     const gpa = ctx.gpa;
 
@@ -977,38 +998,6 @@ fn findArg(args: []const []const u8, needle: []const u8) ?usize {
         if (std.mem.eql(u8, arg, needle)) return i;
     }
     return null;
-}
-
-/// Format link configuration as a shell command string for manual reproduction.
-/// Useful for debugging linking issues by allowing users to run the linker manually.
-pub fn formatLinkCommand(ctx: *CliCtx, config: LinkConfig) LinkError![]const u8 {
-    const args = try buildLinkArgs(ctx, config);
-
-    // Join args with spaces, quoting paths that contain spaces or special chars
-    var result = std.array_list.Managed(u8).init(ctx.arena);
-
-    for (args.items, 0..) |arg, i| {
-        if (i > 0) result.append(' ') catch return LinkError.OutOfMemory;
-
-        // Quote if contains spaces or shell metacharacters
-        const needs_quoting = std.mem.findAny(u8, arg, " \t'\"\\$`") != null;
-        if (needs_quoting) {
-            result.append('\'') catch return LinkError.OutOfMemory;
-            // Escape single quotes within the string
-            for (arg) |c| {
-                if (c == '\'') {
-                    result.appendSlice("'\\''") catch return LinkError.OutOfMemory;
-                } else {
-                    result.append(c) catch return LinkError.OutOfMemory;
-                }
-            }
-            result.append('\'') catch return LinkError.OutOfMemory;
-        } else {
-            result.appendSlice(arg) catch return LinkError.OutOfMemory;
-        }
-    }
-
-    return result.toOwnedSlice() catch return LinkError.OutOfMemory;
 }
 
 /// Convenience function to link two object files into an executable

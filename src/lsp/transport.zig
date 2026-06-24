@@ -6,7 +6,10 @@ const std = @import("std");
 pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
     return struct {
         const Self = @This();
-        const ReaderError = if (@hasDecl(ReaderType, "Error")) ReaderType.Error else anyerror;
+        const ReaderError = if (@hasDecl(ReaderType, "Error"))
+            ReaderType.Error
+        else
+            @compileError("LSP transport ReaderType must expose an Error error set");
 
         allocator: std.mem.Allocator,
         std_io: std.Io,

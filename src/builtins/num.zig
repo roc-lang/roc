@@ -1218,7 +1218,11 @@ fn unsignedMaxPlusOneText(comptime T: type) []const u8 {
     };
 }
 
-fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) anyerror!void {
+const NumTestHelperError = error{
+    TestExpectedEqual,
+};
+
+fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) NumTestHelperError!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 
@@ -1227,7 +1231,7 @@ fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: 
     try std.testing.expectEqual(expected, result.value);
 }
 
-fn expectParseIntReject(comptime T: type, text: []const u8, roc_ops: *RocOps) anyerror!void {
+fn expectParseIntReject(comptime T: type, text: []const u8, roc_ops: *RocOps) NumTestHelperError!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 
@@ -1236,28 +1240,28 @@ fn expectParseIntReject(comptime T: type, text: []const u8, roc_ops: *RocOps) an
     try std.testing.expectEqual(@as(T, 0), result.value);
 }
 
-fn expectAddWithOverflowOracle(comptime T: type, lhs: T, rhs: T) anyerror!void {
+fn expectAddWithOverflowOracle(comptime T: type, lhs: T, rhs: T) NumTestHelperError!void {
     const expected = @addWithOverflow(lhs, rhs);
     const actual = addWithOverflow(T, lhs, rhs);
     try std.testing.expectEqual(expected[0], actual.value);
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectSubWithOverflowOracle(comptime T: type, lhs: T, rhs: T) anyerror!void {
+fn expectSubWithOverflowOracle(comptime T: type, lhs: T, rhs: T) NumTestHelperError!void {
     const expected = @subWithOverflow(lhs, rhs);
     const actual = subWithOverflow(T, lhs, rhs);
     try std.testing.expectEqual(expected[0], actual.value);
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectMulWithOverflowOracle(comptime T: type, lhs: T, rhs: T) anyerror!void {
+fn expectMulWithOverflowOracle(comptime T: type, lhs: T, rhs: T) NumTestHelperError!void {
     const expected = @mulWithOverflow(lhs, rhs);
     const actual = mulWithOverflow(T, lhs, rhs);
     try std.testing.expectEqual(expected[0], actual.value);
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectParseFloatBits(comptime T: type, text: []const u8, expected_bits: std.meta.Int(.unsigned, @bitSizeOf(T)), roc_ops: *RocOps) anyerror!void {
+fn expectParseFloatBits(comptime T: type, text: []const u8, expected_bits: std.meta.Int(.unsigned, @bitSizeOf(T)), roc_ops: *RocOps) NumTestHelperError!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 

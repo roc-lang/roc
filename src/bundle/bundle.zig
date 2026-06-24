@@ -449,17 +449,23 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     return null;
 }
 
-/// Writer interface for extracting files during unbundle
+/// Errors that can occur while extracting bundled files.
+pub const ExtractError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.Reader.Error || std.Io.Writer.Error || error{
+    NoDataExtracted,
+    UnexpectedEndOfStream,
+};
+
+/// Writer interface for extracting files during unbundle.
 pub const ExtractWriter = struct {
     ptr: *anyopaque,
-    makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!void,
-    streamFileFn: *const fn (ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void,
+    makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) ExtractError!void,
+    streamFileFn: *const fn (ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) ExtractError!void,
 
-    pub fn makeDir(self: ExtractWriter, path: []const u8) anyerror!void {
+    pub fn makeDir(self: ExtractWriter, path: []const u8) ExtractError!void {
         return self.makeDirFn(self.ptr, path);
     }
 
-    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
+    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: *std.Io.Reader, size: usize) ExtractError!void {
         return self.streamFileFn(self.ptr, path, reader, size);
     }
 };
@@ -528,12 +534,12 @@ pub const DirExtractWriter = struct {
         };
     }
 
-    fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
+    fn makeDir(ptr: *anyopaque, path: []const u8) ExtractError!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
         try self.dir.createDirPath(self.io, path);
     }
 
-    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
+    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) ExtractError!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
 
         // Create parent directories if needed

@@ -247,15 +247,27 @@ pub const WatchEvent = struct {
 /// Callback function type for handling file change events
 pub const WatchCallback = *const fn (event: WatchEvent) void;
 
+/// Callback function type for handling file change events with caller-owned context.
+pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
+
+const EventFilter = enum {
+    roc_files,
+    all_files,
+};
+
 /// High-performance filesystem watcher for .roc files
 /// Monitors directories recursively and invokes callbacks on file changes
 pub const Watcher = struct {
     allocator: std.mem.Allocator,
     std_io: std.Io,
     paths: [][]const u8,
-    callback: WatchCallback,
+    callback: ?WatchCallback,
+    callback_with_context: ?WatchCallbackWithContext,
+    callback_context: ?*anyopaque,
+    event_filter: EventFilter,
     should_stop: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
+    startup_failed: std.atomic.Value(bool),
     thread: ?std.Thread,
 
     impl: switch (builtin.os.tag) {
@@ -295,6 +307,41 @@ pub const Watcher = struct {
 
     /// Initialize a new file watcher
     pub fn init(allocator: std.mem.Allocator, std_io: std.Io, paths: []const []const u8, callback: WatchCallback) Allocator.Error!*Watcher {
+        return initWithFilter(allocator, std_io, paths, .{
+            .callback = callback,
+            .event_filter = .roc_files,
+        });
+    }
+
+    /// Initialize a file watcher that reports every file event under `paths`.
+    /// This is intended for callers that perform their own exact path filtering.
+    pub fn initAllFiles(
+        allocator: std.mem.Allocator,
+        std_io: std.Io,
+        paths: []const []const u8,
+        context: ?*anyopaque,
+        callback: WatchCallbackWithContext,
+    ) Allocator.Error!*Watcher {
+        return initWithFilter(allocator, std_io, paths, .{
+            .callback_with_context = callback,
+            .callback_context = context,
+            .event_filter = .all_files,
+        });
+    }
+
+    const InitOptions = struct {
+        callback: ?WatchCallback = null,
+        callback_with_context: ?WatchCallbackWithContext = null,
+        callback_context: ?*anyopaque = null,
+        event_filter: EventFilter,
+    };
+
+    fn initWithFilter(
+        allocator: std.mem.Allocator,
+        std_io: std.Io,
+        paths: []const []const u8,
+        options: InitOptions,
+    ) Allocator.Error!*Watcher {
         const watcher = try allocator.create(Watcher);
         errdefer allocator.destroy(watcher);
 
@@ -309,9 +356,13 @@ pub const Watcher = struct {
             .allocator = allocator,
             .std_io = std_io,
             .paths = paths_copy,
-            .callback = callback,
+            .callback = options.callback,
+            .callback_with_context = options.callback_with_context,
+            .callback_context = options.callback_context,
+            .event_filter = options.event_filter,
             .should_stop = std.atomic.Value(bool).init(false),
             .is_ready = std.atomic.Value(bool).init(false),
+            .startup_failed = std.atomic.Value(bool).init(false),
             .thread = null,
             .impl = switch (builtin.os.tag) {
                 .macos => MacOSData{
@@ -333,6 +384,30 @@ pub const Watcher = struct {
         };
 
         return watcher;
+    }
+
+    fn shouldEmitPath(self: *Watcher, path: []const u8, is_dir: bool) bool {
+        if (is_dir) return false;
+        return switch (self.event_filter) {
+            .roc_files => std.mem.endsWith(u8, path, ".roc"),
+            .all_files => true,
+        };
+    }
+
+    fn emitEvent(self: *Watcher, event: WatchEvent) void {
+        if (self.callback_with_context) |callback| {
+            callback(self.callback_context, event);
+        } else if (self.callback) |callback| {
+            callback(event);
+        }
+    }
+
+    fn markReady(self: *Watcher) void {
+        self.is_ready.store(true, .seq_cst);
+    }
+
+    fn markStartupFailed(self: *Watcher) void {
+        self.startup_failed.store(true, .seq_cst);
     }
 
     /// Clean up all resources
@@ -377,15 +452,21 @@ pub const Watcher = struct {
     }
 
     /// Start watching for file changes
-    pub fn start(self: *Watcher) (std.Thread.SpawnError || error{AlreadyStarted})!void {
+    pub fn start(self: *Watcher) (std.Thread.SpawnError || error{ AlreadyStarted, WatchBackendFailed })!void {
         if (self.thread != null) return error.AlreadyStarted;
         self.should_stop.store(false, .seq_cst);
         self.is_ready.store(false, .seq_cst);
+        self.startup_failed.store(false, .seq_cst);
 
         self.thread = try std.Thread.spawn(.{}, watchLoop, .{self});
 
         // Wait for the watcher to be ready
         while (!self.is_ready.load(.seq_cst)) {
+            if (self.startup_failed.load(.seq_cst)) {
+                self.thread.?.join();
+                self.thread = null;
+                return error.WatchBackendFailed;
+            }
             std.Thread.yield() catch {};
         }
     }
@@ -393,6 +474,7 @@ pub const Watcher = struct {
     /// Stop watching for file changes
     pub fn stop(self: *Watcher) void {
         self.should_stop.store(true, .seq_cst);
+        self.signalWindowsStopEvent();
 
         if (self.thread) |thread| {
             // Stop the run loop on macOS
@@ -428,10 +510,6 @@ pub const Watcher = struct {
             },
             .windows => {
                 if (self.impl.stop_event) |stop_event| {
-                    const SetEvent = struct {
-                        extern "kernel32" fn SetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
-                    }.SetEvent;
-                    _ = SetEvent(stop_event);
                     _ = std.os.windows.CloseHandle(stop_event);
                     self.impl.stop_event = null;
                 }
@@ -465,11 +543,22 @@ pub const Watcher = struct {
         }
     }
 
+    fn signalWindowsStopEvent(self: *Watcher) void {
+        if (comptime builtin.os.tag == .windows) {
+            if (self.impl.stop_event) |stop_event| {
+                const SetEvent = struct {
+                    extern "kernel32" fn SetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
+                }.SetEvent;
+                _ = SetEvent(stop_event);
+            }
+        }
+    }
+
     fn watchLoopMacOS(self: *Watcher) void {
         // Using stubs - just mark as ready and wait for stop
         // This works for both cross-compilation and testing
         if (use_stubs) {
-            self.is_ready.store(true, .seq_cst);
+            self.markReady();
             while (!self.should_stop.load(.seq_cst)) {
                 std.Thread.yield() catch {};
             }
@@ -477,20 +566,23 @@ pub const Watcher = struct {
         }
         // Create CFString paths
         var cf_strings = self.allocator.alloc(CFStringRef, self.paths.len) catch {
-            std.log.err("Failed to allocate CFString array", .{});
+            std.log.warn("Failed to allocate CFString array", .{});
+            self.markStartupFailed();
             return;
         };
         defer self.allocator.free(cf_strings);
 
         for (self.paths, 0..) |path, i| {
             const path_z = self.allocator.dupeZ(u8, path) catch {
-                std.log.err("Failed to create null-terminated path", .{});
+                std.log.warn("Failed to create null-terminated path", .{});
+                self.markStartupFailed();
                 return;
             };
             defer self.allocator.free(path_z);
 
             cf_strings[i] = CFStringCreateWithCString(null, path_z, kCFStringEncodingUTF8) orelse {
-                std.log.err("Failed to create CFString for path: {s}", .{path});
+                std.log.warn("Failed to create CFString for path: {s}", .{path});
+                self.markStartupFailed();
                 return;
             };
         }
@@ -507,7 +599,8 @@ pub const Watcher = struct {
             @intCast(cf_strings.len),
             null, // kCFTypeArrayCallBacks
         ) orelse {
-            std.log.err("Failed to create CFArray", .{});
+            std.log.warn("Failed to create CFArray", .{});
+            self.markStartupFailed();
             return;
         };
         defer CFRelease(paths_array);
@@ -531,7 +624,8 @@ pub const Watcher = struct {
             0.1, // latency in seconds
             kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot,
         ) orelse {
-            std.log.err("Failed to create FSEventStream", .{});
+            std.log.warn("Failed to create FSEventStream", .{});
+            self.markStartupFailed();
             return;
         };
 
@@ -547,12 +641,13 @@ pub const Watcher = struct {
 
         // Start the stream
         if (!FSEventStreamStart(self.impl.stream.?)) {
-            std.log.err("Failed to start FSEventStream", .{});
+            std.log.warn("Failed to start FSEventStream", .{});
+            self.markStartupFailed();
             return;
         }
 
         // Signal that we're ready to receive events
-        self.is_ready.store(true, .seq_cst);
+        self.markReady();
 
         // Run the run loop with periodic checks for stop signal
         while (!self.should_stop.load(.seq_cst)) {
@@ -602,19 +697,19 @@ pub const Watcher = struct {
             const path = paths[i];
             const path_len = std.mem.len(path);
 
-            // Check if it's a .roc file
-            if (path_len > 4 and std.mem.endsWith(u8, path[0..path_len], ".roc")) {
+            if (self.shouldEmitPath(path[0..path_len], false)) {
                 const event = WatchEvent{ .path = path[0..path_len] };
-                self.callback(event);
+                self.emitEvent(event);
             }
         }
     }
 
     fn watchLoopLinux(self: *Watcher) void {
         const init_result = std.os.linux.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
-        const init_errno = std.posix.errno(init_result);
+        const init_errno = std.os.linux.errno(init_result);
         if (init_errno != .SUCCESS) {
-            std.log.err("inotify_init1 failed: {}", .{init_errno});
+            std.log.warn("inotify_init1 failed: {}", .{init_errno});
+            self.markStartupFailed();
             return;
         }
         self.impl.inotify_fd = @as(i32, @intCast(init_result));
@@ -622,12 +717,14 @@ pub const Watcher = struct {
         // Add watches
         for (self.paths) |path| {
             self.addWatchRecursiveLinux(path) catch |err| {
-                std.log.err("Failed to watch {s}: {}", .{ path, err });
+                std.log.warn("Failed to watch {s}: {}", .{ path, err });
+                self.markStartupFailed();
+                return;
             };
         }
 
         // Signal that we're ready to receive events
-        self.is_ready.store(true, .seq_cst);
+        self.markReady();
 
         // Main event loop
         var buffer: [8192]u8 align(@alignOf(std.os.linux.inotify_event)) = undefined;
@@ -679,7 +776,8 @@ pub const Watcher = struct {
                 const name_bytes = buffer[offset + @sizeOf(std.os.linux.inotify_event) .. offset + event_size - 1];
                 const name = std.mem.sliceTo(name_bytes, 0);
 
-                if (std.mem.endsWith(u8, name, ".roc")) {
+                const is_dir = event.mask & std.os.linux.IN.ISDIR != 0;
+                if (self.shouldEmitPath(name, is_dir)) {
                     for (self.impl.watch_descriptors.items) |wd| {
                         if (wd.wd == event.wd) {
                             const full_path = std.fs.path.join(self.allocator, &.{ wd.path, name }) catch |err| switch (err) {
@@ -689,7 +787,7 @@ pub const Watcher = struct {
                                 },
                             };
                             defer self.allocator.free(full_path);
-                            self.callback(.{ .path = full_path });
+                            self.emitEvent(.{ .path = full_path });
                             break;
                         }
                     }
@@ -709,13 +807,13 @@ pub const Watcher = struct {
                                 std.log.err("Failed to watch new directory: {}", .{err});
                             };
 
-                            // Check if there are already .roc files in the new directory
+                            // Check if there are already matching files in the new directory
                             // This handles the case where files are created immediately after the directory
                             var dir = std.Io.Dir.openDirAbsolute(self.std_io, new_dir, .{ .iterate = true }) catch break;
                             defer dir.close(self.std_io);
                             var it = dir.iterate();
                             while (it.next(self.std_io) catch null) |entry| {
-                                if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+                                if (entry.kind == .file and self.shouldEmitPath(entry.name, false)) {
                                     const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch |err| switch (err) {
                                         error.OutOfMemory => {
                                             std.log.err("Out of memory building path for file in new directory: {s}", .{entry.name});
@@ -723,7 +821,7 @@ pub const Watcher = struct {
                                         },
                                     };
                                     defer self.allocator.free(full_path);
-                                    self.callback(.{ .path = full_path });
+                                    self.emitEvent(.{ .path = full_path });
                                 }
                             }
                             break;
@@ -745,12 +843,16 @@ pub const Watcher = struct {
         defer self.allocator.free(path_z);
 
         const add_result = std.os.linux.inotify_add_watch(self.impl.inotify_fd, path_z, flags);
-        const add_errno = std.posix.errno(add_result);
+        const add_errno = std.os.linux.errno(add_result);
         if (add_errno != .SUCCESS) {
-            std.log.err("inotify_add_watch failed: {}", .{add_errno});
+            std.log.warn("inotify_add_watch failed: {}", .{add_errno});
             return error.InotifyAddWatchFailed;
         }
         const wd = @as(i32, @intCast(add_result));
+
+        for (self.impl.watch_descriptors.items) |existing| {
+            if (existing.wd == wd) return;
+        }
 
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
@@ -788,77 +890,101 @@ pub const Watcher = struct {
         }.CreateEventW;
 
         self.impl.stop_event = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse {
-            std.log.err("Failed to create stop event", .{});
+            std.log.warn("Failed to create stop event", .{});
+            self.markStartupFailed();
             return;
         };
 
         // Set up ReadDirectoryChangesW for each path
         for (self.paths) |path| {
             self.setupWindowsWatch(path) catch |err| {
-                std.log.err("Failed to set up watch for {s}: {}", .{ path, err });
-                continue;
+                std.log.warn("Failed to set up watch for {s}: {}", .{ path, err });
+                self.markStartupFailed();
+                return;
             };
         }
 
         // Debug: check if we have any handles
         if (self.impl.handles.items.len == 0) {
-            std.log.err("No directory handles were created", .{});
+            std.log.warn("No directory handles were created", .{});
+            self.markStartupFailed();
             return;
         }
 
-        // Signal that we're ready to receive events
-        self.is_ready.store(true, .seq_cst);
-
-        // Main event loop
-        const max_handles = self.impl.overlapped_data.items.len + 1; // +1 for stop event
-        if (max_handles == 1) return; // Only stop event, no directories to watch
-
-        var handles = self.allocator.alloc(std.os.windows.HANDLE, max_handles) catch {
-            std.log.err("Failed to allocate handles array", .{});
+        const watched_count = self.impl.overlapped_data.items.len;
+        const shard_count = std.math.divCeil(usize, watched_count, windows_max_watched_handles_per_thread) catch {
+            self.markStartupFailed();
             return;
         };
-        defer self.allocator.free(handles);
+        var shard_threads = self.allocator.alloc(std.Thread, shard_count) catch {
+            std.log.warn("Failed to allocate Windows watcher thread list", .{});
+            self.markStartupFailed();
+            return;
+        };
+        defer self.allocator.free(shard_threads);
 
-        // Copy OVERLAPPED event handles (not directory handles!)
-        for (self.impl.overlapped_data.items, 0..) |data, i| {
+        var spawned: usize = 0;
+        while (spawned < shard_count) : (spawned += 1) {
+            const start_index = spawned * windows_max_watched_handles_per_thread;
+            const end_index = @min(watched_count, start_index + windows_max_watched_handles_per_thread);
+            shard_threads[spawned] = std.Thread.spawn(.{}, watchLoopWindowsShard, .{ self, start_index, end_index }) catch |err| {
+                std.log.warn("Failed to spawn Windows watcher shard: {}", .{err});
+                self.markStartupFailed();
+                self.should_stop.store(true, .seq_cst);
+                self.signalWindowsStopEvent();
+                for (shard_threads[0..spawned]) |thread| thread.join();
+                return;
+            };
+        }
+
+        self.markReady();
+        for (shard_threads) |thread| thread.join();
+    }
+
+    const windows_max_wait_handles = 64;
+    const windows_max_watched_handles_per_thread = windows_max_wait_handles - 1;
+    const windows_wait_timeout = 258; // WAIT_TIMEOUT, 0x102
+    const windows_wait_failed = 0xFFFFFFFF; // WAIT_FAILED
+
+    fn watchLoopWindowsShard(self: *Watcher, start_index: usize, end_index: usize) void {
+        if (end_index <= start_index) return;
+
+        const WaitForMultipleObjects = struct {
+            extern "kernel32" fn WaitForMultipleObjects(
+                nCount: std.os.windows.DWORD,
+                lpHandles: [*]const std.os.windows.HANDLE,
+                bWaitAll: std.os.windows.BOOL,
+                dwMilliseconds: std.os.windows.DWORD,
+            ) callconv(.winapi) std.os.windows.DWORD;
+        }.WaitForMultipleObjects;
+
+        var handles: [windows_max_wait_handles]std.os.windows.HANDLE = undefined;
+        for (self.impl.overlapped_data.items[start_index..end_index], 0..) |data, i| {
             handles[i] = data.overlapped.hEvent.?;
         }
-        // Add stop event as last handle
-        handles[handles.len - 1] = self.impl.stop_event.?;
+        const stop_index = end_index - start_index;
+        handles[stop_index] = self.impl.stop_event.?;
+        const handle_count = stop_index + 1;
 
         while (!self.should_stop.load(.seq_cst)) {
-            const WaitForMultipleObjects = struct {
-                extern "kernel32" fn WaitForMultipleObjects(
-                    nCount: std.os.windows.DWORD,
-                    lpHandles: [*]const std.os.windows.HANDLE,
-                    bWaitAll: std.os.windows.BOOL,
-                    dwMilliseconds: std.os.windows.DWORD,
-                ) callconv(.winapi) std.os.windows.DWORD;
-            }.WaitForMultipleObjects;
-
             const result = WaitForMultipleObjects(
-                @intCast(handles.len),
-                handles.ptr,
+                @intCast(handle_count),
+                handles[0..handle_count].ptr,
                 .FALSE,
-                100, // 100ms timeout
+                100,
             );
 
-            // Check if stop event was signaled or timeout occurred
-            const WAIT_TIMEOUT = 258; // 0x102
-            if (result == WAIT_TIMEOUT or result == handles.len - 1) {
+            if (result == windows_wait_timeout or result == stop_index) {
                 continue;
             }
-
-            // Check for errors
-            const WAIT_FAILED = 0xFFFFFFFF;
-            if (result == WAIT_FAILED) {
+            if (result == windows_wait_failed) {
                 std.log.err("WaitForMultipleObjects failed", .{});
-                break;
+                self.should_stop.store(true, .seq_cst);
+                self.signalWindowsStopEvent();
+                return;
             }
-
-            // Process the signaled handle
-            const handle_index = result;
-            if (handle_index < self.impl.overlapped_data.items.len) {
+            if (result < stop_index) {
+                const handle_index = start_index + result;
                 self.processWindowsEvents(handle_index) catch |err| {
                     std.log.err("Failed to process Windows events: {}", .{err});
                 };
@@ -1043,8 +1169,7 @@ pub const Watcher = struct {
             };
             const filename_utf8 = filename_utf8_buf[0..filename_utf8_len];
 
-            // Check if it's a .roc file
-            if (std.mem.endsWith(u8, filename_utf8, ".roc")) {
+            if (self.shouldEmitPath(filename_utf8, false)) {
                 // Create full path
                 const full_path = std.fs.path.join(self.allocator, &.{ base_path, filename_utf8 }) catch |err| switch (err) {
                     error.OutOfMemory => {
@@ -1058,7 +1183,7 @@ pub const Watcher = struct {
                 defer self.allocator.free(full_path);
 
                 const event = WatchEvent{ .path = full_path };
-                self.callback(event);
+                self.emitEvent(event);
             }
 
             // Move to next notification
@@ -1086,7 +1211,7 @@ fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms
     }
 }
 
-fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) anyerror!void {
+fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) error{TestUnexpectedResult}!void {
     if (active_watcher_backend_is_stub) {
         // When the active backend is stubbed, skip the event count check.
         return;
@@ -1142,6 +1267,31 @@ test "basic file watching" {
 
     // Verify we got the expected events (or skip if using stubs)
     try expectEventsOrSkip(&global.event_count, 2);
+}
+
+test "Linux watcher start reports setup failure" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(temp_path);
+
+    const missing_path = try std.fs.path.join(allocator, &.{ temp_path, "missing" });
+    defer allocator.free(missing_path);
+
+    const callback = struct {
+        fn cb(_: WatchEvent) void {}
+    }.cb;
+
+    const watcher = try Watcher.init(allocator, io, &.{missing_path}, callback);
+    defer watcher.deinit();
+
+    try std.testing.expectError(error.WatchBackendFailed, watcher.start());
 }
 
 test "recursive directory watching" {

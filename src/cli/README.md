@@ -8,7 +8,7 @@ The CLI is the main entry point for developers using Roc. Its responsibilities i
 - **Compilation Orchestration**: Managing the compilation pipeline and integrating with the Roc compiler
 - **Linker Integration**: Using an abstraction for the LLD linker as a library through `linker.zig` for code generation
 - **Performance Profiling**: Integration with Tracy profiler for performance analysis
-- **Testing & Benchmarking**: Built-in testing and benchmarking capabilities through `bench.zig`
+- **Testing**: Built-in execution of top-level `expect`s through the `test` command
 - **Shared Memory Management**: Testing utilities for the shared memory system used in IPC
 
 The CLI coordinates between the compiler frontend (parsing, type checking) and backend (code generation, linking) to provide a seamless development experience.

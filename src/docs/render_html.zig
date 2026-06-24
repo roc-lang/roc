@@ -9,6 +9,8 @@ const Allocator = std.mem.Allocator;
 const DocModel = @import("DocModel.zig");
 const collections = @import("collections");
 const DocType = DocModel.DocType;
+/// Errors that can occur while rendering HTML documentation.
+pub const RenderError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.OpenError || std.Io.Dir.WriteFileError || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.Writer.Error;
 
 // Static assets embedded at compile time
 const embedded_css = @embedFile("static/styles.css");
@@ -387,7 +389,7 @@ pub fn renderPackageDocs(
     package_docs: *const DocModel.PackageDocs,
     output_dir_path: []const u8,
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
-) anyerror!void {
+) RenderError!void {
     // Ensure the output directory exists
     std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -424,13 +426,13 @@ pub fn renderPackageDocs(
     }
 }
 
-fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) anyerror!void {
+fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) RenderError!void {
     try dir.writeFile(io, .{ .sub_path = "styles.css", .data = embedded_css });
     try dir.writeFile(io, .{ .sub_path = "search.js", .data = embedded_js });
     try dir.writeFile(io, .{ .sub_path = "favicon.svg", .data = embedded_favicon });
 }
 
-fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) anyerror!void {
+fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) RenderError!void {
     const file = try dir.createFile(io, "index.html", .{});
     defer file.close(io);
     var buf: [4096]u8 = undefined;
@@ -466,7 +468,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     try bw.interface.flush();
 }
 
-fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) anyerror!void {
+fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) RenderError!void {
     // Create module subdirectory
     dir.createDirPath(io, mod.name) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -481,7 +483,7 @@ fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: s
 
 /// Write a module's documentation page as index.html in the given directory.
 /// `base` is the relative path prefix for static assets (e.g. "" for root, "../" for subdirs).
-fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) anyerror!void {
+fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) RenderError!void {
     const file = try dir.createFile(io, "index.html", .{});
     defer file.close(io);
     var buf: [4096]u8 = undefined;

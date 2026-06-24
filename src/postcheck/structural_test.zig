@@ -39,7 +39,7 @@ fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []
     return after_start[0..end_index];
 }
 
-fn expectContains(haystack: []const u8, needle: []const u8) anyerror!void {
+fn expectContains(haystack: []const u8, needle: []const u8) error{TestUnexpectedResult}!void {
     try std.testing.expect(std.mem.find(u8, haystack, needle) != null);
 }
 

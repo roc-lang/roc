@@ -15,23 +15,54 @@ const roc_target = @import("roc_target");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
+const LowerToLirHarnessError = std.mem.Allocator.Error ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    std.Io.Dir.WriteFileError ||
+    Coordinator.AppDiscoveryError ||
+    eval.BuiltinModules.InitError ||
+    std.Thread.SpawnError ||
+    error{
+        BuiltinLowLevelAnnotationMustBeFunction,
+        CompileTimeProblem,
+        DownloadFailed,
+        ExpectedPlatformString,
+        ExpectedString,
+        FileError,
+        FileNotFound,
+        HasUserErrors,
+        Internal,
+        InvalidDependency,
+        InvalidNullByteInPath,
+        InvalidUrl,
+        LowLevelOperationsNotFound,
+        NoCacheDir,
+        NoPackageSource,
+        PathOutsideWorkspace,
+        TestExpectedEqual,
+        TestUnexpectedResult,
+        UnsupportedBuiltinAnnotationOnly,
+        UnsupportedHeader,
+        WriteFailed,
+    };
+
 /// Lower an app whose body is `app_body` (everything after the platform header
 /// and the echo wiring) to LIR. Reaching the end without a panic means the
 /// program checked cleanly and passed ARC certification.
-pub fn expectLowersToLir(app_body: []const u8) anyerror!void {
+pub fn expectLowersToLir(app_body: []const u8) LowerToLirHarnessError!void {
     try runToLir(app_body, null);
 }
 
 /// Lower an app at `app_path` to LIR. Reaching the end without a panic means
 /// the app checked cleanly and passed ARC certification.
-pub fn expectAppPathLowersToLir(app_path: []const u8) anyerror!void {
+pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null);
 }
 
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
 /// a regression that made lowering (e.g. capture order) depend on iteration or
 /// scheduling order would fail here rather than silently.
-pub fn expectDeterministicLir(app_body: []const u8) anyerror!void {
+pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
     const buf_a = try gpa.alloc(u8, cap);
@@ -45,7 +76,7 @@ pub fn expectDeterministicLir(app_body: []const u8) anyerror!void {
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
-fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) anyerror!void {
+fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -102,7 +133,7 @@ fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) anyerror!void {
     try lowerAppPathToLir(gpa, app_path, dump);
 }
 
-fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.Io.Writer) anyerror!void {
+fn lowerAppPathToLir(gpa: std.mem.Allocator, app_path: []const u8, dump: ?*std.Io.Writer) LowerToLirHarnessError!void {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
