@@ -970,6 +970,7 @@ const Builder = struct {
         defer self.active_graph = saved_graph;
         var body_ctx = try BodyContext.init(self.allocator, self, view, wrapper.template, graph);
         defer body_ctx.deinit();
+        body_ctx.setLoweringEntryWrapperRoot(template.root);
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -3253,6 +3254,11 @@ const CollectedListPattern = struct {
     rest: ?checked.CheckedListRestPattern,
 };
 
+const LoweringEntryWrapperRoot = struct {
+    module: checked.ModuleId,
+    root: checked.ComptimeRootId,
+};
+
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
@@ -3292,6 +3298,10 @@ const BodyContext = struct {
     /// The template body can be lowered from a lookup site, but diagnostics
     /// must point at the original const root.
     source_region_override: ?base.Region = null,
+    /// The compile-time root currently being lowered as its own entry wrapper.
+    /// This is the only root whose uses must not restore through static data:
+    /// doing so would make the root definition recursively refer to itself.
+    lowering_entry_wrapper_root: ?LoweringEntryWrapperRoot = null,
 
     const PatternLiteralGuard = struct {
         local: Ast.LocalId,
@@ -3440,6 +3450,7 @@ const BodyContext = struct {
         child.owner_context_fn_key = self.owner_context_fn_key;
         child.current_fn_key = current_fn_key;
         child.comptime_exhaustiveness_depth = self.comptime_exhaustiveness_depth;
+        self.inheritLoweringEntryWrapperRoot(&child);
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -3808,6 +3819,9 @@ const BodyContext = struct {
                 const root = self.view.compile_time_roots.root(wrapper.root);
                 const saved_source_region_override = self.source_region_override;
                 defer self.source_region_override = saved_source_region_override;
+                const saved_lowering_entry_wrapper_root = self.lowering_entry_wrapper_root;
+                defer self.lowering_entry_wrapper_root = saved_lowering_entry_wrapper_root;
+                self.setLoweringEntryWrapperRoot(wrapper.root);
                 self.source_region_override = switch (root.kind) {
                     .hoisted_constant => self.view.bodies.expr(root.expr).source_region,
                     .constant,
@@ -4107,10 +4121,20 @@ const BodyContext = struct {
         self.comptime_exhaustiveness_depth = saved;
     }
 
+    fn setLoweringEntryWrapperRoot(self: *BodyContext, root: checked.ComptimeRootId) void {
+        self.lowering_entry_wrapper_root = .{
+            .module = self.view.key,
+            .root = root,
+        };
+    }
+
+    fn inheritLoweringEntryWrapperRoot(self: *const BodyContext, child: *BodyContext) void {
+        child.lowering_entry_wrapper_root = self.lowering_entry_wrapper_root;
+    }
+
     fn loweringOwnHoistedConstRoot(self: *BodyContext, entry: checked.HoistedConstEntry) bool {
-        const wrapper = self.view.entry_wrappers.lookupByRoot(entry.root) orelse
-            Common.invariant("hoisted const root had no checked entry wrapper");
-        return names.procedureTemplateRefEql(wrapper.template, self.owner_template);
+        const active = self.lowering_entry_wrapper_root orelse return false;
+        return moduleBytesEqual(active.module.bytes, self.view.key.bytes) and active.root == entry.root;
     }
 
     fn restoredHoistedConstAtType(
@@ -8230,6 +8254,7 @@ const BodyContext = struct {
         if (call.direct_target) |target| {
             var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
             defer call_ctx.deinit();
+            self.inheritLoweringEntryWrapperRoot(&call_ctx);
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
 
@@ -8251,6 +8276,7 @@ const BodyContext = struct {
         const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {
             var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
             defer call_ctx.deinit();
+            self.inheritLoweringEntryWrapperRoot(&call_ctx);
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
 
@@ -8678,6 +8704,7 @@ const BodyContext = struct {
 
             var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
             defer call_ctx.deinit();
+            self.inheritLoweringEntryWrapperRoot(&call_ctx);
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
 
@@ -8687,6 +8714,7 @@ const BodyContext = struct {
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
@@ -9037,6 +9065,7 @@ const BodyContext = struct {
         var body_ctx = try BodyContext.init(self.allocator, self.builder, store_view, eval.entry_template, graph);
         defer body_ctx.deinit();
         body_ctx.source_region_override = source_region_override;
+        body_ctx.setLoweringEntryWrapperRoot(body.root);
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -9882,6 +9911,7 @@ const BodyContext = struct {
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
@@ -10006,6 +10036,7 @@ const BodyContext = struct {
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
@@ -10292,6 +10323,7 @@ const BodyContext = struct {
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
@@ -10399,7 +10431,9 @@ const BodyContext = struct {
                 break :blk self.owner_template;
             },
         };
-        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph);
+        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph);
+        self.inheritLoweringEntryWrapperRoot(&target_ctx);
+        return target_ctx;
     }
 
     fn requireLocalMethodTargetInCurrentView(self: *BodyContext, lookup: MethodLookup) void {
@@ -10472,6 +10506,7 @@ const BodyContext = struct {
         };
         var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, graph);
         defer target_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&target_ctx);
         return try target_ctx.instantiateTargetCallTypeFromMonoArgAtIndex(lookup.target.callable_ty, arg_index, arg_ty);
     }
 
@@ -13670,6 +13705,7 @@ const BodyContext = struct {
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 

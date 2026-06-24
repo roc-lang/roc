@@ -594,6 +594,123 @@ test "tuple and tag static data share named and inline list payloads" {
     try std.testing.expect(!exportsContainSequence(exports, &.{ 211, 212, 213, 214 }));
 }
 
+test "inline record-list cells inside runtime record become shared static data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\Sprite : {
+        \\    data : List(U8),
+        \\    region : { x : U64, y : U64, width : U64, height : U64 },
+        \\}
+        \\
+        \\Cell : { frames : U64, sprite : Sprite }
+        \\
+        \\sheet : Sprite
+        \\sheet = {
+        \\    data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\    region: { x: 0, y: 0, width: 2, height: 2 },
+        \\}
+        \\
+        \\sub_sprite : Sprite, U64 -> Sprite
+        \\sub_sprite = |sprite, x| { ..sprite, region: { x, y: 0, width: 1, height: 1 } }
+        \\
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    cells: [
+        \\        { frames: 5.U64, sprite: sub_sprite(sheet, 0) },
+        \\        { frames: 6.U64, sprite: sub_sprite(sheet, 1) },
+        \\    ],
+        \\}
+        \\
+        \\main! = |args| {
+        \\    anim = make_anim(List.len(args))
+        \\    first_x = match List.get(anim.cells, 0) {
+        \\        Ok(cell) => cell.sprite.region.x.to_i64_wrap()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = first_x + anim.last_updated.to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.SharedStaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 2);
+}
+
 test "hoisted constant crash reports original source region" {
     const gpa = std.testing.allocator;
 
@@ -2053,6 +2170,16 @@ fn countInternalStaticValueRelocationsTo(exports: []const @import("backend").Sta
     var count: usize = 0;
     for (exports) |static_export| {
         if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) continue;
+        for (static_export.relocations) |relocation| {
+            if (std.mem.eql(u8, relocation.target_symbol_name, symbol_name)) count += 1;
+        }
+    }
+    return count;
+}
+
+fn countStaticDataRelocationsTo(exports: []const @import("backend").StaticDataExport, symbol_name: []const u8) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
         for (static_export.relocations) |relocation| {
             if (std.mem.eql(u8, relocation.target_symbol_name, symbol_name)) count += 1;
         }
