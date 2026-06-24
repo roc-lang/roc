@@ -181,8 +181,6 @@ const EffectSlotKind = union(enum) {
 const EffectSlot = struct {
     kind: EffectSlotKind,
     direct_effect: bool,
-    outgoing_start: u32,
-    outgoing_len: u32,
     resolved_effectful: ?bool,
 };
 
@@ -580,56 +578,56 @@ Steps:
 
 ### Effect Tests
 
-- [ ] Direct top-level effectful call test exists.
-- [ ] Static-dispatch top-level method effect test exists.
-- [ ] Type-method top-level effect test exists.
-- [ ] Binop dispatch effect test exists.
-- [ ] Unary dispatch effect test exists.
-- [ ] Interpolation dispatch effect test exists.
-- [ ] Iterator dispatch effect test exists.
-- [ ] Imported nominal method effect test exists.
-- [ ] Pure annotation rejects direct effect test exists.
-- [ ] Pure annotation rejects delayed dispatch effect test exists.
-- [ ] Effectful annotation accepts direct effect test exists.
-- [ ] Effectful annotation accepts delayed dispatch effect test exists.
-- [ ] Pure where-clause accepts pure implementation test exists.
-- [ ] Pure where-clause rejects effectful implementation test exists.
-- [ ] Effectful where-clause accepts effectful implementation test exists.
-- [ ] Effectful where-clause propagates to caller test exists.
-- [ ] Direct effectful `expect` test exists.
-- [ ] Delayed dispatch effectful `expect` test exists.
-- [ ] Function alias effect tests exist.
-- [ ] Higher-order effect tests exist.
-- [ ] Closure creation/call effect tests exist.
-- [ ] Recursive effect tests exist.
-- [ ] `crash`/`dbg`/`expect` non-effect tests exist.
+- [x] Direct top-level effectful call test exists.
+- [x] Static-dispatch top-level method effect test exists.
+- [x] Type-method top-level effect test exists.
+- [x] Binop dispatch effect test exists.
+- [x] Unary dispatch effect test exists.
+- [x] Interpolation dispatch effect test exists.
+- [x] Iterator dispatch effect test exists.
+- [x] Imported nominal method effect test exists.
+- [x] Pure annotation rejects direct effect test exists.
+- [x] Pure annotation rejects delayed dispatch effect test exists.
+- [x] Effectful annotation accepts direct effect test exists.
+- [x] Effectful annotation accepts delayed dispatch effect test exists.
+- [x] Pure where-clause accepts pure implementation test exists.
+- [x] Pure where-clause rejects effectful implementation test exists.
+- [x] Effectful where-clause accepts effectful implementation test exists.
+- [x] Effectful where-clause propagates to caller test exists.
+- [x] Direct effectful `expect` test exists.
+- [x] Delayed dispatch effectful `expect` test exists.
+- [x] Function alias effect tests exist.
+- [x] Higher-order effect tests exist.
+- [x] Closure creation/call effect tests exist.
+- [x] Recursive effect tests exist.
+- [x] `crash`/`dbg`/`expect` non-effect tests exist.
 
 ### Effect Implementation
 
-- [ ] Effect slots exist for function bodies.
-- [ ] Effect slots exist for top-level value right-hand sides.
-- [ ] Effect slots exist for `expect` bodies.
+- [x] Effect slots exist for function bodies.
+- [x] Effect slots exist for top-level value right-hand sides.
+- [x] Effect slots exist for `expect` bodies.
 - [ ] Effect slots exist for delayed-effect root candidates.
-- [ ] Active effect-slot stack exists.
-- [ ] Direct effectful calls mark active slots.
-- [ ] Calls to known local functions add directed effect edges.
-- [ ] Calls through function parameters use checked function effect kinds.
-- [ ] Closure creation does not mark the active slot effectful.
-- [ ] Dispatch function variables record active-slot watchers.
-- [ ] Dispatch watchers cover receiver method calls.
-- [ ] Dispatch watchers cover type-method calls.
-- [ ] Dispatch watchers cover binop and unary dispatch.
-- [ ] Dispatch watchers cover interpolation dispatch.
-- [ ] Dispatch watchers cover iterator dispatch.
-- [ ] Dispatch watchers cover where-clause dispatch.
-- [ ] Dispatch watchers cover imported nominal method dispatch.
-- [ ] Dispatch resolution marks watcher slots when selected methods are
+- [x] Active effect-slot stack exists.
+- [x] Direct effectful calls mark active slots.
+- [x] Calls to known local functions add directed effect edges.
+- [x] Calls through function parameters use checked function effect kinds.
+- [x] Closure creation does not mark the active slot effectful.
+- [x] Dispatch function variables record active-slot watchers.
+- [x] Dispatch watchers cover receiver method calls.
+- [x] Dispatch watchers cover type-method calls.
+- [x] Dispatch watchers cover binop and unary dispatch.
+- [x] Dispatch watchers cover interpolation dispatch.
+- [x] Dispatch watchers cover iterator dispatch.
+- [x] Dispatch watchers cover where-clause dispatch.
+- [x] Dispatch watchers cover imported nominal method dispatch.
+- [x] Dispatch resolution marks watcher slots when selected methods are
       effectful.
-- [ ] Pure where-clause implementation checking rejects effectful methods.
-- [ ] Effectful where-clause calls propagate to callers.
-- [ ] Function effect kinds finalize before checked function output.
+- [x] Pure where-clause implementation checking rejects effectful methods.
+- [x] Effectful where-clause calls propagate to callers.
+- [x] Function effect kinds finalize before checked function output.
 - [ ] Recursive effect groups solve with directed SCC propagation.
-- [ ] Top-level effect errors use finalized effect slots.
+- [x] Top-level effect errors use finalized effect slots.
 - [ ] `expect` effect errors use finalized effect slots.
 - [ ] Checked modules export/import explicit effect summaries.
 
@@ -650,7 +648,7 @@ Steps:
 - [ ] Rejected parent roots preserve eligible child roots.
 - [ ] Delayed-effect parent roots finalize correctly.
 - [ ] Leaf/root pruning rules are removed.
-- [ ] Observable-effect root blockers are removed.
+- [x] Observable-effect root blockers are removed.
 - [ ] `return`/`break`/loop syntax root blockers are removed.
 
 ### Compile-Time Evaluation And Static Data
@@ -674,9 +672,9 @@ Steps:
 
 - [ ] Old hoist selection machinery is deleted or fully bypassed.
 - [ ] No post-check stage infers root eligibility from source/CIR shape.
-- [ ] Focused checker tests pass.
+- [x] Focused checker tests pass.
 - [ ] Compile-time evaluation/static data tests pass.
-- [ ] Existing relevant compiler tests pass.
+- [x] Existing relevant compiler tests pass.
 - [ ] Rocci Bird formats successfully.
 - [ ] Rocci Bird builds with `--opt=size`.
 - [ ] Rocci Bird disassembly confirms sprite/list data is static.

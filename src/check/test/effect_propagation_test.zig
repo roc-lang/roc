@@ -59,6 +59,18 @@ test "effect propagation - pure function annotation rejects direct effectful cal
     , "TYPE MISMATCH");
 }
 
+test "effect propagation - effectful function annotation accepts direct effectful call" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\direct : {} => U64
+        \\direct = |x| tick!(x)
+    );
+}
+
 test "effect propagation - pure function annotation rejects effectful method call" {
     try expectOneTypeError(
         \\package [] {}
@@ -87,6 +99,22 @@ test "effect propagation - effectful function annotation accepts effectful metho
     );
 }
 
+test "effect propagation - pure where clause accepts pure implementation method" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\uses_tick : a -> U64 where [a.tick : a -> U64]
+        \\uses_tick = |x| x.tick()
+        \\
+        \\Pure := [Pure].{
+        \\    tick : Pure -> U64
+        \\    tick = |_| 1
+        \\}
+        \\
+        \\value = uses_tick(Pure.Pure)
+    );
+}
+
 test "effect propagation - pure where clause rejects effectful implementation method" {
     try expectFirstTypeError(
         \\package [] {}
@@ -101,6 +129,23 @@ test "effect propagation - pure where clause rejects effectful implementation me
         \\
         \\value = uses_tick(Eff.Eff)
     , "TYPE MISMATCH");
+}
+
+test "effect propagation - effectful where clause accepts effectful implementation method" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\uses_tick : a => U64 where [a.tick! : a => U64]
+        \\uses_tick = |x| x.tick!()
+        \\
+        \\Eff := [Eff].{
+        \\    tick! : Eff => U64
+        \\    tick! = |_| 1
+        \\}
+        \\
+        \\caller! : Eff => U64
+        \\caller! = |x| uses_tick(x)
+    );
 }
 
 test "effect propagation - effectful where clause makes caller effectful" {
