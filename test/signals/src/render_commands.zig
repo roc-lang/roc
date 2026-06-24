@@ -18,6 +18,10 @@ pub const Op = enum(u32) {
     bind_input = 15,
     bind_check = 16,
     clear_event = 17,
+    start_interval = 18,
+    cancel_interval = 19,
+    start_task = 20,
+    cancel_task = 21,
 };
 
 pub const Record = extern struct {
@@ -143,6 +147,7 @@ pub const Counts = struct {
             // Event-unbinding is counted through `addEventBinding` alongside the
             // bind it supersedes, so the raw wire op never reaches this counter.
             .clear_event => self.bind_event += 1,
+            .start_interval, .cancel_interval, .start_task, .cancel_task => {},
         }
     }
 

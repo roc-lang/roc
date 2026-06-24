@@ -135,6 +135,24 @@ const WasmSink = struct {
         appendCommand(.clear_event, toU32(elem_id), toU32(@intFromEnum(kind)), 0, 0, 0);
     }
 
+    pub fn startInterval(_: WasmSink, token: u64, period_ms: u64) void {
+        appendCommand(.start_interval, toU32(token), toU32(period_ms), 0, 0, 0);
+    }
+
+    pub fn cancelInterval(_: WasmSink, token: u64) void {
+        appendCommand(.cancel_interval, toU32(token), 0, 0, 0, 0);
+    }
+
+    pub fn startTask(_: WasmSink, request_id: u64, task_name: []const u8, request: []const u8) void {
+        const name_offset = storeBytes(task_name);
+        const request_offset = storeBytes(request);
+        appendCommand(.start_task, toU32(request_id), name_offset, toU32(task_name.len), request_offset, toU32(request.len));
+    }
+
+    pub fn cancelTask(_: WasmSink, request_id: u64) void {
+        appendCommand(.cancel_task, toU32(request_id), 0, 0, 0, 0);
+    }
+
     pub fn debugAssertNode(_: WasmSink, _: u64, _: bool, _: ?[]const u8, _: ?u64, _: []const u64, _: ?u64, _: ?u64, _: ?u64) void {}
 };
 
@@ -351,6 +369,35 @@ fn dispatchEvent(event_id: u32, payload_kind: EventPayloadKind, payload: HostVal
     }
 }
 
+fn resolveTask(request_id: u64, payload_text: []const u8, failed: bool) void {
+    const ctx = WasmCtx{};
+    const pending_index = shared_engine.pendingTaskIndexByRequestId(request_id) orelse failHost();
+    var pending = shared_engine.removePendingTaskAt(pending_index);
+    defer shared_engine.deinitPendingTask(ctx, &pending);
+
+    const record = shared_engine.activeTaskRecordByToken(pending.task_token) orelse failHost();
+    const task_payload = switch (record.payload) {
+        .task_source => |payload| payload,
+        .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
+    };
+    if (task_payload.token != pending.task_token) failHost();
+
+    const payload = hostValueStr(payload_text);
+    setHostValueTypeTag(payload, @ptrCast(@alignCast(task_payload.payload_tag)));
+    defer callErasedHostValueToUnit(&roc_host, task_payload.payload_drop, payload);
+
+    const next = if (failed)
+        callErasedHostValueToHostValue(&roc_host, task_payload.failed, payload)
+    else
+        callErasedHostValueToHostValue(&roc_host, task_payload.done, payload);
+    _ = shared_engine.dispatchEffectSourceValue(ctx, &roc_host, record, next);
+}
+
+fn tickInterval(token: u64) void {
+    const ctx = WasmCtx{};
+    _ = shared_engine.tickIntervalSourceByRuntimeToken(ctx, &roc_host, token);
+}
+
 /// Tear the engine's reactive runtime back down to a re-mountable empty state.
 /// Runs before each mount and on unmount; the order mirrors the engine portion of
 /// the native host's `HostEnv.deinit`.
@@ -382,11 +429,13 @@ fn clearActiveRuntime() void {
     shared_engine.active_events.deinit(a);
     shared_engine.active_events = .empty;
 
-    for (shared_engine.pending_tasks.items) |*task| {
-        shared_engine.deinitPendingTask(ctx, task);
-    }
+    shared_engine.clearPendingTasks(ctx);
     shared_engine.pending_tasks.deinit(a);
     shared_engine.pending_tasks = .empty;
+
+    shared_engine.clearActiveIntervals(ctx);
+    shared_engine.active_intervals.deinit(a);
+    shared_engine.active_intervals = .empty;
 
     for (shared_engine.cleanup_events.items) |name| {
         a.free(name);
@@ -561,9 +610,23 @@ export fn roc_ui_event(event_id: u32, payload_kind_id: u32, payload_ptr: usize, 
     dispatchEvent(event_id, payload_kind, payload);
 }
 
-export fn roc_ui_unmount() callconv(.c) void {
-    clearActiveRuntime();
+export fn roc_ui_timer(token: u32) callconv(.c) void {
     clearCommandBuffers();
+    tickInterval(token);
+}
+
+export fn roc_ui_resolve(request_id: u32, payload_ptr: usize, payload_len: usize, failed: u32) callconv(.c) void {
+    clearCommandBuffers();
+    resolveTask(
+        request_id,
+        (@as([*]const u8, @ptrFromInt(payload_ptr)))[0..payload_len],
+        failed != 0,
+    );
+}
+
+export fn roc_ui_unmount() callconv(.c) void {
+    clearCommandBuffers();
+    clearActiveRuntime();
 }
 
 export fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}

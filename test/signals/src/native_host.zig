@@ -721,6 +721,14 @@ const HostEnv = struct {
         clearNodeEventKind(self, elem_id, kind);
     }
 
+    pub fn sinkStartInterval(_: *HostEnv, _: u64, _: u64) void {}
+
+    pub fn sinkCancelInterval(_: *HostEnv, _: u64) void {}
+
+    pub fn sinkStartTask(_: *HostEnv, _: u64, _: []const u8, _: []const u8) void {}
+
+    pub fn sinkCancelTask(_: *HostEnv, _: u64) void {}
+
     pub fn sinkDebugAssertNode(self: *HostEnv, elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64) void {
         if (elem_id >= self.dom_elements.items.len) {
             if (!active) return;
@@ -1086,10 +1094,7 @@ const HostEnv = struct {
     }
 
     fn clearPendingTasks(self: *HostEnv) void {
-        for (self.engine.pending_tasks.items) |*task| {
-            self.deinitPendingTask(task);
-        }
-        self.engine.pending_tasks.items.len = 0;
+        self.engine.clearPendingTasks(self);
     }
 
     fn clearStates(self: *HostEnv) void {
@@ -1425,6 +1430,8 @@ const HostEnv = struct {
         self.engine.active_bool_signal_routes.deinit(allocator);
         self.engine.active_change_signal_routes.deinit(allocator);
         self.engine.active_structural_signal_routes.deinit(allocator);
+        self.engine.clearActiveIntervals(self);
+        self.engine.active_intervals.deinit(allocator);
         self.clearActiveSignalGraph();
         self.engine.active_signal_graph.deinit(allocator);
         self.engine.active_stream.deinit(allocator, self.engine.roc_host.?, &self.engine.pending_roc_metrics);
@@ -3055,6 +3062,8 @@ fn deinitTestHostGraph(host: *HostEnv) void {
     host.engine.active_bool_signal_routes.deinit(allocator);
     host.engine.active_change_signal_routes.deinit(allocator);
     host.engine.active_structural_signal_routes.deinit(allocator);
+    host.engine.clearActiveIntervals(host);
+    host.engine.active_intervals.deinit(allocator);
     host.clearActiveSignalGraph();
     host.engine.active_signal_graph.deinit(allocator);
     host.clearActiveEvents();

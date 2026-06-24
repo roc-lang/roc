@@ -28,8 +28,11 @@ class MockHost {
     this.strLen = 0;
     this.allocPtr = allocBase;
     this.dispatches = [];
+    this.timers = [];
+    this.resolutions = [];
     this.mountScript = [];
     this.eventResponses = new Map();
+    this.timerResponses = new Map();
 
     this.exports = {
       memory: this.memory,
@@ -45,6 +48,19 @@ class MockHost {
       roc_ui_unmount: () => {
         this.cmdLen = 0;
         this.strLen = 0;
+      },
+      roc_ui_timer: (token) => {
+        this.timers.push(token);
+        const respond = this.timerResponses.get(token);
+        this.writeCommands(respond ? respond(token) : []);
+      },
+      roc_ui_resolve: (requestId, ptr, len, failed) => {
+        this.resolutions.push({
+          requestId,
+          payload: decoder.decode(new Uint8Array(this.memory.buffer, ptr, len)),
+          failed: failed !== 0,
+        });
+        this.writeCommands([]);
       },
       roc_ui_event: (eventId, kind, ptr, len, boolValue) => {
         const dispatch = { eventId, kind };
@@ -76,7 +92,17 @@ class MockHost {
     let strOffset = 0;
     script.forEach((entry, index) => {
       let { a = 0, b = 0, c = 0, d = 0, e = 0 } = entry;
-      if (entry.s !== undefined) {
+      if (entry.strings !== undefined) {
+        const [first, second] = entry.strings.map((value) => encoder.encode(value));
+        bytes.set(first, STR_BASE + strOffset);
+        b = strOffset;
+        c = first.length;
+        strOffset += first.length;
+        bytes.set(second, STR_BASE + strOffset);
+        d = strOffset;
+        e = second.length;
+        strOffset += second.length;
+      } else if (entry.s !== undefined) {
         const encoded = encoder.encode(entry.s);
         bytes.set(encoded, STR_BASE + strOffset);
         b = strOffset;
@@ -220,4 +246,53 @@ test("memory growth during dispatch keeps the response command stream readable",
     { eventId: 2, kind: PayloadKind.str, payload: "after-grow" },
   ]);
   assert.ok(findTextNode(root, "after-grow"));
+});
+
+test("timer commands register intervals and timer ticks re-enter wasm", () => {
+  const { host, root, runtime } = mountWith([
+    { op: Op.resetDom },
+    { op: Op.createText, a: 1, s: "tick-start" },
+    { op: Op.appendChild, a: 0, b: 1 },
+    { op: Op.startInterval, a: 7, b: 60000 },
+  ]);
+  host.timerResponses.set(7, () => [{ op: Op.setText, a: 1, s: "tick-fired" }]);
+
+  try {
+    assert.equal(runtime.intervals.has(7), true);
+    runtime.tickTimer(7);
+    assert.deepEqual(host.timers, [7]);
+    assert.ok(findTextNode(root, "tick-fired"));
+
+    runtime.applyCommand({ op: Op.cancelInterval, a: 7, b: 0, c: 0, d: 0, e: 0 });
+    assert.equal(runtime.intervals.has(7), false);
+  } finally {
+    runtime.cancelInterval(7);
+  }
+});
+
+test("task commands marshal request and resolve payloads by request id", () => {
+  const { host, runtime } = mountWith([
+    { op: Op.resetDom },
+    { op: Op.startTask, a: 5, strings: ["lookup", "roc"] },
+  ]);
+
+  assert.deepEqual(
+    [...runtime.tasks.entries()].map(([requestId, task]) => ({
+      requestId,
+      name: task.name,
+      request: task.request,
+      aborted: task.controller.signal.aborted,
+    })),
+    [{ requestId: 5, name: "lookup", request: "roc", aborted: false }],
+  );
+
+  runtime.resolveTask(5, "Roc result");
+  assert.deepEqual(host.resolutions, [
+    { requestId: 5, payload: "Roc result", failed: false },
+  ]);
+  assert.equal(runtime.tasks.has(5), false);
+
+  runtime.applyCommand({ op: Op.startTask, a: 6, b: 0, c: 6, d: 6, e: 3 });
+  runtime.applyCommand({ op: Op.cancelTask, a: 6, b: 0, c: 0, d: 0, e: 0 });
+  assert.equal(runtime.tasks.has(6), false);
 });

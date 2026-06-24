@@ -68,6 +68,22 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkClearEvent(elem_id, kind);
         }
 
+        pub fn startInterval(self: @This(), token: u64, period_ms: u64) void {
+            self.host.sinkStartInterval(token, period_ms);
+        }
+
+        pub fn cancelInterval(self: @This(), token: u64) void {
+            self.host.sinkCancelInterval(token);
+        }
+
+        pub fn startTask(self: @This(), request_id: u64, task_name: []const u8, request: []const u8) void {
+            self.host.sinkStartTask(request_id, task_name, request);
+        }
+
+        pub fn cancelTask(self: @This(), request_id: u64) void {
+            self.host.sinkCancelTask(request_id);
+        }
+
         pub fn debugAssertNode(self: @This(), elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64) void {
             self.host.sinkDebugAssertNode(elem_id, active, tag, parent_id, children, click_event, input_event, check_event);
         }

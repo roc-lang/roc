@@ -669,6 +669,13 @@ pub const HostPendingTask = struct {
     active: bool,
 };
 
+pub const HostActiveInterval = struct {
+    token: u64,
+    source_token: HostSignalToken,
+    period_ms: u64,
+    active: bool,
+};
+
 pub const HostSignalEventRoute = struct {
     event_id: u64,
     signal_ids: []u64,
@@ -1995,8 +2002,10 @@ pub fn Engine(comptime Ctx: type) type {
         active_structural_signal_routes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(HostActiveStructuralSignal)) = .empty,
         render_scalar_nodes: std.ArrayListUnmanaged(RenderScalarNodeCache) = .empty,
         pending_tasks: std.ArrayListUnmanaged(HostPendingTask) = .empty,
+        active_intervals: std.ArrayListUnmanaged(HostActiveInterval) = .empty,
         cleanup_events: std.ArrayListUnmanaged([]const u8) = .empty,
         next_task_request_id: u64 = 1,
+        next_interval_token: u64 = 1,
         next_elem_id: u64 = 0,
         roc_host: ?*abi.RocHost = null,
         root_elem: ?abi.Elem = null,
@@ -2446,12 +2455,47 @@ pub fn Engine(comptime Ctx: type) type {
             return count;
         }
 
+        pub fn activeIntervalRecordByToken(self: *Self, source_token: HostSignalToken) ?*HostSignalRecord {
+            var found: ?*HostSignalRecord = null;
+            for (self.active_signal_graph.items) |node| {
+                switch (node.record.payload) {
+                    .interval_source => |payload| {
+                        if (payload.token != source_token) continue;
+                        if (found != null) @panic("interval token matched more than one active interval source");
+                        found = node.record;
+                    },
+                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
+                }
+            }
+            return found;
+        }
+
+        pub fn activeIntervalSourceTokenByRuntimeToken(self: *Self, token: u64) ?HostSignalToken {
+            var found: ?HostSignalToken = null;
+            for (self.active_intervals.items) |interval| {
+                if (!interval.active or interval.token != token) continue;
+                if (found != null) @panic("runtime interval token matched more than one active interval");
+                found = interval.source_token;
+            }
+            return found;
+        }
+
         pub fn pendingTaskCountByName(self: *const Self, name: []const u8) u64 {
             var count: u64 = 0;
             for (self.pending_tasks.items) |task| {
                 if (task.active and std.mem.eql(u8, task.task_name, name)) count += 1;
             }
             return count;
+        }
+
+        pub fn pendingTaskIndexByRequestId(self: *Self, request_id: u64) ?usize {
+            var found: ?usize = null;
+            for (self.pending_tasks.items, 0..) |task, index| {
+                if (!task.active or task.request_id != request_id) continue;
+                if (found != null) @panic("task request id matched more than one pending request");
+                found = index;
+            }
+            return found;
         }
 
         pub fn sourceSignalIdsForEvent(self: *Self, event_id: u64) EventLookupError![]const u64 {
@@ -3049,11 +3093,25 @@ pub fn Engine(comptime Ctx: type) type {
             task.* = undefined;
         }
 
+        pub fn cancelPendingTask(self: *Self, ctx: anytype, task: *HostPendingTask) void {
+            if (task.active) {
+                Ctx.sink(ctx).cancelTask(task.request_id);
+            }
+            self.deinitPendingTask(ctx, task);
+        }
+
+        pub fn clearPendingTasks(self: *Self, ctx: anytype) void {
+            for (self.pending_tasks.items) |*task| {
+                self.cancelPendingTask(ctx, task);
+            }
+            self.pending_tasks.items.len = 0;
+        }
+
         pub fn cancelPendingTasksInScopeSubtree(self: *Self, ctx: anytype, scope_id: u64) void {
             var write_index: usize = 0;
             for (self.pending_tasks.items) |*task| {
                 if (self.scopeIsDescendantOrSelf(task.owner_scope_id, scope_id) catch @panic("scope descriptor referenced an unknown parent scope")) {
-                    self.deinitPendingTask(ctx, task);
+                    self.cancelPendingTask(ctx, task);
                     continue;
                 }
                 self.pending_tasks.items[write_index] = task.*;
@@ -3531,6 +3589,90 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_signal_graph.items.len = 0;
         }
 
+        pub fn clearActiveIntervals(self: *Self, ctx: anytype) void {
+            const roc_host = self.roc_host orelse {
+                if (self.active_intervals.items.len != 0) @panic("active intervals cannot release tokens without a Roc host");
+                self.active_intervals.items.len = 0;
+                return;
+            };
+            for (self.active_intervals.items) |interval| {
+                if (interval.active) {
+                    Ctx.sink(ctx).cancelInterval(interval.token);
+                }
+                abi.decrefBox(@ptrCast(interval.source_token), roc_host);
+            }
+            self.active_intervals.clearRetainingCapacity();
+        }
+
+        fn markActiveIntervalsInactive(self: *Self) void {
+            for (self.active_intervals.items) |*interval| {
+                interval.active = false;
+            }
+        }
+
+        fn activeIntervalBySourceToken(self: *Self, source_token: HostSignalToken) ?*HostActiveInterval {
+            var found: ?*HostActiveInterval = null;
+            for (self.active_intervals.items) |*interval| {
+                if (interval.source_token != source_token) continue;
+                if (found != null) @panic("interval source token matched more than one runtime interval");
+                found = interval;
+            }
+            return found;
+        }
+
+        fn ensureActiveInterval(self: *Self, ctx: anytype, source_token: HostSignalToken, period_ms: u64) void {
+            if (self.activeIntervalBySourceToken(source_token)) |interval| {
+                if (interval.period_ms != period_ms) @panic("interval source token changed period");
+                interval.active = true;
+                return;
+            }
+
+            if (self.next_interval_token == std.math.maxInt(u64)) @panic("host interval token overflowed");
+            const token = self.next_interval_token;
+            self.next_interval_token += 1;
+            abi.increfBox(@ptrCast(source_token), 1);
+            self.active_intervals.append(Ctx.allocator(ctx), .{
+                .token = token,
+                .source_token = source_token,
+                .period_ms = period_ms,
+                .active = true,
+            }) catch {
+                abi.decrefBox(@ptrCast(source_token), self.roc_host.?);
+                @panic("out of memory");
+            };
+            Ctx.sink(ctx).startInterval(token, period_ms);
+        }
+
+        fn syncActiveIntervalsFromGraph(self: *Self, ctx: anytype) void {
+            self.markActiveIntervalsInactive();
+
+            for (self.active_signal_graph.items) |node| {
+                switch (node.record.payload) {
+                    .interval_source => |payload| self.ensureActiveInterval(ctx, payload.token, payload.period_ms),
+                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
+                }
+            }
+
+            const roc_host = self.roc_host orelse {
+                for (self.active_intervals.items) |interval| {
+                    if (!interval.active) @panic("inactive interval cannot release token without a Roc host");
+                }
+                return;
+            };
+
+            var write_index: usize = 0;
+            for (self.active_intervals.items) |interval| {
+                if (!interval.active) {
+                    Ctx.sink(ctx).cancelInterval(interval.token);
+                    abi.decrefBox(@ptrCast(interval.source_token), roc_host);
+                    continue;
+                }
+                self.active_intervals.items[write_index] = interval;
+                write_index += 1;
+            }
+            self.active_intervals.items.len = write_index;
+        }
+
         pub fn clearActiveSignalRoutes(self: *Self, ctx: anytype) void {
             const allocator = Ctx.allocator(ctx);
             for (self.active_source_signal_routes.items) |*route| {
@@ -3806,6 +3948,7 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             self.rebuildActiveSinkSignalRoutesFromStream(ctx, stream);
+            self.syncActiveIntervalsFromGraph(ctx);
         }
 
         fn removeActiveSignalDependentId(self: *Self, ctx: anytype, input_record_id: u64, dependent_record_id: u64) void {
@@ -4498,6 +4641,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.validateActiveRenderDescriptorIntegrity();
             self.rebuildActiveStreamSignalRecordTable(ctx);
             self.rebuildActiveSinkSignalRoutesFromStream(ctx, &self.active_stream);
+            self.syncActiveIntervalsFromGraph(ctx);
 
             return .{
                 .removed_elem_ids = removed_elem_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
@@ -5811,7 +5955,7 @@ pub fn Engine(comptime Ctx: type) type {
             return self.applyDirtyStructuralSignalsLocally(ctx, roc_host, dirty_source_node_ids, changes);
         }
 
-        pub fn appendPendingTask(self: *Self, ctx: anytype, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) void {
+        pub fn appendPendingTask(self: *Self, ctx: anytype, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) u64 {
             const allocator = Ctx.allocator(ctx);
             if (self.next_task_request_id == std.math.maxInt(u64)) @panic("host task request id overflowed");
             const request_id = self.next_task_request_id;
@@ -5836,6 +5980,7 @@ pub fn Engine(comptime Ctx: type) type {
                 allocator.free(request_copy);
                 @panic("out of memory");
             };
+            return request_id;
         }
 
         pub fn pendingTaskIndexByName(self: *Self, name: []const u8) ?usize {
@@ -5984,7 +6129,8 @@ pub fn Engine(comptime Ctx: type) type {
             const request = erased_calls.callErasedHostValueToStr(roc_host, cmd.request_read, request_value);
             defer request.decref(roc_host);
 
-            self.appendPendingTask(ctx, owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
+            const request_id = self.appendPendingTask(ctx, owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
+            Ctx.sink(ctx).startTask(request_id, cmd.task_name.asSlice(), request.asSlice());
 
             const loading = erased_calls.callValueInitThunk(roc_host, task_payload.initial);
             return self.dispatchEffectSourceValue(ctx, roc_host, record, loading);
@@ -5992,6 +6138,20 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn tickIntervalSource(self: *Self, ctx: anytype, roc_host: *abi.RocHost, period_ms: u64) render.Counts {
             const record = self.activeIntervalRecordByPeriod(period_ms) orelse @panic("tick_interval matched no active interval source");
+            const interval_payload = switch (record.payload) {
+                .interval_source => |payload| payload,
+                .ref, .const_value, .map, .map2, .combine, .task_source => unreachable,
+            };
+
+            const current = self.evalHostSignalRecord(ctx, roc_host, record);
+            defer self.dropHostSignalRecordValue(ctx, roc_host, record, current);
+            const next = erased_calls.callErasedHostValueToHostValue(roc_host, interval_payload.tick, current);
+            return self.dispatchEffectSourceValue(ctx, roc_host, record, next);
+        }
+
+        pub fn tickIntervalSourceByRuntimeToken(self: *Self, ctx: anytype, roc_host: *abi.RocHost, token: u64) render.Counts {
+            const source_token = self.activeIntervalSourceTokenByRuntimeToken(token) orelse @panic("timer tick referenced an inactive interval token");
+            const record = self.activeIntervalRecordByToken(source_token) orelse @panic("timer tick matched no active interval source");
             const interval_payload = switch (record.payload) {
                 .interval_source => |payload| payload,
                 .ref, .const_value, .map, .map2, .combine, .task_source => unreachable,

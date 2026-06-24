@@ -18,6 +18,10 @@ export const Op = Object.freeze({
   bindInput: 15,
   bindCheck: 16,
   clearEvent: 17,
+  startInterval: 18,
+  cancelInterval: 19,
+  startTask: 20,
+  cancelTask: 21,
 });
 
 // RenderEventKind enum (render_commands.zig) -> DOM event name. The host emits
@@ -50,20 +54,23 @@ export async function instantiateSignalsWasm(url) {
   return instance;
 }
 
-export async function mountSignalsApp({ wasmUrl, root }) {
+export async function mountSignalsApp({ wasmUrl, root, taskHandler }) {
   const instance = await instantiateSignalsWasm(wasmUrl);
-  const runtime = new SignalsRuntime(instance.exports, root);
+  const runtime = new SignalsRuntime(instance.exports, root, { taskHandler });
   runtime.mount();
   return runtime;
 }
 
 export class SignalsRuntime {
-  constructor(exports, root) {
+  constructor(exports, root, options = {}) {
     this.exports = exports;
     this.root = root;
     this.views = createMemoryViewCache(exports.memory);
     this.nodes = new Map([[0, root]]);
     this.eventCleanups = new Map();
+    this.intervals = new Map();
+    this.tasks = new Map();
+    this.taskHandler = options.taskHandler ?? null;
     // The patch stream is inspectable: `lastCommands` holds the records drained
     // by the most recent host call so guards can assert the per-event patch
     // budget (mirrors the native host's `patches_emitted` discipline).
@@ -81,6 +88,7 @@ export class SignalsRuntime {
 
   unmount() {
     this.views.callHost(this.exports.roc_ui_unmount);
+    this.applyPendingCommands();
     this.clearDom();
   }
 
@@ -109,6 +117,21 @@ export class SignalsRuntime {
       payloadLen,
       boolValue,
     );
+    this.applyPendingCommands();
+  }
+
+  tickTimer(token) {
+    this.views.callHost(this.exports.roc_ui_timer, token);
+    this.applyPendingCommands();
+  }
+
+  resolveTask(requestId, value, failed = false) {
+    const bytes = textEncoder.encode(value);
+    const ptr = this.views.callHost(this.exports.roc_alloc, bytes.length, 1).result;
+    this.views.u8.set(bytes, ptr);
+    this.views.callHost(this.exports.roc_ui_resolve, requestId, ptr, bytes.length, failed ? 1 : 0);
+    this.views.callHost(this.exports.roc_dealloc, ptr, 1);
+    this.tasks.delete(requestId);
     this.applyPendingCommands();
   }
 
@@ -248,6 +271,26 @@ export class SignalsRuntime {
         return;
       }
 
+      case Op.startInterval:
+        this.startInterval(record.a, record.b);
+        return;
+
+      case Op.cancelInterval:
+        this.cancelInterval(record.a);
+        return;
+
+      case Op.startTask:
+        this.startTask(
+          record.a,
+          this.readString(record.b, record.c),
+          this.readString(record.d, record.e),
+        );
+        return;
+
+      case Op.cancelTask:
+        this.cancelTask(record.a);
+        return;
+
       default:
         throw new Error(`unknown render op ${record.op}`);
     }
@@ -286,6 +329,60 @@ export class SignalsRuntime {
     }
   }
 
+  startInterval(token, periodMs) {
+    this.cancelInterval(token);
+    const id = setInterval(() => this.tickTimer(token), periodMs);
+    this.intervals.set(token, id);
+  }
+
+  cancelInterval(token) {
+    const id = this.intervals.get(token);
+    if (id === undefined) {
+      return;
+    }
+    clearInterval(id);
+    this.intervals.delete(token);
+  }
+
+  startTask(requestId, name, request) {
+    this.cancelTask(requestId);
+    const controller = new AbortController();
+    this.tasks.set(requestId, { name, request, controller });
+    if (!this.taskHandler) {
+      return;
+    }
+
+    Promise.resolve(this.taskHandler({ requestId, name, request, signal: controller.signal }))
+      .then((value) => {
+        if (!controller.signal.aborted && this.tasks.has(requestId)) {
+          this.resolveTask(requestId, String(value), false);
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted && this.tasks.has(requestId)) {
+          this.resolveTask(requestId, String(err?.message ?? err), true);
+        }
+      });
+  }
+
+  cancelTask(requestId) {
+    const task = this.tasks.get(requestId);
+    if (!task) {
+      return;
+    }
+    task.controller.abort();
+    this.tasks.delete(requestId);
+  }
+
+  clearAsyncResources() {
+    for (const token of [...this.intervals.keys()]) {
+      this.cancelInterval(token);
+    }
+    for (const requestId of [...this.tasks.keys()]) {
+      this.cancelTask(requestId);
+    }
+  }
+
   node(id) {
     const node = this.nodes.get(id);
     if (!node) {
@@ -295,6 +392,7 @@ export class SignalsRuntime {
   }
 
   clearDom() {
+    this.clearAsyncResources();
     for (const cleanup of this.eventCleanups.values()) {
       cleanup();
     }
