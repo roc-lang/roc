@@ -62,7 +62,7 @@ pub const Buffer = struct {
         return @intFromPtr(self.records.items.ptr);
     }
 
-    pub fn append(self: *Buffer, allocator: std.mem.Allocator, op: Op, a: u32, b: u32, c: u32, d: u32, e: u32) !void {
+    pub fn append(self: *Buffer, allocator: std.mem.Allocator, op: Op, a: u32, b: u32, c: u32, d: u32, e: u32) std.mem.Allocator.Error!void {
         try self.records.append(allocator, Record.init(op, a, b, c, d, e));
     }
 };

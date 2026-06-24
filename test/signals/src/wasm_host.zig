@@ -21,7 +21,6 @@ const WasmHostValueTypeTag = *u64;
 const HostValueTypeTag = WasmHostValueTypeTag;
 const HostValueRegistry = host_value_registry.Registry(HostValueTypeTag, false);
 const HostValueList = abi.RocListWith(HostValue, false);
-const RocStr = abi.RocStr;
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RenderTextField = render.TextField;
 const RenderBoolField = render.BoolField;
@@ -216,11 +215,6 @@ const ActiveEvent = struct {
     transform: abi.RocErasedCallable,
 };
 
-const ErasedUnitArgs = erased_calls.ErasedUnitArgs;
-const ErasedHostValueUnaryArgs = erased_calls.ErasedHostValueUnaryArgs;
-const ErasedHostValueBinaryArgs = erased_calls.ErasedHostValueBinaryArgs;
-const ErasedHostValueListUnaryArgs = erased_calls.ErasedHostValueListUnaryArgs;
-
 fn failHost() noreturn {
     @trap();
 }
@@ -392,7 +386,6 @@ fn updateStateValue(state: *HostState, value: HostValue) bool {
     return true;
 }
 
-const erasedCallablePayload = erased_calls.erasedCallablePayload;
 const callValueInitThunk = erased_calls.callValueInitThunk;
 const callErasedHostValueToHostValue = erased_calls.callErasedHostValueToHostValue;
 const callErasedHostValueHostValueToHostValue = erased_calls.callErasedHostValueHostValueToHostValue;

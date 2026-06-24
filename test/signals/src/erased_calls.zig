@@ -6,7 +6,6 @@
 //! capture pointer — is pure ABI with no host state, so it lives here once and
 //! both hosts alias it. See `DESIGN.md` (one engine, two thin hosts).
 
-const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 
 pub const HostValue = u64;

@@ -10,10 +10,7 @@ const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
 const render = @import("render_commands.zig");
 const render_sink = @import("render_sink.zig");
-const signal_graph = @import("signal_graph.zig");
 const scope_tree = @import("scope_tree.zig");
-const identity_table = @import("identity_table.zig");
-const host_value_registry = @import("host_value_registry.zig");
 const erased_calls = @import("erased_calls.zig");
 const hv = @import("host_values.zig");
 const engine = @import("engine.zig");
@@ -30,9 +27,6 @@ const RenderBoolField = render.BoolField;
 const RenderEventKind = render.EventKind;
 const CommandCounts = render.Counts;
 const HostScopeBranch = scope_tree.Branch;
-const HostNodeIdentity = identity_table.NodeIdentity;
-const HostDomIdentity = identity_table.DomIdentity;
-const HostValueRegistry = host_value_registry.Registry(HostValueTypeTag, host_value_type_tags_enabled);
 
 const host_value_type_tags_enabled = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
@@ -81,8 +75,6 @@ const HostNodeDescriptorStream = engine.HostNodeDescriptorStream;
 const HostActiveStructuralSignalKind = engine.HostActiveStructuralSignalKind;
 const HostDirtyStructuralSignal = engine.HostDirtyStructuralSignal;
 const HostKeyedRowDiffResult = engine.HostKeyedRowDiffResult;
-
-const HostRenderMetrics = render.Metrics;
 
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -375,10 +367,10 @@ const SplitTrailingQuoted = struct {
 };
 
 fn splitTrailingQuoted(input: []const u8) ParseError!SplitTrailingQuoted {
-    const end_quote = std.mem.lastIndexOfScalar(u8, input, '"') orelse return ParseError.InvalidFormat;
+    const end_quote = std.mem.findScalarLast(u8, input, '"') orelse return ParseError.InvalidFormat;
     if (end_quote == 0) return ParseError.InvalidFormat;
     const before_end = input[0..end_quote];
-    const start_quote = std.mem.lastIndexOfScalar(u8, before_end, '"') orelse return ParseError.InvalidFormat;
+    const start_quote = std.mem.findScalarLast(u8, before_end, '"') orelse return ParseError.InvalidFormat;
     const tail = std.mem.trim(u8, input[end_quote + 1 ..], " \t");
     if (tail.len != 0) return ParseError.InvalidFormat;
     return .{
@@ -389,7 +381,7 @@ fn splitTrailingQuoted(input: []const u8) ParseError!SplitTrailingQuoted {
 
 fn splitTrailingToken(input: []const u8) ParseError!struct { head: []const u8, token: []const u8 } {
     const trimmed = std.mem.trim(u8, input, " \t");
-    const space_idx = std.mem.lastIndexOfAny(u8, trimmed, " \t") orelse return ParseError.InvalidFormat;
+    const space_idx = std.mem.findLastAny(u8, trimmed, " \t") orelse return ParseError.InvalidFormat;
     return .{
         .head = std.mem.trim(u8, trimmed[0..space_idx], " \t"),
         .token = std.mem.trim(u8, trimmed[space_idx + 1 ..], " \t"),
@@ -405,7 +397,7 @@ fn parseSingleQuoted(input: []const u8) ParseError![]const u8 {
 fn splitTwoQuoted(input: []const u8) ParseError!struct { first: []const u8, second: []const u8 } {
     const trimmed = std.mem.trim(u8, input, " \t");
     if (trimmed.len < 5 or trimmed[0] != '"') return ParseError.InvalidFormat;
-    const first_end = std.mem.indexOfScalarPos(u8, trimmed, 1, '"') orelse return ParseError.InvalidFormat;
+    const first_end = std.mem.findScalarPos(u8, trimmed, 1, '"') orelse return ParseError.InvalidFormat;
     const rest = std.mem.trim(u8, trimmed[first_end + 1 ..], " \t");
     if (rest.len < 2 or rest[0] != '"' or rest[rest.len - 1] != '"') return ParseError.InvalidFormat;
     return .{
@@ -427,7 +419,7 @@ fn parseLocator(allocator: std.mem.Allocator, input: []const u8) ParseError!Loca
 
     if (std.mem.startsWith(u8, trimmed, "role:")) {
         const rest = trimmed["role:".len..];
-        const space_idx = std.mem.indexOfAny(u8, rest, " \t") orelse return ParseError.InvalidFormat;
+        const space_idx = std.mem.findAny(u8, rest, " \t") orelse return ParseError.InvalidFormat;
         const role = rest[0..space_idx];
         const name_part = std.mem.trim(u8, rest[space_idx + 1 ..], " \t");
         const name = (try parseQuotedValue(allocator, "name:", name_part)) orelse return ParseError.InvalidFormat;
@@ -967,69 +959,6 @@ const HostEnv = struct {
         }
     }
 
-    fn signalKindFromAbi(kind: u64) SignalKind {
-        return switch (kind) {
-            @intFromEnum(SignalKind.source) => .source,
-            @intFromEnum(SignalKind.map) => .map,
-            @intFromEnum(SignalKind.map2) => .map2,
-            else => failHost("Roc signal descriptor used an unknown signal kind"),
-        };
-    }
-
-    fn validateSignalSourceStateIds(self: *HostEnv, kind: SignalKind, source_state_ids: []const u64) void {
-        switch (kind) {
-            .source => {
-                if (source_state_ids.len != 1) {
-                    failHost("Roc source signal descriptor must have exactly one source state id");
-                }
-            },
-            .map, .map2 => {
-                if (source_state_ids.len != 0) {
-                    failHost("Roc derived signal descriptor must not have source state ids");
-                }
-            },
-        }
-
-        for (source_state_ids, 0..) |state_id, index| {
-            if (state_id >= self.engine.states.items.len) {
-                failHost("Roc signal descriptor referenced an unknown source state id");
-            }
-
-            for (source_state_ids[0..index]) |previous| {
-                if (previous == state_id) {
-                    failHost("Roc signal descriptor must not contain duplicate source state ids");
-                }
-            }
-        }
-    }
-
-    fn validateSignalInputIds(self: *HostEnv, signal_id: u64, kind: SignalKind, input_signal_ids: []const u64) void {
-        _ = self;
-        switch (kind) {
-            .source => {
-                if (input_signal_ids.len != 0) {
-                    failHost("Roc source signal descriptor must not have input signal ids");
-                }
-            },
-            .map => {
-                if (input_signal_ids.len != 1) {
-                    failHost("Roc map signal descriptor must have exactly one input signal id");
-                }
-            },
-            .map2 => {
-                if (input_signal_ids.len != 2) {
-                    failHost("Roc map2 signal descriptor must have exactly two input signal ids");
-                }
-            },
-        }
-
-        for (input_signal_ids) |input_signal_id| {
-            if (input_signal_id >= signal_id) {
-                failHost("Roc signal descriptor input ids must reference prior signal ids");
-            }
-        }
-    }
-
     fn clearSignalDescriptors(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
         for (self.engine.signal_descriptors.items) |descriptor| {
@@ -1072,71 +1001,6 @@ const HostEnv = struct {
 
     fn requireActiveSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) u64 {
         return self.engine.requireActiveSignalRecordId(record);
-    }
-
-    fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
-        const allocator = self.gpa.allocator();
-        var route_lists = allocator.alloc(std.ArrayListUnmanaged(u64), self.engine.states.items.len) catch std.process.exit(1);
-        defer allocator.free(route_lists);
-
-        for (route_lists) |*list| {
-            list.* = .empty;
-        }
-        errdefer {
-            for (route_lists) |*list| {
-                list.deinit(allocator);
-            }
-        }
-
-        for (self.engine.signal_descriptors.items) |signal| {
-            if (signal.kind != .source) continue;
-            for (signal.source_state_ids) |state_id| {
-                if (state_id >= self.engine.states.items.len) {
-                    failHost("host signal registry contains an unknown state id");
-                }
-                route_lists[@intCast(state_id)].append(allocator, signal.signal_id) catch std.process.exit(1);
-            }
-        }
-
-        self.clearSignalRoutes();
-
-        for (route_lists, 0..) |*route_list, index| {
-            const signal_ids = route_list.toOwnedSlice(allocator) catch std.process.exit(1);
-            self.engine.signal_routes.append(allocator, .{
-                .state_id = @intCast(index),
-                .signal_ids = signal_ids,
-            }) catch {
-                allocator.free(signal_ids);
-                std.process.exit(1);
-            };
-        }
-    }
-
-    fn validateSignalSourceEventIds(self: *HostEnv, kind: SignalKind, source_event_ids: []const u64) void {
-        switch (kind) {
-            .source => {
-                if (source_event_ids.len == 0) {
-                    failHost("Roc source signal descriptor must have at least one source event id");
-                }
-            },
-            .map, .map2 => {
-                if (source_event_ids.len != 0) {
-                    failHost("Roc derived signal descriptor must not have source event ids");
-                }
-            },
-        }
-
-        for (source_event_ids, 0..) |event_id, index| {
-            if (event_id == 0 or event_id > self.engine.event_descriptors.items.len) {
-                failHost("Roc signal descriptor referenced an unknown source event id");
-            }
-
-            for (source_event_ids[0..index]) |previous| {
-                if (previous == event_id) {
-                    failHost("Roc signal descriptor must not contain duplicate source event ids");
-                }
-            }
-        }
     }
 
     fn rebuildSignalTopologyFromSignals(self: *HostEnv) void {
@@ -2386,18 +2250,10 @@ fn hostValueI64(host: *HostEnv, roc_host: *abi.RocHost, value: i64) HostValue {
     return hv.makeI64(host, roc_host, value);
 }
 
-const ErasedUnitArgs = erased_calls.ErasedUnitArgs;
 const ErasedHostValueUnaryArgs = erased_calls.ErasedHostValueUnaryArgs;
 const ErasedHostValueBinaryArgs = erased_calls.ErasedHostValueBinaryArgs;
-const ErasedHostValueListUnaryArgs = erased_calls.ErasedHostValueListUnaryArgs;
-
-const erasedCallablePayload = erased_calls.erasedCallablePayload;
-
-const callValueInitThunk = erased_calls.callValueInitThunk;
 
 const callErasedHostValueToHostValue = erased_calls.callErasedHostValueToHostValue;
-
-const callErasedHostValueToStartTaskCmd = erased_calls.callErasedHostValueToStartTaskCmd;
 
 const callErasedHostValueHostValueToHostValue = erased_calls.callErasedHostValueHostValueToHostValue;
 
@@ -2406,16 +2262,6 @@ const callErasedHostValueHostValueToElem = erased_calls.callErasedHostValueHostV
 const callErasedHostValueHostValueToBool = erased_calls.callErasedHostValueHostValueToBool;
 
 const callErasedHostValueToUnit = erased_calls.callErasedHostValueToUnit;
-
-const callErasedHostValueToStr = erased_calls.callErasedHostValueToStr;
-
-const callErasedHostValueToBool = erased_calls.callErasedHostValueToBool;
-
-const callErasedHostValueToU64 = erased_calls.callErasedHostValueToU64;
-
-const callErasedHostValueToHostValueList = erased_calls.callErasedHostValueToHostValueList;
-
-const callErasedHostValueListToHostValue = erased_calls.callErasedHostValueListToHostValue;
 
 fn hostEventById(host: *HostEnv, event_id: u64) HostActiveEventDesc {
     if (event_id == 0 or event_id > host.engine.active_events.items.len) {
@@ -2742,7 +2588,7 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
     );
 }
 
-fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: usize, samples: usize, verbose: bool) !c_int {
+fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: usize, samples: usize, verbose: bool) error{}!c_int {
     var bench_gpa = std.heap.DebugAllocator(.{ .safety = true }){};
     defer _ = bench_gpa.deinit();
     const allocator = bench_gpa.allocator();
@@ -2874,7 +2720,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     };
 }
 
-fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
+fn platform_main(spec_file: []const u8, verbose: bool) error{}!c_int {
     _ = base.signal_handler.installForCurrentThread(.{
         .stack_overflow = handleRocStackOverflow,
         .access_violation = handleRocAccessViolation,
@@ -3178,7 +3024,7 @@ fn writeMetricDeltaMismatch(line_num: usize, metric_name: []const u8, expected: 
     writeStderr(msg);
 }
 
-fn appendTestSignalDescriptor(host: *HostEnv, signal_id: u64, kind: SignalKind, source_event_ids: []const u64, input_signal_ids: []const u64) !void {
+fn appendTestSignalDescriptor(host: *HostEnv, signal_id: u64, kind: SignalKind, source_event_ids: []const u64, input_signal_ids: []const u64) std.mem.Allocator.Error!void {
     if (!builtin.is_test) @compileError("appendTestSignalDescriptor is test-only");
 
     const allocator = host.gpa.allocator();
@@ -3812,7 +3658,7 @@ fn testHostValueCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callc
     testDropHostValue(roc_host, capture.value);
 }
 
-fn expectHostValueI64(value: HostValue, expected: i64) !void {
+fn expectHostValueI64(value: HostValue, expected: i64) error{TestExpectedEqual}!void {
     const roc_host = testCurrentRocHost();
     try std.testing.expectEqual(expected, testReadHostValueI64(roc_host, value));
     testDropHostValue(roc_host, value);

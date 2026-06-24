@@ -8233,16 +8233,6 @@ const BodyContext = struct {
         };
     }
 
-    fn instantiateCallTypeFromCaller(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        caller: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        checked_args: []const checked.CheckedExprId,
-    ) Allocator.Error!Type.TypeId {
-        return self.instantiateCallTypeFromCallerAtType(source_fn_ty, caller, checked_ret_ty, checked_args, null);
-    }
-
     fn instantiateCallTypeFromCallerAtType(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,

@@ -8,7 +8,6 @@
 //! bookkeeping — are supplied by the caller through an explicit `roc_host` and a
 //! small duck-typed `ctx`. See `DESIGN.md` (one engine, two thin hosts).
 
-const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 
 pub const HostValue = u64;
