@@ -21,10 +21,10 @@ const truncateUtf8 = @import("config.zig").truncateUtf8;
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
 
-/// True if `title` contains the substring "comptime" (case-insensitive).
-fn titleHasComptime(title: []const u8) bool {
-    const needle = "comptime";
-    if (title.len < needle.len) return false;
+/// True if `title` contains `needle` (which must be lowercase) as a substring,
+/// compared case-insensitively.
+fn titleContainsIgnoreCase(title: []const u8, needle: []const u8) bool {
+    if (needle.len == 0 or title.len < needle.len) return false;
     var i: usize = 0;
     while (i + needle.len <= title.len) : (i += 1) {
         var matches = true;
@@ -51,7 +51,9 @@ fn titleHasComptime(title: []const u8) bool {
 ///     reads as `Title Case`, not `ALL CAPS` — the box/HTML/LSP renderers shout
 ///     it back to ALL CAPS, while markdown keeps the authored case);
 ///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
-///     must never reach user-facing text.
+///     must never reach user-facing text;
+///   - free of any pairing of "annotation" with "need" or "miss" — Roc never
+///     tells users they must annotate their types (see the panic below).
 fn assertValidTitle(title: []const u8) void {
     if (builtin.mode != .Debug) return;
 
@@ -71,7 +73,21 @@ fn assertValidTitle(title: []const u8) void {
         if (c >= 'a' and c <= 'z') has_lower = true;
     }
     std.debug.assert(has_lower);
-    std.debug.assert(!titleHasComptime(title));
+    std.debug.assert(!titleContainsIgnoreCase(title, "comptime"));
+
+    if (titleContainsIgnoreCase(title, "annotation") and
+        (titleContainsIgnoreCase(title, "need") or titleContainsIgnoreCase(title, "miss")))
+    {
+        @panic(
+            "Error-report title pairs \"annotation\" with \"need\"/\"miss\". Roc never tells " ++
+                "users they NEED to annotate their types: unlike many languages, type annotations " ++
+                "are never required as a matter of course, so no part of a diagnostic report should " ++
+                "say a type needs, or is missing, an annotation. When a type is ambiguous, explain " ++
+                "the ambiguity itself; at most, note that one way to make it unambiguous is to " ++
+                "introduce a type annotation somewhere. Reword this report's title, headline, and " ++
+                "body to describe the ambiguity rather than to demand an annotation.",
+        );
+    }
 }
 
 /// A structured report containing error information and formatted content.

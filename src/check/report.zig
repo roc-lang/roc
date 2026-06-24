@@ -2410,19 +2410,18 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: TupleAccessNeedsAnnotation,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Tuple Access Needs Annotation", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Ambiguous Tuple Access", "", .runtime_error);
         errdefer report.deinit();
 
         const field_text = try std.fmt.allocPrint(self.gpa, ".{d}", .{data.elem_index});
         defer self.gpa.free(field_text);
         const owned_field = try report.addOwnedString(field_text);
 
-        try D.renderSlice(&.{
-            D.bytes("I can't infer the full tuple type from this"),
+        try D.renderSliceInto(&.{
+            D.bytes("I can't tell the full type of this tuple from this"),
             D.bytes(owned_field).withAnnotation(.inline_code),
-            D.bytes("access alone:"),
-        }, self, &report);
-        try report.document.addLineBreak();
+            D.bytes("access alone."),
+        }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
@@ -2435,7 +2434,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("Add a type annotation that fixes the tuple's arity before accessing this element."),
+            D.bytes("The tuple's type is ambiguous here. One way to make it unambiguous is to add a type annotation for the tuple somewhere."),
         }, self, &report);
 
         return report;
