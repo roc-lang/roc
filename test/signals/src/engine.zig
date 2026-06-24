@@ -5803,6 +5803,256 @@ pub fn Engine(comptime Ctx: type) type {
             }
             return self.applyDirtyStructuralSignalsLocally(ctx, roc_host, dirty_source_node_ids, changes);
         }
+
+        pub fn appendPendingTask(self: *Self, ctx: anytype, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) void {
+            const allocator = Ctx.allocator(ctx);
+            if (self.next_task_request_id == std.math.maxInt(u64)) @panic("host task request id overflowed");
+            const request_id = self.next_task_request_id;
+            self.next_task_request_id += 1;
+
+            abi.increfBox(@ptrCast(task_token), 1);
+            const task_name_copy = allocator.dupe(u8, task_name) catch @panic("out of memory");
+            const request_copy = allocator.dupe(u8, request) catch {
+                allocator.free(task_name_copy);
+                @panic("out of memory");
+            };
+            self.pending_tasks.append(allocator, .{
+                .request_id = request_id,
+                .owner_scope_id = owner_scope_id,
+                .task_token = task_token,
+                .task_name = task_name_copy,
+                .request = request_copy,
+                .active = true,
+            }) catch {
+                abi.decrefBox(@ptrCast(task_token), self.roc_host.?);
+                allocator.free(task_name_copy);
+                allocator.free(request_copy);
+                @panic("out of memory");
+            };
+        }
+
+        pub fn pendingTaskIndexByName(self: *Self, name: []const u8) ?usize {
+            var found: ?usize = null;
+            for (self.pending_tasks.items, 0..) |task, index| {
+                if (!task.active) continue;
+                if (!std.mem.eql(u8, task.task_name, name)) continue;
+                if (found != null) @panic("fake task result matched more than one pending request");
+                found = index;
+            }
+            return found;
+        }
+
+        pub fn removePendingTaskAt(self: *Self, index: usize) HostPendingTask {
+            if (index >= self.pending_tasks.items.len) @panic("pending task index is out of bounds");
+            const task = self.pending_tasks.items[index];
+            const last_index = self.pending_tasks.items.len - 1;
+            if (index != last_index) {
+                self.pending_tasks.items[index] = self.pending_tasks.items[last_index];
+            }
+            self.pending_tasks.items.len = last_index;
+            return task;
+        }
+
+        pub fn activeTaskRecordByName(self: *Self, name: []const u8) ?*HostSignalRecord {
+            var found: ?*HostSignalRecord = null;
+            for (self.active_signal_graph.items) |node| {
+                switch (node.record.payload) {
+                    .task_source => |payload| {
+                        if (!std.mem.eql(u8, payload.name, name)) continue;
+                        if (found != null) @panic("fake task result matched more than one active task source");
+                        found = node.record;
+                    },
+                    .ref, .const_value, .map, .map2, .combine, .interval_source => {},
+                }
+            }
+            return found;
+        }
+
+        pub fn activeIntervalRecordByPeriod(self: *Self, period_ms: u64) ?*HostSignalRecord {
+            var found: ?*HostSignalRecord = null;
+            for (self.active_signal_graph.items) |node| {
+                switch (node.record.payload) {
+                    .interval_source => |payload| {
+                        if (payload.period_ms != period_ms) continue;
+                        if (found != null) @panic("tick_interval matched more than one active interval source");
+                        found = node.record;
+                    },
+                    .ref, .const_value, .map, .map2, .combine, .task_source => {},
+                }
+            }
+            return found;
+        }
+
+        pub fn rebuildActiveEventsFromStream(self: *Self, ctx: anytype, stream: *HostNodeDescriptorStream) void {
+            const allocator = Ctx.allocator(ctx);
+            self.clearActiveEvents() catch @panic("active event table cannot release retained payloads without a Roc host");
+
+            for (stream.events.items) |*desc| {
+                if (!desc.owns_payload_tag) @panic("event descriptor payload tag ownership was already transferred");
+                if (!desc.owns_payload_drop) @panic("event descriptor payload drop ownership was already transferred");
+                if (!desc.owns_transform) @panic("event descriptor transform ownership was already transferred");
+                self.active_events.append(allocator, .{
+                    .target_node_id = desc.target_node_id,
+                    .payload_kind = desc.payload_kind,
+                    .payload_tag = @ptrCast(desc.payload_tag),
+                    .payload_drop = desc.payload_drop,
+                    .transform = desc.transform,
+                }) catch @panic("out of memory");
+                desc.owns_payload_tag = false;
+                desc.owns_payload_drop = false;
+                desc.owns_transform = false;
+            }
+        }
+
+        pub fn updateEffectSourceCacheSlot(self: *Self, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) bool {
+            switch (cache_slot.*) {
+                .absent => {
+                    cache_slot.replace(roc_host, &self.pending_roc_metrics, value, eq, drop);
+                    return true;
+                },
+                .present => |*cached| {
+                    if (cached.valueEquals(roc_host, value)) {
+                        cached.dropIncoming(roc_host, value);
+                        self.recordSignalPrune();
+                        return false;
+                    }
+                    cached.replaceValue(roc_host, value);
+                    return true;
+                },
+            }
+        }
+
+        pub fn updateEffectSourceCache(self: *Self, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) bool {
+            return switch (record.payload) {
+                .task_source => |*payload| self.updateEffectSourceCacheSlot(roc_host, &payload.cached_value, value, payload.eq, payload.drop),
+                .interval_source => |*payload| self.updateEffectSourceCacheSlot(roc_host, &payload.cached_value, value, payload.eq, payload.drop),
+                .ref, .const_value, .map, .map2, .combine => @panic("effect source update targeted a non-source signal record"),
+            };
+        }
+
+        pub fn applyDirtySignalBatch(self: *Self, ctx: anytype, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) render.Counts {
+            const dirty_structural_signals = self.collectDirtyStructuralSignals(ctx, roc_host, Ctx.allocator(ctx), dirty_source_node_ids, changed_record_ids, dirty_generation);
+            defer Ctx.allocator(ctx).free(dirty_structural_signals);
+
+            var counts = self.applyDirtyRenderSinks(ctx, roc_host, dirty_source_node_ids, changed_record_ids, dirty_generation);
+            if (dirty_structural_signals.len != 0) {
+                counts.addAll(self.applyDirtyStructuralSignalsLocally(ctx, roc_host, dirty_source_node_ids, dirty_structural_signals));
+            }
+            return counts;
+        }
+
+        pub fn dispatchEffectSourceValue(self: *Self, ctx: anytype, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) render.Counts {
+            if (!self.updateEffectSourceCache(roc_host, record, value)) return .{};
+
+            self.recordDispatch();
+            var metrics = self.pending_roc_metrics;
+            metrics.bump(.nodes_recomputed, 1);
+            self.pending_roc_metrics = metrics;
+            const dirty_generation = self.nextDirtySignalGeneration();
+            record.last_dirty_generation = dirty_generation;
+            record.last_dirty_changed = true;
+
+            const record_id = self.requireActiveSignalRecordId(record);
+            const roots = [_]u64{record_id};
+            const dirty_record_ids = self.dirtyActiveSignalRecordIdsForRoots(Ctx.allocator(ctx), &roots);
+            defer Ctx.allocator(ctx).free(dirty_record_ids);
+
+            const changed_record_ids = self.propagateDirtyActiveSignalRecordIds(ctx, roc_host, Ctx.allocator(ctx), dirty_record_ids, &.{}, dirty_generation);
+            defer Ctx.allocator(ctx).free(changed_record_ids);
+            return self.applyDirtySignalBatch(ctx, roc_host, &.{}, changed_record_ids, dirty_generation);
+        }
+
+        pub fn startTaskCommand(self: *Self, ctx: anytype, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct76) render.Counts {
+            const record = self.activeTaskRecordByToken(cmd.task_token) orelse @panic("StartTask referenced a task source that is not active");
+            const task_payload = switch (record.payload) {
+                .task_source => |payload| payload,
+                .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
+            };
+            if (!std.mem.eql(u8, task_payload.name, cmd.task_name.asSlice())) {
+                @panic("StartTask task name does not match the referenced task source");
+            }
+
+            const request_value = erased_calls.callValueInitThunk(roc_host, cmd.request_init);
+            defer erased_calls.callErasedHostValueToUnit(roc_host, cmd.request_drop, request_value);
+            const request = erased_calls.callErasedHostValueToStr(roc_host, cmd.request_read, request_value);
+            defer request.decref(roc_host);
+
+            self.appendPendingTask(ctx, owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
+
+            const loading = erased_calls.callValueInitThunk(roc_host, task_payload.initial);
+            return self.dispatchEffectSourceValue(ctx, roc_host, record, loading);
+        }
+
+        pub fn tickIntervalSource(self: *Self, ctx: anytype, roc_host: *abi.RocHost, period_ms: u64) render.Counts {
+            const record = self.activeIntervalRecordByPeriod(period_ms) orelse @panic("tick_interval matched no active interval source");
+            const interval_payload = switch (record.payload) {
+                .interval_source => |payload| payload,
+                .ref, .const_value, .map, .map2, .combine, .task_source => unreachable,
+            };
+
+            const current = self.evalHostSignalRecord(ctx, roc_host, record);
+            defer self.dropHostSignalRecordValue(ctx, roc_host, record, current);
+            const next = erased_calls.callErasedHostValueToHostValue(roc_host, interval_payload.tick, current);
+            return self.dispatchEffectSourceValue(ctx, roc_host, record, next);
+        }
+
+        pub fn evalDirtyOnChange(self: *Self, ctx: anytype, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc, dirty_source_node_ids: []const u64, dirty_generation: u64) render.Counts {
+            const result = self.evalDirtyHostSignalBinding(ctx, roc_host, &desc.signal, dirty_source_node_ids, dirty_generation);
+            if (!result.changed) {
+                erased_calls.callErasedHostValueToUnit(roc_host, self.hostSignalBindingDropCallable(ctx, &desc.signal), result.value);
+                return .{};
+            }
+            if (!self.updateDirtySignalCache(roc_host, &desc.cached_value, result.value)) return .{};
+
+            const cmd = erased_calls.callErasedHostValueToStartTaskCmd(roc_host, desc.to_cmd, result.value);
+            defer abi.decref__AnonStruct76(cmd, roc_host);
+            return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
+        }
+
+        pub fn applyDirtyRenderSinks(self: *Self, ctx: anytype, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) render.Counts {
+            var counts: render.Counts = .{};
+
+            for (changed_record_ids) |record_id| {
+                const route_index: usize = @intCast(record_id);
+                if (route_index < self.active_text_signal_routes.items.len) {
+                    for (self.active_text_signal_routes.items[route_index].items) |route| {
+                        switch (route.kind) {
+                            .text_node => {
+                                const desc = &self.active_stream.signal_text_nodes.items[route.index];
+                                if (self.evalDirtySignalTextField(ctx, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                                    counts.addTextField(.text);
+                                }
+                            },
+                            .text_attr => {
+                                const desc = &self.active_stream.signal_text_attrs.items[route.index];
+                                if (self.evalDirtySignalTextField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                                    counts.addTextField(desc.field);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                if (route_index < self.active_bool_signal_routes.items.len) {
+                    for (self.active_bool_signal_routes.items[route_index].items) |route| {
+                        const desc = &self.active_stream.signal_bool_attrs.items[route.index];
+                        if (self.evalDirtySignalBoolField(ctx, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
+                            counts.addBoolField(desc.field);
+                        }
+                    }
+                }
+
+                if (route_index < self.active_change_signal_routes.items.len) {
+                    for (self.active_change_signal_routes.items[route_index].items) |route| {
+                        const desc = &self.active_stream.on_changes.items[route.index];
+                        counts.addAll(self.evalDirtyOnChange(ctx, roc_host, desc, dirty_source_node_ids, dirty_generation));
+                    }
+                }
+            }
+
+            self.render_metrics.addCommandCounts(counts);
+            return counts;
+        }
     };
 }
 

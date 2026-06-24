@@ -1002,24 +1002,7 @@ const HostEnv = struct {
     }
 
     fn rebuildActiveEventsFromStream(self: *HostEnv, stream: *HostNodeDescriptorStream) void {
-        const allocator = self.gpa.allocator();
-        self.clearActiveEvents();
-
-        for (stream.events.items) |*desc| {
-            if (!desc.owns_payload_tag) failHost("event descriptor payload tag ownership was already transferred");
-            if (!desc.owns_payload_drop) failHost("event descriptor payload drop ownership was already transferred");
-            if (!desc.owns_transform) failHost("event descriptor transform ownership was already transferred");
-            self.engine.active_events.append(allocator, .{
-                .target_node_id = desc.target_node_id,
-                .payload_kind = desc.payload_kind,
-                .payload_tag = desc.payload_tag,
-                .payload_drop = desc.payload_drop,
-                .transform = desc.transform,
-            }) catch std.process.exit(1);
-            desc.owns_payload_tag = false;
-            desc.owns_payload_drop = false;
-            desc.owns_transform = false;
-        }
+        return self.engine.rebuildActiveEventsFromStream(self, stream);
     }
 
     fn clearSignalEventRoutes(self: *HostEnv) void {
@@ -1390,85 +1373,6 @@ const HostEnv = struct {
             self.deinitPendingTask(task);
         }
         self.engine.pending_tasks.items.len = 0;
-    }
-
-    fn activeTaskRecordByName(self: *HostEnv, name: []const u8) ?*HostSignalRecord {
-        var found: ?*HostSignalRecord = null;
-        for (self.engine.active_signal_graph.items) |node| {
-            switch (node.record.payload) {
-                .task_source => |payload| {
-                    if (!std.mem.eql(u8, payload.name, name)) continue;
-                    if (found != null) failHost("fake task result matched more than one active task source");
-                    found = node.record;
-                },
-                .ref, .const_value, .map, .map2, .combine, .interval_source => {},
-            }
-        }
-        return found;
-    }
-
-    fn activeIntervalRecordByPeriod(self: *HostEnv, period_ms: u64) ?*HostSignalRecord {
-        var found: ?*HostSignalRecord = null;
-        for (self.engine.active_signal_graph.items) |node| {
-            switch (node.record.payload) {
-                .interval_source => |payload| {
-                    if (payload.period_ms != period_ms) continue;
-                    if (found != null) failHost("tick_interval matched more than one active interval source");
-                    found = node.record;
-                },
-                .ref, .const_value, .map, .map2, .combine, .task_source => {},
-            }
-        }
-        return found;
-    }
-
-    fn pendingTaskIndexByName(self: *HostEnv, name: []const u8) ?usize {
-        var found: ?usize = null;
-        for (self.engine.pending_tasks.items, 0..) |task, index| {
-            if (!task.active) continue;
-            if (!std.mem.eql(u8, task.task_name, name)) continue;
-            if (found != null) failHost("fake task result matched more than one pending request");
-            found = index;
-        }
-        return found;
-    }
-
-    fn removePendingTaskAt(self: *HostEnv, index: usize) HostPendingTask {
-        if (index >= self.engine.pending_tasks.items.len) failHost("pending task index is out of bounds");
-        const task = self.engine.pending_tasks.items[index];
-        const last_index = self.engine.pending_tasks.items.len - 1;
-        if (index != last_index) {
-            self.engine.pending_tasks.items[index] = self.engine.pending_tasks.items[last_index];
-        }
-        self.engine.pending_tasks.items.len = last_index;
-        return task;
-    }
-
-    fn appendPendingTask(self: *HostEnv, owner_scope_id: u64, task_token: HostSignalToken, task_name: []const u8, request: []const u8) void {
-        const allocator = self.gpa.allocator();
-        if (self.engine.next_task_request_id == std.math.maxInt(u64)) failHost("host task request id overflowed");
-        const request_id = self.engine.next_task_request_id;
-        self.engine.next_task_request_id += 1;
-
-        abi.increfBox(@ptrCast(task_token), 1);
-        const task_name_copy = allocator.dupe(u8, task_name) catch std.process.exit(1);
-        const request_copy = allocator.dupe(u8, request) catch {
-            allocator.free(task_name_copy);
-            std.process.exit(1);
-        };
-        self.engine.pending_tasks.append(allocator, .{
-            .request_id = request_id,
-            .owner_scope_id = owner_scope_id,
-            .task_token = task_token,
-            .task_name = task_name_copy,
-            .request = request_copy,
-            .active = true,
-        }) catch {
-            abi.decrefBox(@ptrCast(task_token), self.engine.roc_host.?);
-            allocator.free(task_name_copy);
-            allocator.free(request_copy);
-            std.process.exit(1);
-        };
     }
 
     fn clearStates(self: *HostEnv) void {
@@ -2926,91 +2830,20 @@ fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64
     return host.engine.evalDirtySignalBoolField(host, roc_host, elem_id, field, signal, read, cache_slot, dirty_source_node_ids, dirty_generation);
 }
 
-fn updateEffectSourceCacheSlot(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue, eq: abi.RocErasedCallable, drop: abi.RocErasedCallable) bool {
-    switch (cache_slot.*) {
-        .absent => {
-            cache_slot.replace(roc_host, &host.engine.pending_roc_metrics, value, eq, drop);
-            return true;
-        },
-        .present => |*cached| {
-            if (cached.valueEquals(roc_host, value)) {
-                cached.dropIncoming(roc_host, value);
-                recordSignalPrune(host);
-                return false;
-            }
-            cached.replaceValue(roc_host, value);
-            return true;
-        },
-    }
-}
-
-fn updateEffectSourceCache(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) bool {
-    return switch (record.payload) {
-        .task_source => |*payload| updateEffectSourceCacheSlot(host, roc_host, &payload.cached_value, value, payload.eq, payload.drop),
-        .interval_source => |*payload| updateEffectSourceCacheSlot(host, roc_host, &payload.cached_value, value, payload.eq, payload.drop),
-        .ref, .const_value, .map, .map2, .combine => failHost("effect source update targeted a non-source signal record"),
-    };
-}
-
-fn applyDirtySignalBatch(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) CommandCounts {
-    const dirty_structural_signals = collectDirtyStructuralSignals(host, roc_host, host.gpa.allocator(), dirty_source_node_ids, changed_record_ids, dirty_generation);
-    defer host.gpa.allocator().free(dirty_structural_signals);
-
-    var counts = applyDirtyRenderSinks(host, roc_host, dirty_source_node_ids, changed_record_ids, dirty_generation);
-    if (dirty_structural_signals.len != 0) {
-        counts.addAll(applyDirtyStructuralSignalsLocally(host, roc_host, dirty_source_node_ids, dirty_structural_signals));
-    }
-    return counts;
-}
-
 fn dispatchEffectSourceValue(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) CommandCounts {
-    if (!updateEffectSourceCache(host, roc_host, record, value)) return .{};
-
-    host.recordDispatch();
-    var metrics = host.engine.pending_roc_metrics;
-    metrics.bump(.nodes_recomputed, 1);
-    host.engine.pending_roc_metrics = metrics;
-    const dirty_generation = host.nextDirtySignalGeneration();
-    record.last_dirty_generation = dirty_generation;
-    record.last_dirty_changed = true;
-
-    const record_id = host.requireActiveSignalRecordId(record);
-    const roots = [_]u64{record_id};
-    const dirty_record_ids = host.dirtyActiveSignalRecordIdsForRoots(host.gpa.allocator(), &roots);
-    defer host.gpa.allocator().free(dirty_record_ids);
-
-    const changed_record_ids = propagateDirtyActiveSignalRecordIds(host, roc_host, host.gpa.allocator(), dirty_record_ids, &.{}, dirty_generation);
-    defer host.gpa.allocator().free(changed_record_ids);
-    return applyDirtySignalBatch(host, roc_host, &.{}, changed_record_ids, dirty_generation);
+    return host.engine.dispatchEffectSourceValue(host, roc_host, record, value);
 }
 
 fn startTaskCommand(host: *HostEnv, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct76) CommandCounts {
-    const record = host.engine.activeTaskRecordByToken(cmd.task_token) orelse failHost("StartTask referenced a task source that is not active");
-    const task_payload = switch (record.payload) {
-        .task_source => |payload| payload,
-        .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
-    };
-    if (!std.mem.eql(u8, task_payload.name, cmd.task_name.asSlice())) {
-        failHost("StartTask task name does not match the referenced task source");
-    }
-
-    const request_value = callValueInitThunk(roc_host, cmd.request_init);
-    defer callErasedHostValueToUnit(roc_host, cmd.request_drop, request_value);
-    const request = callErasedHostValueToStr(roc_host, cmd.request_read, request_value);
-    defer request.decref(roc_host);
-
-    host.appendPendingTask(owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
-
-    const loading = callValueInitThunk(roc_host, task_payload.initial);
-    return dispatchEffectSourceValue(host, roc_host, record, loading);
+    return host.engine.startTaskCommand(host, roc_host, owner_scope_id, cmd);
 }
 
 fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
-    const pending_index = host.pendingTaskIndexByName(name) orelse failHost("fake task result had no matching pending request");
-    var pending = host.removePendingTaskAt(pending_index);
-    defer host.deinitPendingTask(&pending);
+    const pending_index = host.engine.pendingTaskIndexByName(name) orelse failHost("fake task result had no matching pending request");
+    var pending = host.engine.removePendingTaskAt(pending_index);
+    defer host.engine.deinitPendingTask(host, &pending);
 
-    const record = host.activeTaskRecordByName(name) orelse failHost("fake task result matched no active task source");
+    const record = host.engine.activeTaskRecordByName(name) orelse failHost("fake task result matched no active task source");
     const task_payload = switch (record.payload) {
         .task_source => |payload| payload,
         .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
@@ -3025,33 +2858,11 @@ fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, 
         callErasedHostValueToHostValue(roc_host, task_payload.failed, payload_value)
     else
         callErasedHostValueToHostValue(roc_host, task_payload.done, payload_value);
-    return dispatchEffectSourceValue(host, roc_host, record, next);
+    return host.engine.dispatchEffectSourceValue(host, roc_host, record, next);
 }
 
 fn tickIntervalSource(host: *HostEnv, roc_host: *abi.RocHost, period_ms: u64) CommandCounts {
-    const record = host.activeIntervalRecordByPeriod(period_ms) orelse failHost("tick_interval matched no active interval source");
-    const interval_payload = switch (record.payload) {
-        .interval_source => |payload| payload,
-        .ref, .const_value, .map, .map2, .combine, .task_source => unreachable,
-    };
-
-    const current = evalHostSignalRecord(host, roc_host, record);
-    defer dropHostSignalRecordValue(host, roc_host, record, current);
-    const next = callErasedHostValueToHostValue(roc_host, interval_payload.tick, current);
-    return dispatchEffectSourceValue(host, roc_host, record, next);
-}
-
-fn evalDirtyOnChange(host: *HostEnv, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc, dirty_source_node_ids: []const u64, dirty_generation: u64) CommandCounts {
-    const result = evalDirtyHostSignalBinding(host, roc_host, &desc.signal, dirty_source_node_ids, dirty_generation);
-    if (!result.changed) {
-        callErasedHostValueToUnit(roc_host, hostSignalBindingDropCallable(host, &desc.signal), result.value);
-        return .{};
-    }
-    if (!updateDirtySignalCache(host, roc_host, &desc.cached_value, result.value)) return .{};
-
-    const cmd = callErasedHostValueToStartTaskCmd(roc_host, desc.to_cmd, result.value);
-    defer abi.decref__AnonStruct76(cmd, roc_host);
-    return startTaskCommand(host, roc_host, desc.scope_id, cmd);
+    return host.engine.tickIntervalSource(host, roc_host, period_ms);
 }
 
 fn collectDirtyStructuralSignals(host: *HostEnv, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) []HostDirtyStructuralSignal {
@@ -3059,48 +2870,7 @@ fn collectDirtyStructuralSignals(host: *HostEnv, roc_host: *abi.RocHost, allocat
 }
 
 fn applyDirtyRenderSinks(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changed_record_ids: []const u64, dirty_generation: u64) CommandCounts {
-    var counts: CommandCounts = .{};
-
-    for (changed_record_ids) |record_id| {
-        const route_index: usize = @intCast(record_id);
-        if (route_index < host.engine.active_text_signal_routes.items.len) {
-            for (host.engine.active_text_signal_routes.items[route_index].items) |route| {
-                switch (route.kind) {
-                    .text_node => {
-                        const desc = &host.engine.active_stream.signal_text_nodes.items[route.index];
-                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, .text, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
-                            counts.addTextField(.text);
-                        }
-                    },
-                    .text_attr => {
-                        const desc = &host.engine.active_stream.signal_text_attrs.items[route.index];
-                        if (evalDirtySignalTextField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
-                            counts.addTextField(desc.field);
-                        }
-                    },
-                }
-            }
-        }
-
-        if (route_index < host.engine.active_bool_signal_routes.items.len) {
-            for (host.engine.active_bool_signal_routes.items[route_index].items) |route| {
-                const desc = &host.engine.active_stream.signal_bool_attrs.items[route.index];
-                if (evalDirtySignalBoolField(host, roc_host, desc.elem_id, desc.field, &desc.signal, desc.read, &desc.cached_value, dirty_source_node_ids, dirty_generation)) {
-                    counts.addBoolField(desc.field);
-                }
-            }
-        }
-
-        if (route_index < host.engine.active_change_signal_routes.items.len) {
-            for (host.engine.active_change_signal_routes.items[route_index].items) |route| {
-                const desc = &host.engine.active_stream.on_changes.items[route.index];
-                counts.addAll(evalDirtyOnChange(host, roc_host, desc, dirty_source_node_ids, dirty_generation));
-            }
-        }
-    }
-
-    host.engine.render_metrics.addCommandCounts(counts);
-    return counts;
+    return host.engine.applyDirtyRenderSinks(host, roc_host, dirty_source_node_ids, changed_record_ids, dirty_generation);
 }
 
 fn bindNodeEvent(host: *HostEnv, desc: HostNodeEventDesc, event_id: u64) void {
