@@ -671,7 +671,7 @@ wasm-objdump -x -d rocci-bird.wasm > rocci-bird.disasm.txt
 - [x] Every expression uses root frames.
 - [x] Parent root selection removes child roots in the same frame.
 - [x] Rejected parent roots preserve eligible child roots.
-- [ ] Delayed-effect parent roots finalize correctly.
+- [x] Delayed-effect parent roots finalize correctly.
 - [ ] Nested delayed-effect parents finalize correctly.
 - [x] Leaf/root pruning rules are removed.
 - [x] Observable-effect root blockers are removed.
