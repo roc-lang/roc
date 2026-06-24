@@ -313,9 +313,9 @@ Tests:
 - [x] compile-time-known `if` selects the enclosing `if` root
 - [x] compile-time-known `match` selects the enclosing `match` root
 - [x] untaken branch `crash` is not selected independently
-- [ ] `crash` in selected compile-time branch reports at compile time
-- [ ] `dbg` in selected compile-time branch reports at compile time
-- [ ] failed `expect` in selected compile-time branch reports at compile time
+- [x] `crash` in selected compile-time branch reports at compile time
+- [x] `dbg` in selected compile-time branch reports at compile time
+- [x] failed `expect` in selected compile-time branch reports at compile time
 - [x] effectful parent preserves independent static child root
 - [x] direct effectful call blocks containing parent root
 - [x] delayed parent resolving pure replaces children
@@ -362,7 +362,7 @@ Tests:
 - [x] reachable selected-root failed `expect` reports during `roc check`
 - [x] effectful call inside compile-time-known expression is not evaluated
 - [x] all modules in an import graph run eligible top-level diagnostics
-- [ ] duplicate diagnostics are not emitted for shared top-level/root sources
+- [x] duplicate diagnostics are not emitted for shared top-level/root sources
 - [x] successful unreachable top-level value is not emitted as target data
 
 ## Phase 5: Static Data Output

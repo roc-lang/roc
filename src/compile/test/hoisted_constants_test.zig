@@ -1495,6 +1495,270 @@ test "reachable selected-root expect failure reports during compile-time evaluat
     try std.testing.expect(found);
 }
 
+test "selected compile-time branch crash reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = if True {
+        \\        crash "selected compile-time branch crash"
+        \\    } else {
+        \\        41.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME CRASH")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "selected compile-time branch crash");
+    }
+    try std.testing.expect(found);
+}
+
+test "selected compile-time branch dbg reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = if True {
+        \\        dbg "selected compile-time branch"
+        \\        41.I64
+        \\    } else {
+        \\        42.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        found = true;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "\"selected compile-time branch\"");
+    }
+    try std.testing.expect(found);
+}
+
+test "selected compile-time branch expect failure reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = if True {
+        \\        expect 1.I64 == 2.I64
+        \\        41.I64
+        \\    } else {
+        \\        42.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
+test "top-level value shared with selected root reports compile-time dbg once" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\shared = {
+        \\    dbg "shared top-level root"
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |args| {
+        \\    _ = shared + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var matching_dbg_reports: usize = 0;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        if (try reportContains(gpa, entry.report, "\"shared top-level root\"")) {
+            matching_dbg_reports += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), matching_dbg_reports);
+}
+
 test "effectful top-level call is rejected before compile-time dbg can run" {
     const gpa = std.testing.allocator;
 
