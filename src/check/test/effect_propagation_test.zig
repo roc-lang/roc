@@ -320,6 +320,57 @@ test "effect propagation - closure call with effectful body is effectful" {
     , "EFFECTFUL TOP-LEVEL VALUE");
 }
 
+test "effect propagation - self-recursive pure function stays pure" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\count_down : U64 -> U64
+        \\count_down = |n| if n == 0 { 0 } else { count_down(n - 1) }
+        \\
+        \\top = count_down(3)
+    );
+}
+
+test "effect propagation - self-recursive effectful function is effectful" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\count_down = |n| if n == 0 { tick!({}) } else { count_down(n - 1) }
+        \\
+        \\top = count_down(3)
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - mutually recursive effectful member propagates" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\even = |n| if n == 0 { 0 } else { odd(n - 1) }
+        \\
+        \\odd = |n| if n == 0 { tick!({}) } else { even(n - 1) }
+        \\
+        \\top = even(3)
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - mutually recursive pure group stays pure" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\even = |n| if n == 0 { 0 } else { odd(n - 1) }
+        \\
+        \\odd = |n| if n == 0 { 1 } else { even(n - 1) }
+        \\
+        \\top = even(3)
+    );
+}
+
 test "effect propagation - dbg expect and crash are not effectful calls" {
     try expectNoErrors(
         \\package [] {}
