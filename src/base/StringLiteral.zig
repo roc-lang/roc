@@ -405,7 +405,7 @@ fn expectedNextStringContentStart(previous_end: *usize, string_len: usize) u32 {
     return @intCast(content_start);
 }
 
-fn expectStaticRefcountBefore(bytes: []const u8) anyerror!void {
+fn expectStaticRefcountBefore(bytes: []const u8) error{TestExpectedEqual}!void {
     try testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % Store.static_refcount_alignment);
     const refcount_ptr: *const isize = @ptrCast(@alignCast(bytes.ptr - @sizeOf(isize)));
     try testing.expectEqual(Store.static_refcount_value, refcount_ptr.*);

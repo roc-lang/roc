@@ -26,6 +26,6 @@ pub const handlers = struct {
 };
 
 /// Convenience wrapper to launch the server using stdin/stdout from other modules.
-pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: server.DebugOptions) anyerror!void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: server.DebugOptions) server.RunWithStdIoError!void {
     try server.runWithStdIo(allocator, std_io, debug);
 }

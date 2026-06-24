@@ -31,6 +31,7 @@ const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
 const messages = @import("messages.zig");
 const roc_target = @import("roc_target");
+const watch_inputs = @import("watch_inputs.zig");
 
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
@@ -61,6 +62,13 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const parallel = base.parallel;
 const AtomicUsize = std.atomic.Value(usize);
+
+/// Errors that can occur while publishing compile-time finalization results.
+pub const PublishError = CheckedArtifact.CompileTimeFinalizer.Error;
+/// Errors that can occur while type-checking a module.
+pub const TypeCheckModuleError = Allocator.Error || PublishError || error{Internal};
+/// Errors that can occur while processing a package module.
+pub const ProcessError = Allocator.Error || error{FileNotFound} || TypeCheckModuleError;
 
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
@@ -137,6 +145,10 @@ const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 const ModuleState = struct {
     name: []const u8, // Module name is needed for error reporting and the schedule hook
     path: []const u8,
+    /// Optional source directory used to resolve imports from this module.
+    source_dir_override: ?[]const u8 = null,
+    /// Raw source file state observed before line-ending normalization.
+    source_file_state: ?watch_inputs.State = null,
     semantic: ?OwnedSemanticState = null,
     phase: Phase = .Parse,
     imports: std.ArrayList(ModuleId),
@@ -173,6 +185,10 @@ const ModuleState = struct {
             .env = env,
             .checked_artifact = self.checkedArtifact(),
         };
+    }
+
+    pub fn canonicalSourceDir(self: *const ModuleState, fallback_root_dir: []const u8) []const u8 {
+        return self.source_dir_override orelse (std.fs.path.dirname(self.path) orelse fallback_root_dir);
     }
 
     fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
@@ -275,6 +291,9 @@ const ModuleState = struct {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing path\n", .{self.name});
         }
         gpa.free(self.path);
+        if (self.source_dir_override) |source_dir| {
+            gpa.free(source_dir);
+        }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: done\n", .{self.name});
         }
@@ -519,6 +538,8 @@ pub const PackageEnv = struct {
     builtin_modules: *const BuiltinModules,
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
     roc_ctx: CoreCtx,
+    /// Whether to retain exact source byte states for watch-mode refreshes.
+    track_watch_inputs: bool = false,
 
     lock: Mutex = Mutex.init,
     cond: Condition = Condition.init,
@@ -536,7 +557,7 @@ pub const PackageEnv = struct {
     /// ID of the root module (the module passed to buildRoot)
     root_module_id: ?ModuleId = null,
     /// First error reported by worker threads during multi-threaded processing
-    worker_error: ?anyerror = null,
+    worker_error: ?ProcessError = null,
 
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
@@ -586,6 +607,10 @@ pub const PackageEnv = struct {
             .discovered = std.ArrayList(ModuleId).empty,
             .additional_known_modules = std.ArrayList(KnownModule).empty,
         };
+    }
+
+    pub fn setWatchInputTracking(self: *PackageEnv, enabled: bool) void {
+        self.track_watch_inputs = enabled;
     }
 
     pub fn initWithResolver(
@@ -944,13 +969,13 @@ pub const PackageEnv = struct {
     }
 
     /// Public API for processing a module by name (used by BuildEnv)
-    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) anyerror!void {
+    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) ProcessError!void {
         if (self.module_names.get(module_name)) |module_id| {
             try self.process(.{ .module_id = module_id });
         }
     }
 
-    pub fn process(self: *PackageEnv, task: Task) anyerror!void {
+    pub fn process(self: *PackageEnv, task: Task) ProcessError!void {
         // In dispatch-only mode, this method is invoked by the global scheduler.
         // In local mode, it's invoked by the internal run* loops.
 
@@ -1019,11 +1044,14 @@ pub const PackageEnv = struct {
     fn doParse(self: *PackageEnv, module_id: ModuleId) (Allocator.Error || error{FileNotFound})!void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
-        const src = self.readModuleSource(st.path) catch |read_err| {
+        const source_read = self.readModuleSourceForParse(st.path) catch |read_err| {
             // Note: Let the FileNotFound error propagate naturally
             // The existing error handling will report it appropriately
+            st.source_file_state = if (self.track_watch_inputs) .missing else null;
             return read_err;
         };
+        const src = source_read.source;
+        st.source_file_state = source_read.file_state;
 
         // line starts for diagnostics and consistent positions
 
@@ -1175,6 +1203,22 @@ pub const PackageEnv = struct {
         try self.enqueue(module_id);
     }
 
+    const SourceRead = struct {
+        source: []u8,
+        file_state: ?watch_inputs.State,
+    };
+
+    fn readModuleSourceForParse(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
+        if (!self.track_watch_inputs) {
+            return .{
+                .source = try self.readModuleSource(path),
+                .file_state = null,
+            };
+        }
+
+        return try self.readModuleSourceWithState(path);
+    }
+
     fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
         const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
@@ -1186,6 +1230,28 @@ pub const PackageEnv = struct {
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
+    }
+
+    fn readModuleSourceWithState(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
+        const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+
+        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
+        // This reallocates to the correct size if normalization occurs, ensuring
+        // proper memory management when the buffer is freed later.
+        const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
+            self.gpa.free(data);
+            return err;
+        };
+
+        return .{
+            .source = source,
+            .file_state = file_state,
+        };
     }
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) Allocator.Error!void {
@@ -1211,7 +1277,7 @@ pub const PackageEnv = struct {
         // canonicalize using the AST
         var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
+        const module_dir = st.canonicalSourceDir(self.root_dir);
         try canonicalizeModuleWithSiblings(
             self.roc_ctx,
             env,
@@ -1660,7 +1726,7 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
-    ) anyerror!TypeCheckOutput {
+    ) TypeCheckModuleError!TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
@@ -1750,7 +1816,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return publishCheckedArtifactFromCheckedModuleWithStorage(
             gpa,
             env,
@@ -1768,7 +1834,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
         defer typed.modules.deinit();
         return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
@@ -1785,7 +1851,7 @@ pub const PackageEnv = struct {
         module_env_storage: CheckedArtifact.ModuleEnvStorage,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
+    ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
             modules,
@@ -1806,7 +1872,7 @@ pub const PackageEnv = struct {
         );
     }
 
-    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) anyerror!void {
+    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) TypeCheckModuleError!void {
         var st = &self.modules.items[module_id];
         var env = st.moduleEnv().?;
 

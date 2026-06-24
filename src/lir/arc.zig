@@ -4199,7 +4199,9 @@ const ArcTest = struct {
         return count;
     }
 
-    fn expectRcAtomicity(self: *const ArcTest, local_id: LIR.LocalId, expected: LIR.RcAtomicity) anyerror!void {
+    const ExpectError = error{ TestExpectedEqual, TestUnexpectedResult };
+
+    fn expectRcAtomicity(self: *const ArcTest, local_id: LIR.LocalId, expected: LIR.RcAtomicity) ExpectError!void {
         var seen: usize = 0;
         for (self.store.cf_stmts.items) |stmt| {
             const found: LIR.RcAtomicity = switch (stmt) {
@@ -4294,7 +4296,7 @@ const ArcTest = struct {
         return count;
     }
 
-    fn expectRc(self: *const ArcTest, local_id: LIR.LocalId, increfs: usize, decrefs: usize, frees: usize) anyerror!void {
+    fn expectRc(self: *const ArcTest, local_id: LIR.LocalId, increfs: usize, decrefs: usize, frees: usize) ExpectError!void {
         try testing.expectEqual(increfs, self.countRc(local_id, .incref));
         try testing.expectEqual(decrefs, self.countRc(local_id, .decref));
         try testing.expectEqual(frees, self.countRc(local_id, .free));

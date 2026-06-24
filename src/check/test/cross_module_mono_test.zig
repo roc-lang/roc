@@ -107,6 +107,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
         .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
+        .file_dependencies = serialized_ptr.file_dependencies.deserializeInto(base_ptr),
         .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
         .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
         .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),

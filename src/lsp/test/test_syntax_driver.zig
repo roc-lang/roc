@@ -8,6 +8,7 @@ const std = @import("std");
 const can = @import("can");
 
 const Diagnostics = @import("lsp").diagnostics;
+const syntax = @import("lsp").syntax;
 const completion_handler = @import("lsp").handlers.completion;
 const document_symbol_handler = @import("lsp").handlers.document_symbol;
 
@@ -21,6 +22,9 @@ pub const TestSyntaxDriver = struct {
     highlight_calls: usize = 0,
     document_symbol_calls: usize = 0,
     completion_calls: usize = 0,
+
+    pub const CheckError = syntax.SyntaxChecker.CheckError;
+    pub const QueryError = syntax.SyntaxChecker.QueryError;
 
     pub const LspRange = struct {
         start_line: u32,
@@ -63,7 +67,7 @@ pub const TestSyntaxDriver = struct {
         _: []const u8,
         _: ?[]const u8,
         _: ?[]const u8,
-    ) anyerror![]Diagnostics.PublishDiagnostics {
+    ) CheckError![]Diagnostics.PublishDiagnostics {
         self.check_calls += 1;
         return try self.allocator.alloc(Diagnostics.PublishDiagnostics, 0);
     }
@@ -79,7 +83,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) anyerror!?HoverResult {
+    ) QueryError!?HoverResult {
         self.hover_calls += 1;
         return null;
     }
@@ -90,7 +94,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) anyerror!?DefinitionResult {
+    ) QueryError!?DefinitionResult {
         self.definition_calls += 1;
         return null;
     }
@@ -101,7 +105,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) anyerror!?HighlightResult {
+    ) QueryError!?HighlightResult {
         self.highlight_calls += 1;
         return null;
     }
@@ -111,7 +115,7 @@ pub const TestSyntaxDriver = struct {
         allocator: std.mem.Allocator,
         _: []const u8,
         _: []const u8,
-    ) anyerror![]document_symbol_handler.SymbolInformation {
+    ) QueryError![]document_symbol_handler.SymbolInformation {
         self.document_symbol_calls += 1;
         return try allocator.alloc(document_symbol_handler.SymbolInformation, 0);
     }
@@ -122,7 +126,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) anyerror!?completion_handler.CompletionResult {
+    ) QueryError!?completion_handler.CompletionResult {
         self.completion_calls += 1;
         return null;
     }

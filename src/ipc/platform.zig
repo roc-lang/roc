@@ -61,10 +61,20 @@ pub const windows = if (is_windows) struct {
     pub extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
     pub extern "kernel32" fn GetLastError() DWORD;
     pub extern "kernel32" fn GetSystemInfo(lpSystemInfo: *SYSTEM_INFO) void;
+    pub extern "kernel32" fn VirtualProtect(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flNewProtect: DWORD,
+        lpflOldProtect: *DWORD,
+    ) callconv(.winapi) BOOL;
 
     pub const PAGE_READWRITE = 0x04;
+    pub const PAGE_READONLY = 0x02;
+    pub const PAGE_EXECUTE_READ = 0x20;
+    pub const PAGE_EXECUTE_READWRITE = 0x40;
     pub const FILE_MAP_READ = 0x0004;
     pub const FILE_MAP_WRITE = 0x0002;
+    pub const FILE_MAP_EXECUTE = 0x0020;
     pub const FILE_MAP_ALL_ACCESS = 0x001f;
     pub const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
     pub const FALSE = 0;
@@ -132,6 +142,8 @@ pub const SharedMemoryError = error{
     CreateFileMappingFailed,
     OpenFileMappingFailed,
     MapViewOfFileFailed,
+    TempFileOpenFailed,
+    TempFileUnlinkFailed,
     ShmOpenFailed,
     ShmUnlinkFailed,
     MemfdCreateFailed,
@@ -198,7 +210,7 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
             const handle = windows.CreateFileMappingW(
                 windows.INVALID_HANDLE_VALUE,
                 null, // default security
-                windows.PAGE_READWRITE | windows.SEC_RESERVE,
+                windows.PAGE_EXECUTE_READWRITE | windows.SEC_RESERVE,
                 size_high, // high 32 bits
                 size_low, // low 32 bits
                 null, // anonymous mapping
@@ -225,41 +237,78 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
 
             return fd;
         },
-        .macos, .freebsd, .openbsd, .netbsd => {
-            // Use shm_open with a random name
-            var random_buf: [8]u8 = undefined;
-            io.random(&random_buf);
-            const random_val = std.mem.readInt(u64, &random_buf, .little);
-            // The name is "/roc_shm_" + a u64, so size the buffer to the longest
-            // possible such name (largest u64) plus a NUL — it can never overflow.
-            var shm_name_buf: [std.fmt.count("/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
-            const shm_name_null_terminated = std.fmt.bufPrintZ(&shm_name_buf, "/roc_shm_{}", .{random_val}) catch unreachable;
-            const fd = posix.shm_open(
-                shm_name_null_terminated,
-                @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
-                0o600,
-            );
-
-            if (fd < 0) {
-                return error.ShmOpenFailed;
-            }
-
-            // Immediately unlink so it gets cleaned up when all references are closed
-            if (posix.shm_unlink(shm_name_null_terminated) != 0) {
-                _ = std.c.close(fd);
-                return error.ShmUnlinkFailed;
-            }
-
-            // Set the size of the shared memory
-            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
-                _ = std.c.close(fd);
-                return error.FtruncateFailed;
-            }
-
-            return fd;
-        },
+        .macos, .freebsd, .openbsd, .netbsd => return createPosixShmMapping(io, size),
         else => return error.UnsupportedPlatform,
     }
+}
+
+/// Create shared memory whose pages can later be marked executable.
+pub fn createExecutableMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
+    return switch (builtin.os.tag) {
+        .macos => createUnlinkedTempFileMapping(io, size),
+        else => createMapping(io, size),
+    };
+}
+
+fn createUnlinkedTempFileMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
+    var random_buf: [8]u8 = undefined;
+    io.random(&random_buf);
+    const random_val = std.mem.readInt(u64, &random_buf, .little);
+
+    var file_path_buf: [std.fmt.count("/tmp/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
+    const file_path = std.fmt.bufPrintZ(&file_path_buf, "/tmp/roc_shm_{}", .{random_val}) catch unreachable;
+    const fd = std.c.open(
+        file_path,
+        std.c.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true },
+        @as(std.c.mode_t, 0o600),
+    );
+    if (fd < 0) return error.TempFileOpenFailed;
+
+    if (std.c.unlink(file_path) != 0) {
+        _ = std.c.close(fd);
+        return error.TempFileUnlinkFailed;
+    }
+
+    if (std.c.ftruncate(fd, @intCast(size)) != 0) {
+        _ = std.c.close(fd);
+        return error.FtruncateFailed;
+    }
+
+    return fd;
+}
+
+fn createPosixShmMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
+    // Use shm_open with a random name
+    var random_buf: [8]u8 = undefined;
+    io.random(&random_buf);
+    const random_val = std.mem.readInt(u64, &random_buf, .little);
+    // The name is "/roc_shm_" + a u64, so size the buffer to the longest
+    // possible such name (largest u64) plus a NUL - it can never overflow.
+    var shm_name_buf: [std.fmt.count("/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
+    const shm_name_null_terminated = std.fmt.bufPrintZ(&shm_name_buf, "/roc_shm_{}", .{random_val}) catch unreachable;
+    const fd = posix.shm_open(
+        shm_name_null_terminated,
+        @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
+        0o600,
+    );
+
+    if (fd < 0) {
+        return error.ShmOpenFailed;
+    }
+
+    // Immediately unlink so it gets cleaned up when all references are closed.
+    if (posix.shm_unlink(shm_name_null_terminated) != 0) {
+        _ = std.c.close(fd);
+        return error.ShmUnlinkFailed;
+    }
+
+    // Set the size of the shared memory.
+    if (std.c.ftruncate(fd, @intCast(size)) != 0) {
+        _ = std.c.close(fd);
+        return error.FtruncateFailed;
+    }
+
+    return fd;
 }
 
 /// Open an existing named shared memory mapping
@@ -272,7 +321,7 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
             defer allocator.free(wide_name);
 
             const handle = windows.OpenFileMappingW(
-                windows.FILE_MAP_ALL_ACCESS,
+                windows.FILE_MAP_ALL_ACCESS | windows.FILE_MAP_EXECUTE,
                 windows.FALSE,
                 wide_name,
             );
@@ -320,13 +369,18 @@ pub fn mapMemoryNoLog(handle: Handle, size: usize, base_addr: ?*anyopaque) Share
     return mapMemoryWithLogging(handle, size, base_addr, false);
 }
 
-fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log_failure: bool) SharedMemoryError!*anyopaque {
+fn mapMemoryWithLogging(
+    handle: Handle,
+    size: usize,
+    base_addr: ?*anyopaque,
+    log_failure: bool,
+) SharedMemoryError!*anyopaque {
     switch (builtin.os.tag) {
         .windows => {
             const ptr = if (base_addr) |addr|
                 windows.MapViewOfFileEx(
                     handle,
-                    windows.FILE_MAP_ALL_ACCESS,
+                    windows.FILE_MAP_ALL_ACCESS | windows.FILE_MAP_EXECUTE,
                     0, // offset high
                     0, // offset low
                     size,
@@ -335,7 +389,7 @@ fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log
             else
                 windows.MapViewOfFile(
                     handle,
-                    windows.FILE_MAP_ALL_ACCESS,
+                    windows.FILE_MAP_ALL_ACCESS | windows.FILE_MAP_EXECUTE,
                     0, // offset high
                     0, // offset low
                     size,
@@ -369,6 +423,52 @@ fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log
                 return error.MmapFailed;
             }
             return ptr;
+        },
+        else => return error.UnsupportedPlatform,
+    }
+}
+
+/// Page protection mode for already mapped shared memory.
+pub const MemoryProtection = enum {
+    read_write,
+    read_only,
+    read_execute,
+};
+
+/// Errors raised while changing protection on mapped shared memory.
+pub const MemoryProtectError = error{
+    MprotectFailed,
+    VirtualProtectFailed,
+    UnsupportedPlatform,
+};
+
+/// Change page permissions for an already mapped shared-memory range.
+pub fn protectMappedMemory(
+    ptr: [*]align(1) u8,
+    len: usize,
+    protection: MemoryProtection,
+) MemoryProtectError!void {
+    if (len == 0) return;
+
+    switch (builtin.os.tag) {
+        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
+            const prot: std.posix.PROT = switch (protection) {
+                .read_write => .{ .READ = true, .WRITE = true },
+                .read_only => .{ .READ = true },
+                .read_execute => .{ .READ = true, .EXEC = true },
+            };
+            if (std.c.mprotect(@ptrCast(@alignCast(ptr)), len, prot) != 0) return error.MprotectFailed;
+        },
+        .windows => {
+            const protect: windows.DWORD = switch (protection) {
+                .read_write => windows.PAGE_READWRITE,
+                .read_only => windows.PAGE_READONLY,
+                .read_execute => windows.PAGE_EXECUTE_READ,
+            };
+            var old_protect: windows.DWORD = undefined;
+            if (windows.VirtualProtect(ptr, len, protect, &old_protect) == windows.FALSE) {
+                return error.VirtualProtectFailed;
+            }
         },
         else => return error.UnsupportedPlatform,
     }

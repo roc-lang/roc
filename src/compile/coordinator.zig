@@ -52,6 +52,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const package_source = @import("package_source.zig");
+const watch_inputs = @import("watch_inputs.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -78,6 +79,17 @@ const CanonicalizeImport = messages.CanonicalizeImport;
 const TypeCheckTask = messages.TypeCheckTask;
 const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
+
+const WorkerFailureError = Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong } || compile_package.TypeCheckModuleError;
+const TypeCheckWorkerError = Allocator.Error || compile_package.TypeCheckModuleError;
+const CheckedModuleCacheRunError = eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || compile_package.PublishError || PatternExtractionRegionStatsError || error{
+    UnsupportedBuiltinAnnotationOnly,
+    BuiltinLowLevelAnnotationMustBeFunction,
+    LowLevelOperationsNotFound,
+    HasUserErrors,
+    TestUnexpectedResult,
+};
+const OverwriteFilesUnderDirError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.WriteFileError;
 const TypeCheckedResult = messages.TypeCheckedResult;
 const CompileFailure = messages.CompileFailure;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
@@ -320,6 +332,8 @@ pub const ModuleState = struct {
     path: []const u8,
     /// Source-relative import base override for materialized modules.
     source_dir_override: ?[]const u8 = null,
+    /// Raw source file state observed by the parse worker before normalization.
+    source_file_state: ?watch_inputs.State = null,
     /// Compiler role assigned by the scheduler for this module.
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
@@ -526,6 +540,10 @@ pub const PackageState = struct {
     name: []const u8,
     /// Root directory for the package
     root_dir: []const u8,
+    /// Exact package root file read during dependency discovery.
+    root_file: ?[]const u8,
+    /// Source state consumed for `root_file` during dependency discovery.
+    root_file_state: ?watch_inputs.State,
     /// Source URL data when this package came from a URL bundle.
     url: ?package_source.UrlSource,
     /// All modules in this package
@@ -543,6 +561,8 @@ pub const PackageState = struct {
         return .{
             .name = name,
             .root_dir = root_dir,
+            .root_file = null,
+            .root_file_state = null,
             .url = url,
             .modules = std.ArrayList(ModuleState).empty,
             .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
@@ -582,11 +602,19 @@ pub const PackageState = struct {
             std.debug.print("[PKG DEINIT] {s}: freeing name and root_dir\n", .{self.name});
         }
         if (self.url) |*url| url.deinit(gpa);
+        if (self.root_file) |root_file| gpa.free(root_file);
         gpa.free(self.name);
         gpa.free(self.root_dir);
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] done\n", .{});
         }
+    }
+
+    pub fn setRootInput(self: *PackageState, gpa: Allocator, root_file: []const u8, state: ?watch_inputs.State) Allocator.Error!void {
+        const owned_root_file = try gpa.dupe(u8, root_file);
+        if (self.root_file) |old_root_file| gpa.free(old_root_file);
+        self.root_file = owned_root_file;
+        self.root_file_state = state;
     }
 
     pub fn urlId(self: *const PackageState) ?[]const u8 {
@@ -900,6 +928,8 @@ pub const Coordinator = struct {
     /// Whether to run hosted compiler transformation after canonicalization.
     /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
+    /// Whether to retain exact source byte states for watch-mode refreshes.
+    track_watch_inputs: bool,
 
     /// Package name -> note for packages compiled against a dependency
     /// version they did not declare. Rendered alongside errors from those
@@ -979,6 +1009,7 @@ pub const Coordinator = struct {
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
+            .track_watch_inputs = false,
             .version_notes = std.StringHashMap([]const u8).init(gpa),
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
@@ -1060,6 +1091,10 @@ pub const Coordinator = struct {
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
+    }
+
+    pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
+        self.track_watch_inputs = enabled;
     }
 
     /// Set the I/O / core context implementation. Callers must supply a fully
@@ -1322,6 +1357,181 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
+    }
+
+    pub fn freeWatchInputs(self: *Coordinator, inputs: []const []const u8) void {
+        for (inputs) |path| self.gpa.free(path);
+        self.gpa.free(inputs);
+    }
+
+    pub fn freeWatchInputStates(self: *Coordinator, inputs: []const watch_inputs.Input) void {
+        watch_inputs.deinit(self.gpa, inputs);
+    }
+
+    fn appendWatchInput(
+        self: *Coordinator,
+        paths: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        path: []const u8,
+    ) Allocator.Error!void {
+        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
+        errdefer self.gpa.free(absolute);
+
+        if (seen.contains(absolute)) {
+            self.gpa.free(absolute);
+            return;
+        }
+
+        try paths.append(self.gpa, absolute);
+        errdefer _ = paths.pop();
+        try seen.put(self.gpa, absolute, {});
+    }
+
+    fn appendWatchInputState(
+        self: *Coordinator,
+        inputs: *std.ArrayList(watch_inputs.Input),
+        seen: *std.StringHashMapUnmanaged(void),
+        path: []const u8,
+        state: watch_inputs.State,
+    ) Allocator.Error!void {
+        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
+        errdefer self.gpa.free(absolute);
+
+        if (seen.contains(absolute)) {
+            self.gpa.free(absolute);
+            return;
+        }
+
+        try inputs.append(self.gpa, .{
+            .path = absolute,
+            .state = state,
+        });
+        errdefer _ = inputs.pop();
+        try seen.put(self.gpa, absolute, {});
+    }
+
+    fn appendFileDependencyWatchInputs(
+        self: *Coordinator,
+        paths: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        source_dir: []const u8,
+        env: *const ModuleEnv,
+    ) Allocator.Error!void {
+        for (env.file_dependencies.items.items) |dep| {
+            const relative_path = env.fileDependencyRelativePath(dep);
+            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
+            defer self.gpa.free(full_path);
+            try self.appendWatchInput(paths, seen, full_path);
+        }
+    }
+
+    fn fileDependencyWatchState(dep: ModuleEnv.FileDependency) watch_inputs.State {
+        return switch (dep.state) {
+            .present => .{ .hash = dep.content_hash },
+            .missing => .missing,
+            .unreadable => .unreadable,
+            .pending => unreachable,
+        };
+    }
+
+    fn appendFileDependencyWatchInputStates(
+        self: *Coordinator,
+        inputs: *std.ArrayList(watch_inputs.Input),
+        seen: *std.StringHashMapUnmanaged(void),
+        source_dir: []const u8,
+        env: *const ModuleEnv,
+    ) Allocator.Error!void {
+        for (env.file_dependencies.items.items) |dep| {
+            const relative_path = env.fileDependencyRelativePath(dep);
+            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
+            defer self.gpa.free(full_path);
+            try self.appendWatchInputState(inputs, seen, full_path, fileDependencyWatchState(dep));
+        }
+    }
+
+    /// Collect exact filesystem inputs read by this coordinator run. Returned
+    /// paths are owned by the coordinator allocator and must be released with
+    /// `freeWatchInputs`.
+    pub fn collectWatchInputs(self: *Coordinator) Allocator.Error![]const []const u8 {
+        var paths = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (paths.items) |path| self.gpa.free(path);
+            paths.deinit(self.gpa);
+        }
+
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            if (pkg.url != null) continue;
+
+            if (pkg.root_file) |root_file| {
+                try self.appendWatchInput(&paths, &seen, root_file);
+            }
+
+            for (pkg.modules.items) |*mod| {
+                try self.appendWatchInput(&paths, &seen, mod.path);
+
+                const env = mod.moduleEnv() orelse continue;
+                try self.appendFileDependencyWatchInputs(&paths, &seen, mod.canonicalSourceDir(), env);
+            }
+        }
+
+        return paths.toOwnedSlice(self.gpa);
+    }
+
+    /// Collect exact filesystem inputs read by this coordinator run, paired
+    /// with the state consumed by compilation. Returned paths are owned by the
+    /// coordinator allocator and must be released with `freeWatchInputStates`.
+    pub fn collectWatchInputStates(self: *Coordinator) Allocator.Error![]const watch_inputs.Input {
+        if (!self.track_watch_inputs) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
+            }
+            unreachable;
+        }
+
+        var inputs = std.ArrayList(watch_inputs.Input).empty;
+        errdefer {
+            for (inputs.items) |input| self.gpa.free(input.path);
+            inputs.deinit(self.gpa);
+        }
+
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            if (pkg.url != null) continue;
+
+            if (pkg.root_file) |root_file| {
+                const state = pkg.root_file_state orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("coordinator package {s} has root_file without root_file_state", .{pkg.name});
+                    }
+                    unreachable;
+                };
+                try self.appendWatchInputState(&inputs, &seen, root_file, state);
+            }
+
+            for (pkg.modules.items) |*mod| {
+                const state = mod.source_file_state orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("coordinator module {s} has source path without source_file_state", .{mod.name});
+                    }
+                    unreachable;
+                };
+                try self.appendWatchInputState(&inputs, &seen, mod.path, state);
+
+                const env = mod.moduleEnv() orelse continue;
+                try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), env);
+            }
+        }
+
+        return inputs.toOwnedSlice(self.gpa);
     }
 
     /// Collect published checked artifacts available to post-check lowering.
@@ -1975,7 +2185,7 @@ pub const Coordinator = struct {
     /// Must only be called after `coordinatorLoop` returns and after the
     /// caller has confirmed `hasUserErrors() == false`. Returns
     /// `error.HasUserErrors` if called while user-facing diagnostics exist.
-    pub fn finalizeExecutableArtifacts(self: *Coordinator) anyerror!void {
+    pub fn finalizeExecutableArtifacts(self: *Coordinator) (compile_package.PublishError || error{HasUserErrors})!void {
         if (self.hasUserErrors()) return error.HasUserErrors;
 
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse {
@@ -2051,7 +2261,7 @@ pub const Coordinator = struct {
         });
     }
 
-    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) anyerror!void {
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) (Allocator.Error || error{CompileTimeProblem})!void {
         if (self.hasUserErrors()) {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
@@ -2120,7 +2330,7 @@ pub const Coordinator = struct {
         app_mod: *ModuleState,
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         missing: check.CheckedArtifact.PlatformRequirementMissingValue,
-    ) Allocator.Error!void {
+    ) compile_package.PublishError!void {
         var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
         errdefer report.deinit();
 
@@ -2637,7 +2847,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         publication: compile_package.ArtifactPublicationInputs,
-    ) anyerror!void {
+    ) compile_package.PublishError!void {
         const env = mod.moduleEnv() orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env for {s}", .{mod.name});
@@ -3227,13 +3437,20 @@ pub const Coordinator = struct {
         if (source.len > 0) env_alloc.free(@constCast(source));
     }
 
+    fn sourceFileStateForParseReadError(err: error{ AccessDenied, FileNotFound, IoError, StreamTooLong }) watch_inputs.State {
+        return switch (err) {
+            error.FileNotFound => .missing,
+            error.AccessDenied, error.IoError, error.StreamTooLong => .unreadable,
+        };
+    }
+
     fn appendWorkerFailureReport(
         self: *Coordinator,
         allocator: Allocator,
         reports: *std.ArrayList(Report),
         title: []const u8,
         path: []const u8,
-        err: anyerror,
+        err: WorkerFailureError,
     ) void {
         var rep = Report.init(allocator, title, .fatal);
         const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
@@ -3252,7 +3469,7 @@ pub const Coordinator = struct {
         allocator: Allocator,
         title: []const u8,
         path: []const u8,
-        err: anyerror,
+        err: WorkerFailureError,
     ) std.ArrayList(Report) {
         var reports = std.ArrayList(Report).empty;
         self.appendWorkerFailureReport(allocator, &reports, title, path, err);
@@ -3654,6 +3871,7 @@ pub const Coordinator = struct {
         }
 
         // Take ownership of module env and AST
+        mod.source_file_state = result.source_file_state;
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = result.cached_ast;
 
@@ -4001,6 +4219,8 @@ pub const Coordinator = struct {
             });
             unreachable;
         };
+
+        mod.source_file_state = result.source_file_state;
 
         // Store partial env if available
         if (result.partial_env) |env| {
@@ -4520,11 +4740,16 @@ pub const Coordinator = struct {
                     error.FileNotFound => "FILE NOT FOUND",
                     else => "PARSING FAILED",
                 };
+                const source_file_state = if (self.track_watch_inputs)
+                    sourceFileStateForParseReadError(e)
+                else
+                    null;
                 break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
+                    .source_file_state = source_file_state,
                     .reports = self.workerFailureReports(allocators.result, title, task.path, e),
                     .partial_env = null,
                 } };
@@ -4535,7 +4760,8 @@ pub const Coordinator = struct {
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const src = try self.readModuleSource(task.path, task_allocs.module);
+        const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
+        const src = source_read.source;
 
         // Checked-module disk cache lookup happens after canonicalization, when
         // the coordinator has the exact module identity and import keys.
@@ -4633,6 +4859,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
+                .source_file_state = source_read.file_state,
                 .module_env = env,
                 .cached_ast = parse_ast,
                 .discovered_local_imports = discovered_local_imports,
@@ -4741,7 +4968,7 @@ pub const Coordinator = struct {
         };
     }
 
-    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) anyerror!WorkerResult {
+    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) TypeCheckWorkerError!WorkerResult {
         var check_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
@@ -4816,12 +5043,43 @@ pub const Coordinator = struct {
     }
 
     /// Read module source using the Io abstraction.
+    const SourceRead = struct {
+        source: []u8,
+        file_state: ?watch_inputs.State,
+    };
+
+    fn readModuleSourceForParse(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
+        if (!self.track_watch_inputs) {
+            return .{
+                .source = try self.readModuleSource(path, module_alloc),
+                .file_state = null,
+            };
+        }
+
+        return try self.readModuleSourceWithState(path, module_alloc);
+    }
+
     fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })![]u8 {
         const data = try self.roc_ctx.readFile(path, module_alloc);
         errdefer module_alloc.free(data);
 
         // Normalize line endings
         return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
+    }
+
+    fn readModuleSourceWithState(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
+        const data = try self.roc_ctx.readFile(path, module_alloc);
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+
+        const source = base.source_utils.normalizeLineEndingsRealloc(module_alloc, data) catch |err| {
+            module_alloc.free(data);
+            return err;
+        };
+
+        return .{
+            .source = source,
+            .file_state = file_state,
+        };
     }
 
     /// Worker thread main function
@@ -4905,7 +5163,7 @@ fn compileAppWithCheckedModuleCache(
     allocator: Allocator,
     cache_dir: []const u8,
     app_path: []const u8,
-) anyerror!CheckedModuleCacheRunStats {
+) CheckedModuleCacheRunError!CheckedModuleCacheRunStats {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = true,
@@ -5084,7 +5342,7 @@ fn countHoistedConstants(
     return count;
 }
 
-fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) anyerror!usize {
+fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) OverwriteFilesUnderDirError!usize {
     const io = std.testing.io;
     var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
     defer dir.close(io);
@@ -5291,6 +5549,112 @@ test "Coordinator package creation" {
     const retrieved = coord.packages.get("app");
     try std.testing.expect(retrieved != null);
     try std.testing.expectEqualStrings("app", retrieved.?.name);
+}
+
+test "Coordinator collectWatchInputStates includes package root state" {
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.setWatchInputTracking(true);
+
+    const root_hash = [_]u8{11} ** 32;
+    const pkg = try coord.ensurePackage("pkg", "/test/pkg");
+    try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
+
+    const inputs = try coord.collectWatchInputStates();
+    defer coord.freeWatchInputStates(inputs);
+
+    try std.testing.expectEqual(@as(usize, 1), inputs.len);
+    try std.testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
+    switch (inputs[0].state) {
+        .hash => |hash| try std.testing.expectEqualSlices(u8, &root_hash, &hash),
+        .missing, .unreadable => try std.testing.expect(false),
+    }
+}
+
+test "Coordinator readModuleSource hashes raw CRLF source bytes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    const source = "module [main]\r\n\r\nmain = 1\r\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = source });
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_root, "main.roc" });
+    defer allocator.free(main_path);
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.setWatchInputTracking(true);
+
+    const read = try coord.readModuleSourceWithState(main_path, allocator);
+    defer allocator.free(read.source);
+
+    try testing.expectEqualStrings("module [main]\n\nmain = 1\n", read.source);
+    const expected_hash = watch_inputs.hashBytes(source);
+    switch (read.file_state orelse return error.ExpectedWatchInputState) {
+        .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
+        .missing, .unreadable => try testing.expect(false),
+    }
+}
+
+test "Coordinator collectWatchInputStates includes module source file state" {
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.setWatchInputTracking(true);
+
+    const root_hash = [_]u8{11} ** 32;
+    const module_hash = [_]u8{22} ** 32;
+    const pkg = try coord.ensurePackage("pkg", "/test/pkg");
+    try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
+    const module_id = try pkg.ensureModule(allocator, "Foo", "/test/pkg/Foo.roc");
+    pkg.modules.items[module_id].source_file_state = .{ .hash = module_hash };
+
+    const inputs = try coord.collectWatchInputStates();
+    defer coord.freeWatchInputStates(inputs);
+
+    try std.testing.expectEqual(@as(usize, 2), inputs.len);
+    try std.testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
+    try std.testing.expectEqualStrings("/test/pkg/Foo.roc", inputs[1].path);
+    switch (inputs[1].state) {
+        .hash => |hash| try std.testing.expectEqualSlices(u8, &module_hash, &hash),
+        .missing, .unreadable => try std.testing.expect(false),
+    }
 }
 
 test "Coordinator module creation" {
@@ -5575,6 +5939,7 @@ test "Channel in coordinator context" {
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_file_state = .missing,
             .reports = std.ArrayList(reporting.Report).empty,
             .partial_env = null,
         },
@@ -5826,6 +6191,7 @@ test "Coordinator handleParseFailed advances module to Done" {
             .module_id = module_id,
             .module_name = "Builder",
             .path = "/test/app/Builder.roc",
+            .source_file_state = .missing,
             .reports = std.ArrayList(reporting.Report).empty,
             .partial_env = null,
         },
