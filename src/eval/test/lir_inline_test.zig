@@ -832,6 +832,7 @@ fn markReachableLiftedExpr(
         .dec_lit,
         .str_lit,
         .fn_ref,
+        .static_data,
         .crash,
         .comptime_exhaustiveness_failed,
         .uninitialized,
