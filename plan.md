@@ -279,18 +279,18 @@ Tests:
 
 Tasks:
 
-- [ ] Introduce `ExprCheckResult` and helper constructors.
-- [ ] Convert `checkExpr` to return `ExprCheckResult`.
-- [ ] Convert block and statement checking to combine expression results.
-- [ ] Preserve effect-slot updates while changing return types.
-- [ ] Store immutable local RHS summaries only when later local lookup needs
+- [x] Introduce `ExprCheckResult` and helper constructors.
+- [x] Convert `checkExpr` to return `ExprCheckResult`.
+- [x] Convert block and statement checking to combine expression results.
+- [x] Preserve effect-slot updates while changing return types.
+- [x] Store immutable local RHS summaries only when later local lookup needs
   them.
-- [ ] Return stored summaries for immutable compile-time-known local lookups.
-- [ ] Mark lambda parameters runtime-dependent.
-- [ ] Mark match-bound values runtime-dependent unless introduced by checked
+- [x] Return stored summaries for immutable compile-time-known local lookups.
+- [x] Mark lambda parameters runtime-dependent.
+- [x] Mark match-bound values runtime-dependent unless introduced by checked
   compile-time pattern extraction.
-- [ ] Mark loop-bound values runtime-dependent.
-- [ ] Mark mutable and reassigned locals runtime-dependent.
+- [x] Mark loop-bound values runtime-dependent.
+- [x] Mark mutable and reassigned locals runtime-dependent.
 - [ ] Treat checked top-level value lookups as compile-time-known unless their
   checked summaries say otherwise.
 - [ ] Treat imported checked value lookups as compile-time-known unless their
@@ -299,7 +299,27 @@ Tasks:
   including the initializer's transient expression summary at each use site.
 - [x] Detach hoist-frame and candidate stacks when a forward module-level
   lookup checks another module-level definition as a dependency.
-- [ ] Remove old expression-level `does_fx` as a root eligibility input.
+- [x] Remove old expression-level `does_fx` as a root eligibility input.
+
+Implementation evidence:
+
+- `ExprCheckResult` carries runtime dependency, root-effect state, and
+  runtime-source data; `checkExpr`, `checkBlockStatements`, `checkIfElseExpr`,
+  `checkMatchExpr`, unary/binop helpers, and iterator checking return and
+  combine it.
+- Local immutable summaries are scoped in `local_check_summaries`; local lookup
+  consumes them before deciding whether the lookup is compile-time-known or
+  runtime-dependent.
+- Lambda parameters, loop-bound values, mutable bindings, and reassignments are
+  recorded as runtime-dependent summaries. Match branch binders get contextual
+  binding summaries, with pattern extraction roots used only for checked
+  compile-time extraction cases.
+- Effect state still flows through effect slots; `ExprCheckResult.root_effect`
+  is only the root-selection view of the finalized/delayed effect state.
+- Static-dispatch failures now return an explicit problem result from
+  `checkStaticDispatchConstraints`; `checkExpr` turns that into a poisoned
+  expression summary so erroneous children cannot make parent roots eligible.
+- There is no remaining `does_fx` root-eligibility input in the checker.
 
 Tests:
 
@@ -319,33 +339,51 @@ Tests:
   with the initializer's transient runtime dependency
 - [x] order of first and later top-level constant lookups does not change
   compile-time root selection
-- [ ] erroneous child result poisons the parent without duplicate diagnostics
+- [x] erroneous child result poisons the parent without duplicate diagnostics
 
 ## Phase 3: Maximal Root Selection
 
 Tasks:
 
-- [ ] Add root-candidate stack storage.
-- [ ] Add expression root frames with `candidate_start`.
-- [ ] Add checked control-reachability state to expression frames.
-- [ ] On eligible frame exit, replace child candidates with the parent.
-- [ ] On runtime-dependent or effectful frame exit, preserve child candidates.
-- [ ] Suppress independent publication from runtime-controlled branch bodies.
-- [ ] Suppress independent publication from runtime-controlled match guards.
-- [ ] Suppress independent publication from runtime-controlled match branch
+- [x] Add root-candidate stack storage.
+- [x] Add expression root frames with `candidate_start`.
+- [x] Add checked control-reachability state to expression frames.
+- [x] On eligible frame exit, replace child candidates with the parent.
+- [x] On runtime-dependent or effectful frame exit, preserve child candidates.
+- [x] Suppress independent publication from runtime-controlled branch bodies.
+- [x] Suppress independent publication from runtime-controlled match guards.
+- [x] Suppress independent publication from runtime-controlled match branch
   values.
-- [ ] Allow enclosing compile-time-known `if` and `match` expressions to become
+- [x] Allow enclosing compile-time-known `if` and `match` expressions to become
   roots.
-- [ ] Handle `return` and `break` through explicit control-transfer policy.
-- [ ] Add delayed parent candidates tied to effect slots.
-- [ ] Finalize delayed parents from effect-slot results.
-- [ ] Make nested delayed parents stable by explicit candidate intervals.
-- [ ] Preserve local binding root identity when later lookup uses the binding.
-- [ ] Preserve checked pattern extraction roots only when needed.
+- [x] Handle `return` and `break` through explicit control-transfer policy.
+- [x] Add delayed parent candidates tied to effect slots.
+- [x] Finalize delayed parents from effect-slot results.
+- [x] Make nested delayed parents stable by explicit candidate intervals.
+- [x] Preserve local binding root identity when later lookup uses the binding.
+- [x] Preserve checked pattern extraction roots only when needed.
 - [ ] Delete leaf, string, number, empty-list, record, loop,
   `crash`/`dbg`/`expect`, and source-shape root blockers.
-- [ ] Delete old branch-child preservation rules that can select untaken
+- [x] Delete old branch-child preservation rules that can select untaken
   runtime branches independently.
+
+Implementation evidence:
+
+- `hoist_expr_candidates` is the candidate stack. Each `HoistFrame` stores
+  `candidate_start`, delayed-root interval bounds, suppression state, binding
+  identity, and runtime/effect flags.
+- `finishHoistFrame` is the parent-child replacement point: eligible parents
+  cover children, runtime-dependent or effectful parents flush/preserve
+  children, and suppressed branch regions do not publish independent roots.
+- `checkIfElseExpr` and `checkMatchExpr` check runtime-controlled branch bodies,
+  guards, and branch values through `checkExprWithHoistSelectionSuppressed`.
+- `DelayedHoistRoot` records an effect slot and child intervals; delayed roots
+  finalize from `effectSlotIsEffectful` in reverse interval order.
+- Local binding identity is preserved through `hoist_known_values`,
+  `hoist_selected_bindings`, and `HoistSelectionTransaction`.
+- Checked pattern extraction roots are represented explicitly by
+  `HoistPatternExtraction` and tested for record, tuple, tag, nested, rest, and
+  match extraction cases.
 
 Tests:
 

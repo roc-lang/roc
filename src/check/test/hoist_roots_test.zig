@@ -1013,6 +1013,19 @@ test "hoist roots preserve children for reassigned local dependencies" {
     try std.testing.expect(test_env.checker.selectedHoistedRoots().len > 0);
 }
 
+test "hoist roots poison parent with erroneous child without duplicate diagnostics" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    record = { bad: 1.I64 + "nope", bytes: [1.U8, 2.U8] }
+        \\    record
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_record));
+}
+
 test "hoist roots preserve children for loop-bound value dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {

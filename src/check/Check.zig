@@ -5683,7 +5683,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         // After finalizing numeric defaults, resolve any remaining deferred
         // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
         if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-            try self.checkStaticDispatchConstraints(&env, true);
+            _ = try self.checkStaticDispatchConstraints(&env, true);
         }
     }
 
@@ -6606,7 +6606,7 @@ fn checkInstantiatedStaticDispatchConstraints(
     }
     if (env.deferred_static_dispatch_constraints.items.items.len == deferred_top) return;
 
-    try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
+    _ = try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
     try self.checkAllConstraints(env);
 }
 
@@ -7388,7 +7388,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // After finalizing numeric defaults, resolve any remaining deferred
     // static dispatch constraints (e.g., Dec.not for !3).
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
+        _ = try self.checkStaticDispatchConstraints(&env, true);
     }
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
@@ -7461,7 +7461,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // the return type of methods on numerics stays an unconstrained flex var,
     // causing incorrect .zst layouts.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
+        _ = try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
     }
 
@@ -11495,15 +11495,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     }
 
-    self.var_set.clearRetainingCapacity();
-    if (mb_anno_vars == null) {
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-        }
-    }
-
     // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env, false);
+    const static_dispatch_had_problem = try self.checkStaticDispatchConstraints(env, false);
     if (delayed_dispatch_effect_fn_var) |fn_var| {
         if (self.varIsEffectfulFunction(fn_var)) {
             self.markActiveEffectSlotEffectful();
@@ -11512,6 +11505,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         } else {
             try self.markExprResultDelayedOnDispatch(&check_result, expr_idx, fn_var, env);
+        }
+    }
+
+    self.var_set.clearRetainingCapacity();
+    const expr_contains_error = try self.varContainsError(expr_var, &self.var_set);
+    if (expr_contains_error or static_dispatch_had_problem) {
+        check_result.markPoisoned();
+        if (mb_anno_vars == null) {
+            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
         }
     }
 
@@ -14439,7 +14441,7 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 
     while (self.constraints.items.items.len > 0) {
         try self.checkConstraints(env);
-        try self.checkStaticDispatchConstraints(env, false);
+        _ = try self.checkStaticDispatchConstraints(env, false);
     }
 }
 
@@ -15022,7 +15024,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
 
         // --- 4. Cascade the dispatches the commits unblocked. ---
         while (self.anyDeferredDispatchReceiverResolved(env)) {
-            try self.checkStaticDispatchConstraints(env, true);
+            _ = try self.checkStaticDispatchConstraints(env, true);
         }
     }
 }
@@ -16004,9 +16006,10 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// non-terminating cycle, reported as an infinite type instead of hanging.
 const max_deferred_dispatch_iterations: usize = 1 << 14;
 
-fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
+fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
+    const problem_count_start = self.problems.problems.items.len;
 
     // During this pass, we want to hold onto any flex vars we encounter and
     // check them again later, when maybe they've been resolved
@@ -16827,6 +16830,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         self.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
+    return self.problems.problems.items.len > problem_count_start;
 }
 
 fn reportEffectfulDispatch(
