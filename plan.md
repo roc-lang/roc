@@ -430,6 +430,22 @@ Tests:
 - [x] compile-time evaluation tests pass
 - [x] static-data tests pass
 
+Current audit:
+
+- `exprCanBeStandaloneConstRoot`, `exprCanCoverConstRootChildren`, and
+  `exprCanBeBindingConstRoot` currently allow `crash`, `dbg`, `expect`,
+  numbers, strings, empty lists, empty records, records, tuples, tags, calls,
+  dispatch calls, field access, and `for`.
+- `return` and `break` are excluded only as standalone stored roots; the
+  checker marks those expressions runtime-dependent and includes the returned
+  payload expression where appropriate.
+- Runtime-controlled branch bodies are suppressed by
+  `checkExprWithHoistSelectionSuppressed`, with a comment explaining the
+  compile-time observable behavior being preserved.
+- There is no repo-local static-search test harness yet. Do not replace the
+  focused semantic tests with source-text tests; if source searches are added,
+  they should be CI-side guardrails for forbidden blocker patterns only.
+
 ## Phase 7: Rocci Bird Integration
 
 Tasks:
