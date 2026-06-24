@@ -804,7 +804,7 @@ wc -c rocci-bird.wasm
 
 - [x] `checkExpr` returns `ExprCheckResult`.
 - [x] Blocks and statements combine `ExprCheckResult`.
-- [ ] Expression effect propagation no longer depends on old `does_fx`.
+- [x] Expression effect propagation no longer depends on old `does_fx`.
 - [ ] Immutable local binding summaries are stored only when later lookups need
       them.
 - [ ] Runtime dependency from lambda arguments is detected by the new summary.

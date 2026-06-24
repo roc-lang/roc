@@ -460,18 +460,32 @@ const RootEffect = union(enum) {
 };
 
 const ExprCheckResult = struct {
-    does_fx: bool = false,
     runtime_dep: ?RuntimeDep = null,
     root_effect: ?RootEffect = null,
 
-    fn fromDoesFx(does_fx: bool) ExprCheckResult {
+    fn fromResolvedEffect(is_effectful: bool) ExprCheckResult {
         return .{
-            .does_fx = does_fx,
+            .root_effect = if (is_effectful) .effectful else .effect_free,
         };
     }
 
     fn include(self: *ExprCheckResult, other: ExprCheckResult) void {
-        self.does_fx = other.does_fx or self.does_fx;
+        if (other.isKnownEffectful()) {
+            self.markEffectful();
+        } else if (self.root_effect == null) {
+            self.root_effect = other.root_effect;
+        }
+    }
+
+    fn markEffectful(self: *ExprCheckResult) void {
+        self.root_effect = .effectful;
+    }
+
+    fn isKnownEffectful(self: ExprCheckResult) bool {
+        if (self.root_effect) |root_effect| {
+            return root_effect == .effectful;
+        }
+        return false;
     }
 };
 
@@ -929,8 +943,8 @@ const HoistFrameGuard = struct {
     expr: CIR.Expr.Idx,
     active: bool = true,
 
-    fn finish(self: *HoistFrameGuard, does_fx: bool) Allocator.Error!void {
-        try self.checker.finishHoistFrame(self.expr, does_fx);
+    fn finish(self: *HoistFrameGuard, is_effectful: bool) Allocator.Error!void {
+        try self.checker.finishHoistFrame(self.expr, is_effectful);
         self.active = false;
     }
 
@@ -1638,14 +1652,14 @@ fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
     self.last_hoist_result = null;
 }
 
-fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Error!void {
+fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, is_effectful: bool) Allocator.Error!void {
     if (self.hoist_frames.items.len == 0) {
         std.debug.panic("check invariant violated: missing hoist frame", .{});
     }
     const frame_index = self.hoist_frames.items.len - 1;
     var frame = self.hoist_frames.items[frame_index];
     std.debug.assert(frame.expr == expr);
-    if (does_fx) frame.has_effectful_call = true;
+    if (is_effectful) frame.has_effectful_call = true;
 
     const semantically_eligible = frame.eligible();
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
@@ -6730,12 +6744,12 @@ fn checkExpectBody(
     const effect_slot = try self.beginEffectSlot(.{ .expect_body = expect_region });
     defer self.endEffectSlot(effect_slot);
 
-    const body_does_fx = (try self.checkExpr(body, env, expected)).does_fx;
-    const slot_does_fx = try self.effectSlotIsEffectful(effect_slot);
-    if (slot_does_fx) {
+    const body_is_effectful = (try self.checkExpr(body, env, expected)).isKnownEffectful();
+    const slot_is_effectful = try self.effectSlotIsEffectful(effect_slot);
+    if (slot_is_effectful) {
         _ = try self.reportExpectEffectSlot(effect_slot);
     }
-    return body_does_fx or slot_does_fx;
+    return body_is_effectful or slot_is_effectful;
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -7348,8 +7362,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     self.checking_binding_rhs_pattern = def.pattern;
     const effect_slot = try self.beginEffectSlot(.{ .top_level_value = def_idx });
     defer self.endEffectSlot(effect_slot);
-    const def_does_fx = (try self.checkExpr(def.expr, env, expectation)).does_fx;
-    if (def_does_fx or try self.effectSlotIsEffectful(effect_slot)) {
+    const def_is_effectful = (try self.checkExpr(def.expr, env, expectation)).isKnownEffectful();
+    if (def_is_effectful or try self.effectSlotIsEffectful(effect_slot)) {
         try self.reportTopLevelEffectSlot(effect_slot, env);
     }
     if (def.annotation == null and self.exprAlwaysCrashes(def.expr)) {
@@ -10435,17 +10449,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             }
 
-            const legacy_body_does_fx = if (mb_anno_func) |expected_func| blk: {
-                const lambda_body_does_fx = (try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret))).does_fx;
+            const legacy_body_is_effectful = if (mb_anno_func) |expected_func| blk: {
+                const lambda_body_is_effectful = (try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret))).isKnownEffectful();
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
-                break :blk lambda_body_does_fx;
+                break :blk lambda_body_is_effectful;
             } else blk: {
-                const lambda_body_does_fx = (try self.checkExpr(lambda.body, env, Expected.none())).does_fx;
+                const lambda_body_is_effectful = (try self.checkExpr(lambda.body, env, Expected.none())).isKnownEffectful();
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
-                break :blk lambda_body_does_fx;
+                break :blk lambda_body_is_effectful;
             };
-            const body_does_fx = legacy_body_does_fx or try self.effectSlotIsEffectful(effect_slot);
+            const body_is_effectful = legacy_body_is_effectful or try self.effectSlotIsEffectful(effect_slot);
 
             // Process any pending return constraints (from early returns / ? operator) before
             // creating the function type. This must happen after the body is fully checked
@@ -10457,7 +10471,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.processReturnConstraints(env);
 
             // Create the function type
-            if (body_does_fx) {
+            if (body_is_effectful) {
                 try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
             } else {
                 try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
@@ -10586,7 +10600,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         if (mb_func_info) |info| {
                             if (info.is_effectful) {
                                 self.markActiveEffectSlotEffectful();
-                                check_result.does_fx = true;
+                                check_result.markEffectful();
                             }
                         }
 
@@ -10928,7 +10942,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markActiveEffectSlotEffectful();
-                check_result.does_fx = true;
+                check_result.markEffectful();
             }
         },
         .e_structural_eq => |eq| {
@@ -11040,7 +11054,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markActiveEffectSlotEffectful();
-                check_result.does_fx = true;
+                check_result.markEffectful();
             }
         },
         .e_crash => {
@@ -11058,7 +11072,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_expect => |expect| {
-            check_result.include(ExprCheckResult.fromDoesFx(try self.checkExpectBody(expect.body, env, expected, expr_region)));
+            check_result.include(ExprCheckResult.fromResolvedEffect(try self.checkExpectBody(expect.body, env, expected, expr_region)));
             const body_var = ModuleEnv.varFrom(expect.body);
 
             const bool_var = try self.freshBool(env, expr_region);
@@ -11202,7 +11216,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         if (self.varIsEffectfulFunction(fn_var)) {
             self.markActiveEffectSlotEffectful();
             if (self.current_expect_region == null) {
-                check_result.does_fx = true;
+                check_result.markEffectful();
             }
         }
     }
@@ -11265,7 +11279,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     }
 
-    try hoist_frame.finish(check_result.does_fx);
+    try hoist_frame.finish(check_result.isKnownEffectful());
     return check_result;
 }
 
@@ -12352,7 +12366,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
             .s_expect => |expr_stmt| {
-                check_result.include(ExprCheckResult.fromDoesFx(try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region)));
+                check_result.include(ExprCheckResult.fromResolvedEffect(try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region)));
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 const bool_var = try self.freshBool(env, stmt_region);
