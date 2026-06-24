@@ -421,7 +421,7 @@ const EffectSlotId = enum(u32) { _ };
 const EffectSlotKind = union(enum) {
     function_body: CIR.Expr.Idx,
     top_level_value: CIR.Def.Idx,
-    expect_body: CIR.Node.Idx,
+    expect_body: Region,
     const_root_candidate: u32,
 };
 
@@ -1399,14 +1399,35 @@ fn reportTopLevelEffectSlot(self: *Self, slot: EffectSlotId, env: ?*Env) Allocat
     }
 }
 
-fn markDispatchEffectWatchers(self: *Self, fn_var: Var) Allocator.Error!void {
+fn reportExpectEffectSlot(self: *Self, slot: EffectSlotId) Allocator.Error!bool {
+    const slot_ptr = self.effectSlotPtr(slot);
+    const region = switch (slot_ptr.kind) {
+        .expect_body => |region| region,
+        .function_body,
+        .top_level_value,
+        .const_root_candidate,
+        => return false,
+    };
+    if (!slot_ptr.reported) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+            .region = region,
+        } });
+        slot_ptr.reported = true;
+    }
+    return true;
+}
+
+fn markDispatchEffectWatchers(self: *Self, fn_var: Var) Allocator.Error!bool {
+    var reported_expect = false;
     for (self.dispatch_effect_watches.items) |watch| {
         if (watch.fn_var != fn_var) continue;
         const slot_ptr = self.effectSlotPtr(watch.slot);
         slot_ptr.direct_effect = true;
         slot_ptr.resolved_effectful = null;
+        reported_expect = try self.reportExpectEffectSlot(watch.slot) or reported_expect;
         try self.reportTopLevelEffectSlot(watch.slot, null);
     }
+    return reported_expect;
 }
 
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator.Error!HoistFrameGuard {
@@ -4419,12 +4440,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         switch (stmt) {
             .s_expect => |expr_stmt| {
                 // Check the body expression
-                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
+                _ = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 // Unify with Bool (expects must be bool expressions)
@@ -6531,10 +6547,15 @@ fn checkExpectBody(
     self.current_expect_region = expect_region;
     defer self.current_expect_region = saved_expect_region;
 
-    const effect_slot = try self.beginEffectSlot(.{ .expect_body = ModuleEnv.nodeIdxFrom(body) });
+    const effect_slot = try self.beginEffectSlot(.{ .expect_body = expect_region });
     defer self.endEffectSlot(effect_slot);
 
-    return try self.checkExpr(body, env, expected);
+    const body_does_fx = try self.checkExpr(body, env, expected);
+    const slot_does_fx = self.effectSlotIsEffectful(effect_slot);
+    if (slot_does_fx) {
+        _ = try self.reportExpectEffectSlot(effect_slot);
+    }
+    return body_does_fx or slot_does_fx;
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -10857,11 +10878,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_expect => |expect| {
             const expect_does_fx = try self.checkExpectBody(expect.body, env, expected, expr_region);
-            if (expect_does_fx) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                    .region = expr_region,
-                } });
-            }
             does_fx = expect_does_fx or does_fx;
             const body_var = ModuleEnv.varFrom(expect.body);
 
@@ -12157,11 +12173,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_expect => |expr_stmt| {
                 const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
                 does_fx = expect_does_fx or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
@@ -16319,11 +16330,13 @@ fn reportEffectfulDispatch(
     {
         return;
     }
-    try self.markDispatchEffectWatchers(constraint.fn_var);
-    if (self.expect_region_by_constraint_fn_var.fetchRemove(constraint.fn_var)) |entry| {
-        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-            .region = entry.value,
-        } });
+    const reported_expect = try self.markDispatchEffectWatchers(constraint.fn_var);
+    if (!reported_expect) {
+        if (self.expect_region_by_constraint_fn_var.fetchRemove(constraint.fn_var)) |entry| {
+            _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+                .region = entry.value,
+            } });
+        }
     }
 }
 

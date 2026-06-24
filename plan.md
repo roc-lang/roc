@@ -174,7 +174,7 @@ const EffectSlotId = enum(u32) { _ };
 const EffectSlotKind = union(enum) {
     function_body: CIR.Expr.Idx,
     top_level_value: CIR.Def.Idx,
-    expect_body: CIR.Node.Idx,
+    expect_body: Region,
     const_root_candidate: u32,
 };
 
@@ -628,7 +628,7 @@ Steps:
 - [x] Function effect kinds finalize before checked function output.
 - [ ] Recursive effect groups solve with directed SCC propagation.
 - [x] Top-level effect errors use finalized effect slots.
-- [ ] `expect` effect errors use finalized effect slots.
+- [x] `expect` effect errors use finalized effect slots.
 - [ ] Checked modules export/import explicit effect summaries.
 
 ### Root Selection
