@@ -53,6 +53,13 @@ else. This is not a general "unsupported shape" escape hatch: if a well-checked
 eligible expression cannot be evaluated, stored, restored, or emitted correctly,
 that is a compiler bug to fix with a regression test.
 
+Implementation must never use a checked-module, checked-package, or
+checked-program "has diagnostics" bit as a compile-time-evaluation gate.
+Diagnostics and compile-time roots are parallel checking outputs: a bad
+expression contributes its diagnostic and poisons only dependent root
+candidates, while every independent eligible root in the same artifact is still
+published, evaluated, and later emitted if reachable.
+
 `crash`, `dbg`, and `expect` are compile-time observables. They are not
 effectful calls. If an eligible selected root contains them, they must run
 during checking.
@@ -121,6 +128,8 @@ fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNo
   candidates in that frame's candidate interval.
 - Checker-error poison is expression/dependency-local. It is never a
   module-wide, package-wide, or program-wide hoisting disable switch.
+- Checked artifact diagnostics must be carried alongside compile-time roots,
+  not used to suppress independent roots.
 - No backend may rediscover root eligibility from source shape, names, wasm
   bytes, object symbols, or generated code.
 - No stage after checking reports user-facing type/effect/static-dispatch

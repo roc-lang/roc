@@ -251,6 +251,10 @@ expression whose own dependency region is resolved and otherwise eligible. This
 is required for Roc's recover-and-continue behavior: `roc check`, tests, and
 program execution must keep doing all valid work that does not depend on the
 erroneous code path.
+No downstream compile-time-evaluation step may use a checked artifact's
+nonempty diagnostic list as a reason to skip independent roots; it must consume
+the explicit root list and the per-root poisoned/dependency state produced by
+checking.
 Compiler implementation gaps are not poison. Once checking has accepted an
 eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression
@@ -1079,6 +1083,9 @@ values, unrelated imported modules, or the checked program as a whole. If one
 definition is erroneous and another definition is independently
 compile-time-known, the independent definition must still be evaluated during
 checking and, when reachable, emitted as static data.
+The checked artifact must therefore be able to contain both diagnostics and
+successful compile-time root requests. The presence of diagnostics is not an
+artifact-level root-selection failure.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
