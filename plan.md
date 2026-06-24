@@ -291,10 +291,11 @@ Tasks:
   compile-time pattern extraction.
 - [x] Mark loop-bound values runtime-dependent.
 - [x] Mark mutable and reassigned locals runtime-dependent.
-- [ ] Treat checked top-level value lookups as compile-time-known unless their
-  checked summaries say otherwise.
-- [ ] Treat imported checked value lookups as compile-time-known unless their
-  imported summaries say otherwise.
+- [x] Treat checked top-level value lookups as compile-time-known checked
+  binding identities without replaying initializer summaries at each use.
+- [x] Treat imported checked value lookups as compile-time-known checked
+  binding identities without replaying imported initializer summaries at each
+  use.
 - [x] Treat module-level lookups as checked binding identities instead of
   including the initializer's transient expression summary at each use site.
 - [x] Detach hoist-frame and candidate stacks when a forward module-level
@@ -319,6 +320,10 @@ Implementation evidence:
 - Static-dispatch failures now return an explicit problem result from
   `checkStaticDispatchConstraints`; `checkExpr` turns that into a poisoned
   expression summary so erroneous children cannot make parent roots eligible.
+- Top-level and imported value lookups are compile-time-known identities at the
+  use site. Checked summaries remain available for runtime-source callable
+  decisions and checked artifact output; ordinary initializer runtime dependency
+  is not replayed into each lookup.
 - There is no remaining `does_fx` root-eligibility input in the checker.
 
 Tests:
