@@ -845,6 +845,112 @@ test "reachable function-valued constant restores without static data literal" {
     try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
 }
 
+test "provided boxed finite callable captures static list data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_box_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!, boxed] { pf: platform "./.roc_box_platform/main.roc" }
+        \\
+        \\main! = || {}
+        \\
+        \\base = [1.I64, 2.I64]
+        \\
+        \\boxed : Box((I64 -> I64))
+        \\boxed = Box.box(|value| value + List.len(base).to_i64_wrap())
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_box_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : () => {}, boxed : Box((I64 -> I64)) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host!, "roc_boxed": boxed_for_host }
+        \\
+        \\main_for_host! : () => {}
+        \\main_for_host! = main!
+        \\
+        \\boxed_for_host : Box((I64 -> I64))
+        \\boxed_for_host = boxed
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const captured_list_payload = [_]u8{
+        1, 0, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0, 0, 0,
+    };
+    const shared_payload = findExportContainingSequence(exports, &captured_list_payload) orelse return error.CapturedListPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &captured_list_payload));
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
+}
+
 test "reachable local List.iter hoist stores iterator const data" {
     const gpa = std.testing.allocator;
 

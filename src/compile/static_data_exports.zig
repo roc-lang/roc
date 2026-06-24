@@ -377,7 +377,7 @@ const StaticDataBuilder = struct {
                 };
                 try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = backing }, named.backing, layout_idx);
             },
-            .fn_value => staticDataInvariant("provided function-valued data export reached finite callable static materialization"),
+            .fn_value => |set| try self.writeFnValue(bytes, relocations, base_offset, node.module, value, set, layout_idx),
             .erased_fn => |set| try self.writeErasedFn(bytes, relocations, base_offset, node.module, value, set, layout_idx),
         }
     }
@@ -721,6 +721,78 @@ const StaticDataBuilder = struct {
 
         const tag_data = self.layouts().getTagUnionData(tag_layout.getTagUnion().idx);
         tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant);
+    }
+
+    fn writeFnValue(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        source: ConstModule,
+        value: ConstValue,
+        set_id: lir.Program.FnSetId,
+        callable_layout_idx: layout.Idx,
+    ) MaterializationError!void {
+        const fn_id = switch (value) {
+            .fn_value => |fn_id| fn_id,
+            else => staticDataInvariant("finite callable const plan received non-function ConstStore node"),
+        };
+        const raw = @intFromEnum(fn_id);
+        if (raw >= source.store.fns.items.len) staticDataInvariant("ConstStore function id is out of range");
+        const fn_value = source.store.getFn(@enumFromInt(raw));
+        const set = self.lowered.lir_result.fn_sets.items[@intFromEnum(set_id)];
+        if (set.layout != callable_layout_idx) {
+            staticDataInvariant("finite callable const plan layout differed from requested static data layout");
+        }
+        const variant = fnVariantForConstFn(set, fn_value);
+
+        const callable_layout = self.layoutValue(callable_layout_idx);
+        if (callable_layout.tag == .zst) {
+            if (self.layouts().layoutSize(self.layoutValue(variant.payload_layout)) != 0) {
+                staticDataInvariant("ZST finite callable layout had non-ZST capture payload");
+            }
+            return;
+        }
+
+        if (callable_layout.tag == .tag_union) {
+            const tag_info = self.layouts().getTagUnionInfo(callable_layout);
+            const active_payload_layout_idx = tag_info.variants.get(@intCast(variant.discriminant)).payload_layout;
+            if (active_payload_layout_idx != variant.payload_layout) {
+                staticDataInvariant("finite callable variant payload layout differed from committed tag-union payload layout");
+            }
+            try self.writeCaptures(
+                bytes,
+                relocations,
+                base_offset,
+                source,
+                fn_value,
+                variant.captures,
+                active_payload_layout_idx,
+            );
+            const tag_data = self.layouts().getTagUnionData(callable_layout.getTagUnion().idx);
+            tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant);
+            return;
+        }
+
+        try self.writeCaptures(
+            bytes,
+            relocations,
+            base_offset,
+            source,
+            fn_value,
+            variant.captures,
+            callable_layout_idx,
+        );
+    }
+
+    fn fnVariantForConstFn(
+        set: lir.Program.FnSet,
+        fn_value: ConstFn,
+    ) lir.Program.FnVariant {
+        for (set.variants) |variant| {
+            if (sameFnTemplate(fn_value, variant.template)) return variant;
+        }
+        staticDataInvariant("finite callable ConstStore function was absent from LIR callable variants");
     }
 
     fn writeErasedFn(

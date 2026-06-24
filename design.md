@@ -243,10 +243,14 @@ once instead of being hidden by hoisting or reported again by a parent root.
 Static-dispatch failures, type errors, and other checker-owned problems must
 feed this poison result explicitly through the same expression summary path.
 Poison is local to the expression or dependency region that owns the checking
-problem; it must not disable hoisting for unrelated expressions in the same
-module or program. A checked module or checked program may contain user-facing
-diagnostics and still produce hoisted roots for every independent expression
-whose own dependency region is resolved and otherwise eligible.
+problem. It propagates only through explicit checked dependencies, such as a
+lookup of an erroneous local or top-level value. It must never become a module,
+package, or program flag. A checked module or checked program may contain
+user-facing diagnostics and still produce hoisted roots for every independent
+expression whose own dependency region is resolved and otherwise eligible. This
+is required for Roc's recover-and-continue behavior: `roc check`, tests, and
+program execution must keep doing all valid work that does not depend on the
+erroneous code path.
 Compiler implementation gaps are not poison. Once checking has accepted an
 eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression
@@ -1066,6 +1070,15 @@ checked plan does not identify a pure compile-time-evaluable operation.
 Low-level operations may participate only through explicit checked purity and
 totality metadata; they must never be allowed by whitelist, name, or backend
 knowledge.
+
+Checking errors are dependency-local for hoistability. A malformed expression,
+unresolved static-dispatch call, type error, or other checker-owned diagnostic
+poisons the expression that owns the error and any expression that explicitly
+depends on it. It does not poison sibling definitions, unrelated top-level
+values, unrelated imported modules, or the checked program as a whole. If one
+definition is erroneous and another definition is independently
+compile-time-known, the independent definition must still be evaluated during
+checking and, when reachable, emitted as static data.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,

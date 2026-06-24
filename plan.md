@@ -47,9 +47,11 @@ poison is local to the expression or dependency region that owns the checking
 error. A separate eligible expression elsewhere in the same module or program
 must still be hoisted. A module or program that contains diagnostics is not
 globally disqualified from compile-time evaluation; only the affected
-expression/dependency region is. This is not a general "unsupported shape" escape hatch:
-if a well-checked eligible expression cannot be evaluated, stored, restored, or
-emitted correctly, that is a compiler bug to fix with a regression test.
+expression/dependency region is. Poison propagates through explicit checked
+dependencies, such as using an erroneous local or top-level value, and nowhere
+else. This is not a general "unsupported shape" escape hatch: if a well-checked
+eligible expression cannot be evaluated, stored, restored, or emitted correctly,
+that is a compiler bug to fix with a regression test.
 
 `crash`, `dbg`, and `expect` are compile-time observables. They are not
 effectful calls. If an eligible selected root contains them, they must run
@@ -91,8 +93,7 @@ This part is already implemented and tested:
 
 The remaining blockers are:
 
-- no failing test yet locks down the local `List.iter`/`Iter` shape
-- static-data selection in Monotype is still value-only:
+- static-data selection in Monotype is still partly value-only:
 
 ```zig
 fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNodeId) bool
@@ -101,12 +102,10 @@ fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNo
 - that value-only function treats `.fn_value` as "no static data," which is
   wrong for a reachable aggregate whose runtime representation contains a
   callable payload
-- static-data export generation still rejects finite callable plans:
-
-```zig
-.fn_value => staticDataInvariant("provided function-valued data export reached finite callable static materialization")
-```
-
+- finite callable static-data materialization exists for the captured-list
+  path, but still needs complete focused coverage for zero-capture,
+  scalar-capture, nested-callable-capture, and multi-variant callable-set
+  layouts
 - erased callable static data exists, but needs focused tests in the
   callable-containing aggregate path
 - cross-module compile-time diagnostics need tests proving every eligible
@@ -120,6 +119,8 @@ fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNo
   expression traversal in `src/check/Check.zig`.
 - There is one subsumption rule: an eligible parent frame replaces child
   candidates in that frame's candidate interval.
+- Checker-error poison is expression/dependency-local. It is never a
+  module-wide, package-wide, or program-wide hoisting disable switch.
 - No backend may rediscover root eligibility from source shape, names, wasm
   bytes, object symbols, or generated code.
 - No stage after checking reports user-facing type/effect/static-dispatch
@@ -192,6 +193,40 @@ Expected:
 - the record root is selected
 - the list child is not selected
 - the function expression is not selected as a data root
+
+Add checker-error poison locality tests:
+
+```roc
+bad = unknown_name
+
+good = [1.I64, 2.I64].iter()
+
+main = good
+```
+
+Expected:
+
+- the `bad` definition owns the original checking diagnostic
+- `good` is still selected/evaluated as a compile-time root
+- `main` still depends on the stored `good` value
+- no module-wide or program-wide "has diagnostics" bit suppresses `good`
+
+Add the dependent poisoned case:
+
+```roc
+bad = unknown_name
+
+dependent = [bad, 1.I64].iter()
+
+independent = [2.I64, 3.I64].iter()
+```
+
+Expected:
+
+- `dependent` is not selected because it explicitly depends on `bad`
+- `independent` is still selected
+- the original `bad` diagnostic is not duplicated by attempting to hoist
+  `dependent`
 
 ### Compile-Time Diagnostic Tests
 
@@ -649,9 +684,10 @@ zig build -Doptimize=ReleaseSmall
 - [x] Imported eligible top-level diagnostics run during checking.
 - [x] Unreachable successful evaluated constants do not emit target static data.
 - [x] Maximal root subsumption is tested for callable-containing aggregates.
+- [x] Finite callable static data materializes a captured static list.
 - [ ] Static-data selection consumes explicit value and type/layout data.
 - [ ] Erased callable static data is covered by tests.
-- [ ] Finite callable static data is implemented and covered by tests.
+- [ ] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
 - [ ] Reachability marks callable static-data procedures and capture plans.
 - [ ] Rocci Bird with `base_points.iter()` builds with `--opt=size`.
 - [ ] Rocci Bird disassembly proves the base iterator is static, shared data.
