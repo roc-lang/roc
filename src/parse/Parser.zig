@@ -4570,6 +4570,7 @@ fn runExprStatementKernel(
                                 .var_tok = state.var_tok,
                                 .args = args,
                                 .ret_anno = fn_type.ret,
+                                .effectful = fn_type.effectful,
                             } }));
                             continue :expr_kernel .where_after_clause;
                         }
@@ -4584,6 +4585,7 @@ fn runExprStatementKernel(
                             .var_tok = state.var_tok,
                             .args = empty_args,
                             .ret_anno = completed,
+                            .effectful = false,
                         } }));
                         continue :expr_kernel .where_after_clause;
                     },

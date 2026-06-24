@@ -1622,6 +1622,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
                 .method_name = method_name,
                 .args = .{ .span = .{ .start = args_ret.start, .len = args_ret.len } },
                 .ret = @enumFromInt(args_ret.node),
+                .effectful = p.effectful != 0,
             } };
         },
         .where_alias => {
@@ -2905,6 +2906,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
                 .var_idx = @intFromEnum(where_method.var_),
                 .name = @bitCast(where_method.method_name),
                 .args_ret_idx = args_ret_idx,
+                .effectful = @intFromBool(where_method.effectful),
             } });
         },
         .w_alias => |mod_alias| {

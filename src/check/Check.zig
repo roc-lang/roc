@@ -1298,7 +1298,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         !self.varIsFunctionType(ModuleEnv.varFrom(expr));
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
     const has_child_candidates = self.hoist_expr_candidates.items.len > frame.candidate_start;
-    const action: HoistSelectionAction = if (selection_suppressed)
+    const action: HoistSelectionAction = if (selection_suppressed or frame.has_observable_effect)
         .suppress_children
     else if (current_covers_children)
         .cover_with_current_root
@@ -1314,6 +1314,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
 
     const should_flush_deferred_binding_dependencies = frame.binding_rhs and
+        !frame.has_observable_effect and
         !binding_rhs_can_cover_children and
         !selection_suppressed and
         self.hoist_deferred_binding_dependencies.items.len > frame.deferred_dependency_start;
@@ -7407,8 +7408,12 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
             try self.generateAnnoTypeInPlace(method.ret, env, .annotation);
             const ret_var = ModuleEnv.varFrom(method.ret);
 
-            // Create the function var
-            const func_content = try self.types.mkFuncUnbound(anno_arg_vars, ret_var);
+            // Create the function var. The where-clause arrow is explicit
+            // checked data; method names such as `foo!` do not determine effects.
+            const func_content = if (method.effectful)
+                try self.types.mkFuncEffectful(anno_arg_vars, ret_var)
+            else
+                try self.types.mkFuncPure(anno_arg_vars, ret_var);
             const func_var = try self.freshFromContent(func_content, env, where_region);
 
             // Add to scratch list
@@ -9106,6 +9111,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     };
 
     var does_fx = false; // Does this expression potentially perform any side effects?
+    var delayed_dispatch_effect_fn_var: ?Var = null;
     self.checking_binding_rhs_pattern = binding_rhs_pattern;
     errdefer self.checking_binding_rhs_pattern = null;
     var hoist_frame = try self.beginHoistFrame(expr_idx, is_binding_rhs);
@@ -10486,6 +10492,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     interpolation.method_name_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 try self.cir.store.replaceExprWithInterpolationConstraint(
                     expr_idx,
                     interpolation.first,
@@ -10527,6 +10534,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.method_name_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 try self.cir.store.replaceExprWithDispatchCall(
                     expr_idx,
                     method_call.receiver,
@@ -10551,6 +10559,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (did_err) {
                 try self.unifyWith(expr_var, .err, env);
             }
+            delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
@@ -10601,6 +10610,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 self.cir.store.replaceExprWithMethodEq(
                     expr_idx,
                     eq.lhs,
@@ -10639,6 +10649,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.method_name_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 try self.cir.store.replaceExprWithTypeDispatchCall(
                     expr_idx,
                     method_call.type_dispatch_stmt,
@@ -10660,6 +10671,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (did_err) {
                 try self.unifyWith(expr_var, .err, env);
             }
+            delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
@@ -10834,6 +10846,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // Check any accumulated static dispatch constraints
     try self.checkStaticDispatchConstraints(env, false);
+    if (delayed_dispatch_effect_fn_var) |fn_var| {
+        if (self.varIsEffectfulFunction(fn_var)) {
+            self.markCurrentHoistObservableEffect();
+            if (self.current_expect_region == null) {
+                does_fx = true;
+            }
+        }
+    }
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {

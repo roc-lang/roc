@@ -994,6 +994,7 @@ pub const Payload = extern union {
         var_idx: u32,
         name: u32,
         args_ret_idx: u32, // Index into span_with_node_data: (args.start, args.len, ret)
+        effectful: u32,
     };
 
     pub const WhereMalformed = extern struct {

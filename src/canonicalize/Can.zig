@@ -19515,6 +19515,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 .method_name = method_ident,
                 .args = args_span,
                 .ret = ret,
+                .effectful = mm.effectful,
             } }, region);
         },
         .mod_alias => |ma| {
