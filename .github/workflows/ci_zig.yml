@@ -196,7 +196,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build run-test-eval -- --llvm"
-          error_string_contains: "EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout"
           retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
@@ -212,7 +212,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build run-test-eval -- --llvm --timeout 120000"
-          error_string_contains: "EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout"
           retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
