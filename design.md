@@ -269,6 +269,74 @@ runtime-controlled branch body is different: its contents are not
 unconditionally evaluated, so they cannot be selected independently without
 explicit checked proof that doing so preserves compile-time observables.
 
+### Checker Implementation Contract
+
+The checker has one authoritative state for effect propagation and compile-time
+root selection. This state is owned by checking, updated during the existing
+`checkExpr` traversal, finalized before checked module output, and exported as
+explicit checked data. Canonicalization may produce stable identities and source
+structure, but it must not select compile-time roots or decide final
+effectfulness. Post-check stages may consume checked roots and evaluated
+constants, but they must not repair or reinterpret root eligibility.
+
+Each expression frame records the current root-candidate stack length when the
+frame begins. The frame receives child expression summaries as checking
+progresses and returns one transient summary to its parent. The summary records
+only the data needed by the parent: runtime data dependency, checked control
+reachability, and effect state. Ordinary summaries are stack-local. A summary is
+stored past the current expression only when a later checked local lookup needs
+it, when an effect slot or dispatch watcher must finalize later, or when a
+tentative root candidate has been selected.
+
+Effect propagation uses directed slots and edges:
+
+- checking a function body, top-level value, `expect` body, or delayed root
+  candidate creates an effect slot when that boundary needs a checked effect
+  answer
+- a direct call to a known effectful function marks the active slot effectful
+- a direct call to a local function with its own slot adds a caller-to-callee
+  edge
+- a call through a function-typed value consumes the checked function effect
+  kind
+- an unresolved static-dispatch call records a watcher from the dispatch
+  variable to the active slot
+- dispatch resolution updates the watched slot from the selected checked method
+  effect
+
+Those edges are dependencies, not equality. Recursive groups may be condensed
+while solving, but unrelated caller and callee slots must remain one-way. A
+slot whose callees and dispatch watchers have not finalized cannot be reported
+as definitely pure. Finalization runs after the relevant ordinary type,
+literal-defaulting, and static-dispatch constraints have settled; checked
+module output must not contain unresolved effect slots or unresolved root
+candidates.
+
+Root selection uses the same expression frames. When a frame finishes as
+compile-time-known, unconditionally reached, and effect-free, it replaces the
+candidate interval added by its children with the parent candidate. When a
+frame finishes as runtime-dependent or effectful, it leaves eligible
+unconditionally reached children in place. When a frame is in a branch body,
+match guard, or match branch value controlled by a runtime decision, it does
+not publish independent candidates from that conditional region. The enclosing
+`if` or `match` may still be selected if the whole control expression becomes
+compile-time-known and effect-free.
+
+Delayed root candidates are tied to effect slots. The candidate stores the
+owned interval of child candidates and is finalized from the slot result. If
+the slot resolves effect-free, the parent candidate is kept and the child
+interval is removed. If the slot resolves effectful, the parent candidate is
+discarded and finalized children remain. This interval rule is the only
+subsumption rule; implementation must not add leaf filters, observable-effect
+filters, or source-shape pruning.
+
+Compile-time observables are not effect blockers. `crash`, `dbg`, and `expect`
+must be represented as ordinary checked expressions for root selection. When
+their enclosing selected root is evaluated during checking, they run and report
+their diagnostics. An untaken runtime-controlled branch containing those
+constructs must not be independently selected, because that would change source
+behavior by running compile-time observables that the program would not
+evaluate.
+
 ### Compile-Time Evaluation And Static Storage
 
 Compile-time evaluation must evaluate every checked top-level expression and

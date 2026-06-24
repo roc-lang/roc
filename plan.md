@@ -1,0 +1,509 @@
+# Effect Propagation, Compile-Time Roots, And Static Data Plan
+
+## Objective
+
+Replace the current hoisting/root-selection behavior with one checked-stage
+system that owns:
+
+- Roc effect validation
+- compile-time root eligibility
+- maximal compile-time root selection
+- compile-time `crash`, `dbg`, and `expect` diagnostics
+- evaluated constant output
+- reachable static-data output
+
+The target result is that every module is considered for compile-time
+evaluation, effectful calls never run at compile time, `crash`/`dbg`/`expect`
+run at compile time whenever their enclosing expression is eligible, and named
+top-level constants compile the same as equivalent closed inline expressions.
+
+The motivating integration proof is Rocci Bird: sprite sheets, sprite records,
+`Sprite.sub_or_crash(...)` cells, and animation records must end up in static
+data when their inputs are compile-time-known, and ordinary gameplay must not
+rebuild those values inside `update`.
+
+## Invariants
+
+- Checking is the last user-facing compiler stage for type errors, effect
+  errors, static-dispatch errors, compile-time `crash`, compile-time `dbg`, and
+  compile-time `expect`.
+- Later stages consume explicit checked outputs. They must not infer
+  effectfulness, root eligibility, static-data ownership, or constant identity
+  from source shape, CIR shape, function bodies, wasm bytes, object symbols, or
+  backend code.
+- Compile-time root eligibility depends only on runtime data dependency,
+  checked control reachability, and effectfulness.
+- Effectful calls do not run at compile time.
+- `crash`, `dbg`, and `expect` are compile-time observables, not effectful
+  calls. They must not block root selection.
+- Function creation is not an effectful call, even when the function body is
+  effectful. Calling the function propagates the body effect.
+- Static dispatch contributes effectfulness through resolved checked method
+  effects, not through source spelling.
+- Negative effect answers are not final while any callee slot or static-dispatch
+  watcher can still change.
+- Effect dependencies are directed. A caller depending on a callee is not
+  equality. Recursive groups may be condensed, but ordinary caller-to-callee
+  edges remain one-way.
+- Union-find is not the effect solver.
+- Root selection has one parent-child replacement rule: an eligible parent
+  replaces child candidates in its own expression frame.
+- Rejecting a parent for runtime dependency or effectfulness preserves eligible
+  unconditionally reached child candidates.
+- Runtime-controlled branch bodies, match guards, and match branch values do
+  not publish independent candidates. They contribute summaries to the
+  enclosing control expression.
+- `return` and `break` are not standalone stored-value roots without an
+  explicit checked continuation representation. Their payloads may still
+  contribute through checked control data.
+- Leaves, strings, numbers, empty lists, records, loops, `crash`, `dbg`, and
+  `expect` are not special root blockers.
+- Ordinary expression summaries are stack-local. Store a summary only when a
+  later local lookup, effect finalization, delayed root candidate, or checked
+  output needs it.
+- Compile-time evaluation and static storage are separate outputs. Unreachable
+  eligible top-level values are evaluated for diagnostics, but successfully
+  evaluated unreachable data is not forced into target static data.
+- Backends do not rediscover hoisting or static-data eligibility.
+
+## Architecture
+
+### Effect Slots
+
+The checker owns sparse effect slots only for boundaries that need checked
+effect answers:
+
+- function bodies
+- lambda bodies
+- top-level value right-hand sides
+- `expect` bodies
+- delayed compile-time root candidates
+
+Slots are updated by explicit events:
+
+- direct call to a known effectful function marks the active slot effectful
+- direct call to a local function with a slot adds a caller-to-callee edge
+- call through a function-typed value consumes the checked function effect kind
+- unresolved static dispatch records a watcher from the dispatch variable to
+  the active slot
+- static-dispatch resolution marks or connects watcher slots from the selected
+  checked method effect
+
+Effect finalization builds the directed slot graph, condenses SCCs only for
+recursive groups, propagates effectfulness to callers, and writes final checked
+effect kinds before checked module output.
+
+### Expression Results
+
+`checkExpr` returns a transient result to its parent:
+
+```zig
+const ExprCheckResult = struct {
+    runtime_dep: RuntimeDep,
+    control_dep: ControlDep,
+    root_effect: RootEffect,
+};
+```
+
+`RuntimeDep` tells whether the expression can be known without runtime data.
+`ControlDep` tells whether the expression may publish an independent candidate
+or is under a runtime-controlled branch/guard/branch-value. `RootEffect` is a
+view of effect-slot state; it is not a second effect solver.
+
+### Root Candidate Frames
+
+Every expression frame records the root-candidate stack length at entry.
+
+Frame exit rules:
+
+- compile-time-known, unconditionally reached, effect-free: remove candidates
+  added inside the frame and append the parent candidate
+- runtime-dependent or effectful: keep eligible candidates added inside the
+  frame
+- runtime-controlled branch/guard/branch-value: suppress independent candidate
+  publication inside the conditional region and return summaries to the
+  enclosing `if` or `match`
+- delayed effectfulness: append a tentative parent candidate tied to the effect
+  slot and record the child candidate interval it owns
+
+After effect finalization:
+
+- delayed parent resolves effect-free: keep the parent and remove its child
+  interval
+- delayed parent resolves effectful: discard the parent and keep finalized
+  children
+
+This interval rule is the only subsumption rule.
+
+## Phase 0: Baseline Audit
+
+Tasks:
+
+- [ ] Inventory current effect-slot storage, dispatch watchers, and finalization
+  points.
+- [ ] Inventory current hoist/root selection helpers.
+- [ ] Identify every current source-shape filter for roots.
+- [ ] Identify every current observable-effect filter for roots.
+- [ ] Identify every later pass that repairs, prunes, or reinterprets selected
+  roots.
+- [ ] Record current Rocci Bird `--opt=size` byte size and disassembly with
+  named constants.
+- [ ] Record current Rocci Bird `--opt=size` byte size and disassembly with
+  equivalent inline constants.
+
+Success criteria:
+
+- [ ] There is a written map from old implementation paths to replacement
+  phases.
+- [ ] Every old path has an owner phase for deletion or conversion.
+
+## Phase 1: Effect Soundness
+
+Tasks:
+
+- [ ] Introduce or normalize `EffectSlotId`, `EffectSlot`, `EffectEdge`, and
+  dispatch watcher storage.
+- [ ] Create effect slots for function bodies, lambdas, top-level values,
+  `expect` bodies, and delayed root candidates.
+- [ ] Track the active effect slot while checking each boundary.
+- [ ] Mark active slots for direct calls to checked effectful functions.
+- [ ] Add directed caller-to-callee edges for calls to local functions with
+  slots.
+- [ ] Consume checked function effect kinds for calls through function-typed
+  values.
+- [ ] Register dispatch watchers for unresolved static-dispatch calls.
+- [ ] Resolve watcher slots from selected checked method effects.
+- [ ] Implement directed SCC finalization for recursive effect groups.
+- [ ] Finalize negative answers only after callees and dispatch watchers settle.
+- [ ] Emit checked effect summaries for local and imported checked modules.
+- [ ] Report top-level and `expect` effect errors from finalized slots.
+
+Tests:
+
+- [ ] direct effectful top-level call reports `effectful_top_level`
+- [ ] delayed receiver method call at top level reports `effectful_top_level`
+- [ ] delayed type-method call at top level reports `effectful_top_level`
+- [ ] effectful binop dispatch at top level reports `effectful_top_level`
+- [ ] effectful unary dispatch at top level reports `effectful_top_level`
+- [ ] interpolation dispatch propagates effectfulness
+- [ ] synthetic iterator dispatch propagates effectfulness
+- [ ] imported nominal method dispatch propagates effectfulness
+- [ ] pure annotation rejects direct effectful call
+- [ ] pure annotation rejects delayed effectful method call
+- [ ] effectful annotation accepts direct effectful call
+- [ ] effectful annotation accepts delayed effectful method call
+- [ ] pure where-clause accepts pure implementation
+- [ ] pure where-clause rejects effectful implementation
+- [ ] effectful where-clause accepts effectful implementation
+- [ ] effectful where-clause call makes caller effectful
+- [ ] direct effectful call in `expect` reports `effectful_expect`
+- [ ] delayed effectful dispatch in `expect` reports `effectful_expect`
+- [ ] local function alias preserves effectfulness
+- [ ] imported function alias preserves effectfulness
+- [ ] higher-order pure function parameter stays pure when called
+- [ ] higher-order effectful function parameter makes caller effectful
+- [ ] closure creation with effectful body is pure
+- [ ] calling closure with effectful body is effectful
+- [ ] boxed lambda creation with effectful body is pure
+- [ ] calling boxed lambda with effectful body is effectful
+- [ ] self-recursive pure function stays pure
+- [ ] self-recursive effectful function is effectful
+- [ ] mutual recursion with one effectful member propagates to the group
+- [ ] mutual recursion where every member is pure stays pure
+- [ ] `dbg` around pure value is not effectful
+- [ ] `dbg` around effectful call reports through the call
+- [ ] `crash` in otherwise pure value is not effectful
+- [ ] `expect` in otherwise pure value is not effectful
+
+## Phase 2: Expression Results
+
+Tasks:
+
+- [ ] Introduce `ExprCheckResult` and helper constructors.
+- [ ] Convert `checkExpr` to return `ExprCheckResult`.
+- [ ] Convert block and statement checking to combine expression results.
+- [ ] Preserve effect-slot updates while changing return types.
+- [ ] Store immutable local RHS summaries only when later local lookup needs
+  them.
+- [ ] Return stored summaries for immutable compile-time-known local lookups.
+- [ ] Mark lambda parameters runtime-dependent.
+- [ ] Mark match-bound values runtime-dependent unless introduced by checked
+  compile-time pattern extraction.
+- [ ] Mark loop-bound values runtime-dependent.
+- [ ] Mark mutable and reassigned locals runtime-dependent.
+- [ ] Treat checked top-level value lookups as compile-time-known unless their
+  checked summaries say otherwise.
+- [ ] Treat imported checked value lookups as compile-time-known unless their
+  imported summaries say otherwise.
+- [ ] Remove old expression-level `does_fx` as a root eligibility input.
+
+Tests:
+
+- [ ] closed top-level list literal returns compile-time-known
+- [ ] closed top-level record containing a list returns compile-time-known
+- [ ] immutable local independent of a lambda argument is compile-time-known
+- [ ] immutable local depending directly on a lambda argument is runtime-dependent
+- [ ] immutable local depending indirectly on a lambda argument is runtime-dependent
+- [ ] local alias of compile-time-known local stays compile-time-known
+- [ ] match-bound value blocks a containing parent root
+- [ ] loop-bound value blocks a containing parent root
+- [ ] mutable local blocks a containing parent root
+- [ ] reassignment blocks a containing parent root
+- [ ] top-level checked value lookup stays compile-time-known
+- [ ] imported checked value lookup stays compile-time-known
+- [ ] erroneous child result poisons the parent without duplicate diagnostics
+
+## Phase 3: Maximal Root Selection
+
+Tasks:
+
+- [ ] Add root-candidate stack storage.
+- [ ] Add expression root frames with `candidate_start`.
+- [ ] Add checked control-reachability state to expression frames.
+- [ ] On eligible frame exit, replace child candidates with the parent.
+- [ ] On runtime-dependent or effectful frame exit, preserve child candidates.
+- [ ] Suppress independent publication from runtime-controlled branch bodies.
+- [ ] Suppress independent publication from runtime-controlled match guards.
+- [ ] Suppress independent publication from runtime-controlled match branch
+  values.
+- [ ] Allow enclosing compile-time-known `if` and `match` expressions to become
+  roots.
+- [ ] Handle `return` and `break` through explicit control-transfer policy.
+- [ ] Add delayed parent candidates tied to effect slots.
+- [ ] Finalize delayed parents from effect-slot results.
+- [ ] Make nested delayed parents stable by explicit candidate intervals.
+- [ ] Preserve local binding root identity when later lookup uses the binding.
+- [ ] Preserve checked pattern extraction roots only when needed.
+- [ ] Delete leaf, string, number, empty-list, record, loop,
+  `crash`/`dbg`/`expect`, and source-shape root blockers.
+- [ ] Delete old branch-child preservation rules that can select untaken
+  runtime branches independently.
+
+Tests:
+
+- [ ] number literal can be a maximal root
+- [ ] string literal can be a maximal root
+- [ ] empty list can be a maximal root
+- [ ] empty record can be a maximal root
+- [ ] record containing list selects the record, not the list child
+- [ ] list inside runtime-dependent record stays as child root
+- [ ] nested closed block selects the block root
+- [ ] runtime-dependent block preserves independent closed child roots
+- [ ] closed `return` payload can be selected, but `return` is not a root
+- [ ] closed `break` payload can be selected, but `break` is not a root
+- [ ] closed `for` expression can be covered by a parent root
+- [ ] runtime-condition `if` does not publish independent branch-body roots
+- [ ] runtime-scrutinee `match` does not publish independent branch-body roots
+- [ ] compile-time-known `if` selects the enclosing `if` root
+- [ ] compile-time-known `match` selects the enclosing `match` root
+- [ ] untaken branch `crash` is not selected independently
+- [ ] `crash` in selected compile-time branch reports at compile time
+- [ ] `dbg` in selected compile-time branch reports at compile time
+- [ ] failed `expect` in selected compile-time branch reports at compile time
+- [ ] effectful parent preserves independent static child root
+- [ ] direct effectful call blocks containing parent root
+- [ ] delayed parent resolving pure replaces children
+- [ ] delayed parent resolving effectful preserves children
+- [ ] nested delayed parents finalize in stable order
+- [ ] named top-level constant and equivalent inline expression select
+  equivalent roots
+- [ ] closed local constant and equivalent inline expression select equivalent
+  roots
+- [ ] record destructure extracts necessary compile-time root
+- [ ] tuple destructure extracts necessary compile-time root
+- [ ] tag payload destructure extracts necessary compile-time root
+- [ ] nested destructure extracts necessary compile-time root
+
+## Phase 4: Compile-Time Evaluation And Diagnostics
+
+Tasks:
+
+- [ ] Define checked output for selected root requests.
+- [ ] Define checked output for evaluated root values.
+- [ ] Define checked output for top-level values evaluated only for diagnostics.
+- [ ] Schedule eligible top-level values in every checked module.
+- [ ] Schedule unreachable eligible top-level values for diagnostics.
+- [ ] Schedule selected roots exactly once.
+- [ ] Avoid scheduling child roots removed by parent selection.
+- [ ] Run `crash`, `dbg`, and `expect` during compile-time evaluation.
+- [ ] Reject effectful calls before evaluation can execute them.
+- [ ] Report evaluation diagnostics through `roc check`.
+- [ ] Deduplicate diagnostics shared by a top-level value and selected root.
+- [ ] Keep successful unreachable evaluated values out of target static data.
+
+Tests:
+
+- [ ] unreachable top-level `crash` reports during `roc check`
+- [ ] unreachable top-level `dbg` reports during `roc check`
+- [ ] unreachable failed `expect` reports during `roc check`
+- [ ] reachable selected-root `crash` reports during `roc check`
+- [ ] reachable selected-root `dbg` reports during `roc check`
+- [ ] reachable selected-root failed `expect` reports during `roc check`
+- [ ] effectful call inside compile-time-known expression is not evaluated
+- [ ] all modules in an import graph run eligible top-level diagnostics
+- [ ] duplicate diagnostics are not emitted for shared top-level/root sources
+- [ ] successful unreachable top-level value is not emitted as target data
+
+## Phase 5: Static Data Output
+
+Tasks:
+
+- [ ] Define explicit static-storable categories for scalars, strings, lists,
+  records, tuples, tags, and allowed opaque values.
+- [ ] Define explicit non-storable categories.
+- [ ] Store reachable evaluated values only.
+- [ ] Share repeated static list bytes.
+- [ ] Store records that point at shared static list bytes.
+- [ ] Store tuples and tag payloads that point at shared static list bytes.
+- [ ] Ensure opaque static data uses checked backing values only when allowed.
+- [ ] Ensure removed child roots do not emit duplicate static data.
+- [ ] Ensure target static-data emission consumes evaluated checked values, not
+  source/CIR shape.
+- [ ] Ensure lowering knows exactly when it is lowering a root's own entry
+  wrapper so it does not recursively restore that root from static data.
+
+Tests:
+
+- [ ] static list bytes are emitted once when shared
+- [ ] static record points at static list bytes
+- [ ] repeated records sharing a list share the list bytes
+- [ ] tuple containing list points at static list bytes
+- [ ] tag payload containing list points at static list bytes
+- [ ] opaque backed by static-storable data emits only through allowed checked
+  output
+- [ ] repeated sprite sheets share bytes
+- [ ] sub-sprite records point at sprite sheet bytes
+- [ ] inline animation cells and named animation cells emit equivalent data
+- [ ] child roots removed by parent root do not emit duplicate data
+- [ ] effectful parent does not prevent independent static child data
+- [ ] unreachable successfully evaluated value is not emitted as target data
+- [ ] non-storable reachable evaluated value is represented explicitly
+
+## Phase 6: Cleanup Old Machinery
+
+Tasks:
+
+- [ ] Delete or replace all old root-selection paths that can disagree with
+  root frames.
+- [ ] Delete root blockers for `dbg`, `expect`, and `crash`.
+- [ ] Delete leaf/root pruning rules.
+- [ ] Delete loop/data-shape root blockers.
+- [ ] Delete duplicate dependency verification walks used to repair selection.
+- [ ] Delete comments that describe old behavior as intended.
+- [ ] Add static searches that prevent reintroducing forbidden blockers where
+  practical.
+
+Tests:
+
+- [ ] static search finds no root blocker for `dbg`, `expect`, or `crash`
+- [ ] static search finds no root blocker for leaves
+- [ ] static search finds no data-shape root blocker for loops
+- [ ] static search shows `return` and `break` use explicit control-transfer
+  policy
+- [ ] focused effect tests pass
+- [ ] focused root tests pass
+- [ ] compile-time evaluation tests pass
+- [ ] static-data tests pass
+
+## Phase 7: Rocci Bird Integration
+
+Tasks:
+
+- [ ] Build the local compiler with `zig build`.
+- [ ] Build the roc-wasm4 host with `zig build -Doptimize=ReleaseSmall`.
+- [ ] Run `roc fmt` on `/home/rtfeldman/code/roc-wasm4/examples/rocci-bird.roc`.
+- [ ] Build Rocci Bird with `roc build examples/rocci-bird.roc --opt=size`.
+- [ ] Measure final wasm byte size.
+- [ ] Disassemble final wasm.
+- [ ] Compare named top-level animation data against equivalent inline
+  animation data.
+- [ ] Verify optimized Rocci Bird starts and plays.
+- [ ] Verify dev Rocci Bird starts and plays.
+- [ ] Record remaining normal-gameplay allocation sites, excluding game-over
+  paths.
+
+Disassembly checks:
+
+- [ ] sprite sheet byte arrays appear in static data, not rebuilt inside
+  `update`
+- [ ] sprite sheet records point at shared byte arrays
+- [ ] `Sprite.sub_or_crash(rocci_sprite_sheet, ...)` cells are precomputed when
+  inputs are compile-time-known
+- [ ] animation records are not rebuilt inline in ordinary gameplay paths
+- [ ] equivalent inline and named animation data produce equivalent static data
+- [ ] `update` no longer contains repeated byte-by-byte construction of
+  sprite/list values
+
+Recorded output:
+
+- [ ] final wasm byte count
+- [ ] code section byte count
+- [ ] data section byte count
+- [ ] largest function bodies
+- [ ] normal-gameplay allocation sites
+- [ ] comparison to the Rust WASM-4 port
+
+## Verification Commands
+
+Focused check tests:
+
+```sh
+zig build run-test-zig-module-check -- --test-filter "effect"
+zig build run-test-zig-module-check -- --test-filter "hoist"
+```
+
+Focused compile/static-data tests:
+
+```sh
+zig build run-test-zig-module-compile -- --test-filter "hoisted"
+zig build run-test-zig-module-compile -- --test-filter "static"
+```
+
+Full checked-module tests:
+
+```sh
+zig build run-test-zig-module-check
+zig build run-test-zig-module-compile
+```
+
+Broader compiler tests at major phase boundaries:
+
+```sh
+zig build test
+```
+
+Rocci Bird integration:
+
+```sh
+cd /home/rtfeldman/code/roc-wasm4
+zig build -Doptimize=ReleaseSmall
+/home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc fmt examples/rocci-bird.roc
+/home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc build \
+  examples/rocci-bird.roc \
+  --opt=size \
+  --output=rocci-bird.wasm
+wc -c rocci-bird.wasm
+wasm-objdump -x -d rocci-bird.wasm > rocci-bird.disasm.txt
+```
+
+## Final Checklist
+
+- [ ] Effect propagation is directed and finalized before checked output.
+- [ ] Static dispatch can no longer hide effectful calls from `roc check`.
+- [ ] `checkExpr` returns root-relevant data without a permanent per-expression
+  summary table.
+- [ ] Root selection has one implementation and one parent-child replacement
+  rule.
+- [ ] `crash`, `dbg`, and `expect` run at compile time whenever their enclosing
+  expression is eligible.
+- [ ] Runtime-controlled branch bodies do not run compile-time observables
+  independently.
+- [ ] Every module evaluates eligible top-level values for diagnostics.
+- [ ] Reachable static data is emitted once and shared.
+- [ ] Unreachable successful constants are not forced into target data.
+- [ ] Named constants, closed locals, and equivalent inline expressions select
+  equivalent roots and produce equivalent static data.
+- [ ] Rocci Bird builds with `--opt=size`.
+- [ ] Rocci Bird disassembly proves sprite/list/animation data is static.
+- [ ] Rocci Bird runs in optimized and dev WASM-4 builds.
+- [ ] Full relevant Zig test suites pass.
