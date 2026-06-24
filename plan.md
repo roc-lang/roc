@@ -109,10 +109,10 @@ fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNo
 - that value-only function treats `.fn_value` as "no static data," which is
   wrong for a reachable aggregate whose runtime representation contains a
   callable payload
-- finite callable static-data materialization exists for the captured-list
-  path, but still needs complete focused coverage for zero-capture,
-  scalar-capture, nested-callable-capture, and multi-variant callable-set
-  layouts
+- finite callable static-data materialization is covered for zero-capture
+  provided data and captured-list provided data, but still needs complete
+  focused coverage for scalar-capture, nested-callable-capture, and
+  multi-variant callable-set layouts
 - erased callable static data is covered in the callable-containing aggregate
   path
 - cross-module compile-time diagnostics need tests proving every eligible
@@ -468,6 +468,12 @@ boundaries:
    callable const plan and layout, then make the `.static_data` decision there.
    That is a larger change, but it is the correct escape hatch if Monotype
    lacks explicit data.
+
+   Current evidence says this larger path is required. A stored `ConstFn` can
+   have `ConstStore` captures while its committed runtime callable layout is
+   ZST, as happens in the iterator proof case. Therefore Monotype must not infer
+   "needs static data" from `fn_value.captures.len`; the decision needs the
+   callable layout and const plan from the later LIR lowering stage.
 
 Success criteria:
 

@@ -959,6 +959,120 @@ test "provided boxed erased callable captures static list data" {
     try std.testing.expect(countFunctionPointerRelocations(exports) >= 1);
 }
 
+test "provided finite callable zero and list-capture static data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_callable_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!, zero, callable] { pf: platform "./.roc_callable_platform/main.roc" }
+        \\
+        \\main! = || {}
+        \\
+        \\zero : { run : (I64 -> I64) }
+        \\zero = { run: |value| value }
+        \\
+        \\callable : { run : (I64 -> List(I64)) }
+        \\callable = {
+        \\    items = [1.I64, 2.I64]
+        \\    { run: |_value| items }
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_callable_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : () => {}, zero : { run : (I64 -> I64) }, callable : { run : (I64 -> List(I64)) } }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host!, "roc_zero": zero_for_host, "roc_callable": callable_for_host }
+        \\
+        \\main_for_host! : () => {}
+        \\main_for_host! = main!
+        \\
+        \\zero_for_host : { run : (I64 -> I64) }
+        \\zero_for_host = zero
+        \\
+        \\callable_for_host : { run : (I64 -> List(I64)) }
+        \\callable_for_host = callable
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const captured_list_payload = [_]u8{
+        1, 0, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0, 0, 0,
+    };
+    const shared_payload = findExportContainingSequence(exports, &captured_list_payload) orelse return error.FiniteCallableCapturedListPayloadNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_zero") orelse return error.ZeroCaptureFiniteCallableExportNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &captured_list_payload));
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
+}
+
 test "reachable local List.iter hoist stores iterator const data" {
     const gpa = std.testing.allocator;
 
