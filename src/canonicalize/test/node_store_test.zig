@@ -296,7 +296,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_lookup_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
-            .target_node_idx = rand.random().int(u16),
+            .external_ref = @enumFromInt(rand.random().int(u16)),
             .ident_idx = rand_ident_idx(),
             .region = rand_region(),
         },
@@ -502,7 +502,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_nominal_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
-            .target_node_idx = rand.random().int(u16),
+            .external_ref = @enumFromInt(rand.random().int(u16)),
             .backing_expr = rand_idx(CIR.Expr.Idx),
             .backing_type = .tag,
         },
@@ -1193,7 +1193,7 @@ test "NodeStore round trip - TypeAnno" {
             .name = rand_ident_idx(),
             .base = .{ .external = .{
                 .module_idx = rand_idx(CIR.Import.Idx),
-                .target_node_idx = rand.random().int(u16),
+                .external_ref = @enumFromInt(rand.random().int(u16)),
             } },
             .args = CIR.TypeAnno.Span{ .span = rand_span() },
         },
@@ -1231,7 +1231,7 @@ test "NodeStore round trip - TypeAnno" {
             .name = rand_ident_idx(),
             .base = .{ .external = .{
                 .module_idx = rand_idx(CIR.Import.Idx),
-                .target_node_idx = rand.random().int(u16),
+                .external_ref = @enumFromInt(rand.random().int(u16)),
             } },
         },
     });
@@ -1340,7 +1340,7 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, CIR.Pattern{
         .nominal_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
-            .target_node_idx = rand.random().int(u16),
+            .external_ref = @enumFromInt(rand.random().int(u16)),
             .backing_pattern = rand_idx(CIR.Pattern.Idx),
             .backing_type = .tag,
         },

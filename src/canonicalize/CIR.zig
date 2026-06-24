@@ -1116,14 +1116,27 @@ pub const ExternalDecl = struct {
 pub const ExternalRef = struct {
     /// Index into this module's import list (source-order; already source-pure).
     import_idx: Import.Idx,
-    /// The local/qualified name being referenced in the target module.
+    /// The local/qualified name being referenced in the target module. For a
+    /// user-module reference this drives name-based resolution. For a builtin
+    /// auto-import it is `Ident.Idx.NONE` (see `builtin_node`).
     name_ident: base.Ident.Idx,
+    /// Compiler-fixed target node index, used only for builtin auto-imports
+    /// (`name_ident == .NONE`). Builtin layout is fixed per compiler version, so
+    /// this index is source-pure (the compiler version is folded into the cache
+    /// key), unlike a user module's node index which would not be.
+    builtin_node: u32,
     /// What kind of exposed item the reference resolves against.
     kind: Kind,
     /// Region of the reference, for the resolver's diagnostic.
     region: Region,
 
     pub const Kind = enum(u8) { value, type, nominal_type };
+
+    /// A builtin auto-import carries its compiler-fixed target node directly
+    /// rather than a name to resolve.
+    pub fn isBuiltin(self: ExternalRef) bool {
+        return self.name_ident.isNone();
+    }
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };

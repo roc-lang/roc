@@ -3777,7 +3777,7 @@ fn unifyTypedLiteralWithExplicitType(
             _ = try self.unify(flex_var, resolved_var, env);
         },
         .external => |external| {
-            if (try self.resolveVarFromExternal(external.external_ref)) |ext_ref| {
+            if (try self.resolveVarFromExternalNode(external.import_idx, external.target_node_idx)) |ext_ref| {
                 const instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
@@ -3817,7 +3817,7 @@ fn explicitTypeSuffixVar(
             _ = try self.unify(suffix_var, resolved_var, env);
         },
         .external => |external| {
-            if (try self.resolveVarFromExternal(external.external_ref)) |ext_ref| {
+            if (try self.resolveVarFromExternalNode(external.import_idx, external.target_node_idx)) |ext_ref| {
                 const instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
@@ -5190,8 +5190,10 @@ fn hoistedCallableDefForExpr(
             // so resolve the reference on the fly from its symbolic name rather
             // than the current module's resolution table.
             const ref = module.getExternalRef(external.external_ref).*;
-            const name_text = module.getIdent(ref.name_ident);
-            const node = (can.lookupExposedExternalNode(self.gpa, imported_module, name_text, ref.kind) catch break :blk null) orelse break :blk null;
+            const node = if (ref.isBuiltin())
+                ref.builtin_node
+            else
+                (can.lookupExposedExternalNode(self.gpa, imported_module, module.getIdent(ref.name_ident), ref.kind) catch break :blk null) orelse break :blk null;
             break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(node));
         },
         .e_str,
@@ -11249,8 +11251,10 @@ fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
             const module_idx = self.cir.imports.getResolvedModule(ref.import_idx) orelse return false;
             if (module_idx >= self.imported_modules.len) return false;
             const other_env = self.imported_modules[module_idx];
-            const name_text = self.cir.getIdent(ref.name_ident);
-            const resolved_node = (can.lookupExposedExternalNode(self.gpa, other_env, name_text, ref.kind) catch return false) orelse return false;
+            const resolved_node = if (ref.isBuiltin())
+                ref.builtin_node
+            else
+                (can.lookupExposedExternalNode(self.gpa, other_env, self.cir.getIdent(ref.name_ident), ref.kind) catch return false) orelse return false;
             const def_idx: CIR.Def.Idx = @enumFromInt(resolved_node);
             const ident = patternIdentInModule(other_env, def_idx) orelse return false;
             return ident.eql(other_env.idents.builtin_str_inspect);
@@ -13870,14 +13874,27 @@ fn resolveVarFromExternal(
     // unresolved and keep checking.
     const ref = self.cir.getExternalRef(external_ref).*;
     const module_idx = self.cir.imports.getResolvedModule(ref.import_idx) orelse return null;
+    if (module_idx >= self.imported_modules.len) return null;
+    const resolved_node = if (ref.isBuiltin())
+        ref.builtin_node
+    else
+        (try can.lookupExposedExternalNode(self.gpa, self.imported_modules[module_idx], self.cir.getIdent(ref.name_ident), ref.kind)) orelse return null;
+    return self.resolveVarFromExternalNode(ref.import_idx, resolved_node);
+}
+
+/// Resolve a cross-module reference whose target node index in the imported
+/// module is already known (e.g. a compiler-fixed numeric-suffix conversion).
+fn resolveVarFromExternalNode(
+    self: *Self,
+    import_idx: CIR.Import.Idx,
+    node_idx: u32,
+) std.mem.Allocator.Error!?ExternalType {
+    const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse return null;
     if (module_idx < self.imported_modules.len) {
         const other_module_env = self.imported_modules[module_idx];
 
-        const name_text = self.cir.getIdent(ref.name_ident);
-        const resolved_node = (try can.lookupExposedExternalNode(self.gpa, other_module_env, name_text, ref.kind)) orelse return null;
-
         // The idx of the expression in the other module
-        const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(resolved_node));
+        const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
 
         // Check if we've already copied this import
         const cache_key = ImportCacheKey{

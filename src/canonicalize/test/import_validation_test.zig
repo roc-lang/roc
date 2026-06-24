@@ -29,7 +29,8 @@ fn expectNoZeroTargetExternalLookup(env: *const ModuleEnv) error{TestUnexpectedR
         const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
         switch (env.store.getExpr(expr_idx)) {
             .e_lookup_external => |external| {
-                try testing.expect(external.target_node_idx != 0);
+                // The reference resolves to a builtin auto-import (compiler-fixed node).
+                try testing.expect(env.getExternalRef(external.external_ref).builtin_node != 0);
             },
             else => unreachable,
         }

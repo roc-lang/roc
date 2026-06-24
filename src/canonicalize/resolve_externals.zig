@@ -68,6 +68,10 @@ fn resolveOneOk(
     scratch: *std.ArrayList(u8),
     diagnostics: *Diagnostics,
 ) Allocator.Error!bool {
+    // Builtin auto-imports carry a compiler-fixed target node; nothing to resolve
+    // or diagnose (builtin layout is part of the compiler version).
+    if (ref.isBuiltin()) return true;
+
     const module_name_ident = env.imports.getIdentIdx(ref.import_idx) orelse base.Ident.Idx.NONE;
     const name_text = env.getIdent(ref.name_ident);
 

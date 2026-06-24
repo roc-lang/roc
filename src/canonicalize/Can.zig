@@ -554,7 +554,7 @@ fn synthesizeIterMemberLookup(
 
     return try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
-        .target_node_idx = method_node_idx,
+        .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = method_node_idx, .kind = .value, .region = region }),
         .ident_idx = qualified_method_name,
         .region = region,
     } }, region);
@@ -791,7 +791,7 @@ fn addAutoImportedNominalTagExpr(
     return try self.env.addExpr(CIR.Expr{
         .e_nominal_external = .{
             .module_idx = import_idx,
-            .target_node_idx = target_node_idx,
+            .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
             .backing_expr = tag_expr_idx,
             .backing_type = .tag,
         },
@@ -6688,10 +6688,10 @@ fn canonicalizedExternalLookup(
     // module's node index is recovered later by external resolution, so it is not
     // baked into CIR here. (`target_node_idx` is still computed by callers as an
     // existence check; that guard is removed in a follow-up purity pass.)
-    _ = target_node_idx;
     const external_ref = try self.env.pushExternalRef(.{
         .import_idx = import_idx,
-        .name_ident = ident_idx,
+        .name_ident = base.Ident.Idx.NONE,
+        .builtin_node = target_node_idx,
         .kind = .value,
         .region = region,
     });
@@ -7189,15 +7189,18 @@ fn finishSuffixSingleQuestionExpr(
     const ok_tag_ident = self.env.idents.ok;
     const err_tag_ident = self.env.idents.err;
 
-    // Look up Try type for nominal wrapping (improves error messages)
+    // Look up Try type for nominal wrapping (improves error messages). Whether
+    // Try is in scope is source-derivable (it's imported or not); the imported
+    // node index is recovered later by external resolution, so it is not read
+    // here — keeping CIR a pure function of source.
     const try_ident = self.env.idents.@"try";
-    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u32 } = blk: {
+    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, builtin_node: u32 } = blk: {
         if (try self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
             switch (type_binding_loc.binding.*) {
                 .external_nominal => |ext| {
                     if (ext.import_idx) |import_idx| {
                         if (ext.target_node_idx) |target_node_idx| {
-                            break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                            break :blk .{ .import_idx = import_idx, .builtin_node = target_node_idx };
                         }
                     }
                 },
@@ -7242,7 +7245,7 @@ fn finishSuffixSingleQuestionExpr(
                 break :blk try self.env.addPattern(Pattern{
                     .nominal_external = .{
                         .module_idx = info.import_idx,
-                        .target_node_idx = info.target_node_idx,
+                        .external_ref = try self.env.pushExternalRef(.{ .import_idx = info.import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = info.builtin_node, .kind = .nominal_type, .region = region }),
                         .backing_pattern = applied_tag_pattern,
                         .backing_type = .tag,
                     },
@@ -7312,7 +7315,7 @@ fn finishSuffixSingleQuestionExpr(
                 break :blk try self.env.addPattern(Pattern{
                     .nominal_external = .{
                         .module_idx = info.import_idx,
-                        .target_node_idx = info.target_node_idx,
+                        .external_ref = try self.env.pushExternalRef(.{ .import_idx = info.import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = info.builtin_node, .kind = .nominal_type, .region = region }),
                         .backing_pattern = applied_tag_pattern,
                         .backing_type = .tag,
                     },
@@ -7369,7 +7372,7 @@ fn finishSuffixSingleQuestionExpr(
                     break :expr_blk try self.env.addExpr(CIR.Expr{
                         .e_nominal_external = .{
                             .module_idx = info.import_idx,
-                            .target_node_idx = info.target_node_idx,
+                            .external_ref = try self.env.pushExternalRef(.{ .import_idx = info.import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = info.builtin_node, .kind = .nominal_type, .region = region }),
                             .backing_expr = tag_expr,
                             .backing_type = .tag,
                         },
@@ -8837,7 +8840,7 @@ fn isInfiniteLoopCondition(self: *const Self, expr_idx: Expr.Idx) bool {
             self.isBuiltinBoolLocalNominal(nominal.nominal_type_decl) and
             self.exprIsBareTrueTag(nominal.backing_expr),
         .e_nominal_external => |nominal| nominal.backing_type == .tag and
-            self.isBuiltinBoolExternalNominal(nominal.module_idx, nominal.target_node_idx) and
+            self.isBuiltinBoolExternalNominal(nominal.external_ref) and
             self.exprIsBareTrueTag(nominal.backing_expr),
         else => false,
     };
@@ -8859,13 +8862,15 @@ fn isBuiltinBoolLocalNominal(self: *const Self, nominal_type_decl: Statement.Idx
     };
 }
 
-fn isBuiltinBoolExternalNominal(self: *const Self, module_idx: Import.Idx, target_node_idx: u32) bool {
+fn isBuiltinBoolExternalNominal(self: *const Self, ref_idx: CIR.ExternalRef.Idx) bool {
+    const ref = self.env.getExternalRef(ref_idx).*;
+    if (!ref.isBuiltin()) return false;
     const bool_info = self.builtin_auto_imported_types.get(self.env.idents.bool) orelse return false;
     const bool_stmt_idx = bool_info.statement_idx orelse return false;
     const bool_target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse return false;
-    if (target_node_idx != bool_target_node_idx) return false;
+    if (ref.builtin_node != bool_target_node_idx) return false;
 
-    const module_idx_int = @intFromEnum(module_idx);
+    const module_idx_int = @intFromEnum(ref.import_idx);
     if (module_idx_int >= self.env.imports.imports.items.items.len) return false;
 
     const string_lit_idx = self.env.imports.imports.items.items[module_idx_int];
@@ -12539,7 +12544,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         return try self.env.addExpr(CIR.Expr{
             .e_nominal_external = .{
                 .module_idx = import_idx,
-                .target_node_idx = target_node_idx,
+                .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
             },
@@ -12567,7 +12572,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
             break :blk try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = import_idx,
-                    .target_node_idx = target_node_idx,
+                    .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                     .backing_expr = tag_expr_idx,
                     .backing_type = .tag,
                 },
@@ -12612,15 +12617,18 @@ fn canonicalizeDoubleQuestionOp(
     const ok_tag_ident = self.env.idents.ok;
     const err_tag_ident = self.env.idents.err;
 
-    // Look up Try type for nominal wrapping (improves error messages)
+    // Look up Try type for nominal wrapping (improves error messages). Whether
+    // Try is in scope is source-derivable (it's imported or not); the imported
+    // node index is recovered later by external resolution, so it is not read
+    // here — keeping CIR a pure function of source.
     const try_ident = self.env.idents.@"try";
-    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u32 } = blk: {
+    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, builtin_node: u32 } = blk: {
         if (try self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
             switch (type_binding_loc.binding.*) {
                 .external_nominal => |ext| {
                     if (ext.import_idx) |import_idx| {
                         if (ext.target_node_idx) |target_node_idx| {
-                            break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                            break :blk .{ .import_idx = import_idx, .builtin_node = target_node_idx };
                         }
                     }
                 },
@@ -12665,7 +12673,7 @@ fn canonicalizeDoubleQuestionOp(
                 break :ok_blk try self.env.addPattern(Pattern{
                     .nominal_external = .{
                         .module_idx = info.import_idx,
-                        .target_node_idx = info.target_node_idx,
+                        .external_ref = try self.env.pushExternalRef(.{ .import_idx = info.import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = info.builtin_node, .kind = .nominal_type, .region = region }),
                         .backing_pattern = applied_tag_pattern,
                         .backing_type = .tag,
                     },
@@ -12732,7 +12740,7 @@ fn canonicalizeDoubleQuestionOp(
                 break :err_blk try self.env.addPattern(Pattern{
                     .nominal_external = .{
                         .module_idx = info.import_idx,
-                        .target_node_idx = info.target_node_idx,
+                        .external_ref = try self.env.pushExternalRef(.{ .import_idx = info.import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = info.builtin_node, .kind = .nominal_type, .region = region }),
                         .backing_pattern = applied_tag_pattern,
                         .backing_type = .tag,
                     },
@@ -12913,7 +12921,7 @@ fn buildMap2Call(
         } }, region),
         .external => |external| try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
             .module_idx = external.module_idx,
-            .target_node_idx = external.target_node_idx,
+            .external_ref = try self.env.pushExternalRef(.{ .import_idx = external.module_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = external.target_node_idx, .kind = .value, .region = region }),
             .ident_idx = external.ident_idx,
             .region = region,
         } }, region),
@@ -13362,7 +13370,7 @@ fn finishNominalRecordForType(
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = import_idx,
-                    .target_node_idx = target_node_idx,
+                    .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                     .backing_expr = backing_expr_idx,
                     .backing_type = .record,
                 },
@@ -13481,7 +13489,7 @@ fn finishNominalRecordForType(
     const expr_idx = try self.env.addExpr(CIR.Expr{
         .e_nominal_external = .{
             .module_idx = import_idx,
-            .target_node_idx = target_node_idx,
+            .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
             .backing_expr = backing_expr_idx,
             .backing_type = .record,
         },
@@ -13591,7 +13599,7 @@ fn finishTagExprWithArgs(
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_nominal_external = .{
                         .module_idx = import_idx,
-                        .target_node_idx = target_node_idx,
+                        .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                         .backing_expr = tag_expr_idx,
                         .backing_type = .tag,
                     },
@@ -13655,7 +13663,7 @@ fn finishTagExprWithArgs(
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = import_idx,
-                    .target_node_idx = target_node_idx,
+                    .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                     .backing_expr = tag_expr_idx,
                     .backing_type = .tag,
                 },
@@ -13711,7 +13719,7 @@ fn finishTagExprWithArgs(
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = import_idx,
-                    .target_node_idx = target_node_idx,
+                    .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                     .backing_expr = tag_expr_idx,
                     .backing_type = .tag,
                 },
@@ -13867,7 +13875,7 @@ fn finishTagExprWithArgs(
         const expr_idx = try self.env.addExpr(CIR.Expr{
             .e_nominal_external = .{
                 .module_idx = import_idx,
-                .target_node_idx = target_node_idx,
+                .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
             },
@@ -14425,7 +14433,7 @@ fn finishTagPattern(
         const nominal_pattern_idx = try self.env.addPattern(CIR.Pattern{
             .nominal_external = .{
                 .module_idx = import_idx,
-                .target_node_idx = target_node_idx,
+                .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                 .backing_pattern = tag_pattern_idx,
                 .backing_type = .tag,
             },
@@ -17915,7 +17923,7 @@ fn canonicalizeTypeAnnoBasicType(
                             .name = type_name_ident,
                             .base = .{ .external = .{
                                 .module_idx = import_idx,
-                                .target_node_idx = target_node_idx,
+                                .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = type_name_region }),
                             } },
                         } }, region);
                     },
@@ -17956,7 +17964,7 @@ fn canonicalizeTypeAnnoBasicType(
                     .name = type_name_ident,
                     .base = .{ .external = .{
                         .module_idx = import_idx,
-                        .target_node_idx = target_node_idx,
+                        .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = region }),
                     } },
                 } }, region);
             }
@@ -17984,7 +17992,7 @@ fn canonicalizeTypeAnnoBasicType(
                             .name = type_name_ident,
                             .base = .{ .external = .{
                                 .module_idx = import_idx,
-                                .target_node_idx = target_node_idx,
+                                .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = type_name_region }),
                             } },
                         } }, region);
                     }
@@ -18071,7 +18079,7 @@ fn canonicalizeTypeAnnoBasicType(
 
             return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
                 .module_idx = import_idx,
-                .target_node_idx = target_node_idx,
+                .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = region }),
             } } } }, region);
         }
 
@@ -18162,7 +18170,7 @@ fn canonicalizeTypeAnnoBasicType(
         // this module's type store
         return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_name_ident, .base = .{ .external = .{
             .module_idx = import_idx,
-            .target_node_idx = target_node_idx,
+            .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = region }),
         } } } }, region);
     }
 }
@@ -18184,7 +18192,7 @@ fn resolveNestedExternalTypeAnno(
 
     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
         .module_idx = import_idx,
-        .target_node_idx = target_node_idx,
+        .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = region }),
     } } } }, region);
 }
 
@@ -19755,7 +19763,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
                     if (module_env.getExposedValueNodeIndexById(method_ident_idx)) |method_node_idx| {
                         const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                             .module_idx = auto_import_idx,
-                            .target_node_idx = method_node_idx,
+                            .external_ref = try self.env.pushExternalRef(.{ .import_idx = auto_import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = method_node_idx, .kind = .value, .region = region }),
                             .ident_idx = qualified_method_name,
                             .region = region,
                         } }, region);
@@ -19792,7 +19800,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
 
         const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
             .module_idx = import_idx,
-            .target_node_idx = target_node_idx,
+            .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .value, .region = region }),
             .ident_idx = method_name,
             .region = region,
         } }, region);
@@ -19840,7 +19848,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = auto_import_idx,
-                    .target_node_idx = target_node_idx,
+                    .external_ref = try self.env.pushExternalRef(.{ .import_idx = auto_import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .nominal_type, .region = region }),
                     .backing_expr = tag_expr_idx,
                     .backing_type = .tag,
                 },
@@ -19866,7 +19874,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
 
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
-        .target_node_idx = target_node_idx,
+        .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .value, .region = region }),
         .ident_idx = field_name,
         .region = region,
     } }, region);
@@ -20038,7 +20046,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
                     if (ext.target_node_idx) |target_node_idx| {
                         return TypeAnno.LocalOrExternal{ .external = .{
                             .module_idx = import_idx,
-                            .target_node_idx = target_node_idx,
+                            .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = Region.zero() }),
                         } };
                     }
                 }
@@ -20053,7 +20061,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
             if (auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx)) |target_node_idx| {
                 return TypeAnno.LocalOrExternal{ .external = .{
                     .module_idx = import_idx,
-                    .target_node_idx = target_node_idx,
+                    .external_ref = try self.env.pushExternalRef(.{ .import_idx = import_idx, .name_ident = base.Ident.Idx.NONE, .builtin_node = target_node_idx, .kind = .type, .region = Region.zero() }),
                 } };
             }
         }

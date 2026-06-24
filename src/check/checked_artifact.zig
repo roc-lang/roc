@@ -11617,15 +11617,17 @@ fn categorizeValueRef(
                 unreachable;
             };
             const imported_env = modules.module(resolved_module_idx).moduleEnvConst();
-            const name_text = owner_env.getIdent(ref.name_ident);
-            const target_node = (try can.lookupExposedExternalNode(allocator, imported_env, name_text, ref.kind)) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: external lookup '{s}' not exposed by resolved module {d}",
-                        .{ name_text, resolved_module_idx },
-                    );
-                }
-                unreachable;
+            const target_node = if (ref.isBuiltin()) ref.builtin_node else blk_node: {
+                const name_text = owner_env.getIdent(ref.name_ident);
+                break :blk_node (try can.lookupExposedExternalNode(allocator, imported_env, name_text, ref.kind)) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: external lookup '{s}' not exposed by resolved module {d}",
+                            .{ name_text, resolved_module_idx },
+                        );
+                    }
+                    unreachable;
+                };
             };
             break :blk categorizeImportedValueRef(
                 module,
