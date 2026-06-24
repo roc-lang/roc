@@ -147,12 +147,12 @@ This interval rule is the only subsumption rule.
 
 Tasks:
 
-- [ ] Inventory current effect-slot storage, dispatch watchers, and finalization
+- [x] Inventory current effect-slot storage, dispatch watchers, and finalization
   points.
-- [ ] Inventory current hoist/root selection helpers.
-- [ ] Identify every current source-shape filter for roots.
-- [ ] Identify every current observable-effect filter for roots.
-- [ ] Identify every later pass that repairs, prunes, or reinterprets selected
+- [x] Inventory current hoist/root selection helpers.
+- [x] Identify every current source-shape filter for roots.
+- [x] Identify every current observable-effect filter for roots.
+- [x] Identify every later pass that repairs, prunes, or reinterprets selected
   roots.
 - [ ] Record current Rocci Bird `--opt=size` byte size and disassembly with
   named constants.
@@ -161,30 +161,82 @@ Tasks:
 
 Success criteria:
 
-- [ ] There is a written map from old implementation paths to replacement
+- [x] There is a written map from old implementation paths to replacement
   phases.
-- [ ] Every old path has an owner phase for deletion or conversion.
+- [x] Every old path has an owner phase for deletion or conversion.
+
+Current implementation map:
+
+- Effect storage lives in `src/check/Check.zig`: `EffectSlotId`,
+  `EffectSlot`, `EffectEdge`, `DispatchEffectWatch`, `effect_slots`,
+  `effect_edges`, `dispatch_effect_watches`, `active_effect_slots`, and
+  `function_effect_slots_by_pattern`.
+- Effect finalization lives in `resolveEffectSlots`, which builds directed
+  caller-to-callee edges, condenses SCCs, and propagates effectfulness back to
+  callers. `effectSlotIsEffectful` consumes that result; mutations invalidate
+  cached resolutions.
+- Dispatch watcher ownership lives in `recordDispatchEffectWatch`,
+  `markExprResultDelayedOnDispatch`, and `reportEffectfulDispatch`.
+  Watcher resolution marks the owning slot effectful and reports top-level or
+  `expect` errors from that slot.
+- Root selection state lives in `ExprCheckResult`, `HoistFrame`,
+  `DelayedHoistRoot`, `HoistSelectionTransaction`, `hoist_expr_candidates`,
+  `hoist_delayed_roots`, `hoist_known_values`, `hoist_selected_exprs`,
+  `hoist_selected_bindings`, and `selected_hoisted_roots`.
+- Current source-shape filters are concentrated in
+  `exprCanBeStandaloneConstRoot`, `exprCanCoverConstRootChildren`, and
+  `exprCanBeBindingConstRoot`. Phase 3 owns replacing these with expression
+  result and frame policy; Phase 6 owns deleting any leftover blockers.
+- Current observable-effect audit: `crash`, `dbg`, and `expect` are allowed by
+  the root helpers and tested semantically. `expect_err` is still treated
+  specially in child-covering policy, so Phase 6 must keep auditing it while
+  deleting old source-shape filters.
+- Later root repair/pruning currently lives in
+  `finalizeDelayedHoistedRoots`, `finalizeSelectedHoistedRootsAfterSolving`,
+  `stageExprDependenciesInternal`, and dependency/concreteness checks on
+  selected roots. Phase 4 owns checked output/evaluation scheduling, Phase 5
+  owns static-data output, and Phase 6 owns deleting any duplicate selection
+  logic that can disagree with root frames.
 
 ## Phase 1: Effect Soundness
 
 Tasks:
 
-- [ ] Introduce or normalize `EffectSlotId`, `EffectSlot`, `EffectEdge`, and
+- [x] Introduce or normalize `EffectSlotId`, `EffectSlot`, `EffectEdge`, and
   dispatch watcher storage.
-- [ ] Create effect slots for function bodies, lambdas, top-level values,
+- [x] Create effect slots for function bodies, lambdas, top-level values,
   `expect` bodies, and delayed root candidates.
-- [ ] Track the active effect slot while checking each boundary.
-- [ ] Mark active slots for direct calls to checked effectful functions.
-- [ ] Add directed caller-to-callee edges for calls to local functions with
+- [x] Track the active effect slot while checking each boundary.
+- [x] Mark active slots for direct calls to checked effectful functions.
+- [x] Add directed caller-to-callee edges for calls to local functions with
   slots.
-- [ ] Consume checked function effect kinds for calls through function-typed
+- [x] Consume checked function effect kinds for calls through function-typed
   values.
-- [ ] Register dispatch watchers for unresolved static-dispatch calls.
-- [ ] Resolve watcher slots from selected checked method effects.
-- [ ] Implement directed SCC finalization for recursive effect groups.
-- [ ] Finalize negative answers only after callees and dispatch watchers settle.
-- [ ] Emit checked effect summaries for local and imported checked modules.
-- [ ] Report top-level and `expect` effect errors from finalized slots.
+- [x] Register dispatch watchers for unresolved static-dispatch calls.
+- [x] Resolve watcher slots from selected checked method effects.
+- [x] Implement directed SCC finalization for recursive effect groups.
+- [x] Finalize negative answers only after callees and dispatch watchers settle.
+- [x] Emit checked effect summaries for local and imported checked modules.
+- [x] Report top-level and `expect` effect errors from finalized slots.
+
+Implementation evidence:
+
+- `beginEffectSlot` and `endEffectSlot` maintain the active slot stack.
+  Top-level values, `expect` bodies, and lambda/function bodies create slots;
+  delayed root candidates allocate `const_root_candidate` slots.
+- `markActiveEffectSlotEffectful` records direct effects, and calls through
+  function-typed values consume the checked `fn_pure`/`fn_unbound`/`fn_effectful`
+  function kind at the call site.
+- `recordDirectCalleeEffectDependency` adds caller-to-callee edges for local
+  function calls with slots; `resolveEffectSlots` keeps those dependencies
+  directed and uses SCC condensation only to solve recursive groups.
+- Static dispatch constraints call `recordDispatchEffectWatch` when the
+  dispatch function variable is created. `reportEffectfulDispatch` resolves the
+  watched slot from the selected checked method effect and reports from the
+  owning top-level or `expect` slot.
+- Function effect summaries are represented by the checked function type kind
+  selected after slot finalization, and expression summaries are retained only
+  for checked top-level values and checked function/lambda bodies.
 
 Tests:
 
