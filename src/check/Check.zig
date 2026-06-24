@@ -475,6 +475,18 @@ const ExprCheckResult = struct {
         };
     }
 
+    fn runtimeDependent() ExprCheckResult {
+        return .{
+            .runtime_dep = .runtime_dependent,
+        };
+    }
+
+    fn compileTimeKnown() ExprCheckResult {
+        return .{
+            .runtime_dep = .compile_time_known,
+        };
+    }
+
     fn include(self: *ExprCheckResult, other: ExprCheckResult) void {
         if (other.runtime_dep) |other_dep| {
             switch (other_dep) {
@@ -1951,6 +1963,17 @@ fn recordHoistMatchBranchContextualBindings(
     }
 }
 
+fn recordMatchBranchRuntimeSummaries(
+    self: *Self,
+    branch_patterns: []const CIR.Expr.Match.BranchPattern.Idx,
+) Allocator.Error!void {
+    const runtime_summary = ExprCheckResult.runtimeDependent();
+    for (branch_patterns) |branch_pattern_idx| {
+        const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
+        try self.recordLocalCheckSummary(branch_pattern.pattern, runtime_summary);
+    }
+}
+
 fn recordHoistPatternExtractionProvenanceHelp(
     self: *Self,
     pattern: CIR.Pattern.Idx,
@@ -2677,9 +2700,7 @@ test "local check summaries are scoped to lexical blocks" {
     _ = try state.borrowCheckedContext(&test_env.checker);
 
     const scope = state.checker.beginHoistLexicalScope();
-    var summary = ExprCheckResult{};
-    summary.markCompileTimeKnown();
-    try state.checker.recordLocalCheckSummary(pattern, summary);
+    try state.checker.recordLocalCheckSummary(pattern, ExprCheckResult.compileTimeKnown());
 
     const stored = state.checker.local_check_summaries.get(pattern) orelse return error.ExpectedLocalCheckSummary;
     try std.testing.expectEqual(RuntimeDep.compile_time_known, stored.runtime_dep.?);
@@ -10470,10 +10491,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
             defer arg_vars_alloc.free(arg_vars);
             const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
+            const arg_summary_start = self.local_check_summary_scope_patterns.items.len;
+            defer self.popLocalCheckSummaryScope(arg_summary_start);
             for (0..arg_count) |i| {
                 const pattern_idx = self.cir.store.patternAt(lambda.args, i);
                 arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
                 try self.checkPattern(pattern_idx, pattern_ctx, env);
+                try self.recordLocalCheckSummary(pattern_idx, ExprCheckResult.runtimeDependent());
             }
 
             // Now, check if we have an expected function to validate against
@@ -12313,6 +12337,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 // Check the pattern
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                try self.recordLocalCheckSummary(var_stmt.pattern_idx, ExprCheckResult.runtimeDependent());
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // Check the annotation, if it exists. A mutable `var` never
@@ -12353,6 +12378,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                try self.recordLocalCheckSummary(var_stmt.pattern_idx, ExprCheckResult.runtimeDependent());
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // A mutable `var` never generalizes, so a type variable its
@@ -12382,6 +12408,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // established explicitly before we unify it with the RHS.
                 const reassign_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(reassign.pattern_idx)) .match_branch else .bound;
                 try self.checkPattern(reassign.pattern_idx, reassign_pattern_ctx, env);
+                try self.recordLocalCheckSummary(reassign.pattern_idx, ExprCheckResult.runtimeDependent());
                 self.discardHoistBindingCandidate(reassign.pattern_idx);
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
@@ -12867,6 +12894,7 @@ fn checkMatchExpr(
             try self.recordHoistSingleBranchMatchPatternProvenance(match, first_branch, first_branch_ptrn_idxs);
         }
         try self.recordHoistMatchBranchContextualBindings(first_branch_ptrn_idxs, match_hoist_owner);
+        try self.recordMatchBranchRuntimeSummaries(first_branch_ptrn_idxs);
 
         // Check guard if present
         if (first_branch.guard) |guard_idx| {
@@ -12922,6 +12950,7 @@ fn checkMatchExpr(
             had_type_error = true;
         }
         try self.recordHoistMatchBranchContextualBindings(branch_ptrn_idxs, match_hoist_owner);
+        try self.recordMatchBranchRuntimeSummaries(branch_ptrn_idxs);
 
         // Check guard if present
         if (branch.guard) |guard_idx| {
@@ -12979,6 +13008,7 @@ fn checkMatchExpr(
                         }
                     }
                     try self.recordHoistMatchBranchContextualBindings(other_branch_ptrn_idxs, match_hoist_owner);
+                    try self.recordMatchBranchRuntimeSummaries(other_branch_ptrn_idxs);
 
                     // Then check the other branch's exprs
                     check_result.include(try self.checkExprWithHoistSelectionSuppressed(other_branch.value, env, expected.forBranchBody()));
@@ -13736,6 +13766,10 @@ fn checkIteratorForLoop(
     );
 
     try self.cir.recordForLoopDispatchPlan(loop_node, ModuleEnv.nodeIdxFrom(pattern), ModuleEnv.nodeIdxFrom(iterable), iter_fn_var, next_fn_var);
+
+    const item_summary_start = self.local_check_summary_scope_patterns.items.len;
+    defer self.popLocalCheckSummaryScope(item_summary_start);
+    try self.recordLocalCheckSummary(pattern, ExprCheckResult.runtimeDependent());
 
     check_result.include(try self.checkExpr(body, env, Expected.none()));
     return check_result;
