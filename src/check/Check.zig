@@ -146,10 +146,10 @@ current_expect_region: ?Region,
 /// Effect slots owned by the checker. These are sparse semantic slots, not a
 /// per-expression table.
 effect_slots: std.ArrayListUnmanaged(EffectSlot),
-/// Directed dependencies between effect slots. This is populated by the
-/// long-term effect solver; current call paths still use the legacy bool while
-/// slots are being introduced.
+/// Directed caller -> callee dependencies between effect slots.
 effect_edges: std.ArrayListUnmanaged(EffectEdge),
+/// Function binding patterns mapped to their checker-owned body effect slot.
+function_effect_slots_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, EffectSlotId),
 /// Stack of currently active effect slots.
 active_effect_slots: std.ArrayListUnmanaged(EffectSlotId),
 /// Static-dispatch function variables watched by active effect slots.
@@ -428,9 +428,8 @@ const EffectSlotKind = union(enum) {
 const EffectSlot = struct {
     kind: EffectSlotKind,
     direct_effect: bool = false,
-    outgoing_start: u32 = 0,
-    outgoing_len: u32 = 0,
     resolved_effectful: ?bool = null,
+    resolving_effectful: bool = false,
     reported: bool = false,
 };
 
@@ -1122,6 +1121,7 @@ fn initAssumePrepared(
         .current_expect_region = null,
         .effect_slots = .empty,
         .effect_edges = .empty,
+        .function_effect_slots_by_pattern = .{},
         .active_effect_slots = .empty,
         .dispatch_effect_watches = .empty,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
@@ -1266,6 +1266,7 @@ pub fn deinit(self: *Self) void {
     self.expect_region_by_constraint_fn_var.deinit();
     self.effect_slots.deinit(self.gpa);
     self.effect_edges.deinit(self.gpa);
+    self.function_effect_slots_by_pattern.deinit(self.gpa);
     self.active_effect_slots.deinit(self.gpa);
     self.dispatch_effect_watches.deinit(self.gpa);
     self.top_level_ptrns.deinit();
@@ -1318,12 +1319,55 @@ fn effectSlotPtr(self: *Self, slot: EffectSlotId) *EffectSlot {
 
 fn effectSlotIsEffectful(self: *Self, slot: EffectSlotId) bool {
     const slot_ptr = self.effectSlotPtr(slot);
-    return slot_ptr.resolved_effectful orelse slot_ptr.direct_effect;
+    if (slot_ptr.resolved_effectful) |resolved| return resolved;
+    if (slot_ptr.direct_effect) {
+        slot_ptr.resolved_effectful = true;
+        return true;
+    }
+    if (slot_ptr.resolving_effectful) return false;
+
+    slot_ptr.resolving_effectful = true;
+    defer slot_ptr.resolving_effectful = false;
+
+    for (self.effect_edges.items) |edge| {
+        if (edge.from != slot) continue;
+        if (self.effectSlotIsEffectful(edge.to)) {
+            slot_ptr.resolved_effectful = true;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 fn markActiveEffectSlotEffectful(self: *Self) void {
     const slot = self.currentEffectSlot() orelse return;
-    self.effectSlotPtr(slot).direct_effect = true;
+    const slot_ptr = self.effectSlotPtr(slot);
+    slot_ptr.direct_effect = true;
+    slot_ptr.resolved_effectful = null;
+}
+
+fn recordActiveEffectSlotDependency(self: *Self, callee_slot: EffectSlotId) Allocator.Error!void {
+    const caller_slot = self.currentEffectSlot() orelse return;
+    try self.effect_edges.append(self.gpa, .{
+        .from = caller_slot,
+        .to = callee_slot,
+    });
+    self.effectSlotPtr(caller_slot).resolved_effectful = null;
+}
+
+fn recordFunctionEffectSlotForBinding(self: *Self, pattern: CIR.Pattern.Idx, slot: EffectSlotId) Allocator.Error!void {
+    try self.function_effect_slots_by_pattern.put(self.gpa, pattern, slot);
+}
+
+fn recordDirectCalleeEffectDependency(self: *Self, callee: CIR.Expr.Idx) Allocator.Error!void {
+    switch (self.cir.store.getExpr(callee)) {
+        .e_lookup_local => |lookup| {
+            const callee_slot = self.function_effect_slots_by_pattern.get(lookup.pattern_idx) orelse return;
+            try self.recordActiveEffectSlotDependency(callee_slot);
+        },
+        else => {},
+    }
 }
 
 fn recordDispatchEffectWatch(self: *Self, fn_var: Var) Allocator.Error!void {
@@ -1360,6 +1404,7 @@ fn markDispatchEffectWatchers(self: *Self, fn_var: Var) Allocator.Error!void {
         if (watch.fn_var != fn_var) continue;
         const slot_ptr = self.effectSlotPtr(watch.slot);
         slot_ptr.direct_effect = true;
+        slot_ptr.resolved_effectful = null;
         try self.reportTopLevelEffectSlot(watch.slot, null);
     }
 }
@@ -10182,6 +10227,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const effect_slot = try self.beginEffectSlot(.{ .function_body = lambda.body });
             defer self.endEffectSlot(effect_slot);
+            if (is_binding_rhs) {
+                if (binding_rhs_pattern) |pattern| {
+                    try self.recordFunctionEffectSlotForBinding(pattern, effect_slot);
+                }
+            }
 
             const legacy_body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
@@ -10327,6 +10377,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             }
                         };
                         const mb_func = if (mb_func_info) |info| info.func else null;
+
+                        try self.recordDirectCalleeEffectDependency(call.func);
 
                         // If the function being called is effectful, mark this expression as effectful
                         if (mb_func_info) |info| {
