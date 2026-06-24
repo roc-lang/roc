@@ -2539,9 +2539,6 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        .e_for,
-        .e_return,
-        .e_break,
         .e_run_low_level,
         => false,
         .e_dbg,
@@ -2572,6 +2569,9 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_method_call,
         .e_type_dispatch_call,
         .e_tuple_access,
+        .e_for,
+        .e_return,
+        .e_break,
         => true,
     };
 }
@@ -2586,7 +2586,6 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_dispatch_call,
         .e_dispatch_call,
         => true,
-        .e_for,
         .e_run_low_level,
         .e_lookup_required,
         .e_runtime_error,
@@ -2601,6 +2600,7 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         => false,
         .e_dbg,
         .e_expect,
+        .e_for,
         => true,
         .e_expect_err => false,
         .e_lookup_external,
@@ -4879,15 +4879,16 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        .e_for,
-        .e_return,
-        .e_break,
         .e_run_low_level,
         => false,
         .e_crash => true,
         .e_dbg => |dbg| self.hoistedRootDependenciesAreKeptInternal(dbg.expr, context, keep_oracle),
         .e_expect_err => |expect_err| self.hoistedRootDependenciesAreKeptInternal(expect_err.expr, context, keep_oracle),
         .e_expect => |expect| self.hoistedRootDependenciesAreKeptInternal(expect.body, context, keep_oracle),
+        .e_for => |for_expr| (try self.hoistedRootDependenciesAreKeptInternal(for_expr.expr, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(for_expr.body, context, keep_oracle),
+        .e_return => |ret| self.hoistedRootDependenciesAreKeptInternal(ret.expr, context, keep_oracle),
+        .e_break => true,
         .e_str => |str| self.hoistedRootExprSpanDependenciesAreKept(str.span, context, keep_oracle),
         .e_list => |list| self.hoistedRootExprSpanDependenciesAreKept(list.elems, context, keep_oracle),
         .e_tuple => |tuple| self.hoistedRootExprSpanDependenciesAreKept(tuple.elems, context, keep_oracle),
@@ -5370,17 +5371,21 @@ fn hoistedRootStatementDependenciesAreKept(
         .s_var,
         .s_var_uninitialized,
         .s_reassign,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
         .s_runtime_error,
         => false,
         .s_crash => true,
         .s_dbg => |dbg| self.hoistedRootDependenciesAreKeptInternal(dbg.expr, context, keep_oracle),
         .s_expect => |expect| self.hoistedRootDependenciesAreKeptInternal(expect.body, context, keep_oracle),
+        .s_for => |for_stmt| (try self.hoistedRootDependenciesAreKeptInternal(for_stmt.expr, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(for_stmt.body, context, keep_oracle),
+        .s_while => |while_stmt| (try self.hoistedRootDependenciesAreKeptInternal(while_stmt.cond, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(while_stmt.body, context, keep_oracle),
+        .s_infinite_loop => |loop_stmt| (try self.hoistedRootDependenciesAreKeptInternal(loop_stmt.cond, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(loop_stmt.body, context, keep_oracle),
+        .s_breakable_loop => |loop_stmt| (try self.hoistedRootDependenciesAreKeptInternal(loop_stmt.cond, context, keep_oracle)) and
+            try self.hoistedRootDependenciesAreKeptInternal(loop_stmt.body, context, keep_oracle),
+        .s_return => |ret| self.hoistedRootDependenciesAreKeptInternal(ret.expr, context, keep_oracle),
+        .s_break => true,
     };
 }
 

@@ -649,7 +649,7 @@ Steps:
 - [ ] Delayed-effect parent roots finalize correctly.
 - [ ] Leaf/root pruning rules are removed.
 - [x] Observable-effect root blockers are removed.
-- [ ] `return`/`break`/loop syntax root blockers are removed.
+- [x] `return`/`break`/loop syntax root blockers are removed.
 
 ### Compile-Time Evaluation And Static Data
 
