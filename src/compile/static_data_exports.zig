@@ -368,6 +368,21 @@ const StaticDataBuilder = struct {
             }
         }
         switch (plan) {
+            .named => |named| {
+                const backing_node = switch (value) {
+                    .nominal => |nominal| ConstNode{ .module = node.module, .id = nominal.backing },
+                    else => node,
+                };
+                try self.writeValue(bytes, relocations, base_offset, backing_node, named.backing, layout_idx);
+                return;
+            },
+            else => {},
+        }
+        if (self.layoutWrapsLogicalValue(layout_idx, plan)) {
+            try self.writeLayoutBoxedValue(bytes, relocations, base_offset, node, plan_id, layout_idx);
+            return;
+        }
+        switch (plan) {
             .pending => staticDataInvariant("pending const plan reached static data export"),
             .zst => switch (value) {
                 .zst => {},
@@ -380,16 +395,23 @@ const StaticDataBuilder = struct {
             .tuple => |items| try self.writeTuple(bytes, relocations, base_offset, node, value, items, layout_idx),
             .record => |fields| try self.writeRecord(bytes, relocations, base_offset, node, value, fields, layout_idx),
             .tag_union => |variants| try self.writeTagUnion(bytes, relocations, base_offset, node, value, variants, layout_idx),
-            .named => |named| {
-                const backing_node = switch (value) {
-                    .nominal => |nominal| ConstNode{ .module = node.module, .id = nominal.backing },
-                    else => node,
-                };
-                try self.writeValue(bytes, relocations, base_offset, backing_node, named.backing, layout_idx);
-            },
+            .named => staticDataInvariant("named const plan was not unwrapped before static data export"),
             .fn_value => |set| try self.writeFnValue(bytes, relocations, base_offset, node.module, value, set, layout_idx),
             .erased_fn => |set| try self.writeErasedFn(bytes, relocations, base_offset, node.module, value, set, layout_idx),
         }
+    }
+
+    fn layoutWrapsLogicalValue(
+        self: *StaticDataBuilder,
+        layout_idx: layout.Idx,
+        plan: lir.Program.ConstPlan,
+    ) bool {
+        switch (plan) {
+            .box => return false,
+            else => {},
+        }
+        const layout_value = self.layoutValue(layout_idx);
+        return layout_value.tag == .box or layout_value.tag == .box_of_zst;
     }
 
     fn writeScalar(self: *StaticDataBuilder, bytes: []u8, base_offset: u32, value: ConstValue, layout_idx: layout.Idx) void {
@@ -602,6 +624,38 @@ const StaticDataBuilder = struct {
 
         const abi = self.layouts().builtinBoxAbi(box_layout_idx);
         const payload = try self.materializeValue(.{ .module = node.module, .id = payload_node }, payload_plan, abi.elem_layout_idx orelse layout.Idx.zst);
+        var payload_consumed = false;
+        errdefer if (!payload_consumed) self.deinitMaterialized(payload);
+
+        const target = try self.addStaticAllocationWithRelocs(
+            payload.bytes,
+            abi.elem_alignment,
+            abi.contains_refcounted,
+            null,
+            payload.relocations,
+        );
+        payload_consumed = true;
+        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+    }
+
+    fn writeLayoutBoxedValue(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        node: ConstNode,
+        plan_id: lir.Program.ConstPlanId,
+        box_layout_idx: layout.Idx,
+    ) MaterializationError!void {
+        const box_layout = self.layoutValue(box_layout_idx);
+        if (box_layout.tag == .box_of_zst) {
+            self.writeTargetWord(bytes, base_offset, 0);
+            return;
+        }
+        if (box_layout.tag != .box) staticDataInvariant("layout-boxed const value had non-box layout");
+
+        const abi = self.layouts().builtinBoxAbi(box_layout_idx);
+        const payload = try self.materializeValue(node, plan_id, abi.elem_layout_idx orelse layout.Idx.zst);
         var payload_consumed = false;
         errdefer if (!payload_consumed) self.deinitMaterialized(payload);
 

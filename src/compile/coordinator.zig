@@ -1263,6 +1263,7 @@ pub const Coordinator = struct {
         var seen = std.AutoHashMap(check.CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
         defer seen.deinit();
 
+        try pending.append(allocator, check.CheckedArtifact.importedView(&self.builtin_modules.checked_artifact));
         for (imported_artifacts) |imported| {
             try pending.append(allocator, imported.view);
         }
@@ -1274,10 +1275,10 @@ pub const Coordinator = struct {
 
             try views.append(allocator, view);
 
-            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+            for (view.public_api_dependencies.artifacts) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
+                        std.debug.panic("compile.coordinator missing public API dependency checked artifact", .{});
                     }
                     unreachable;
                 };

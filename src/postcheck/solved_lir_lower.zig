@@ -1121,8 +1121,16 @@ const Lowerer = struct {
     fn constPlanNeedsStaticData(self: *Lowerer, plan_id: LirProgram.ConstPlanId, layout_idx: layout.Idx) bool {
         const layout_value = self.result.layouts.getLayout(layout_idx);
         if (self.result.layouts.layoutSize(layout_value) == 0) return false;
+        const plan = self.result.const_plans.items[@intFromEnum(plan_id)];
+        if (layout_value.tag == .box or layout_value.tag == .box_of_zst) {
+            switch (plan) {
+                .box => {},
+                .named => |named| return self.constPlanNeedsStaticData(named.backing, layout_idx),
+                else => return true,
+            }
+        }
 
-        return switch (self.result.const_plans.items[@intFromEnum(plan_id)]) {
+        return switch (plan) {
             .pending => Common.invariant("pending const plan reached static data candidate selection"),
             .zst,
             .scalar,
