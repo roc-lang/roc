@@ -2938,9 +2938,16 @@ fn patternIsTopLevel(self: *Self, pattern: CIR.Pattern.Idx) bool {
 fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => false,
+        .e_lookup_local,
         .e_lookup_external,
         .e_lookup_required,
+        .e_runtime_error,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_closure,
+        .e_lambda,
+        .e_hosted_lambda,
+        => false,
         .e_str_segment,
         .e_bytes_literal,
         .e_num,
@@ -2955,15 +2962,8 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
         .e_crash,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        => false,
-        .e_str => |str| self.stringHasInterpolation(str.span),
+        .e_str,
         .e_list,
         .e_tuple,
         .e_block,
@@ -3008,6 +3008,14 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_lookup_local,
         .e_lookup_external,
         .e_lookup_required,
+        .e_runtime_error,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_closure,
+        .e_lambda,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => false,
         .e_str_segment,
         .e_bytes_literal,
         .e_num,
@@ -3022,20 +3030,12 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
         .e_crash,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        .e_run_low_level,
-        => false,
         .e_dbg,
         .e_expect,
         => true,
         .e_expect_err => false,
-        .e_str => |str| self.stringHasInterpolation(str.span),
+        .e_str,
         .e_list,
         .e_tuple,
         .e_block,
@@ -3069,47 +3069,45 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
 fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => true,
-        .e_call,
-        .e_method_call,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_dispatch_call,
-        => true,
         .e_run_low_level,
         .e_lookup_required,
         .e_runtime_error,
         .e_ellipsis,
         .e_anno_only,
-        .e_crash,
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        .e_return,
-        .e_break,
         => false,
-        .e_dbg,
-        .e_expect,
-        .e_for,
-        => true,
-        .e_expect_err => false,
+        .e_lookup_local,
         .e_lookup_external,
         .e_str_segment,
         .e_bytes_literal,
+        .e_num,
+        .e_num_from_numeral,
         .e_frac_f32,
         .e_frac_f64,
         .e_dec,
         .e_dec_small,
         .e_typed_int,
         .e_typed_frac,
+        .e_typed_num_from_numeral,
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_for,
+        .e_str,
         .e_list,
         .e_tuple,
         .e_block,
         .e_match,
         .e_if,
+        .e_call,
+        .e_method_call,
+        .e_dispatch_call,
         .e_record,
         .e_tag,
         .e_nominal,
@@ -3122,21 +3120,13 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_structural_eq,
         .e_structural_hash,
         .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
         .e_tuple_access,
+        .e_return,
+        .e_break,
         => true,
-        .e_num,
-        .e_num_from_numeral,
-        .e_typed_num_from_numeral,
-        .e_str,
-        => !self.exprHasDedicatedLiteralConversionRoot(expr),
     };
-}
-
-fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
-    for (self.cir.store.sliceExpr(span)) |segment| {
-        if (self.cir.store.getExpr(segment) != .e_str_segment) return true;
-    }
-    return false;
 }
 /// In debug builds, verifies that region and type arrays have matching lengths.
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
@@ -5340,8 +5330,6 @@ fn hoistedRootDependenciesAreKeptInternal(
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
-    if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
-
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => |lookup| self.patternIsTopLevel(lookup.pattern_idx) or
             context.contains(lookup.pattern_idx) or
@@ -5755,58 +5743,6 @@ fn hoistedIfAllowsStoredConst(
         if (!try self.hoistedExprAllowsStoredConst(module, branch.body, context)) return false;
     }
     return try self.hoistedExprAllowsStoredConst(module, final_else, context);
-}
-
-fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
-    const node = ModuleEnv.nodeIdxFrom(expr);
-    if (self.cir.numeralDispatchPlanForNode(node) != null) {
-        if (self.cir.numericSuffixTargetForNode(node)) |suffix_target| {
-            return switch (suffix_target.target()) {
-                .builtin => false,
-                .local,
-                .external,
-                => true,
-                .invalid => false,
-            };
-        }
-        return !self.varIsBuiltinLiteralTarget(ModuleEnv.varFrom(expr));
-    }
-    if (self.cir.quoteDispatchPlanForNode(node) != null and
-        !self.varIsBuiltinLiteralTarget(ModuleEnv.varFrom(expr)))
-    {
-        return true;
-    }
-    return false;
-}
-
-fn varIsBuiltinLiteralTarget(self: *Self, var_: Var) bool {
-    var current = var_;
-    while (true) {
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = self.types.getAliasBackingVar(alias);
-            },
-            .structure => |flat| return switch (flat) {
-                .nominal_type => |nominal| self.nominalIsBuiltinNumberType(nominal) or
-                    self.nominalIsBuiltinStrType(nominal),
-                .record,
-                .record_unbound,
-                .tuple,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                => false,
-            },
-            .err,
-            .flex,
-            .rigid,
-            => return false,
-        }
-    }
 }
 
 fn hoistedRootExprSpanDependenciesAreKept(

@@ -815,13 +815,13 @@ wc -c rocci-bird.wasm
   the new summary.
 - [x] Top-level checked value lookups are compile-time-known.
 - [x] Imported checked value lookups are compile-time-known.
-- [ ] Root-candidate stack exists.
-- [ ] Every expression uses root frames.
-- [ ] Parent root selection removes child roots in the same frame.
-- [ ] Rejected parent roots preserve eligible child roots.
+- [x] Root-candidate stack exists.
+- [x] Every expression uses root frames.
+- [x] Parent root selection removes child roots in the same frame.
+- [x] Rejected parent roots preserve eligible child roots.
 - [ ] Delayed-effect parent roots finalize correctly.
 - [ ] Nested delayed-effect parents finalize correctly.
-- [ ] Leaf/root pruning rules are removed.
+- [x] Leaf/root pruning rules are removed.
 - [x] Observable-effect root blockers are removed.
 - [x] `return`/`break`/loop syntax root blockers are removed.
 
@@ -857,7 +857,7 @@ wc -c rocci-bird.wasm
 - [ ] Old hoist selection machinery is deleted or fully replaced.
 - [ ] No post-check stage infers root eligibility from source/CIR shape.
 - [ ] No root blocker remains for `dbg`, `expect`, or `crash`.
-- [ ] No root blocker remains for leaf expressions.
+- [x] No root blocker remains for leaf expressions.
 - [ ] No root blocker remains for `return`, `break`, or loops.
 - [x] Focused effect tests pass.
 - [x] Focused root tests pass.
