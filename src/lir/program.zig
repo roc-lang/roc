@@ -51,6 +51,7 @@ pub const CaptureSlot = struct {
     id: const_store.CaptureId,
     slot: u32,
     plan: ConstPlanId,
+    layout_idx: layout.Idx,
 };
 
 /// One runtime tag variant for a finite callable value.
@@ -86,12 +87,19 @@ pub const ErasedFns = struct {
 /// Identifier for a constant storage plan emitted with LIR.
 pub const ConstPlanId = enum(u32) { _ };
 
+/// One logical child in an aggregate constant plan, paired with its committed
+/// runtime layout.
+pub const ConstFieldPlan = struct {
+    plan: ConstPlanId,
+    layout_idx: layout.Idx,
+};
+
 /// Tag variant in a constant storage plan.
 pub const ConstTagVariant = struct {
     name: []const u8,
     checked_name: names.TagNameId,
     discriminant: u16,
-    payloads: []const ConstPlanId = &.{},
+    payloads: []const ConstFieldPlan = &.{},
 };
 
 /// Shape plan used to store an interpreted compile-time result in ConstStore.
@@ -102,12 +110,13 @@ pub const ConstPlan = union(enum) {
     str,
     list: ConstPlanId,
     box: ConstPlanId,
-    tuple: []const ConstPlanId,
-    record: []const ConstPlanId,
+    tuple: []const ConstFieldPlan,
+    record: []const ConstFieldPlan,
     tag_union: []const ConstTagVariant,
     named: struct {
         named_type: check.CheckedModule.ConstNamedType,
         backing: ConstPlanId,
+        backing_layout_idx: layout.Idx,
     },
     fn_value: FnSetId,
     erased_fn: ErasedFnsId,

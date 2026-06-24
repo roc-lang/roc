@@ -95,7 +95,7 @@ The branch already has the major pieces of the pipeline:
   callables in `src/postcheck/solved_lir_lower.zig`
 - static-data export materialization in `src/compile/static_data_exports.zig`
 
-This part is already implemented and tested:
+This work is now implemented and tested:
 
 - a function-valued aggregate can be a stored hoisted constant
 - a bare function root is still rejected as a data root and restored through
@@ -109,27 +109,19 @@ This part is already implemented and tested:
   `.assign_literal .static_data` statements, so callable procedures and child
   capture plans needed only by internal static data are preserved before
   proc/statement compaction
-
-The remaining blockers are:
-
-- static-data selection in Monotype is still partly value-only:
-
-```zig
-fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNodeId) bool
-```
-
-- that value-only function treats `.fn_value` as "no static data," which is
-  wrong for a reachable aggregate whose runtime representation contains a
-  callable payload
 - finite callable static-data materialization is covered for zero-capture,
   scalar-capture, captured-list, nested-callable-capture, and multi-variant
   callable-set provided data
 - erased callable static data is covered in the callable-containing aggregate
   path
-- cross-module compile-time diagnostics need tests proving every eligible
-  module-level root is evaluated even when unreachable from runtime roots
-- Rocci Bird has not yet been rebuilt and disassembled after the full static
-  callable path is complete
+- static-data selection is made after LIR const-plan and layout selection, so
+  it uses explicit value, checked type, layout, and const-plan data
+- layout-inserted box edges are treated as target representation by static-data
+  selection and export materialization, not as source `Box` values
+- cross-module compile-time diagnostics are covered by tests proving eligible
+  module-level roots run even when unreachable from runtime roots
+- Rocci Bird has been rebuilt and inspected after the full static callable path
+  was completed
 
 ## Invariants
 
@@ -672,6 +664,32 @@ Success criteria:
 - the `.iter()` version is no larger because of runtime base-iterator rebuilds
 - the disassembly proves static sharing, not merely a smaller byte count
 
+Completed evidence:
+
+- compiler code commit: `f829ac54e1de`
+- wasm4 commit: `deae1505a67a`
+- `zig build` passed in the compiler repo
+- `zig build -Doptimize=ReleaseSmall` passed in the wasm4 repo
+- Rocci Bird built successfully with `--opt=size`
+- output size: 33,777 bytes
+- output sha256:
+  `24a33e32fea80d05da5795bd7c0768198006447882a85f369c2ab96c97dc59c2`
+- `w4 run /home/rtfeldman/code/roc-wasm4/rocci-bird.wasm --port 4445
+  --no-open --no-qr` serves `/cart.wasm` on `http://127.0.0.1:4445/`
+  with the same size and sha256
+- section-aware wasm inspection found the base point backing bytes once, in
+  active data segment 45 at memory `0x2be0`; its explicit payload is 61 bytes
+  because the remaining trailing zero bytes are supplied by wasm's zero-filled
+  memory
+- data segment 46 at memory `0x2c30` is the static list allocation and points
+  at the `0x2be0` point backing
+- the update function copies the base iterator fields from static memory
+  addresses `0x2c50`, `0x2c58`, and `0x2c60`
+- static memory `0x2c60` stores pointer `0x2c28`, the allocation base for the
+  same list whose payload is at `0x2c30`
+- the wasm code contains no consecutive emitted `i32.const` sequence for the
+  base point values, so the base point list is not rebuilt in the function body
+
 ## Phase 8: Required Verification Commands
 
 Run targeted tests as each phase lands:
@@ -707,6 +725,75 @@ zig build -Doptimize=ReleaseSmall
 /home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc build examples/rocci-bird.roc --opt=size --output=rocci-bird.wasm
 ```
 
+Completed verification sweep on compiler code commit `f829ac54e1de`:
+
+- `zig build run-test-zig-module-check -- --test-filter "hoist roots"` passed
+- `zig build run-test-zig-module-compile -- --test-filter "static data"`
+  passed
+- `zig build run-test-zig-module-compile -- --test-filter "hoisted"` passed
+- `zig build run-test-eval` passed with 1,443 passed, 0 failed, 0 crashed,
+  and 0 skipped
+- `zig build run-test-zig-module-check` passed
+- `zig build run-test-zig-module-compile` passed
+- `zig build` passed
+- `zig build -Doptimize=ReleaseSmall` passed in `/home/rtfeldman/code/roc-wasm4`
+- Rocci Bird rebuilt with `--opt=size` and produced the recorded 33,777 byte
+  wasm with sha256
+  `24a33e32fea80d05da5795bd7c0768198006447882a85f369c2ab96c97dc59c2`
+- `http://127.0.0.1:4445/cart.wasm` serves the same 33,777 byte wasm with
+  the same sha256
+
+## Completion Audit
+
+Phase 1 is complete: the regression coverage lives in
+`src/check/test/hoist_roots_test.zig`,
+`src/compile/test/hoisted_constants_test.zig`, and
+`src/lir/reachable_procs.zig`. The named tests cover local `List.iter` root
+selection, runtime-dependent parent/closed-child selection, callable aggregate
+subsumption, checker-error poison locality, compile-time diagnostics, static
+data emission, erased callable aggregates, finite callable capture shapes, and
+reachable callable const-plan preservation.
+
+Phase 2 is complete: root selection in `src/check/Check.zig` uses checked
+summary data for runtime dependency, control dependency, effectful calls, and
+checker-error poison. The hoist-root suite covers leaves, strings, numbers,
+empty lists, records, calls, `crash`, `dbg`, and `expect` so they are not
+categorical blockers, and the parent-over-child interval replacement behavior
+is covered for records, callable aggregates, and iterators.
+
+Phase 3 is complete: compile-time finalization tests in
+`src/compile/test/hoisted_constants_test.zig` cover unreachable top-level
+`crash`, `dbg`, and failed `expect`, imported-module diagnostics, shared
+dependency diagnostic dedupe, effectful-call rejection, and successful
+unreachable constants not creating target static data.
+
+Phase 4 is complete: Monotype carries static-data candidates as explicit
+stored-const requests, and the final decision happens during LIR lowering from
+the explicit const plan, use-site type, and committed layout. The bare
+function-valued constant test proves callable roots still restore through the
+callable path instead of being forced into data roots.
+
+Phase 5 is complete: `src/compile/static_data_exports.zig` materializes finite
+callables through `writeFnValue`, chooses variants by explicit function
+template identity, writes captures through the shared capture writer, and
+deduplicates callable allocations through the same byte-plus-relocation static
+allocation path as other static data. The finite callable tests cover
+zero-capture, scalar capture, list capture, nested callable capture, and
+multi-variant callable sets.
+
+Phase 6 is complete: provided data exports remain separate from internal
+runtime-reachable static-data uses, and `ReachableProcs.run` marks procedures
+and child const plans reached only through callable static data before
+compaction. The `reachable_procs` tests cover erased callable plans and finite
+callable capture plans.
+
+Phase 7 is complete: Rocci Bird keeps `base_points = [...].iter()`, builds with
+`--opt=size`, serves through wasm4 on port 4445, and the wasm section scan
+shows the point backing bytes once in active data segment 45 and zero times in
+the code section. Segment 46 is the static list allocation pointing at that
+backing, and the unchanged sha256 ties this rebuild to the inspected static
+iterator/callable-data artifact.
+
 ## Final Checklist
 
 - [x] Failing tests capture local `List.iter` root selection.
@@ -722,5 +809,5 @@ zig build -Doptimize=ReleaseSmall
 - [x] Erased callable static data is covered by tests.
 - [x] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
 - [x] Reachability marks callable static-data procedures and capture plans.
-- [ ] Rocci Bird with `base_points.iter()` builds with `--opt=size`.
-- [ ] Rocci Bird disassembly proves the base iterator is static, shared data.
+- [x] Rocci Bird with `base_points.iter()` builds with `--opt=size`.
+- [x] Rocci Bird disassembly proves the base iterator is static, shared data.

@@ -1125,7 +1125,7 @@ const Lowerer = struct {
         if (layout_value.tag == .box or layout_value.tag == .box_of_zst) {
             switch (plan) {
                 .box => {},
-                .named => |named| return self.constPlanNeedsStaticData(named.backing, layout_idx),
+                .named => |named| return self.constPlanNeedsStaticData(named.backing, named.backing_layout_idx),
                 else => return true,
             }
         }
@@ -1144,20 +1144,28 @@ const Lowerer = struct {
             .tuple => |items| self.aggregatePlanNeedsStaticData(items, layout_idx),
             .record => |fields| self.aggregatePlanNeedsStaticData(fields, layout_idx),
             .tag_union => |variants| self.tagPlanNeedsStaticData(variants, layout_idx),
-            .named => |named| self.constPlanNeedsStaticData(named.backing, layout_idx),
+            .named => |named| self.constPlanNeedsStaticData(named.backing, named.backing_layout_idx),
         };
     }
 
-    fn aggregatePlanNeedsStaticData(self: *Lowerer, children: []const LirProgram.ConstPlanId, layout_idx: layout.Idx) bool {
+    fn aggregatePlanNeedsStaticData(self: *Lowerer, children: []const LirProgram.ConstFieldPlan, layout_idx: layout.Idx) bool {
         if (children.len == 0) return false;
         const aggregate_layout = self.result.layouts.getLayout(layout_idx);
         if (aggregate_layout.tag != .struct_) {
-            if (children.len != 1) Common.invariant("non-struct aggregate static-data candidate had multiple children");
-            return self.constPlanNeedsStaticData(children[0], layout_idx);
+            var runtime_child_count: usize = 0;
+            var needs_static_data = false;
+            for (children) |child| {
+                const child_layout = self.result.layouts.getLayout(child.layout_idx);
+                if (self.result.layouts.layoutSize(child_layout) == 0) continue;
+                runtime_child_count += 1;
+                if (self.constPlanNeedsStaticData(child.plan, layout_idx)) needs_static_data = true;
+            }
+            if (runtime_child_count != 1) Common.invariant("non-struct aggregate static-data candidate did not have one runtime child");
+            return needs_static_data;
         }
         for (children, 0..) |child, index| {
             const field_layout_idx = self.result.layouts.getStructFieldLayoutByOriginalIndex(aggregate_layout.getStruct().idx, @intCast(index));
-            if (self.constPlanNeedsStaticData(child, field_layout_idx)) return true;
+            if (self.constPlanNeedsStaticData(child.plan, field_layout_idx)) return true;
         }
         return false;
     }
@@ -1167,7 +1175,10 @@ const Lowerer = struct {
         switch (tag_layout.tag) {
             .zst, .scalar => return false,
             .tag_union => {},
-            else => Common.invariant("tag-union static-data candidate had non-tag-union layout"),
+            else => {
+                if (variants.len != 1) Common.invariant("layout-unwrapped tag static-data candidate had multiple variants");
+                return self.tagPayloadPlanNeedsStaticData(variants[0].payloads, layout_idx);
+            },
         }
         const tag_data = self.result.layouts.getTagUnionData(tag_layout.getTagUnion().idx);
         const layout_variants = self.result.layouts.getTagUnionVariants(tag_data);
@@ -1175,25 +1186,42 @@ const Lowerer = struct {
             if (variant.payloads.len == 0) continue;
             if (variant.discriminant >= layout_variants.len) Common.invariant("tag static-data candidate discriminant exceeded committed layout variants");
             const payload_layout_idx = layout_variants.get(@intCast(variant.discriminant)).payload_layout;
-            for (variant.payloads, 0..) |payload_plan, payload_index| {
-                const child_layout_idx = self.tagPayloadArgLayout(payload_layout_idx, variant.payloads.len, @intCast(payload_index));
-                if (self.constPlanNeedsStaticData(payload_plan, child_layout_idx)) return true;
-            }
+            if (self.tagPayloadPlanNeedsStaticData(variant.payloads, payload_layout_idx)) return true;
         }
         return false;
     }
 
-    fn tagPayloadArgLayout(self: *Lowerer, payload_layout_idx: layout.Idx, payload_count: usize, payload_index: u32) layout.Idx {
-        if (payload_count == 0) return .zst;
-        const payload_layout = self.result.layouts.getLayout(payload_layout_idx);
-        if (payload_count == 1) {
-            if (payload_layout.tag == .struct_ and self.result.layouts.getStructInfo(payload_layout).fields.len == 1) {
-                return self.result.layouts.getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, 0);
-            }
-            return payload_layout_idx;
+    fn tagPayloadPlanNeedsStaticData(
+        self: *Lowerer,
+        payloads: []const LirProgram.ConstFieldPlan,
+        payload_layout_idx: layout.Idx,
+    ) bool {
+        if (payloads.len == 0) return false;
+        if (payloads.len == 1) {
+            return self.constPlanNeedsStaticData(payloads[0].plan, payload_layout_idx);
         }
-        if (payload_layout.tag != .struct_) Common.invariant("multi-payload tag static-data candidate did not use a struct payload layout");
-        return self.result.layouts.getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, @intCast(payload_index));
+
+        const payload_layout = self.result.layouts.getLayout(payload_layout_idx);
+        if (payload_layout.tag == .zst) return false;
+        if (payload_layout.tag != .struct_) {
+            var runtime_payload_count: usize = 0;
+            var needs_static_data = false;
+            for (payloads) |payload| {
+                const payload_child_layout = self.result.layouts.getLayout(payload.layout_idx);
+                if (self.result.layouts.layoutSize(payload_child_layout) == 0) continue;
+                runtime_payload_count += 1;
+                if (self.constPlanNeedsStaticData(payload.plan, payload_layout_idx)) needs_static_data = true;
+            }
+            if (runtime_payload_count != 1) Common.invariant("compact tag payload static-data candidate did not have one runtime child");
+            return needs_static_data;
+        }
+        for (payloads, 0..) |payload, payload_index| {
+            const child_layout_idx = self.result.layouts.getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, @intCast(payload_index));
+            if (self.constPlanNeedsStaticData(payload.plan, child_layout_idx)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     fn buildConstPlan(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LirProgram.ConstPlan {
@@ -1221,16 +1249,22 @@ const Lowerer = struct {
             .box => |elem| .{ .box = try self.constPlanOfType(elem) },
             .tuple => |items| blk: {
                 const source = self.types.span(items);
-                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, source.len);
+                const plans = try self.allocator.alloc(LirProgram.ConstFieldPlan, source.len);
                 errdefer self.allocator.free(plans);
-                for (source, 0..) |item, i| plans[i] = try self.constPlanOfType(item);
+                for (source, 0..) |item, i| plans[i] = .{
+                    .plan = try self.constPlanOfType(item),
+                    .layout_idx = try self.layoutOfType(item),
+                };
                 break :blk .{ .tuple = plans };
             },
             .record => |fields| blk: {
                 const source = self.types.fieldSpan(fields);
-                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, source.len);
+                const plans = try self.allocator.alloc(LirProgram.ConstFieldPlan, source.len);
                 errdefer self.allocator.free(plans);
-                for (source, 0..) |field, i| plans[i] = try self.constPlanOfType(field.ty);
+                for (source, 0..) |field, i| plans[i] = .{
+                    .plan = try self.constPlanOfType(field.ty),
+                    .layout_idx = try self.layoutOfType(field.ty),
+                };
                 break :blk .{ .record = plans };
             },
             .tag_union => |tags| blk: {
@@ -1248,10 +1282,13 @@ const Lowerer = struct {
                     const name = try self.allocator.dupe(u8, self.solved.lifted.names.tagLabelText(tag.name));
                     errdefer self.allocator.free(name);
                     const payload_tys = self.types.span(tag.payloads);
-                    const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_tys.len);
+                    const payloads = try self.allocator.alloc(LirProgram.ConstFieldPlan, payload_tys.len);
                     var payloads_owned = true;
                     errdefer if (payloads_owned) self.allocator.free(payloads);
-                    for (payload_tys, 0..) |payload_ty, j| payloads[j] = try self.constPlanOfType(payload_ty);
+                    for (payload_tys, 0..) |payload_ty, j| payloads[j] = .{
+                        .plan = try self.constPlanOfType(payload_ty),
+                        .layout_idx = try self.layoutOfType(payload_ty),
+                    };
                     variants[i] = .{
                         .name = name,
                         .checked_name = tag.checked_name,
@@ -1271,6 +1308,7 @@ const Lowerer = struct {
                         .ty = named.named_type.ty,
                     },
                     .backing = try self.constPlanOfType(backing.ty),
+                    .backing_layout_idx = try self.layoutOfType(backing.ty),
                 } };
             },
             .callable => |variants| .{ .fn_value = try self.fnSetForType(ty, variants) },
@@ -1415,6 +1453,7 @@ const Lowerer = struct {
                     .{ .generated = @intFromEnum(field.symbol) },
                 .slot = @intCast(index),
                 .plan = try self.constPlanOfType(field.ty),
+                .layout_idx = try self.layoutOfType(field.ty),
             };
         }
         return slots;
@@ -2041,6 +2080,9 @@ const Lowerer = struct {
         if (source_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) {
             return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
         }
+        if (try self.assignStructBoundary(target, target_content, source, source_content, next)) |stmt| {
+            return stmt;
+        }
 
         if (self.isZstLocal(target)) {
             if (!self.isZstLocal(source)) {
@@ -2076,6 +2118,82 @@ const Lowerer = struct {
             );
         }
         unreachable;
+    }
+
+    fn assignStructBoundary(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_content: layout.Layout,
+        source: LIR.LocalId,
+        source_content: layout.Layout,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!?LIR.CFStmtId {
+        if (target_content.tag != .struct_ or source_content.tag != .struct_) return null;
+
+        const target_struct = self.result.layouts.getStructData(target_content.getStruct().idx);
+        const target_fields = self.result.layouts.struct_fields.sliceRange(target_struct.getFields());
+
+        var semantic_field_count: usize = 0;
+        for (0..target_fields.len) |sorted_index| {
+            const target_field = target_fields.get(@intCast(sorted_index));
+            if (!target_field.is_padding) semantic_field_count += 1;
+        }
+
+        const field_locals = try self.allocator.alloc(LIR.LocalId, semantic_field_count);
+        defer self.allocator.free(field_locals);
+        const source_layouts = try self.allocator.alloc(layout.Idx, semantic_field_count);
+        defer self.allocator.free(source_layouts);
+
+        for (0..semantic_field_count) |field_index| {
+            const target_field_layout = self.structFieldLayoutByOriginalIndex(target_content.getStruct().idx, @intCast(field_index)) orelse return null;
+            const source_field_layout = self.structFieldLayoutByOriginalIndex(source_content.getStruct().idx, @intCast(field_index)) orelse return null;
+            if (!self.layoutsAssignable(target_field_layout, source_field_layout)) return null;
+            field_locals[field_index] = try self.addLocalForLayout(target_field_layout);
+            source_layouts[field_index] = source_field_layout;
+        }
+
+        var current = try self.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.result.store.addLocalSpan(field_locals),
+            .next = next,
+        } });
+        var i = semantic_field_count;
+        while (i > 0) {
+            i -= 1;
+            current = try self.assignRefRead(
+                field_locals[i],
+                source_layouts[i],
+                .{ .field = .{ .source = source, .field_idx = @intCast(i) } },
+                current,
+            );
+        }
+        return current;
+    }
+
+    fn structFieldLayoutByOriginalIndex(
+        self: *Lowerer,
+        struct_idx: layout.StructIdx,
+        original_index: u32,
+    ) ?layout.Idx {
+        const struct_data = self.result.layouts.getStructData(struct_idx);
+        const fields = self.result.layouts.struct_fields.sliceRange(struct_data.getFields());
+        for (0..fields.len) |sorted_index| {
+            const field = fields.get(@intCast(sorted_index));
+            if (field.index == original_index and !field.is_padding) return field.layout;
+        }
+        return null;
+    }
+
+    fn layoutsAssignable(self: *Lowerer, target_layout: layout.Idx, source_layout: layout.Idx) bool {
+        if (target_layout == source_layout) return true;
+        const target_content = self.result.layouts.getLayout(target_layout);
+        const source_content = self.result.layouts.getLayout(source_layout);
+        if (target_content.eql(source_content)) return true;
+        if (target_content.tag == .box and self.result.layouts.getLayout(target_content.getIdx()).eql(source_content)) return true;
+        if (target_content.tag == .box_of_zst and self.result.layouts.isZeroSized(source_content)) return true;
+        if (source_content.tag == .box and self.result.layouts.getLayout(source_content.getIdx()).eql(target_content)) return true;
+        if (source_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) return true;
+        return false;
     }
 
     fn assignRefRead(

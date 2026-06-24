@@ -4121,6 +4121,14 @@ const ArcTest = struct {
         } });
     }
 
+    fn assignStaticData(self: *ArcTest, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .static_data = @enumFromInt(0) },
+            .next = next,
+        } });
+    }
+
     fn assignList(self: *ArcTest, target: LIR.LocalId, elems: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_list = .{
             .target = target,
@@ -5562,6 +5570,25 @@ test "uniqueness: freshly built list consumed by a checked op elides the check" 
     // The list is born unique and its single unit moves into the op, so the
     // op's runtime count check on argument 0 is redundant.
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: static data list consumed by a checked op keeps the runtime check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const list_assign = try f.assignStaticData(list, append);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
 test "uniqueness: freshly packed erased callable repack elides the check" {

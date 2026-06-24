@@ -1395,6 +1395,38 @@ test "reachable local List.iter hoist stores iterator const data" {
     try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &point_payload_bytes));
 }
 
+test "reachable local List.iter append hoist stores iterator const data" {
+    const gpa = std.testing.allocator;
+
+    const exports = try buildStaticDataExportsForAppSource(gpa,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\main! = |args| {
+        \\    base_points = [
+        \\        { x: 11.I64, y: 2.I64 },
+        \\        { x: 9.I64, y: 13.I64 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        base_points
+        \\            .append({ x: 2.I64, y: 1.I64 })
+        \\            .append({ x: 7.I64, y: 1.I64 })
+        \\
+        \\    total = Iter.fold(collision_points, 0.I64, |acc, point| acc + point.x + point.y + List.len(args).to_i64_wrap())
+        \\    Err(Exit(total.to_i8_wrap()))
+        \\}
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const base_point_payload_bytes = [_]u8{
+        11, 0, 0, 0, 0, 0, 0, 0,
+        2,  0, 0, 0, 0, 0, 0, 0,
+        9,  0, 0, 0, 0, 0, 0, 0,
+        13, 0, 0, 0, 0, 0, 0, 0,
+    };
+    _ = findExportContainingSequence(exports, &base_point_payload_bytes) orelse return error.IterAppendBasePointListStaticPayloadNotFound;
+}
+
 test "inline sub_or_crash cells inside runtime record become shared static data" {
     const gpa = std.testing.allocator;
 

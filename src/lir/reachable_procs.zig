@@ -237,11 +237,11 @@ const Pass = struct {
             => {},
             .list => |elem| try self.markConstPlan(elem),
             .box => |boxed| try self.markConstPlan(boxed),
-            .tuple => |items| for (items) |item| try self.markConstPlan(item),
-            .record => |fields| for (fields) |field| try self.markConstPlan(field),
+            .tuple => |items| for (items) |item| try self.markConstPlan(item.plan),
+            .record => |fields| for (fields) |field| try self.markConstPlan(field.plan),
             .tag_union => |variants| {
                 for (variants) |variant| {
-                    for (variant.payloads) |payload| try self.markConstPlan(payload);
+                    for (variant.payloads) |payload| try self.markConstPlan(payload.plan);
                 }
             },
             .named => |named| try self.markConstPlan(named.backing),
@@ -808,6 +808,7 @@ test "reachable proc pass marks finite callable capture plans" {
         .id = .{ .generated = 0 },
         .slot = 0,
         .plan = erased_plan,
+        .layout_idx = .zst,
     };
     const finite_variants = try std.testing.allocator.alloc(LirProgram.FnVariant, 1);
     finite_variants[0] = .{

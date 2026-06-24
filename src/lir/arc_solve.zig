@@ -1418,7 +1418,7 @@ pub fn computeVisibility(
 pub const Uniqueness = struct {
     /// Bit set => every definition of the local binds a value whose
     /// outermost allocation originated at a unique birth: a fresh aggregate
-    /// or literal assignment, a low-level op whose `RcEffect` marks its
+    /// or non-static literal assignment, a low-level op whose `RcEffect` marks its
     /// result unique, a direct call whose callee's signature returns
     /// unique, or a pure same-value alias of a born-unique source. This is
     /// the origin property alone, independent of the holder accounting in
@@ -1626,10 +1626,10 @@ pub fn computeUniqueness(
             .assign_literal => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 switch (assign.value) {
-                    // A big string literal is a view of static backing whose
-                    // count is the static sentinel, never 1, so it is not a
-                    // unique birth and must never take an in-place path.
-                    .str_literal => marks.destroy(&foreign_def, assign.target),
+                    // Static-backed literals have the static count sentinel,
+                    // never a fresh count-1 outer allocation, so they must not
+                    // erase runtime uniqueness checks or take in-place paths.
+                    .str_literal, .static_data => marks.destroy(&foreign_def, assign.target),
                     else => marks.noteBirth(&born, assign.target),
                 }
             },
