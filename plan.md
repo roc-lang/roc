@@ -105,6 +105,10 @@ This part is already implemented and tested:
   exports with the same checked type but different concrete callable values use
   the exact value-specific layout/const plan instead of the first matching
   checked type
+- `ReachableProcs.run` marks const plans reached through reachable
+  `.assign_literal .static_data` statements, so callable procedures and child
+  capture plans needed only by internal static data are preserved before
+  proc/statement compaction
 
 The remaining blockers are:
 
@@ -577,6 +581,13 @@ Tasks:
    callable static data and marks capture const plans through both erased and
    finite callable plans.
 
+   Status: covered for reachable internal `static_data` literals with erased
+   callable plans and finite callable capture plans. The direct regressions
+   build root statements that point at `StaticDataValue`s; the only edge to the
+   callable procedure is through the static value's erased callable const plan,
+   either directly or through a finite callable capture plan, and the pass must
+   keep and remap that procedure.
+
 5. Add tests for:
 
    - reachable imported static list
@@ -710,6 +721,6 @@ zig build -Doptimize=ReleaseSmall
 - [ ] Static-data selection consumes explicit value and type/layout data.
 - [x] Erased callable static data is covered by tests.
 - [x] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
-- [ ] Reachability marks callable static-data procedures and capture plans.
+- [x] Reachability marks callable static-data procedures and capture plans.
 - [ ] Rocci Bird with `base_points.iter()` builds with `--opt=size`.
 - [ ] Rocci Bird disassembly proves the base iterator is static, shared data.
