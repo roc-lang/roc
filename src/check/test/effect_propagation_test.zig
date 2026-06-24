@@ -192,6 +192,52 @@ test "effect propagation - imported effectful nominal method reports top-level e
     try test_env.assertFirstTypeError("EFFECTFUL TOP-LEVEL VALUE");
 }
 
+test "effect propagation - imported pure where clause rejects effectful implementation method" {
+    var imported = try TestEnv.init("A",
+        \\A := [A].{
+        \\    tick! : A => U64
+        \\    tick! = |_| 1
+        \\}
+    );
+    defer imported.deinit();
+    try imported.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import A
+        \\
+        \\uses_tick : a -> U64 where [a.tick! : a -> U64]
+        \\uses_tick = |x| x.tick!()
+        \\
+        \\top = uses_tick(A.A)
+    , "A", &imported);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "effect propagation - imported effectful where clause makes caller effectful" {
+    var imported = try TestEnv.init("A",
+        \\A := [A].{
+        \\    tick! : A => U64
+        \\    tick! = |_| 1
+        \\}
+    );
+    defer imported.deinit();
+    try imported.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import A
+        \\
+        \\uses_tick : a => U64 where [a.tick! : a => U64]
+        \\uses_tick = |x| x.tick!()
+        \\
+        \\top = uses_tick(A.A)
+    , "A", &imported);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("EFFECTFUL TOP-LEVEL VALUE");
+}
+
 test "effect propagation - effectful type method reports top-level effect" {
     try expectOneTypeError(
         \\package [] {}
