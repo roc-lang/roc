@@ -2115,28 +2115,29 @@ pub const BuildEnv = struct {
         self.gpa.free(@constCast(drained));
     }
 
-    /// Get accumulated timing information from all ModuleBuild instances
+    /// Get accumulated per-phase timing information for the whole compilation.
     pub fn getTimingInfo(self: *BuildEnv) ModuleTimingInfo {
-        var total = ModuleTimingInfo{
+        // The coordinator is the actual execution engine for both single- and
+        // multi-threaded modes, so its accumulators are the source of truth.
+        const coord = self.coordinator orelse return .{
             .tokenize_parse_ns = 0,
             .canonicalize_ns = 0,
             .canonicalize_diagnostics_ns = 0,
             .type_checking_ns = 0,
             .check_diagnostics_ns = 0,
         };
-
-        var it = self.schedulers.iterator();
-        while (it.next()) |entry| {
-            const scheduler = entry.value_ptr.*;
-            const timing = scheduler.getTimingInfo();
-            total.tokenize_parse_ns += timing.tokenize_parse_ns;
-            total.canonicalize_ns += timing.canonicalize_ns;
-            total.canonicalize_diagnostics_ns += timing.canonicalize_diagnostics_ns;
-            total.type_checking_ns += timing.type_checking_ns;
-            total.check_diagnostics_ns += timing.check_diagnostics_ns;
-        }
-
-        return total;
+        return .{
+            .tokenize_parse_ns = coord.total_parse_ns,
+            .canonicalize_ns = coord.total_canonicalize_ns,
+            .canonicalize_diagnostics_ns = coord.total_canonicalize_diag_ns,
+            .type_checking_ns = coord.total_typecheck_ns,
+            .check_diagnostics_ns = coord.total_typecheck_diag_ns,
+            .source_read_ns = coord.total_source_read_ns,
+            .source_hash_ns = coord.total_source_hash_ns,
+            .cache_read_ns = coord.total_cache_read_ns,
+            .cache_write_ns = coord.total_cache_write_ns,
+            .comptime_eval_ns = coord.total_comptime_eval_ns,
+        };
     }
 
     /// Build statistics collected during compilation

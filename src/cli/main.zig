@@ -5585,11 +5585,19 @@ fn lowerLirWithCoordinator(
         };
     }
     if (reporter) |r| {
-        r.endWithBreakdown(&.{
-            .{ .name = "Parsing", .ns = coord.total_parse_ns },
-            .{ .name = "Name Resolution", .ns = coord.total_canonicalize_ns + coord.total_canonicalize_diag_ns },
-            .{ .name = "Type Inference", .ns = coord.total_typecheck_ns + coord.total_typecheck_diag_ns },
-        });
+        const stats = coord.getBuildStats();
+        r.endWithBreakdown(&phaseBreakdown(TimingInfo{
+            .tokenize_parse_ns = coord.total_parse_ns,
+            .canonicalize_ns = coord.total_canonicalize_ns,
+            .canonicalize_diagnostics_ns = coord.total_canonicalize_diag_ns,
+            .type_checking_ns = coord.total_typecheck_ns,
+            .check_diagnostics_ns = coord.total_typecheck_diag_ns,
+            .source_read_ns = coord.total_source_read_ns,
+            .source_hash_ns = coord.total_source_hash_ns,
+            .cache_read_ns = coord.total_cache_read_ns,
+            .cache_write_ns = coord.total_cache_write_ns,
+            .comptime_eval_ns = coord.total_comptime_eval_ns,
+        }, stats.cache_hits, stats.modules_compiled));
     }
 
     const root_artifact = coord.executableRootCheckedArtifact();
@@ -8116,7 +8124,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
-    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
+    const breakdown_stats = build_env.getBuildStats();
+    reporter.endWithBreakdown(&phaseBreakdown(build_env.getTimingInfo(), breakdown_stats.cache_hits, breakdown_stats.modules_compiled));
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
@@ -8447,7 +8456,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
-    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
+    const breakdown_stats = build_env.getBuildStats();
+    reporter.endWithBreakdown(&phaseBreakdown(build_env.getTimingInfo(), breakdown_stats.cache_hits, breakdown_stats.modules_compiled));
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
@@ -8784,7 +8794,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
-    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
+    const breakdown_stats = build_env.getBuildStats();
+    reporter.endWithBreakdown(&phaseBreakdown(build_env.getTimingInfo(), breakdown_stats.cache_hits, breakdown_stats.modules_compiled));
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
@@ -11421,13 +11432,20 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
     });
 }
 
-/// Split the front-end's accumulated timing into the user-facing phases shown
-/// in the breakdown once type checking completes.
-fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
+/// Split the compilation's accumulated timing into the user-facing phases shown
+/// in the breakdown once type checking completes. Each line measures a disjoint
+/// slice of work, so the durations never double-count. The per-module cache
+/// outcome (`cached`/`uncached`) is shown alongside Cache Reads.
+fn phaseBreakdown(timing: anytype, cached: u32, uncached: u32) [8]progress.SubTiming {
     return .{
+        .{ .name = "Source File Read", .ns = timing.source_read_ns },
+        .{ .name = "Hash Source Files", .ns = timing.source_hash_ns },
+        .{ .name = "Cache Reads", .ns = timing.cache_read_ns, .cache_counts = .{ .cached = cached, .uncached = uncached } },
         .{ .name = "Parsing", .ns = timing.tokenize_parse_ns },
         .{ .name = "Name Resolution", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
         .{ .name = "Type Inference", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
+        .{ .name = "Compile-Time Evaluation", .ns = timing.comptime_eval_ns },
+        .{ .name = "Cache Writes", .ns = timing.cache_write_ns },
     };
 }
 
@@ -12264,7 +12282,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
             if (builtin.target.cpu.arch == .wasm32) {
                 reporter.end();
             } else {
-                reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+                reporter.endWithBreakdown(&phaseBreakdown(check_result.timing, check_result.cache_hits, check_result.modules_compiled));
             }
             reporter.finish();
 
@@ -12293,7 +12311,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
         if (builtin.target.cpu.arch == .wasm32) {
             reporter.end();
         } else {
-            reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+            reporter.endWithBreakdown(&phaseBreakdown(check_result.timing, check_result.cache_hits, check_result.modules_compiled));
         }
         reporter.finish();
 
@@ -12325,7 +12343,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
     if (builtin.target.cpu.arch == .wasm32) {
         reporter.end();
     } else {
-        reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+        reporter.endWithBreakdown(&phaseBreakdown(check_result.timing, check_result.cache_hits, check_result.modules_compiled));
     }
     reporter.finish();
 

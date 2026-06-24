@@ -942,6 +942,17 @@ pub const Coordinator = struct {
     total_canonicalize_diag_ns: u64,
     total_typecheck_ns: u64,
     total_typecheck_diag_ns: u64,
+    /// Reading module source files from disk (disjoint from `total_parse_ns`).
+    total_source_read_ns: u64,
+    /// Hashing module source inputs to compute checked-artifact cache lookup keys.
+    total_source_hash_ns: u64,
+    /// Loading checked artifacts from the on-disk cache (read + relocate).
+    total_cache_read_ns: u64,
+    /// Serializing and writing checked artifacts to the on-disk cache.
+    total_cache_write_ns: u64,
+    /// Evaluating compile-time roots/constants and storing their results
+    /// (disjoint from `total_typecheck_ns`).
+    total_comptime_eval_ns: u64,
 
     /// Build statistics
     cache_hits: u32,
@@ -1016,6 +1027,11 @@ pub const Coordinator = struct {
             .total_canonicalize_diag_ns = 0,
             .total_typecheck_ns = 0,
             .total_typecheck_diag_ns = 0,
+            .total_source_read_ns = 0,
+            .total_source_hash_ns = 0,
+            .total_cache_read_ns = 0,
+            .total_cache_write_ns = 0,
+            .total_comptime_eval_ns = 0,
             .cache_hits = 0,
             .cache_misses = 0,
             .modules_compiled = 0,
@@ -2958,6 +2974,7 @@ pub const Coordinator = struct {
             publication_with_availability.available_artifacts = base_available_artifacts;
         }
 
+        var republish_timing = eval.CompileTimeFinalization.EvalTiming{ .io = self.roc_ctx.std_io };
         var artifact = try compile_package.PackageEnv.publishFromPrebuiltModules(
             self.gpa,
             &typed.modules,
@@ -2965,7 +2982,9 @@ pub const Coordinator = struct {
             module_env_storage,
             imported_artifacts,
             publication_with_availability,
+            &republish_timing,
         );
+        self.total_comptime_eval_ns += republish_timing.ns;
         var artifact_owned = true;
         errdefer if (artifact_owned) artifact.deinit(self.gpa);
         const artifact_ptr = try allocateCheckedArtifact(artifact);
@@ -3498,6 +3517,9 @@ pub const Coordinator = struct {
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
+        var hash_timer = startStageTimer(self.roc_ctx.std_io);
+        defer self.total_source_hash_ns += readStageTimer(self.roc_ctx.std_io, &hash_timer);
+
         var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
         defer typed.modules.deinit();
 
@@ -3536,6 +3558,9 @@ pub const Coordinator = struct {
     fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
+
+        var write_timer = startStageTimer(self.roc_ctx.std_io);
+        defer self.total_cache_write_ns += readStageTimer(self.roc_ctx.std_io, &write_timer);
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
             manager.stats.recordStoreFailure();
@@ -3617,6 +3642,9 @@ pub const Coordinator = struct {
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
+
+        var read_timer = startStageTimer(self.roc_ctx.std_io);
+        defer self.total_cache_read_ns += readStageTimer(self.roc_ctx.std_io, &read_timer);
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
             manager.stats.recordMiss();
@@ -3888,6 +3916,7 @@ pub const Coordinator = struct {
 
         // Update timing
         self.total_parse_ns += result.parse_ns;
+        self.total_source_read_ns += result.source_read_ns;
         mod.compile_time_ns += result.parse_ns;
 
         for (result.discovered_local_imports.items) |imp| {
@@ -4173,7 +4202,8 @@ pub const Coordinator = struct {
         // Update timing
         self.total_typecheck_ns += result.type_check_ns;
         self.total_typecheck_diag_ns += result.check_diagnostics_ns;
-        mod.compile_time_ns += result.type_check_ns + result.check_diagnostics_ns;
+        self.total_comptime_eval_ns += result.comptime_eval_ns;
+        mod.compile_time_ns += result.type_check_ns + result.check_diagnostics_ns + result.comptime_eval_ns;
 
         // Record per-module compile time for min/max/avg stats
         const module_time = mod.compile_time_ns;
@@ -4758,10 +4788,14 @@ pub const Coordinator = struct {
     }
 
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
-        var parse_timer = startStageTimer(self.roc_ctx.std_io);
-
+        var source_read_timer = startStageTimer(self.roc_ctx.std_io);
         const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
+        const source_read_ns = readStageTimer(self.roc_ctx.std_io, &source_read_timer);
         const src = source_read.source;
+
+        // Start the parse timer after the source read so the two stages don't
+        // overlap: `parse_ns` measures parsing only, never file I/O.
+        var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
         // Checked-module disk cache lookup happens after canonicalization, when
         // the coordinator has the exact module identity and import keys.
@@ -4866,6 +4900,7 @@ pub const Coordinator = struct {
                 .discovered_external_imports = discovered_external_imports,
                 .reports = reports,
                 .parse_ns = readStageTimer(self.roc_ctx.std_io, &parse_timer),
+                .source_read_ns = source_read_ns,
             },
         };
     }
@@ -4983,6 +5018,7 @@ pub const Coordinator = struct {
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
         var typecheck_output = try compile_package.PackageEnv.typeCheckModule(
+            self.roc_ctx.std_io,
             check_alloc,
             result_alloc,
             env,
@@ -4994,7 +5030,10 @@ pub const Coordinator = struct {
         );
         defer typecheck_output.deinit();
 
-        const type_check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
+        // `typeCheckModule` measures compile-time evaluation as its own phase;
+        // exclude it from type inference so the two timings stay disjoint.
+        const comptime_eval_ns = typecheck_output.comptime_eval_ns;
+        const type_check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer) -| comptime_eval_ns;
 
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;
@@ -5038,6 +5077,7 @@ pub const Coordinator = struct {
                 .reports = reports,
                 .type_check_ns = type_check_ns,
                 .check_diagnostics_ns = diagnostics_ns,
+                .comptime_eval_ns = comptime_eval_ns,
             },
         };
     }

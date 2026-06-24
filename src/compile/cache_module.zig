@@ -28,8 +28,21 @@ fn computeVersionHash(comptime StructType: type, comptime cache_version: u32) [3
     return check.layoutVersionHash(StructType, cache_version);
 }
 
-/// Version hash of ModuleEnv.Serialized computed at comptime
-const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
+/// Version hash of ModuleEnv.Serialized computed at comptime.
+///
+/// Public so the standalone CIR disk cache (which stores a `ModuleEnv` blob on
+/// its own, keyed purely on source hash) can stamp and validate it in its entry
+/// header: relocating a cached env whose `Serialized` layout differs from the
+/// running compiler's is a real hazard during development, where
+/// `compiler_version` is a fixed release string that does not move between
+/// rebuilds. A mismatch must be treated as a cache miss, never relocated.
+pub const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
+
+/// Validate a ModuleEnv layout hash read from a cache header against the running
+/// compiler's `MODULE_ENV_VERSION_HASH`. Returns true when they match.
+pub fn expectModuleEnvVersion(found: *const [32]u8) bool {
+    return std.mem.eql(u8, found, &MODULE_ENV_VERSION_HASH);
+}
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
@@ -289,8 +302,8 @@ test "MODULE_ENV_VERSION_HASH golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x6D, 0x28, 0x0E, 0x0E, 0xC0, 0x30, 0xEC, 0x13, 0x44, 0xE6, 0xB1, 0x04, 0xCC, 0x9F, 0xFC, 0xFD,
-        0x83, 0xF0, 0x0A, 0x73, 0xCB, 0x86, 0x56, 0x94, 0xD6, 0x61, 0x17, 0x5C, 0x92, 0xA5, 0x50, 0x44,
+        0x1B, 0xAA, 0x0C, 0xAC, 0x2E, 0x0D, 0xA8, 0xA6, 0xD8, 0x43, 0xB1, 0x11, 0x50, 0x9A, 0xB9, 0xC8,
+        0xDB, 0x87, 0x97, 0xB6, 0x01, 0x51, 0x9D, 0xD1, 0x92, 0x1E, 0xB0, 0x6A, 0xA1, 0x04, 0x31, 0x22,
     };
     try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
 }

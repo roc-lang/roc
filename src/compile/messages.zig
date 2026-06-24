@@ -174,8 +174,10 @@ pub const ParsedResult = struct {
     discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
-    /// Timing: nanoseconds spent parsing
+    /// Timing: nanoseconds spent parsing (disjoint from `source_read_ns`)
     parse_ns: u64,
+    /// Timing: nanoseconds spent reading the source file from disk
+    source_read_ns: u64,
 };
 
 /// Result of successfully canonicalizing a module
@@ -226,10 +228,12 @@ pub const TypeCheckedResult = struct {
     semantic: *OwnedSemanticModuleData,
     /// Any reports generated during type checking
     reports: std.ArrayList(Report),
-    /// Timing: nanoseconds spent type checking
+    /// Timing: nanoseconds spent type checking (disjoint from `comptime_eval_ns`)
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,
+    /// Timing: nanoseconds spent evaluating compile-time roots/constants
+    comptime_eval_ns: u64,
 };
 
 /// Result when parsing fails (but we still return partial info)
@@ -451,6 +455,7 @@ test "WorkerResult accessors" {
             .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
             .reports = reports,
             .parse_ns = 1000,
+            .source_read_ns = 100,
         },
     };
 

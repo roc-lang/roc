@@ -43,11 +43,19 @@ const spinner_frames = [_][]const u8{
     "\u{2834}", "\u{2826}", "\u{2827}", "\u{2807}", "\u{280F}",
 };
 
+/// Per-module cache outcome shown in parentheses after a sub-timing's duration.
+pub const CacheCounts = struct {
+    cached: u32,
+    uncached: u32,
+};
+
 /// A named sub-measurement shown beneath a phase (e.g. the front-end's
 /// Parsing / Name Resolution / Type Inference split).
 pub const SubTiming = struct {
     name: []const u8,
     ns: u64,
+    /// When set, renders " (N cached, M uncached modules)" after the duration.
+    cache_counts: ?CacheCounts = null,
 };
 
 const Phase = struct {
@@ -55,7 +63,7 @@ const Phase = struct {
     start_ns: u64,
     end_ns: ?u64 = null,
     /// When set, the phase renders as these rows instead of a single line.
-    sub: [4]SubTiming = undefined,
+    sub: [8]SubTiming = undefined,
     sub_len: u8 = 0,
 };
 
@@ -289,7 +297,11 @@ pub const Reporter = struct {
             for (p.sub[0..p.sub_len]) |s| {
                 var buf: [32]u8 = undefined;
                 const dur = formatDuration(&buf, s.ns, .final);
-                self.writer.print("  {s} {f}{s}\n", .{ check, padName(s.name), dur }) catch {};
+                if (s.cache_counts) |c| {
+                    self.writer.print("  {s} {f}{s} ({d} cached, {d} uncached modules)\n", .{ check, padName(s.name), dur, c.cached, c.uncached }) catch {};
+                } else {
+                    self.writer.print("  {s} {f}{s}\n", .{ check, padName(s.name), dur }) catch {};
+                }
             }
             return;
         }
@@ -445,6 +457,32 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Code Generation") != null);
     // Type Checking is replaced by its breakdown, not shown directly.
     try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
+}
+
+test "sub-timing renders cache counts in parentheses after the duration" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+
+    reporter.begin("Type Checking");
+    reporter.endWithBreakdown(&.{
+        .{ .name = "Parsing", .ns = 2 * std.time.ns_per_ms, .cache_counts = .{ .cached = 5, .uncached = 6 } },
+        .{ .name = "Name Resolution", .ns = 5 * std.time.ns_per_ms },
+    });
+    reporter.finish();
+
+    const out = buf.written();
+    try testing.expect(std.mem.find(u8, out, "Parsing                 2ms (5 cached, 6 uncached modules)") != null);
+    // A sub-timing without counts stays plain.
+    try testing.expect(std.mem.find(u8, out, "Name Resolution         5ms\n") != null);
 }
 
 test "fast run without the timings flag prints nothing" {

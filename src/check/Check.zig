@@ -66,6 +66,12 @@ cir: *ModuleEnv,
 regions: Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
+/// Resolution of this module's symbolic external references (`cir.external_refs`)
+/// against `imported_modules`, populated before `checkFile` and consulted by the
+/// `e_lookup_external` / nominal / pattern / type-anno external arms instead of a
+/// CIR-embedded node index. Owned; freed in `deinit`. Index-parallel to
+/// `cir.external_refs`.
+resolved_externals: CIR.ResolvedExternal.SafeList = .{},
 /// Module envs whose public APIs are semantically visible through imported checked data.
 owner_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through direct imports.
@@ -1181,6 +1187,7 @@ pub fn fixupTypeWriter(self: *Self) void {
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
     self.regions.deinit(self.gpa);
+    self.resolved_externals.deinit(self.gpa);
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
     self.import_mapping.deinit();

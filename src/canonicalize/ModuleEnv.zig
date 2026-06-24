@@ -617,6 +617,10 @@ hosted_entries: HostedEntry.SafeList,
 builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
 external_decls: CIR.ExternalDecl.SafeList,
+/// Symbolic external references (the resolution worklist). Source-pure: each
+/// entry records an import index + the referenced name, never the imported
+/// module's node index, so CIR stays a pure function of this module's source.
+external_refs: CIR.ExternalRef.SafeList,
 /// Store for interned module imports
 imports: CIR.Import.Store,
 /// Source-relative file imports read while canonicalizing this module.
@@ -760,6 +764,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.common.relocate(offset);
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
+    self.external_refs.relocate(offset);
     self.requires_types.relocate(offset);
     self.for_clause_aliases.relocate(offset);
     self.provides_entries.relocate(offset);
@@ -834,6 +839,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .hosted_entries = try HostedEntry.SafeList.initCapacity(gpa, 4),
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
+        .external_refs = try CIR.ExternalRef.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .file_dependencies = .{},
         .module_name = "", // May be set later during canonicalization
@@ -860,6 +866,7 @@ pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
+    self.external_refs.deinit(self.gpa);
     self.requires_types.deinit(self.gpa);
     self.for_clause_aliases.deinit(self.gpa);
     self.provides_entries.deinit(self.gpa);
@@ -3231,6 +3238,7 @@ pub const Serialized = extern struct {
     hosted_entries: HostedEntry.SafeList.Serialized,
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
+    external_refs: CIR.ExternalRef.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     file_dependencies: FileDependency.SafeList.Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
@@ -3280,6 +3288,7 @@ pub const Serialized = extern struct {
         try self.provides_entries.serialize(&env.provides_entries, allocator, writer);
         try self.hosted_entries.serialize(&env.hosted_entries, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
+        try self.external_refs.serialize(&env.external_refs, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
         try self.file_dependencies.serialize(&env.file_dependencies, allocator, writer);
 
@@ -3351,6 +3360,7 @@ pub const Serialized = extern struct {
             .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
+            .external_refs = self.external_refs.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
             .module_name = module_name,
@@ -3408,6 +3418,7 @@ pub const Serialized = extern struct {
             .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
+            .external_refs = self.external_refs.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
             .module_name = module_name,
@@ -3890,6 +3901,18 @@ pub fn pushExternalDecl(self: *Self, decl: CIR.ExternalDecl) std.mem.Allocator.E
 /// Retrieves an external declaration by its index
 pub fn getExternalDecl(self: *const Self, idx: CIR.ExternalDecl.Idx) *const CIR.ExternalDecl {
     return self.external_decls.get(@as(CIR.ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
+}
+
+/// Adds a symbolic external reference to the resolution worklist and returns its index.
+pub fn pushExternalRef(self: *Self, ref: CIR.ExternalRef) std.mem.Allocator.Error!CIR.ExternalRef.Idx {
+    const idx = @as(u32, @intCast(self.external_refs.len()));
+    _ = try self.external_refs.append(self.gpa, ref);
+    return @enumFromInt(idx);
+}
+
+/// Retrieves a symbolic external reference by its index.
+pub fn getExternalRef(self: *const Self, idx: CIR.ExternalRef.Idx) *const CIR.ExternalRef {
+    return self.external_refs.get(@as(CIR.ExternalRef.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
 }
 
 /// Adds multiple external declarations and returns a span

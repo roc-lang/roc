@@ -29,6 +29,10 @@ pub const CoreCtx = @import("ctx").CoreCtx;
 /// Re-export AutoImportedType for callers
 pub const AutoImportedType = Can.AutoImportedType;
 
+/// Resolve a module's symbolic external references against its imported modules.
+pub const resolveExternalRefs = @import("resolve_externals.zig").resolveExternalRefs;
+pub const ResolveExternalDiagnostics = @import("resolve_externals.zig").Diagnostics;
+
 /// Canonicalize a full module file.
 ///
 /// This is the unified entry point for module canonicalization. It:
@@ -94,6 +98,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
     std.testing.refAllDecls(@import("Pattern.zig"));
+    std.testing.refAllDecls(@import("resolve_externals.zig"));
     std.testing.refAllDecls(@import("Scope.zig"));
     std.testing.refAllDecls(@import("Statement.zig"));
     std.testing.refAllDecls(@import("TypeAnnotation.zig"));

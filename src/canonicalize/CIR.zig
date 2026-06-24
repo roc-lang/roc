@@ -1105,6 +1105,56 @@ pub const ExternalDecl = struct {
     }
 };
 
+/// A symbolic reference to a value/type/nominal-type exposed by an imported
+/// module, recorded during canonicalization without resolving it to the imported
+/// module's node index. Keeping the reference symbolic (import index + the local
+/// name being referenced) is what makes CIR a pure function of this module's
+/// source: resolution to the imported module's actual node index happens in a
+/// later pass (`check/resolve_externals.zig`) and is stored separately, with the
+/// type-checked artifact, so it can depend on the imported modules' contents
+/// without contaminating the source-pure CIR.
+pub const ExternalRef = struct {
+    /// Index into this module's import list (source-order; already source-pure).
+    import_idx: Import.Idx,
+    /// The local/qualified name being referenced in the target module.
+    name_ident: base.Ident.Idx,
+    /// What kind of exposed item the reference resolves against.
+    kind: Kind,
+    /// Region of the reference, for the resolver's diagnostic.
+    region: Region,
+
+    pub const Kind = enum(u8) { value, type, nominal_type };
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = extern struct { span: base.DataSpan };
+    /// A safe list of symbolic external references (the resolution worklist).
+    pub const SafeList = collections.SafeList(ExternalRef);
+};
+
+/// The resolution of one `ExternalRef` against the (now-available) imported
+/// modules: the imported module's index and the resolved node index within it.
+/// Produced by `check/resolve_externals.zig` and stored with the type-checked
+/// artifact (not with CIR), because it depends on the imported modules' contents.
+/// The list is index-parallel to `ModuleEnv.external_refs` (`ExternalRef.Idx` ==
+/// `ResolvedExternal.Idx`).
+pub const ResolvedExternal = extern struct {
+    resolved_module_idx: u32,
+    target_node_idx: u32,
+    /// 0 = ok, 1 = unresolved (a diagnostic was emitted; consumers treat the
+    /// reference as `.err`). Kept as a fixed-width int for relocation-invariant
+    /// serialization alongside the checked artifact.
+    status: u32,
+
+    pub const Status = enum(u32) { ok = 0, unresolved = 1 };
+
+    pub fn isOk(self: ResolvedExternal) bool {
+        return self.status == @intFromEnum(Status.ok);
+    }
+
+    pub const Idx = enum(u32) { _ };
+    pub const SafeList = collections.SafeList(ResolvedExternal);
+};
+
 // Real Report type from the reporting module
 pub const Report = reporting.Report;
 

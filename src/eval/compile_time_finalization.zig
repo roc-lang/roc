@@ -100,13 +100,27 @@ const ComptimeCoverage = struct {
     }
 };
 
+/// Optional timing slot: when a `*EvalTiming` is supplied as the finalizer's
+/// context, `finalize` records the nanoseconds it spends evaluating compile-time
+/// roots (lowering, interpreting, and storing their results) into `ns`.
+pub const EvalTiming = struct {
+    io: std.Io,
+    ns: u64 = 0,
+};
+
 /// Return the checking finalizer that evaluates compile-time roots.
 pub fn finalizer() checked.CompileTimeFinalizer {
     return .{ .finalize = finalize };
 }
 
+/// Like `finalizer`, but records how long compile-time evaluation takes into
+/// `timing.ns`.
+pub fn finalizerTimed(timing: *EvalTiming) checked.CompileTimeFinalizer {
+    return .{ .context = timing, .finalize = finalize };
+}
+
 fn finalize(
-    _: ?*anyopaque,
+    context: ?*anyopaque,
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     imports: []const checked.PublishImportArtifact,
@@ -114,6 +128,13 @@ fn finalize(
     relation_modules: []const checked.ImportedModuleView,
     problem_store: ?*check.problem.Store,
 ) FinalizeError!void {
+    const timing: ?*EvalTiming = if (context) |c| @ptrCast(@alignCast(c)) else null;
+    const start_ts: ?std.Io.Timestamp = if (timing) |t| std.Io.Timestamp.now(t.io, .awake) else null;
+    defer if (timing) |t| {
+        const elapsed = start_ts.?.untilNow(t.io, .awake).nanoseconds;
+        t.ns = if (elapsed > 0) @intCast(elapsed) else 0;
+    };
+
     const requests = module.root_requests.compile_time_requests;
     var had_problem = false;
 

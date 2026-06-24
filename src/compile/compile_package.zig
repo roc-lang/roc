@@ -54,6 +54,16 @@ pub const TimingInfo = struct {
     canonicalize_diagnostics_ns: u64,
     type_checking_ns: u64,
     check_diagnostics_ns: u64,
+    /// Reading module source files from disk (disjoint from `tokenize_parse_ns`).
+    source_read_ns: u64 = 0,
+    /// Hashing module source inputs to compute checked-artifact cache lookup keys.
+    source_hash_ns: u64 = 0,
+    /// Loading checked artifacts from the on-disk cache (read + relocate).
+    cache_read_ns: u64 = 0,
+    /// Serializing and writing checked artifacts to the on-disk cache.
+    cache_write_ns: u64 = 0,
+    /// Evaluating compile-time roots/constants (disjoint from `type_checking_ns`).
+    comptime_eval_ns: u64 = 0,
 };
 const Allocator = std.mem.Allocator;
 
@@ -72,24 +82,6 @@ pub const ProcessError = Allocator.Error || error{FileNotFound} || TypeCheckModu
 
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
-
-const stage_timers_supported = !threading.is_freestanding;
-
-const StageTimer = if (stage_timers_supported) std.Io.Timestamp else void;
-
-fn startStageTimer(io: std.Io) ?StageTimer {
-    if (comptime !stage_timers_supported) return null;
-    return std.Io.Timestamp.now(io, .awake);
-}
-
-fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
-    if (comptime !stage_timers_supported) return 0;
-    if (timer.*) |active| {
-        const elapsed = active.untilNow(io, .awake).nanoseconds;
-        return if (elapsed > 0) @intCast(elapsed) else 0;
-    }
-    return 0;
-}
 
 // FileProvider was removed in favour of the unified Io abstraction (src/io/Io.zig).
 // Callers that previously used FileProvider now use Io.readFile / Io.fileExists directly.
@@ -321,6 +313,9 @@ pub const SemanticModuleData = struct {
 pub const TypeCheckOutput = struct {
     checker: Check,
     checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+    /// Nanoseconds spent evaluating compile-time roots/constants and storing
+    /// their results (the post-type-inference finalization step).
+    comptime_eval_ns: u64 = 0,
 
     pub fn deinit(self: *TypeCheckOutput) void {
         if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
@@ -562,13 +557,6 @@ pub const PackageEnv = struct {
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
     emitted: std.bit_set.DynamicBitSetUnmanaged = .{},
-
-    // Timing collection (accumulated across all modules)
-    total_tokenize_parse_ns: u64 = 0,
-    total_canonicalize_ns: u64 = 0,
-    total_canonicalize_diagnostics_ns: u64 = 0,
-    total_type_checking_ns: u64 = 0,
-    total_check_diagnostics_ns: u64 = 0,
 
     // Additional known modules (e.g., from platform exposes) to include in module_envs_map
     // These are modules that exist in external directories (like URL platform cache)
@@ -920,17 +908,6 @@ pub const PackageEnv = struct {
         }
     }
 
-    /// Get accumulated timing information
-    pub fn getTimingInfo(self: *PackageEnv) TimingInfo {
-        return TimingInfo{
-            .tokenize_parse_ns = self.total_tokenize_parse_ns,
-            .canonicalize_ns = self.total_canonicalize_ns,
-            .canonicalize_diagnostics_ns = self.total_canonicalize_diagnostics_ns,
-            .type_checking_ns = self.total_type_checking_ns,
-            .check_diagnostics_ns = self.total_check_diagnostics_ns,
-        };
-    }
-
     /// Public API to read a module's current recorded dependency depth
     pub fn getModuleDepth(self: *PackageEnv, name: []const u8) ?u32 {
         if (self.module_names.get(name)) |module_id| {
@@ -1275,8 +1252,6 @@ pub const PackageEnv = struct {
         }
 
         // canonicalize using the AST
-        var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
-
         const module_dir = st.canonicalSourceDir(self.root_dir);
         try canonicalizeModuleWithSiblings(
             self.roc_ctx,
@@ -1291,17 +1266,13 @@ pub const PackageEnv = struct {
             &.{},
         );
 
-        self.total_canonicalize_ns += readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
-
         // Collect canonicalization diagnostics
-        var canonicalize_diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
-        self.total_canonicalize_diagnostics_ns += readStageTimer(self.roc_ctx.std_io, &canonicalize_diagnostics_timer);
 
         // Discover imports from env.imports
         const import_count = env.imports.imports.items.items.len;
@@ -1718,6 +1689,7 @@ pub const PackageEnv = struct {
     /// `check_alloc` owns checker/session data that dies with `TypeCheckOutput.deinit`.
     /// `artifact_alloc` owns any published checked artifact returned in `TypeCheckOutput`.
     pub fn typeCheckModule(
+        std_io: std.Io,
         check_alloc: Allocator,
         artifact_alloc: Allocator,
         env: *ModuleEnv,
@@ -1759,6 +1731,16 @@ pub const PackageEnv = struct {
         checker.fixupTypeWriter();
         errdefer checker.deinit();
 
+        // Resolve this module's symbolic external references against its
+        // now-available imports, producing the side table the checker consults
+        // for cross-module lookups (kept out of the source-pure CIR). Imports
+        // were already resolved (`setResolvedModule`) by the coordinator before
+        // this call. Resolution diagnostics are rendered into the module's
+        // reports alongside the checker's own problems.
+        var resolve_diags: can.ResolveExternalDiagnostics = .empty;
+        defer resolve_diags.deinit(check_alloc);
+        checker.resolved_externals = try can.resolveExternalRefs(check_alloc, env, imported_envs, &resolve_diags);
+
         // For app modules with platform requirements, defer finalizing numeric defaults
         // until after platform requirements are checked, so numeric literals can be
         // constrained by platform types (e.g., I64) before defaulting to Dec.
@@ -1779,6 +1761,11 @@ pub const PackageEnv = struct {
             };
         }
 
+        // Evaluating compile-time roots/constants and storing their results
+        // happens inside artifact publication. The finalizer records just that
+        // work (lowering + interpreting + storing) into `eval_timing`, so it is
+        // measured on its own without overlapping type inference.
+        var eval_timing = eval.CompileTimeFinalization.EvalTiming{ .io = std_io };
         var checked_artifact = publishCheckedArtifactFromCheckedModule(
             artifact_alloc,
             env,
@@ -1792,12 +1779,14 @@ pub const PackageEnv = struct {
                 .available_artifacts = available_artifacts,
                 .problem_store = &checker.problems,
             },
+            &eval_timing,
         ) catch |err| switch (err) {
             error.CompileTimeProblem => {
                 _ = try checker.problems.flushPendingStaticExhaustiveness(check_alloc);
                 return .{
                     .checker = checker,
                     .checked_artifact = null,
+                    .comptime_eval_ns = eval_timing.ns,
                 };
             },
             else => |other| return other,
@@ -1807,6 +1796,7 @@ pub const PackageEnv = struct {
         return .{
             .checker = checker,
             .checked_artifact = checked_artifact,
+            .comptime_eval_ns = eval_timing.ns,
         };
     }
 
@@ -1816,6 +1806,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
+        comptime_timing: ?*eval.CompileTimeFinalization.EvalTiming,
     ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return publishCheckedArtifactFromCheckedModuleWithStorage(
             gpa,
@@ -1824,6 +1815,7 @@ pub const PackageEnv = struct {
             imported_envs,
             imported_artifacts,
             publication,
+            comptime_timing,
         );
     }
 
@@ -1834,16 +1826,20 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
+        comptime_timing: ?*eval.CompileTimeFinalization.EvalTiming,
     ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
         defer typed.modules.deinit();
-        return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
+        return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication, comptime_timing);
     }
 
     /// Publish from an already-built `Modules` graph. The cache-key probe builds the
     /// root graph to compute the key; on a miss the same graph is reused here instead of
     /// rebuilding it (the build runs `prepareRuntimeEnv` over every env, so rebuilding is
     /// real, redundant work).
+    ///
+    /// When `comptime_timing` is supplied, the finalizer records how long
+    /// compile-time evaluation of roots/constants takes into it.
     pub fn publishFromPrebuiltModules(
         gpa: Allocator,
         modules: *const CheckedModules,
@@ -1851,6 +1847,7 @@ pub const PackageEnv = struct {
         module_env_storage: CheckedArtifact.ModuleEnvStorage,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
+        comptime_timing: ?*eval.CompileTimeFinalization.EvalTiming,
     ) PublishError!CheckedArtifact.CheckedModuleArtifact {
         return try CheckedArtifact.publishFromTypedModule(
             gpa,
@@ -1866,7 +1863,10 @@ pub const PackageEnv = struct {
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
                 .hoisted_roots = publication.hoisted_roots,
-                .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+                .compile_time_finalizer = if (comptime_timing) |t|
+                    eval.CompileTimeFinalization.finalizerTimed(t)
+                else
+                    eval.CompileTimeFinalization.finalizer(),
                 .problem_store = publication.problem_store,
             },
         );
@@ -1939,8 +1939,8 @@ pub const PackageEnv = struct {
         const available_artifacts = try self.buildAvailableArtifactViewsForImports(imported_artifacts.items);
         defer self.gpa.free(available_artifacts);
 
-        var check_timer = startStageTimer(self.roc_ctx.std_io);
         var typecheck_output = try typeCheckModule(
+            self.roc_ctx.std_io,
             self.gpa,
             self.gpa,
             env,
@@ -1954,10 +1954,8 @@ pub const PackageEnv = struct {
         if (typecheck_output.checked_artifact != null) {
             st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
         }
-        self.total_type_checking_ns += readStageTimer(self.roc_ctx.std_io, &check_timer);
 
         // Build reports from problems
-        var check_diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         var rb = try ReportBuilder.init(
             self.gpa,
             env,
@@ -1975,7 +1973,6 @@ pub const PackageEnv = struct {
             errdefer rep.deinit();
             try st.reports.append(self.gpa, rep);
         }
-        self.total_check_diagnostics_ns += readStageTimer(self.roc_ctx.std_io, &check_diagnostics_timer);
 
         // Comptime evaluator is managed inside typeCheckModule, no need to deinit here
 
