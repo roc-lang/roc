@@ -188,40 +188,40 @@ Tasks:
 
 Tests:
 
-- [ ] direct effectful top-level call reports `effectful_top_level`
-- [ ] delayed receiver method call at top level reports `effectful_top_level`
-- [ ] delayed type-method call at top level reports `effectful_top_level`
-- [ ] effectful binop dispatch at top level reports `effectful_top_level`
-- [ ] effectful unary dispatch at top level reports `effectful_top_level`
-- [ ] interpolation dispatch propagates effectfulness
-- [ ] synthetic iterator dispatch propagates effectfulness
-- [ ] imported nominal method dispatch propagates effectfulness
-- [ ] pure annotation rejects direct effectful call
-- [ ] pure annotation rejects delayed effectful method call
-- [ ] effectful annotation accepts direct effectful call
-- [ ] effectful annotation accepts delayed effectful method call
-- [ ] pure where-clause accepts pure implementation
-- [ ] pure where-clause rejects effectful implementation
-- [ ] effectful where-clause accepts effectful implementation
-- [ ] effectful where-clause call makes caller effectful
-- [ ] direct effectful call in `expect` reports `effectful_expect`
-- [ ] delayed effectful dispatch in `expect` reports `effectful_expect`
-- [ ] local function alias preserves effectfulness
-- [ ] imported function alias preserves effectfulness
-- [ ] higher-order pure function parameter stays pure when called
-- [ ] higher-order effectful function parameter makes caller effectful
-- [ ] closure creation with effectful body is pure
-- [ ] calling closure with effectful body is effectful
+- [x] direct effectful top-level call reports `effectful_top_level`
+- [x] delayed receiver method call at top level reports `effectful_top_level`
+- [x] delayed type-method call at top level reports `effectful_top_level`
+- [x] effectful binop dispatch at top level reports `effectful_top_level`
+- [x] effectful unary dispatch at top level reports `effectful_top_level`
+- [x] interpolation dispatch propagates effectfulness
+- [x] synthetic iterator dispatch propagates effectfulness
+- [x] imported nominal method dispatch propagates effectfulness
+- [x] pure annotation rejects direct effectful call
+- [x] pure annotation rejects delayed effectful method call
+- [x] effectful annotation accepts direct effectful call
+- [x] effectful annotation accepts delayed effectful method call
+- [x] pure where-clause accepts pure implementation
+- [x] pure where-clause rejects effectful implementation
+- [x] effectful where-clause accepts effectful implementation
+- [x] effectful where-clause call makes caller effectful
+- [x] direct effectful call in `expect` reports `effectful_expect`
+- [x] delayed effectful dispatch in `expect` reports `effectful_expect`
+- [x] local function alias preserves effectfulness
+- [x] imported function alias preserves effectfulness
+- [x] higher-order pure function parameter stays pure when called
+- [x] higher-order effectful function parameter makes caller effectful
+- [x] closure creation with effectful body is pure
+- [x] calling closure with effectful body is effectful
 - [ ] boxed lambda creation with effectful body is pure
 - [ ] calling boxed lambda with effectful body is effectful
-- [ ] self-recursive pure function stays pure
-- [ ] self-recursive effectful function is effectful
-- [ ] mutual recursion with one effectful member propagates to the group
-- [ ] mutual recursion where every member is pure stays pure
-- [ ] `dbg` around pure value is not effectful
-- [ ] `dbg` around effectful call reports through the call
-- [ ] `crash` in otherwise pure value is not effectful
-- [ ] `expect` in otherwise pure value is not effectful
+- [x] self-recursive pure function stays pure
+- [x] self-recursive effectful function is effectful
+- [x] mutual recursion with one effectful member propagates to the group
+- [x] mutual recursion where every member is pure stays pure
+- [x] `dbg` around pure value is not effectful
+- [x] `dbg` around effectful call reports through the call
+- [x] `crash` in otherwise pure value is not effectful
+- [x] `expect` in otherwise pure value is not effectful
 
 ## Phase 2: Expression Results
 
@@ -424,7 +424,7 @@ Tests:
 - [ ] static search finds no data-shape root blocker for loops
 - [ ] static search shows `return` and `break` use explicit control-transfer
   policy
-- [ ] focused effect tests pass
+- [x] focused effect tests pass
 - [x] focused root tests pass
 - [x] compile-time evaluation tests pass
 - [x] static-data tests pass
