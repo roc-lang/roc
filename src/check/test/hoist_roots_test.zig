@@ -75,7 +75,7 @@ test "hoist roots selected for direct closed ordinary call function body" {
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
-test "hoist roots are not selected for ordinary call with dbg in reachable body" {
+test "hoist roots selected for ordinary call with dbg in reachable body" {
     var test_env = try TestEnv.init("Test",
         \\dbg_value = || {
         \\    x = 42.I64
@@ -91,10 +91,10 @@ test "hoist roots are not selected for ordinary call with dbg in reachable body"
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
 }
 
-test "hoist roots are not selected for ordinary call with expect in reachable body" {
+test "hoist roots selected for ordinary call with expect in reachable body" {
     var test_env = try TestEnv.init("Test",
         \\expect_value = || {
         \\    expect 1.I64 == 1.I64
@@ -109,7 +109,7 @@ test "hoist roots are not selected for ordinary call with expect in reachable bo
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
 }
 
 test "hoist roots selected for direct closed arithmetic function body" {
@@ -719,7 +719,7 @@ test "hoist roots are not selected for mutable local dependencies" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected for observable debug expressions" {
+test "hoist roots selected for observable debug expressions" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
         \\    dbg 1.I64
@@ -729,10 +729,10 @@ test "hoist roots are not selected for observable debug expressions" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_block));
 }
 
-test "hoist roots are not selected after observable effects in blocks" {
+test "hoist roots selected across observable debug statements in blocks" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
         \\    before = 1.I64 + 2.I64
@@ -744,7 +744,40 @@ test "hoist roots are not selected after observable effects in blocks" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+    try std.testing.expectEqual(@as(usize, 2), countExprRootsByTag(&test_env, .e_dispatch_call));
+}
+
+test "hoist roots selected for dbg expression wrappers" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| dbg (1.I64 + 2.I64)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dbg));
+}
+
+test "hoist roots selected for expect statements" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    expect 1.I64 == 1.I64
+        \\    {}
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_block));
+}
+
+test "hoist roots selected for conditional crash expressions" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| if 1.I64 == 0.I64 { crash "bad" } else { 42.I64 }
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_if));
 }
 
 test "hoist roots with non-concrete compile-time types are pruned" {
@@ -920,7 +953,7 @@ test "hoist roots are not selected for branch body call with runtime argument" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected for branch body call with observable reachable body" {
+test "hoist roots selected for branch body call with observable reachable body" {
     var test_env = try TestEnv.init("Test",
         \\dbg_value = || {
         \\    dbg 1.I64
@@ -938,7 +971,7 @@ test "hoist roots are not selected for branch body call with observable reachabl
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    try std.testing.expect(countExprRootsByTag(&test_env, .e_block) > 0);
 }
 
 test "hoist roots selected for whole closed conditional expressions" {
@@ -998,7 +1031,7 @@ test "hoist roots are not selected for custom from_quote conversion roots" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected for effectful static dispatch calls" {
+test "hoist roots preserve independent children around effectful static dispatch calls" {
     var test_env = try TestEnv.init("Test",
         \\Foo := { x: I64 }.{
         \\    show! : Foo => I64
@@ -1016,7 +1049,7 @@ test "hoist roots are not selected for effectful static dispatch calls" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_record));
 }
 
 test "hoist roots are not selected for dict pseudo-seed dependent values" {

@@ -454,12 +454,12 @@ const HoistFrame = struct {
     deferred_dependency_start: usize,
     has_runtime_dependency: bool = false,
     has_contextual_dependency: bool = false,
-    has_observable_effect: bool = false,
+    has_effectful_call: bool = false,
 
     fn eligible(self: @This()) bool {
         return !self.suppressed and
             !self.has_runtime_dependency and
-            !self.has_observable_effect;
+            !self.has_effectful_call;
     }
 };
 
@@ -467,7 +467,6 @@ const CompletedHoistResult = struct {
     expr: CIR.Expr.Idx,
     eligible: bool,
     top_level_equivalent: bool,
-    has_observable_effect: bool,
 };
 
 const HoistPatternExtraction = hoist_roots.PatternExtraction;
@@ -691,14 +690,14 @@ const HoistSelectionTransaction = struct {
             .e_closure,
             .e_lambda,
             .e_hosted_lambda,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
             .e_for,
             .e_return,
             .e_break,
             .e_run_low_level,
             => {},
+            .e_dbg => |dbg| try self.stageExprDependenciesInternal(dbg.expr, context),
+            .e_expect_err => |expect_err| try self.stageExprDependenciesInternal(expect_err.expr, context),
+            .e_expect => |expect| try self.stageExprDependenciesInternal(expect.body, context),
             .e_str => |str| try self.stageExprSpanDependencies(str.span, context),
             .e_list => |list| try self.stageExprSpanDependencies(list.elems, context),
             .e_tuple => |tuple| try self.stageExprSpanDependencies(tuple.elems, context),
@@ -785,8 +784,6 @@ const HoistSelectionTransaction = struct {
                 .s_var_uninitialized,
                 .s_reassign,
                 .s_crash,
-                .s_dbg,
-                .s_expect,
                 .s_for,
                 .s_while,
                 .s_infinite_loop,
@@ -795,6 +792,8 @@ const HoistSelectionTransaction = struct {
                 .s_return,
                 .s_runtime_error,
                 => {},
+                .s_dbg => |dbg| try self.stageExprDependenciesInternal(dbg.expr, context),
+                .s_expect => |expect| try self.stageExprDependenciesInternal(expect.body, context),
             }
         }
         try self.stageExprDependenciesInternal(final_expr, context);
@@ -1405,7 +1404,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     const frame_index = self.hoist_frames.items.len - 1;
     var frame = self.hoist_frames.items[frame_index];
     std.debug.assert(frame.expr == expr);
-    if (does_fx) frame.has_observable_effect = true;
+    if (does_fx) frame.has_effectful_call = true;
 
     const semantically_eligible = frame.eligible();
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
@@ -1420,7 +1419,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         !self.varIsFunctionType(ModuleEnv.varFrom(expr));
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
     const has_child_candidates = self.hoist_expr_candidates.items.len > frame.candidate_start;
-    const action: HoistSelectionAction = if (selection_suppressed or frame.has_observable_effect)
+    const action: HoistSelectionAction = if (selection_suppressed)
         .suppress_children
     else if (current_covers_children)
         .cover_with_current_root
@@ -1436,7 +1435,6 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
 
     const should_flush_deferred_binding_dependencies = frame.binding_rhs and
-        !frame.has_observable_effect and
         !binding_rhs_can_cover_children and
         !selection_suppressed and
         self.hoist_deferred_binding_dependencies.items.len > frame.deferred_dependency_start;
@@ -1476,7 +1474,6 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         .expr = expr,
         .eligible = semantically_eligible,
         .top_level_equivalent = top_level_equivalent,
-        .has_observable_effect = frame.has_observable_effect,
     };
     self.last_hoist_result = completed;
 
@@ -1498,22 +1495,10 @@ fn markCurrentHoistRuntimeDependency(self: *Self) void {
     self.hoist_frames.items[self.hoist_frames.items.len - 1].has_runtime_dependency = true;
 }
 
-fn markCurrentHoistObservableEffect(self: *Self) void {
-    if (self.hoist_frames.items.len == 0) return;
-    self.hoist_frames.items[self.hoist_frames.items.len - 1].has_observable_effect = true;
-}
-
 fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!bool {
     self.hoist_selection_suppressed_depth += 1;
     defer self.hoist_selection_suppressed_depth -= 1;
     return try self.checkExpr(expr, env, expected);
-}
-
-fn checkedExprBlocksLaterHoists(self: *const Self, expr: CIR.Expr.Idx, does_fx: bool) bool {
-    if (does_fx) return true;
-    const completed = self.last_hoist_result orelse return false;
-    if (completed.expr != expr) return false;
-    return completed.has_observable_effect;
 }
 
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
@@ -2459,8 +2444,8 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
 
 /// True when this expression can replace already-bubbled child candidates with
 /// one larger stored data root. This is intentionally stricter than semantic
-/// eligibility: function/lambda/closure and observable expression frames may
-/// contain closed child work, but they cannot cover that work as data roots.
+/// eligibility: function/lambda/closure frames may contain closed child work,
+/// but they cannot cover that work as data roots.
 fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
@@ -2488,14 +2473,15 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
         .e_for,
         .e_return,
         .e_break,
         .e_run_low_level,
         => false,
+        .e_dbg,
+        .e_expect,
+        => true,
+        .e_expect_err => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
         .e_list,
         .e_tuple,
@@ -2544,12 +2530,13 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
         .e_return,
         .e_break,
         => false,
+        .e_dbg,
+        .e_expect,
+        => true,
+        .e_expect_err => false,
         .e_lookup_external,
         .e_str_segment,
         .e_bytes_literal,
@@ -4828,18 +4815,18 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_runtime_error,
         .e_ellipsis,
         .e_anno_only,
-        .e_crash,
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
         .e_for,
         .e_return,
         .e_break,
         .e_run_low_level,
         => false,
+        .e_crash => true,
+        .e_dbg => |dbg| self.hoistedRootDependenciesAreKeptInternal(dbg.expr, context, keep_oracle),
+        .e_expect_err => |expect_err| self.hoistedRootDependenciesAreKeptInternal(expect_err.expr, context, keep_oracle),
+        .e_expect => |expect| self.hoistedRootDependenciesAreKeptInternal(expect.body, context, keep_oracle),
         .e_str => |str| self.hoistedRootExprSpanDependenciesAreKept(str.span, context, keep_oracle),
         .e_list => |list| self.hoistedRootExprSpanDependenciesAreKept(list.elems, context, keep_oracle),
         .e_tuple => |tuple| self.hoistedRootExprSpanDependenciesAreKept(tuple.elems, context, keep_oracle),
@@ -4987,11 +4974,11 @@ fn hoistedExprAllowsStoredConst(
         .e_type_method_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
         .e_type_dispatch_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
         .e_tuple_access => |access| self.hoistedExprAllowsStoredConst(module, access.tuple, context),
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
         .e_break,
         => false,
+        .e_dbg => |dbg| self.hoistedExprAllowsStoredConst(module, dbg.expr, context),
+        .e_expect_err => |expect_err| self.hoistedExprAllowsStoredConst(module, expect_err.expr, context),
+        .e_expect => |expect| self.hoistedExprAllowsStoredConst(module, expect.body, context),
         .e_for => |for_expr| (try self.hoistedExprAllowsStoredConst(module, for_expr.expr, context)) and
             try self.hoistedExprAllowsStoredConst(module, for_expr.body, context),
         .e_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
@@ -5145,9 +5132,8 @@ fn hoistedStatementAllowsStoredConst(
         .s_var => |var_stmt| self.hoistedExprAllowsStoredConst(module, var_stmt.expr, context),
         .s_reassign => |reassign| self.hoistedExprAllowsStoredConst(module, reassign.expr, context),
         .s_expr => |expr_stmt| self.hoistedExprAllowsStoredConst(module, expr_stmt.expr, context),
-        .s_dbg,
-        .s_expect,
-        => false,
+        .s_dbg => |dbg| self.hoistedExprAllowsStoredConst(module, dbg.expr, context),
+        .s_expect => |expect| self.hoistedExprAllowsStoredConst(module, expect.body, context),
         .s_for => |for_stmt| (try self.hoistedExprAllowsStoredConst(module, for_stmt.expr, context)) and
             try self.hoistedExprAllowsStoredConst(module, for_stmt.body, context),
         .s_while => |while_stmt| (try self.hoistedExprAllowsStoredConst(module, while_stmt.cond, context)) and
@@ -5323,9 +5309,6 @@ fn hoistedRootStatementDependenciesAreKept(
         .s_var,
         .s_var_uninitialized,
         .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expect,
         .s_for,
         .s_while,
         .s_infinite_loop,
@@ -5334,6 +5317,9 @@ fn hoistedRootStatementDependenciesAreKept(
         .s_return,
         .s_runtime_error,
         => false,
+        .s_crash => true,
+        .s_dbg => |dbg| self.hoistedRootDependenciesAreKeptInternal(dbg.expr, context, keep_oracle),
+        .s_expect => |expect| self.hoistedRootDependenciesAreKeptInternal(expect.body, context, keep_oracle),
     };
 }
 
@@ -10052,10 +10038,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = stmt_result.does_fx or does_fx;
 
             // Check the final expression
-            const final_expr_does_fx = if (stmt_result.blocks_later_hoists)
-                try self.checkExprWithHoistSelectionSuppressed(block.final_expr, env, expected)
-            else
-                try self.checkExpr(block.final_expr, env, expected);
+            const final_expr_does_fx = try self.checkExpr(block.final_expr, env, expected);
             does_fx = final_expr_does_fx or does_fx;
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
@@ -10691,7 +10674,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markActiveEffectSlotEffectful();
-                self.markCurrentHoistObservableEffect();
                 does_fx = true;
             }
         },
@@ -10804,7 +10786,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markActiveEffectSlotEffectful();
-                self.markCurrentHoistObservableEffect();
                 does_fx = true;
             }
         },
@@ -10812,21 +10793,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_expect_err => |expect_err| {
-            self.markCurrentHoistObservableEffect();
             // The Err payload is consumed at runtime when the enclosing expect
             // fails; this expression itself never returns, so its type is free.
-            _ = try self.checkExpr(expect_err.expr, env, Expected.none());
+            does_fx = try self.checkExpr(expect_err.expr, env, Expected.none()) or does_fx;
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_dbg => |dbg| {
-            self.markCurrentHoistObservableEffect();
             // dbg evaluates its inner expression but returns {} (like expect)
-            _ = try self.checkExpr(dbg.expr, env, Expected.none());
-            does_fx = false;
+            does_fx = try self.checkExpr(dbg.expr, env, Expected.none()) or does_fx;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_expect => |expect| {
-            self.markCurrentHoistObservableEffect();
             const expect_does_fx = try self.checkExpectBody(expect.body, env, expected, expr_region);
             if (expect_does_fx) {
                 _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
@@ -10842,7 +10819,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_for => |for_expr| {
-            self.markCurrentHoistObservableEffect();
             does_fx = try self.checkIteratorForLoop(
                 ModuleEnv.nodeIdxFrom(expr_idx),
                 for_expr.patt,
@@ -10878,7 +10854,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_return => |ret| {
-            self.markCurrentHoistObservableEffect();
             does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
@@ -10906,7 +10881,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // any surrounding expected type.
         },
         .e_hosted_lambda => |lambda| {
-            self.markCurrentHoistObservableEffect();
             // Record the parameter span for the end-of-check pinnable
             // collection (see `checked_lambda_params`).
             try self.checked_lambda_params.append(self.gpa, lambda.args);
@@ -10929,7 +10903,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_run_low_level => |run_ll| {
-            self.markCurrentHoistObservableEffect();
             // Check each argument expression in the run_low_level node
             for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
                 self.checking_call_arg = true;
@@ -10980,7 +10953,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     if (delayed_dispatch_effect_fn_var) |fn_var| {
         if (self.varIsEffectfulFunction(fn_var)) {
             self.markActiveEffectSlotEffectful();
-            self.markCurrentHoistObservableEffect();
             if (self.current_expect_region == null) {
                 does_fx = true;
             }
@@ -11859,7 +11831,6 @@ fn checkParamPatternExhaustiveness(
 const BlockStatementsResult = struct {
     does_fx: bool,
     diverges: bool,
-    blocks_later_hoists: bool,
 };
 
 /// Given a slice of stmts, type check each one
@@ -11870,7 +11841,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
     var does_fx = false;
     var diverges = false;
-    var blocks_later_hoists = false;
     var warn_unreachable = false;
     for (0..statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(statements, stmt_offset);
@@ -11886,13 +11856,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
         try self.setVarRank(stmt_var, env);
 
-        const suppress_statement_hoists = blocks_later_hoists;
-        if (suppress_statement_hoists) self.hoist_selection_suppressed_depth += 1;
-        defer {
-            if (suppress_statement_hoists) self.hoist_selection_suppressed_depth -= 1;
-        }
-
-        var statement_blocks_later_hoists = false;
         switch (stmt) {
             .s_decl => |decl_stmt| {
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
@@ -11937,7 +11900,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
                 const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
                 does_fx = decl_expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(decl_stmt.expr, decl_expr_does_fx);
                 try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -11992,7 +11954,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 const var_expr_does_fx = try self.checkExpr(var_stmt.expr, env, expectation);
                 does_fx = var_expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(var_stmt.expr, var_expr_does_fx);
                 self.discardHoistBindingCandidate(var_stmt.pattern_idx);
                 if (var_stmt.anno == null and self.erroneous_value_exprs.contains(var_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
@@ -12046,7 +12007,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 const reassign_expr_does_fx = try self.checkExpr(reassign.expr, env, Expected.none());
                 does_fx = reassign_expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(reassign.expr, reassign_expr_does_fx);
                 const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
                 try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
 
@@ -12063,8 +12023,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
             },
             .s_for => |for_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 const for_region = self.cir.store.getStatementRegion(stmt_idx);
                 does_fx = try self.checkIteratorForLoop(
                     ModuleEnv.nodeIdxFrom(stmt_idx),
@@ -12078,8 +12036,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_while => |while_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 // Check the condition
                 // while $count < 10 {
                 //       ^^^^^^^^^^^
@@ -12101,8 +12057,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_breakable_loop => |while_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
@@ -12115,8 +12069,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_infinite_loop => |while_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
@@ -12131,7 +12083,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             .s_expr => |expr| {
                 const expr_does_fx = try self.checkExpr(expr.expr, env, Expected.none());
                 does_fx = expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(expr.expr, expr_does_fx);
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 // Statements must evaluate to {}. Add a constraint to unify with empty record.
@@ -12147,16 +12098,12 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
             },
             .s_dbg => |expr| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
             .s_expect => |expr_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region);
                 if (expect_does_fx) {
                     _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
@@ -12172,13 +12119,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
             .s_crash => {
-                statement_blocks_later_hoists = true;
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
             .s_return => |ret| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 // Type check the return expression
                 does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
                 const ret_var = ModuleEnv.varFrom(ret.expr);
@@ -12220,12 +12164,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 diverges = true;
             },
         }
-        blocks_later_hoists = statement_blocks_later_hoists or blocks_later_hoists;
     }
     return .{
         .does_fx = does_fx,
         .diverges = diverges,
-        .blocks_later_hoists = blocks_later_hoists,
     };
 }
 
