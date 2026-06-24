@@ -664,9 +664,9 @@ Success criteria:
 - the `.iter()` version is no larger because of runtime base-iterator rebuilds
 - the disassembly proves static sharing, not merely a smaller byte count
 
-Completed evidence:
+Completed evidence from the current verification pass:
 
-- compiler code commit: `f829ac54e1de`
+- compiler code commit: `959c457e6933`
 - wasm4 commit: `deae1505a67a`
 - `zig build` passed in the compiler repo
 - `zig build -Doptimize=ReleaseSmall` passed in the wasm4 repo
@@ -687,8 +687,12 @@ Completed evidence:
   addresses `0x2c50`, `0x2c58`, and `0x2c60`
 - static memory `0x2c60` stores pointer `0x2c28`, the allocation base for the
   same list whose payload is at `0x2c30`
-- the wasm code contains no consecutive emitted `i32.const` sequence for the
-  base point values, so the base point list is not rebuilt in the function body
+- the code section contains zero raw copies of the full base point payload and
+  zero instruction-level consecutive `i32.const` sequences for the base point
+  values, so the base point list is not rebuilt in the function body
+- the instruction-level scan found static iterator field loads from memory
+  addresses `0x2c50`, `0x2c58`, and `0x2c60`, and no `i32.const` references to
+  the base point backing address `0x2be0`
 
 ## Phase 8: Required Verification Commands
 
@@ -725,12 +729,13 @@ zig build -Doptimize=ReleaseSmall
 /home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc build examples/rocci-bird.roc --opt=size --output=rocci-bird.wasm
 ```
 
-Completed verification sweep on compiler code commit `f829ac54e1de`:
+Completed verification sweep on compiler code commit `959c457e6933`:
 
 - `zig build run-test-zig-module-check -- --test-filter "hoist roots"` passed
 - `zig build run-test-zig-module-compile -- --test-filter "static data"`
   passed
 - `zig build run-test-zig-module-compile -- --test-filter "hoisted"` passed
+- `zig build run-test-zig-module-lir` passed
 - `zig build run-test-eval` passed with 1,443 passed, 0 failed, 0 crashed,
   and 0 skipped
 - `zig build run-test-zig-module-check` passed
@@ -793,6 +798,23 @@ shows the point backing bytes once in active data segment 45 and zero times in
 the code section. Segment 46 is the static list allocation pointing at that
 backing, and the unchanged sha256 ties this rebuild to the inspected static
 iterator/callable-data artifact.
+
+Final current-state audit on compiler commit `959c457e6933`:
+
+- The checklist below has no unchecked items, and the targeted/full verification
+  commands in Phase 8 passed on this commit.
+- The checker-root requirements are covered by the `hoist roots` suite and the
+  static policy tests in `src/check/test/hoist_roots_test.zig`.
+- The compile-time diagnostic requirements are covered by the eval suite and
+  the focused diagnostics/static-data tests in
+  `src/compile/test/hoisted_constants_test.zig` and
+  `src/compile/test/comptime_diagnostics_test.zig`.
+- The static-data, callable materialization, and reachability requirements are
+  covered by `src/compile/test/hoisted_constants_test.zig`,
+  `src/lir/reachable_procs.zig`, and `src/lir/arc.zig`.
+- The Rocci Bird proof was rerun from source with the current compiler and the
+  current wasm4 branch, and the rebuilt wasm matches the recorded byte size,
+  sha256, static data section layout, and served `/cart.wasm` artifact.
 
 ## Final Checklist
 
