@@ -597,6 +597,45 @@ test "parent static root does not emit removed child root data" {
     try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name));
 }
 
+test "nominal record backed by static data emits through checked output" {
+    const gpa = std.testing.allocator;
+
+    const exports = try buildStaticDataExportsForAppSource(gpa,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\Token := { raw : List(U8), width : U64 }.{
+        \\    bytes : Token -> List(U8)
+        \\    bytes = |token| token.raw
+        \\
+        \\    width : Token -> U64
+        \\    width = |token| token.width
+        \\}
+        \\
+        \\token : Token
+        \\token = Token.{ raw: [17.U8, 34.U8, 51.U8, 68.U8], width: 4 }
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % Token.width(token)
+        \\    byte_value = match List.get(Token.bytes(token), index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = byte_value
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.StaticNominalPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueExports(exports));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name));
+}
+
 test "tuple and tag static data share named and inline list payloads" {
     const gpa = std.testing.allocator;
 

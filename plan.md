@@ -377,7 +377,7 @@ Tasks:
 - [ ] Share repeated static list bytes.
 - [ ] Store records that point at shared static list bytes.
 - [ ] Store tuples and tag payloads that point at shared static list bytes.
-- [ ] Ensure opaque static data uses checked backing values only when allowed.
+- [x] Ensure opaque static data uses checked backing values only when allowed.
 - [x] Ensure removed child roots do not emit duplicate static data.
 - [ ] Ensure target static-data emission consumes evaluated checked values, not
   source/CIR shape.
@@ -391,7 +391,7 @@ Tests:
 - [x] repeated records sharing a list share the list bytes
 - [x] tuple containing list points at static list bytes
 - [x] tag payload containing list points at static list bytes
-- [ ] opaque backed by static-storable data emits only through allowed checked
+- [x] opaque backed by static-storable data emits only through allowed checked
   output
 - [x] repeated sprite sheets share bytes
 - [x] sub-sprite records point at sprite sheet bytes
