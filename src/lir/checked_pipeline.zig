@@ -213,7 +213,7 @@ pub fn lowerCheckedModulesToLir(
         rootRequests(roots, layout_requests, static_data_requests),
         .{
             .proc_debug_names = target.proc_debug_names,
-            .hoisted_static_data_literals = target.checked_module_state == .complete and roots.include_static_data_exports,
+            .static_data_literals = target.checked_module_state == .complete and roots.include_static_data_exports,
         },
     );
     var mono_owned = true;

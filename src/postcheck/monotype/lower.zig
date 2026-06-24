@@ -32,9 +32,9 @@ pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
-    /// Restore selected stored hoisted constants as readonly static-data values
-    /// when their ConstStore shape requires runtime storage.
-    hoisted_static_data_literals: bool = false,
+    /// Restore stored constants as readonly static-data values when their
+    /// ConstStore shape requires runtime storage.
+    static_data_literals: bool = false,
 };
 
 /// Lower checked modules and explicit roots into Monotype IR.
@@ -342,13 +342,19 @@ const GeneratedHelperDefEntry = union(enum) {
     }
 };
 
+const StaticDataUse = struct {
+    const_ref: checked.ConstRef,
+    checked_type: checked.CheckedTypeId,
+    ty: Type.TypeId,
+};
+
 const Builder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
     proc_debug_names: bool,
-    hoisted_static_data_literals: bool,
+    static_data_literals: bool,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Monotypes owned by the builder-global type cache. They are lowered
@@ -359,7 +365,7 @@ const Builder = struct {
     lowered_nested_fns: std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
-    static_data_ids: std.AutoHashMap(checked.ConstRef, Common.StaticDataId),
+    static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -381,14 +387,14 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .proc_debug_names = options.proc_debug_names,
-            .hoisted_static_data_literals = options.hoisted_static_data_literals,
+            .static_data_literals = options.static_data_literals,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
             .lowered_nested_fns = std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
-            .static_data_ids = std.AutoHashMap(checked.ConstRef, Common.StaticDataId).init(allocator),
+            .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
@@ -1884,8 +1890,17 @@ const Builder = struct {
         };
     }
 
-    fn staticDataValue(self: *Builder, const_ref: checked.ConstRef, checked_type: checked.CheckedTypeId) Allocator.Error!Common.StaticDataId {
-        const gop = try self.static_data_ids.getOrPut(const_ref);
+    fn staticDataValue(
+        self: *Builder,
+        const_ref: checked.ConstRef,
+        checked_type: checked.CheckedTypeId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Common.StaticDataId {
+        const gop = try self.static_data_ids.getOrPut(.{
+            .const_ref = const_ref,
+            .checked_type = checked_type,
+            .ty = ty,
+        });
         if (!gop.found_existing) {
             const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(self.program.static_data_values.items.len)));
             try self.program.static_data_values.append(self.allocator, .{
@@ -4068,10 +4083,10 @@ const BodyContext = struct {
         const template = self.view.const_templates.get(entry.const_ref);
         return switch (template.state) {
             .stored_const => |stored| blk: {
-                if (self.builder.hoisted_static_data_literals and
+                if (self.builder.static_data_literals and
                     self.builder.constNodeNeedsStaticData(self.view, stored.node))
                 {
-                    const id = try self.builder.staticDataValue(entry.const_ref, entry.checked_type);
+                    const id = try self.builder.staticDataValue(entry.const_ref, entry.checked_type, ty);
                     break :blk try self.builder.program.addExpr(.{
                         .ty = ty,
                         .data = .{ .static_data = id },
@@ -8935,7 +8950,18 @@ const BodyContext = struct {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
-            .stored_const => |stored| try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty),
+            .stored_const => |stored| blk: {
+                if (self.builder.static_data_literals and
+                    self.builder.constNodeNeedsStaticData(store_view, stored.node))
+                {
+                    const id = try self.builder.staticDataValue(const_use.const_ref, requested_ty, ty);
+                    break :blk try self.builder.program.addExpr(.{
+                        .ty = ty,
+                        .data = .{ .static_data = id },
+                    });
+                }
+                break :blk try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty);
+            },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| try self.lowerConstEvalTemplateUse(store_view, eval, ty, null),
         };
