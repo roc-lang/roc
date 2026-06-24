@@ -803,7 +803,7 @@ wc -c rocci-bird.wasm
 ### Root Selection
 
 - [x] `checkExpr` returns `ExprCheckResult`.
-- [ ] Blocks and statements combine `ExprCheckResult`.
+- [x] Blocks and statements combine `ExprCheckResult`.
 - [ ] Expression effect propagation no longer depends on old `does_fx`.
 - [ ] Immutable local binding summaries are stored only when later lookups need
       them.
@@ -859,10 +859,10 @@ wc -c rocci-bird.wasm
 - [ ] No root blocker remains for `dbg`, `expect`, or `crash`.
 - [ ] No root blocker remains for leaf expressions.
 - [ ] No root blocker remains for `return`, `break`, or loops.
-- [ ] Focused effect tests pass.
-- [ ] Focused root tests pass.
+- [x] Focused effect tests pass.
+- [x] Focused root tests pass.
 - [ ] Compile-time evaluation/static data tests pass.
-- [ ] Full `zig build run-test-zig-module-check` passes.
+- [x] Full `zig build run-test-zig-module-check` passes.
 - [ ] Broader compiler tests pass at major phase boundaries.
 
 ### Rocci Bird

@@ -469,6 +469,10 @@ const ExprCheckResult = struct {
             .does_fx = does_fx,
         };
     }
+
+    fn include(self: *ExprCheckResult, other: ExprCheckResult) void {
+        self.does_fx = other.does_fx or self.does_fx;
+    }
 };
 
 const HoistFrame = struct {
@@ -10277,11 +10281,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check all statements in the block
             const stmt_result = try self.checkBlockStatements(block.stmts, env, expr_region);
-            does_fx = stmt_result.does_fx or does_fx;
+            var block_check = ExprCheckResult{};
+            block_check.include(stmt_result.check);
 
             // Check the final expression
-            const final_expr_does_fx = (try self.checkExpr(block.final_expr, env, expected)).does_fx;
-            does_fx = final_expr_does_fx or does_fx;
+            block_check.include(try self.checkExpr(block.final_expr, env, expected));
+            does_fx = block_check.does_fx or does_fx;
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
             // since the final expression is unreachable
@@ -12073,7 +12078,7 @@ fn checkParamPatternExhaustiveness(
 // stmts //
 
 const BlockStatementsResult = struct {
-    does_fx: bool,
+    check: ExprCheckResult,
     diverges: bool,
 };
 
@@ -12083,7 +12088,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var does_fx = false;
+    var check_result = ExprCheckResult{};
     var diverges = false;
     var warn_unreachable = false;
     for (0..statements.span.len) |stmt_offset| {
@@ -12142,8 +12147,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
-                const decl_expr_does_fx = (try self.checkExpr(decl_stmt.expr, env, expectation)).does_fx;
-                does_fx = decl_expr_does_fx or does_fx;
+                const decl_expr_result = try self.checkExpr(decl_stmt.expr, env, expectation);
+                check_result.include(decl_expr_result);
                 try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -12196,8 +12201,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
-                const var_expr_does_fx = (try self.checkExpr(var_stmt.expr, env, expectation)).does_fx;
-                does_fx = var_expr_does_fx or does_fx;
+                const var_expr_result = try self.checkExpr(var_stmt.expr, env, expectation);
+                check_result.include(var_expr_result);
                 self.discardHoistBindingCandidate(var_stmt.pattern_idx);
                 if (var_stmt.anno == null and self.erroneous_value_exprs.contains(var_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
@@ -12249,8 +12254,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
-                const reassign_expr_does_fx = (try self.checkExpr(reassign.expr, env, Expected.none())).does_fx;
-                does_fx = reassign_expr_does_fx or does_fx;
+                const reassign_expr_result = try self.checkExpr(reassign.expr, env, Expected.none());
+                check_result.include(reassign_expr_result);
                 const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
                 try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
 
@@ -12268,14 +12273,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_for => |for_stmt| {
                 const for_region = self.cir.store.getStatementRegion(stmt_idx);
-                does_fx = try self.checkIteratorForLoop(
+                check_result.include(ExprCheckResult.fromDoesFx(try self.checkIteratorForLoop(
                     ModuleEnv.nodeIdxFrom(stmt_idx),
                     for_stmt.patt,
                     for_stmt.expr,
                     for_stmt.body,
                     env,
                     for_region,
-                ) or does_fx;
+                )));
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, for_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
@@ -12283,7 +12288,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // Check the condition
                 // while $count < 10 {
                 //       ^^^^^^^^^^^
-                does_fx = (try self.checkExpr(while_stmt.cond, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.cond, env, Expected.none()));
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
@@ -12296,37 +12301,37 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 //     print!($count.toStr())  <<<<
                 //     $count = $count + 1
                 // }
-                does_fx = (try self.checkExpr(while_stmt.body, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.body, env, Expected.none()));
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_breakable_loop => |while_stmt| {
-                does_fx = (try self.checkExpr(while_stmt.cond, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.cond, env, Expected.none()));
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = (try self.checkExpr(while_stmt.body, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.body, env, Expected.none()));
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_infinite_loop => |while_stmt| {
-                does_fx = (try self.checkExpr(while_stmt.cond, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.cond, env, Expected.none()));
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = (try self.checkExpr(while_stmt.body, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.body, env, Expected.none()));
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
             .s_expr => |expr| {
-                const expr_does_fx = (try self.checkExpr(expr.expr, env, Expected.none())).does_fx;
-                does_fx = expr_does_fx or does_fx;
+                const expr_result = try self.checkExpr(expr.expr, env, Expected.none());
+                check_result.include(expr_result);
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 // Statements must evaluate to {}. Add a constraint to unify with empty record.
@@ -12342,14 +12347,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
             },
             .s_dbg => |expr| {
-                does_fx = (try self.checkExpr(expr.expr, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(expr.expr, env, Expected.none()));
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
             .s_expect => |expr_stmt| {
-                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region);
-                does_fx = expect_does_fx or does_fx;
+                check_result.include(ExprCheckResult.fromDoesFx(try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region)));
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 const bool_var = try self.freshBool(env, stmt_region);
@@ -12363,7 +12367,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_return => |ret| {
                 // Type check the return expression
-                does_fx = (try self.checkExpr(ret.expr, env, Expected.none())).does_fx or does_fx;
+                check_result.include(try self.checkExpr(ret.expr, env, Expected.none()));
                 const ret_var = ModuleEnv.varFrom(ret.expr);
 
                 // Write down this constraint for later validation
@@ -12405,7 +12409,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
         }
     }
     return .{
-        .does_fx = does_fx,
+        .check = check_result,
         .diverges = diverges,
     };
 }
