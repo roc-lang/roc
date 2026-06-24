@@ -17,6 +17,7 @@ pub const Op = enum(u32) {
     bind_click = 14,
     bind_input = 15,
     bind_check = 16,
+    clear_event = 17,
 };
 
 pub const Record = extern struct {
@@ -139,6 +140,9 @@ pub const Counts = struct {
             .set_disabled => self.set_disabled += 1,
             .set_role, .set_label, .set_test_id => self.set_metadata += 1,
             .bind_click, .bind_input, .bind_check => self.bind_event += 1,
+            // Event-unbinding is counted through `addEventBinding` alongside the
+            // bind it supersedes, so the raw wire op never reaches this counter.
+            .clear_event => self.bind_event += 1,
         }
     }
 

@@ -2756,11 +2756,12 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn bindNodeSignalExpr(self: *Self, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) *HostSignalRecord {
             return switch (expr.tag) {
                 .Ref => blk: {
-                    const node_id = resolveNodeBinderRef(binder_stack, expr.payload.ref);
+                    const node_id = resolveNodeBinderRef(binder_stack, expr.payload_ref());
                     break :blk HostSignalRecord.init(allocator, .{ .ref = node_id });
                 },
                 .ConstValue => blk: {
-                    const token = expr.payload.const_value._0;
+                    const payload = expr.payload_const_value();
+                    const token = payload._0;
                     if (stream.signalRecordByToken(token)) |record| {
                         validateExistingSignalRecord(record, .const_value);
                         break :blk record.retain();
@@ -2768,59 +2769,62 @@ pub fn Engine(comptime Ctx: type) type {
 
                     const record = HostSignalRecord.init(allocator, .{ .const_value = .{
                         .token = retainHostSignalToken(token),
-                        .init = retainHostCallable(expr.payload.const_value._1, &self.pending_roc_metrics),
-                        .eq = retainHostCallable(expr.payload.const_value._2, &self.pending_roc_metrics),
-                        .drop = retainHostCallable(expr.payload.const_value._3, &self.pending_roc_metrics),
+                        .init = retainHostCallable(payload._1, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(payload._2, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(payload._3, &self.pending_roc_metrics),
                     } });
                     stream.rememberSignalRecord(allocator, record);
                     break :blk record;
                 },
                 .Map => blk: {
-                    const token = expr.payload.map._0;
+                    const payload = expr.payload_map();
+                    const token = payload._0;
                     if (stream.signalRecordByToken(token)) |record| {
                         validateExistingSignalRecord(record, .map);
                         break :blk record.retain();
                     }
 
-                    const input = self.bindNodeSignalExpr(allocator, stream, expr.payload.map._1.*, binder_stack);
+                    const input = self.bindNodeSignalExpr(allocator, stream, payload._1.*, binder_stack);
                     const record = HostSignalRecord.init(allocator, .{ .map = .{
                         .token = retainHostSignalToken(token),
                         .input = input,
-                        .transform = retainHostCallable(expr.payload.map._2, &self.pending_roc_metrics),
-                        .eq = retainHostCallable(expr.payload.map._3, &self.pending_roc_metrics),
-                        .drop = retainHostCallable(expr.payload.map._4, &self.pending_roc_metrics),
+                        .transform = retainHostCallable(payload._2, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(payload._3, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(payload._4, &self.pending_roc_metrics),
                     } });
                     stream.rememberSignalRecord(allocator, record);
                     break :blk record;
                 },
                 .Map2 => blk: {
-                    const token = expr.payload.map2._0;
+                    const payload = expr.payload_map2();
+                    const token = payload._0;
                     if (stream.signalRecordByToken(token)) |record| {
                         validateExistingSignalRecord(record, .map2);
                         break :blk record.retain();
                     }
 
-                    const left = self.bindNodeSignalExpr(allocator, stream, expr.payload.map2._1.*, binder_stack);
-                    const right = self.bindNodeSignalExpr(allocator, stream, expr.payload.map2._2.*, binder_stack);
+                    const left = self.bindNodeSignalExpr(allocator, stream, payload._1.*, binder_stack);
+                    const right = self.bindNodeSignalExpr(allocator, stream, payload._2.*, binder_stack);
                     const record = HostSignalRecord.init(allocator, .{ .map2 = .{
                         .token = retainHostSignalToken(token),
                         .left = left,
                         .right = right,
-                        .transform = retainHostCallable(expr.payload.map2._3, &self.pending_roc_metrics),
-                        .eq = retainHostCallable(expr.payload.map2._4, &self.pending_roc_metrics),
-                        .drop = retainHostCallable(expr.payload.map2._5, &self.pending_roc_metrics),
+                        .transform = retainHostCallable(payload._3, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(payload._4, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(payload._5, &self.pending_roc_metrics),
                     } });
                     stream.rememberSignalRecord(allocator, record);
                     break :blk record;
                 },
                 .Combine => blk: {
-                    const token = expr.payload.combine._0;
+                    const payload = expr.payload_combine();
+                    const token = payload._0;
                     if (stream.signalRecordByToken(token)) |record| {
                         validateExistingSignalRecord(record, .combine);
                         break :blk record.retain();
                     }
 
-                    const source_children = expr.payload.combine._1.items();
+                    const source_children = payload._1.items();
                     const children = allocator.alloc(*HostSignalRecord, source_children.len) catch @panic("out of memory");
                     for (source_children, children) |child, *dest| {
                         dest.* = self.bindNodeSignalExpr(allocator, stream, child, binder_stack);
@@ -2828,15 +2832,15 @@ pub fn Engine(comptime Ctx: type) type {
                     const record = HostSignalRecord.init(allocator, .{ .combine = .{
                         .token = retainHostSignalToken(token),
                         .children = children,
-                        .transform = retainHostCallable(expr.payload.combine._2, &self.pending_roc_metrics),
-                        .eq = retainHostCallable(expr.payload.combine._3, &self.pending_roc_metrics),
-                        .drop = retainHostCallable(expr.payload.combine._4, &self.pending_roc_metrics),
+                        .transform = retainHostCallable(payload._2, &self.pending_roc_metrics),
+                        .eq = retainHostCallable(payload._3, &self.pending_roc_metrics),
+                        .drop = retainHostCallable(payload._4, &self.pending_roc_metrics),
                     } });
                     stream.rememberSignalRecord(allocator, record);
                     break :blk record;
                 },
                 .TaskSource => blk: {
-                    const payload = expr.payload.task_source;
+                    const payload = expr.payload_task_source();
                     const token = payload.token;
                     if (stream.signalRecordByToken(token)) |record| {
                         validateExistingSignalRecord(record, .task_source);
@@ -2859,7 +2863,7 @@ pub fn Engine(comptime Ctx: type) type {
                     break :blk record;
                 },
                 .IntervalSource => blk: {
-                    const payload = expr.payload.interval_source;
+                    const payload = expr.payload_interval_source();
                     const token = payload.token;
                     if (stream.signalRecordByToken(token)) |record| {
                         validateExistingSignalRecord(record, .interval_source);
@@ -3246,29 +3250,29 @@ pub fn Engine(comptime Ctx: type) type {
             const allocator = Ctx.allocator(ctx);
             switch (attr.tag) {
                 .StaticText => {
-                    const payload = attr.payload.static_text;
+                    const payload = attr.payload_static_text();
                     const field = renderTextFieldFromAbi(payload.field);
                     stream.appendStaticTextAttr(allocator, elem_id, field, payload.value.asSlice());
                 },
                 .SignalText => {
-                    const payload = attr.payload.signal_text;
+                    const payload = attr.payload_signal_text();
                     const field = renderTextFieldFromAbi(payload.field);
                     const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
                     stream.appendSignalTextAttr(allocator, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
                 },
                 .StaticBool => {
-                    const payload = attr.payload.static_bool;
+                    const payload = attr.payload_static_bool();
                     const field = renderBoolFieldFromAbi(payload.field);
                     stream.appendStaticBoolAttr(allocator, elem_id, field, payload.value);
                 },
                 .SignalBool => {
-                    const payload = attr.payload.signal_bool;
+                    const payload = attr.payload_signal_bool();
                     const field = renderBoolFieldFromAbi(payload.field);
                     const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
                     stream.appendSignalBoolAttr(allocator, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
                 },
                 .OnEvent => {
-                    const payload = attr.payload.on_event;
+                    const payload = attr.payload_on_event();
                     const msg = payload.msg;
                     const kind = renderEventKindFromAbi(payload.kind);
                     const payload_kind = eventPayloadKindFromAbi(msg.payload_kind);
@@ -3361,7 +3365,7 @@ pub fn Engine(comptime Ctx: type) type {
             const allocator = Ctx.allocator(ctx);
             switch (elem.tag) {
                 .Element => {
-                    const payload = elem.payload.element;
+                    const payload = elem.payload_element();
                     const elem_id = self.internDomIdentity(Ctx.allocator(ctx), scope_id, dom_ordinal.*) catch @panic("scope id has no host scope descriptor");
                     dom_ordinal.* += 1;
                     _ = stream.appendElement(allocator, elem_id, parent_elem_id, scope_id, payload.tag.asSlice());
@@ -3375,20 +3379,20 @@ pub fn Engine(comptime Ctx: type) type {
                 .Text => {
                     const elem_id = self.internDomIdentity(Ctx.allocator(ctx), scope_id, dom_ordinal.*) catch @panic("scope id has no host scope descriptor");
                     dom_ordinal.* += 1;
-                    stream.appendTextNode(allocator, elem_id, parent_elem_id, scope_id, elem.payload.text.asSlice());
+                    stream.appendTextNode(allocator, elem_id, parent_elem_id, scope_id, elem.payload_text().asSlice());
                 },
                 .TextSignal => {
                     const elem_id = self.internDomIdentity(Ctx.allocator(ctx), scope_id, dom_ordinal.*) catch @panic("scope id has no host scope descriptor");
                     dom_ordinal.* += 1;
-                    const text_signal = elem.payload.text_signal;
+                    const text_signal = elem.payload_text_signal();
                     const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
                     stream.appendSignalTextNode(allocator, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
                 },
                 .Cleanup => {
-                    stream.appendCleanup(allocator, scope_id, elem.payload.cleanup.cleanup.asSlice());
+                    stream.appendCleanup(allocator, scope_id, elem.payload_cleanup().cleanup.asSlice());
                 },
                 .OnChange => {
-                    const payload = elem.payload.on_change;
+                    const payload = elem.payload_on_change();
                     const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack.items);
                     stream.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, scope_id, signal, payload.to_cmd);
                 },
@@ -3397,10 +3401,11 @@ pub fn Engine(comptime Ctx: type) type {
                     const node_id = self.internNodeIdentity(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
                     ordinal.* += 1;
                     stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
-                    stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq, elem.payload.state.drop);
+                    const state = elem.payload_state();
+                    stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, state.initial, state.eq, state.drop);
                     self.ensureStateFromDesc(ctx, roc_host, stream.states.items[stream.states.items.len - 1]);
-                    binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch @panic("out of memory");
-                    self.collectActiveElemDescriptors(ctx, roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
+                    binder_stack.append(allocator, .{ .token = state.binder, .node_id = node_id }) catch @panic("out of memory");
+                    self.collectActiveElemDescriptors(ctx, roc_host, stream, state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
                     _ = binder_stack.pop() orelse unreachable;
                 },
                 .Component => {
@@ -3411,15 +3416,16 @@ pub fn Engine(comptime Ctx: type) type {
                     const component_scope_id = self.internComponentScope(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
                     var component_ordinal: u64 = 0;
                     var component_dom_ordinal: u64 = 0;
-                    self.collectActiveElemDescriptors(ctx, roc_host, stream, elem.payload.component.child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack, dirty_source_node_ids);
+                    self.collectActiveElemDescriptors(ctx, roc_host, stream, elem.payload_component().child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack, dirty_source_node_ids);
                 },
                 .When => {
                     const site_ordinal = ordinal.*;
                     const node_id = self.internNodeIdentity(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
                     ordinal.* += 1;
                     stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
-                    const condition_binding = self.bindNodeSignal(allocator, stream, elem.payload.when.condition.*, binder_stack.items);
-                    stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, node_id, condition_binding, elem.payload.when.read, elem.payload.when.when_false.*, elem.payload.when.when_true.*);
+                    const when_payload = elem.payload_when();
+                    const condition_binding = self.bindNodeSignal(allocator, stream, when_payload.condition.*, binder_stack.items);
+                    stream.appendWhen(allocator, roc_host, &self.pending_roc_metrics, node_id, condition_binding, when_payload.read, when_payload.when_false.*, when_payload.when_true.*);
 
                     const when_index = stream.whens.items.len - 1;
                     const when_desc = &stream.whens.items[when_index];
@@ -3432,8 +3438,8 @@ pub fn Engine(comptime Ctx: type) type {
                     const branch_scope_id = self.internWhenBranchScope(Ctx.allocator(ctx), scope_id, site_ordinal, active_branch) catch @panic("scope id has no host scope descriptor");
                     var branch_ordinal: u64 = 0;
                     const branch_elem = switch (active_branch) {
-                        .true_branch => elem.payload.when.when_true.*,
-                        .false_branch => elem.payload.when.when_false.*,
+                        .true_branch => when_payload.when_true.*,
+                        .false_branch => when_payload.when_false.*,
                     };
                     var branch_dom_ordinal: u64 = 0;
                     self.collectActiveElemDescriptors(ctx, roc_host, stream, branch_elem, branch_scope_id, parent_elem_id, &branch_ordinal, &branch_dom_ordinal, binder_stack, dirty_source_node_ids);
@@ -3443,21 +3449,22 @@ pub fn Engine(comptime Ctx: type) type {
                     const node_id = self.internNodeIdentity(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
                     ordinal.* += 1;
                     stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .each, binder_stack.items);
-                    const items_binding = self.bindNodeSignal(allocator, stream, elem.payload.each.items.*, binder_stack.items);
+                    const each_payload = elem.payload_each();
+                    const items_binding = self.bindNodeSignal(allocator, stream, each_payload.items.*, binder_stack.items);
                     stream.appendEach(
                         allocator,
                         roc_host,
                         &self.pending_roc_metrics,
                         node_id,
                         items_binding,
-                        elem.payload.each.items_to_values,
-                        elem.payload.each.key_hash,
-                        elem.payload.each.key_of,
-                        elem.payload.each.key_eq,
-                        elem.payload.each.key_drop,
-                        elem.payload.each.item_eq,
-                        elem.payload.each.item_drop,
-                        elem.payload.each.row,
+                        each_payload.items_to_values,
+                        each_payload.key_hash,
+                        each_payload.key_of,
+                        each_payload.key_eq,
+                        each_payload.key_drop,
+                        each_payload.item_eq,
+                        each_payload.item_drop,
+                        each_payload.row,
                     );
                     const each_index = stream.eaches.items.len - 1;
                     const each_desc = stream.eaches.items[stream.eaches.items.len - 1];
@@ -4280,7 +4287,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_events.append(allocator, .{
                     .target_node_id = desc.target_node_id,
                     .payload_kind = desc.payload_kind,
-                    .payload_tag = @ptrCast(desc.payload_tag),
+                    .payload_tag = @ptrCast(@alignCast(desc.payload_tag)),
                     .payload_drop = desc.payload_drop,
                     .transform = desc.transform,
                 }) catch @panic("out of memory");
@@ -5894,7 +5901,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_events.append(allocator, .{
                     .target_node_id = desc.target_node_id,
                     .payload_kind = desc.payload_kind,
-                    .payload_tag = @ptrCast(desc.payload_tag),
+                    .payload_tag = @ptrCast(@alignCast(desc.payload_tag)),
                     .payload_drop = desc.payload_drop,
                     .transform = desc.transform,
                 }) catch @panic("out of memory");

@@ -17,6 +17,17 @@ export const Op = Object.freeze({
   bindClick: 14,
   bindInput: 15,
   bindCheck: 16,
+  clearEvent: 17,
+});
+
+// RenderEventKind enum (render_commands.zig) -> DOM event name. The host emits
+// `clearEvent` with the kind in operand `b`; JS maps it back to the listener it
+// bound so it can run the matching cleanup.
+const EventKind = Object.freeze({ click: 1, input: 2, check: 3 });
+const domEventForKind = Object.freeze({
+  [EventKind.click]: "click",
+  [EventKind.input]: "input",
+  [EventKind.check]: "change",
 });
 
 export const PayloadKind = Object.freeze({
@@ -171,6 +182,7 @@ export class SignalsRuntime {
       case Op.removeNode: {
         const node = this.node(record.a);
         node.parentNode?.removeChild(node);
+        this.clearElemListeners(record.a);
         this.nodes.delete(record.a);
         return;
       }
@@ -227,6 +239,15 @@ export class SignalsRuntime {
         });
         return;
 
+      case Op.clearEvent: {
+        const domEvent = domEventForKind[record.b];
+        if (domEvent === undefined) {
+          throw new Error(`unknown clear_event kind ${record.b}`);
+        }
+        this.clearEvent(record.a, domEvent);
+        return;
+      }
+
       default:
         throw new Error(`unknown render op ${record.op}`);
     }
@@ -239,6 +260,30 @@ export class SignalsRuntime {
     elem.addEventListener(domEvent, listener);
     this.eventCleanups.set(key, () => elem.removeEventListener(domEvent, listener));
     elem.dataset.rocEventId = String(eventId);
+  }
+
+  clearEvent(elemId, domEvent) {
+    const key = `${elemId}:${domEvent}`;
+    const cleanup = this.eventCleanups.get(key);
+    if (!cleanup) {
+      return;
+    }
+    cleanup();
+    this.eventCleanups.delete(key);
+    const elem = this.nodes.get(elemId);
+    if (elem && elem.dataset) {
+      delete elem.dataset.rocEventId;
+    }
+  }
+
+  clearElemListeners(elemId) {
+    const prefix = `${elemId}:`;
+    for (const key of this.eventCleanups.keys()) {
+      if (key.startsWith(prefix)) {
+        this.eventCleanups.get(key)();
+        this.eventCleanups.delete(key);
+      }
+    }
   }
 
   node(id) {
