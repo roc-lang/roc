@@ -3633,6 +3633,7 @@ fn constNodeContainsListLength(module: StaticConstModule, node: check.CheckedArt
             }
             return false;
         },
+        .box => |payload| constNodeContainsListLength(module, payload, len),
         .tuple => |items| {
             for (items) |item| {
                 if (constNodeContainsListLength(module, item, len)) return true;
