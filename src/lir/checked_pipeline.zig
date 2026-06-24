@@ -384,7 +384,7 @@ fn collectStaticDataRequests(
             .data => |data| {
                 if (try checkedTypeContainsFunction(allocator, root.checked_types.view(), data.checked_type)) {
                     try requests.append(allocator, .{
-                        .const_ref = data.const_ref,
+                        .const_template = checked.constTemplateAddress(data.const_ref),
                         .checked_type = data.checked_type,
                     });
                 }

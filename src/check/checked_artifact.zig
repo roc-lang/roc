@@ -19440,6 +19440,20 @@ pub const ConstRef = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
 };
 
+/// Public checked constant template address.
+pub const ConstTemplateAddress = struct {
+    module: ModuleId,
+    template: ConstTemplateId,
+};
+
+/// Return the checked module and table row for a compile-time constant.
+pub fn constTemplateAddress(ref: ConstRef) ConstTemplateAddress {
+    return .{
+        .module = ref.artifact,
+        .template = ref.template,
+    };
+}
+
 /// Return the checked module id that owns a compile-time constant.
 pub fn constModuleId(ref: ConstRef) ModuleId {
     return ref.artifact;
@@ -22227,12 +22241,17 @@ pub const ConstTemplateTable = struct {
         }
     }
 
-    pub fn get(self: *const ConstTemplateTable, ref: ConstRef) ConstTemplate {
-        const idx = @intFromEnum(ref.template);
+    pub fn getById(self: *const ConstTemplateTable, id: ConstTemplateId) ConstTemplate {
+        const idx = @intFromEnum(id);
         if (idx >= self.templates.items.len) {
             checkedArtifactInvariant("ConstRef template id is out of range", .{});
         }
         const template = self.templates.items[idx];
+        return template;
+    }
+
+    pub fn get(self: *const ConstTemplateTable, ref: ConstRef) ConstTemplate {
+        const template = self.getById(ref.template);
         if (!constOwnerEql(template.owner, ref.owner) or
             !std.meta.eql(template.source_scheme.bytes, ref.source_scheme.bytes))
         {

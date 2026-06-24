@@ -188,7 +188,7 @@ const StaticDataBuilder = struct {
         }
 
         for (self.lowered.lir_result.static_data_values.items, 0..) |value, index| {
-            const const_node = self.constNode(value.const_ref);
+            const const_node = self.constNodeForAddress(value.const_template);
             const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, @enumFromInt(@as(u32, @intCast(index))));
             errdefer self.allocator.free(symbol_name);
 
@@ -235,15 +235,30 @@ const StaticDataBuilder = struct {
         };
     }
 
+    fn constNodeForAddress(self: *StaticDataBuilder, address: CheckedModule.ConstTemplateAddress) ConstNode {
+        const module = self.moduleForId(address.module);
+        const template = module.templates.getById(address.template);
+        return switch (template.state) {
+            .stored_const => |stored| .{ .module = module, .id = stored.node },
+            .reserved,
+            .eval_template,
+            => staticDataInvariant("LIR static data const was not stored before static materialization"),
+        };
+    }
+
     fn moduleForConst(self: *StaticDataBuilder, ref: CheckedModule.ConstRef) ConstModule {
-        if (moduleBytesEqual(self.root.module.key.bytes, ref.artifact.bytes)) return .{
+        return self.moduleForId(ref.artifact);
+    }
+
+    fn moduleForId(self: *StaticDataBuilder, module_id: CheckedModule.ModuleId) ConstModule {
+        if (moduleBytesEqual(self.root.module.key.bytes, module_id.bytes)) return .{
             .key = self.root.module.key,
             .names = &self.root.module.canonical_names,
             .templates = &self.root.module.const_templates,
             .store = &self.root.module.const_store,
         };
         for (self.imports) |imported| {
-            if (moduleBytesEqual(imported.key.bytes, ref.artifact.bytes)) return .{
+            if (moduleBytesEqual(imported.key.bytes, module_id.bytes)) return .{
                 .key = imported.key,
                 .names = imported.canonical_names,
                 .templates = imported.const_templates,
@@ -251,7 +266,7 @@ const StaticDataBuilder = struct {
             };
         }
         for (self.root.relation_modules) |relation| {
-            if (moduleBytesEqual(relation.key.bytes, ref.artifact.bytes)) return .{
+            if (moduleBytesEqual(relation.key.bytes, module_id.bytes)) return .{
                 .key = relation.key,
                 .names = relation.canonical_names,
                 .templates = relation.const_templates,

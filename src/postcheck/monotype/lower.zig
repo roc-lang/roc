@@ -359,7 +359,7 @@ const Builder = struct {
     lowered_nested_fns: std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
-    static_data_ids: std.AutoHashMap(checked.ConstRef, Common.StaticDataId),
+    static_data_ids: std.AutoHashMap(checked.ConstTemplateAddress, Common.StaticDataId),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -388,7 +388,7 @@ const Builder = struct {
             .lowered_nested_fns = std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
-            .static_data_ids = std.AutoHashMap(checked.ConstRef, Common.StaticDataId).init(allocator),
+            .static_data_ids = std.AutoHashMap(checked.ConstTemplateAddress, Common.StaticDataId).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
@@ -702,7 +702,7 @@ const Builder = struct {
     fn lowerStaticDataRequest(self: *Builder, request: Common.StaticDataRequest) Allocator.Error!void {
         const type_view = moduleView(self.root_view);
         const ret_ty = try self.lowerType(type_view, request.checked_type);
-        const const_node = self.constNode(request.const_ref);
+        const const_node = self.constNode(request.const_template);
         const body = try self.restoreConstNodeAtType(const_node.module, type_view, const_node.id, ret_ty);
         const def: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
         try self.program.defs.append(self.allocator, .{
@@ -1873,9 +1873,9 @@ const Builder = struct {
         return try self.program.types.addDeclaredFields(entries);
     }
 
-    fn constNode(self: *Builder, const_ref: checked.ConstRef) ConstNode {
-        const view = self.moduleForId(checked.constModuleId(const_ref));
-        const template = view.const_templates.get(const_ref);
+    fn constNode(self: *Builder, const_template: checked.ConstTemplateAddress) ConstNode {
+        const view = self.moduleForId(const_template.module);
+        const template = view.const_templates.getById(const_template.template);
         return switch (template.state) {
             .stored_const => |stored| .{ .module = view, .id = stored.node },
             .reserved,
@@ -1884,12 +1884,12 @@ const Builder = struct {
         };
     }
 
-    fn staticDataValue(self: *Builder, const_ref: checked.ConstRef, checked_type: checked.CheckedTypeId) Allocator.Error!Common.StaticDataId {
-        const gop = try self.static_data_ids.getOrPut(const_ref);
+    fn staticDataValue(self: *Builder, const_template: checked.ConstTemplateAddress, checked_type: checked.CheckedTypeId) Allocator.Error!Common.StaticDataId {
+        const gop = try self.static_data_ids.getOrPut(const_template);
         if (!gop.found_existing) {
             const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(self.program.static_data_values.items.len)));
             try self.program.static_data_values.append(self.allocator, .{
-                .const_ref = const_ref,
+                .const_template = const_template,
                 .checked_type = checked_type,
             });
             gop.value_ptr.* = id;
@@ -4071,7 +4071,7 @@ const BodyContext = struct {
                 if (self.builder.hoisted_static_data_literals and
                     self.builder.constNodeNeedsStaticData(self.view, stored.node))
                 {
-                    const id = try self.builder.staticDataValue(entry.const_ref, entry.checked_type);
+                    const id = try self.builder.staticDataValue(checked.constTemplateAddress(entry.const_ref), entry.checked_type);
                     break :blk try self.builder.program.addExpr(.{
                         .ty = ty,
                         .data = .{ .static_data = id },

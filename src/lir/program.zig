@@ -121,7 +121,7 @@ pub const ConstRootPlan = struct {
 
 /// One checked value that is materialized as readonly target data.
 pub const StaticDataValue = struct {
-    const_ref: checked.ConstRef,
+    const_template: checked.ConstTemplateAddress,
     checked_type: checked.CheckedTypeId,
     layout_idx: layout.Idx,
     plan: ConstPlanId,
