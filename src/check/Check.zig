@@ -2131,6 +2131,70 @@ fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *
     return try self.checkExpr(expr, env, expected);
 }
 
+fn checkExprWithDetachedHoistFrames(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!ExprCheckResult {
+    const saved_hoist_frames = self.hoist_frames;
+    const saved_hoist_expr_candidates = self.hoist_expr_candidates;
+    const saved_hoist_root_dependencies = self.hoist_root_dependencies;
+    const saved_hoist_required_concrete_patterns = self.hoist_required_concrete_patterns;
+    const saved_hoist_deferred_binding_dependencies = self.hoist_deferred_binding_dependencies;
+    const saved_hoist_contextual_bindings = self.hoist_contextual_bindings;
+    const saved_hoist_contextual_binding_scope_patterns = self.hoist_contextual_binding_scope_patterns;
+    const saved_last_hoist_result = self.last_hoist_result;
+
+    self.hoist_frames = .empty;
+    self.hoist_expr_candidates = .empty;
+    self.hoist_root_dependencies = .empty;
+    self.hoist_required_concrete_patterns = .empty;
+    self.hoist_deferred_binding_dependencies = .empty;
+    self.hoist_contextual_bindings = .{};
+    self.hoist_contextual_binding_scope_patterns = .empty;
+    self.last_hoist_result = null;
+    defer {
+        if (self.hoist_frames.items.len != 0 or
+            self.hoist_expr_candidates.items.len != 0 or
+            self.hoist_root_dependencies.items.len != 0 or
+            self.hoist_required_concrete_patterns.items.len != 0 or
+            self.hoist_deferred_binding_dependencies.items.len != 0 or
+            self.hoist_contextual_binding_scope_patterns.items.len != 0)
+        {
+            hoistSelectionInvariant("detached expression left hoist frame state behind");
+        }
+        self.hoist_frames.deinit(self.gpa);
+        self.hoist_expr_candidates.deinit(self.gpa);
+        self.hoist_root_dependencies.deinit(self.gpa);
+        self.hoist_required_concrete_patterns.deinit(self.gpa);
+        self.hoist_deferred_binding_dependencies.deinit(self.gpa);
+        self.hoist_contextual_bindings.deinit(self.gpa);
+        self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
+        self.hoist_frames = saved_hoist_frames;
+        self.hoist_expr_candidates = saved_hoist_expr_candidates;
+        self.hoist_root_dependencies = saved_hoist_root_dependencies;
+        self.hoist_required_concrete_patterns = saved_hoist_required_concrete_patterns;
+        self.hoist_deferred_binding_dependencies = saved_hoist_deferred_binding_dependencies;
+        self.hoist_contextual_bindings = saved_hoist_contextual_bindings;
+        self.hoist_contextual_binding_scope_patterns = saved_hoist_contextual_binding_scope_patterns;
+        self.last_hoist_result = saved_last_hoist_result;
+    }
+
+    const result = try self.checkExpr(expr, env, expected);
+    const selection_suppressed = self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0;
+    const has_delayed_effect = if (result.root_effect) |root_effect|
+        root_effect == .delayed
+    else
+        false;
+    if (!selection_suppressed and !has_delayed_effect) {
+        if (self.last_hoist_result) |completed| {
+            if (completed.expr == expr and completed.top_level_equivalent and self.exprCanBeStandaloneConstRoot(expr)) {
+                var transaction = HoistSelectionTransaction.init(self);
+                defer transaction.deinit();
+                _ = try transaction.stageExprRoot(expr, null);
+                try transaction.commit();
+            }
+        }
+    }
+    return result;
+}
+
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
     if (self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0) return;
     const completed = self.last_hoist_result orelse return;
@@ -5451,9 +5515,9 @@ fn filterSelectedHoistedRootsForConstStorage(self: *Self) Allocator.Error!void {
     var kept_pattern_count: u32 = 0;
     root_loop: for (self.selected_hoisted_roots.items, 0..) |root, i| {
         if (root.has_runtime_source) continue;
-        if (!try self.hoistedRootHasConcreteStoredConstType(root)) continue;
+        if (!try self.hoistedRootHasStorableConstType(root)) continue;
         for (root.required_concrete_patterns) |pattern| {
-            if (!try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) continue :root_loop;
+            if (!try self.varIsStorableConstType(ModuleEnv.varFrom(pattern))) continue :root_loop;
         }
         for (root.dependencies) |dependency| {
             const dependency_index: usize = @intCast(dependency);
@@ -5507,7 +5571,7 @@ fn filterSelectedHoistedRootsForConstStorage(self: *Self) Allocator.Error!void {
     self.debugAssertHoistSelectionConsistent();
 }
 
-fn hoistedRootHasConcreteStoredConstType(
+fn hoistedRootHasStorableConstType(
     self: *Self,
     root: hoist_roots.SelectedHoistedRoot,
 ) Allocator.Error!bool {
@@ -5517,15 +5581,15 @@ fn hoistedRootHasConcreteStoredConstType(
         ModuleEnv.varFrom(root.expr);
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
     if (self.varIsFunctionType(type_var)) return false;
-    return try self.varIsConcreteHoistedConstType(type_var);
+    return try self.varIsStorableConstType(type_var);
 }
 
-fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
+fn varIsStorableConstType(self: *Self, var_: Var) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return try self.varIsConcreteHoistedConstTypeInternal(var_, &self.var_set);
+    return try self.varIsStorableConstTypeInternal(var_, &self.var_set);
 }
 
-fn varIsConcreteHoistedConstTypeInternal(
+fn varIsStorableConstTypeInternal(
     self: *Self,
     var_: Var,
     visited: *std.AutoHashMap(Var, void),
@@ -5539,24 +5603,24 @@ fn varIsConcreteHoistedConstTypeInternal(
         .flex,
         .rigid,
         => false,
-        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(self.types.sliceAliasArgs(alias), visited)) and
-            try self.varIsConcreteHoistedConstTypeInternal(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat| try self.flatTypeIsConcreteHoistedConst(flat, visited),
+        .alias => |alias| (try self.varsAreStorableConstTypes(self.types.sliceAliasArgs(alias), visited)) and
+            try self.varIsStorableConstTypeInternal(self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat| try self.flatTypeIsStorableConst(flat, visited),
     };
 }
 
-fn varsAreConcreteHoistedConstTypes(
+fn varsAreStorableConstTypes(
     self: *Self,
     vars: []const Var,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     for (vars) |var_| {
-        if (!try self.varIsConcreteHoistedConstTypeInternal(var_, visited)) return false;
+        if (!try self.varIsStorableConstTypeInternal(var_, visited)) return false;
     }
     return true;
 }
 
-fn flatTypeIsConcreteHoistedConst(
+fn flatTypeIsStorableConst(
     self: *Self,
     flat: FlatType,
     visited: *std.AutoHashMap(Var, void),
@@ -5568,26 +5632,26 @@ fn flatTypeIsConcreteHoistedConst(
         .fn_pure,
         .fn_effectful,
         .fn_unbound,
-        => false,
+        => true,
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (!try self.varsAreConcreteHoistedConstTypes(fields.items(.var_), visited)) break :blk false;
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(record.ext, visited);
+            if (!try self.varsAreStorableConstTypes(fields.items(.var_), visited)) break :blk false;
+            break :blk try self.varIsStorableConstTypeInternal(record.ext, visited);
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            break :blk try self.varsAreConcreteHoistedConstTypes(fields_slice.items(.var_), visited);
+            break :blk try self.varsAreStorableConstTypes(fields_slice.items(.var_), visited);
         },
-        .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(self.types.sliceVars(tuple.elems), visited),
+        .tuple => |tuple| try self.varsAreStorableConstTypes(self.types.sliceVars(tuple.elems), visited),
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |tag_args| {
-                if (!try self.varsAreConcreteHoistedConstTypes(self.types.sliceVars(tag_args), visited)) break :blk false;
+                if (!try self.varsAreStorableConstTypes(self.types.sliceVars(tag_args), visited)) break :blk false;
             }
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(tag_union.ext, visited);
+            break :blk try self.varIsStorableConstTypeInternal(tag_union.ext, visited);
         },
         .nominal_type => |nominal| blk: {
-            if (!try self.varsAreConcreteHoistedConstTypes(self.types.sliceNominalArgs(nominal), visited)) break :blk false;
+            if (!try self.varsAreStorableConstTypes(self.types.sliceNominalArgs(nominal), visited)) break :blk false;
             if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| {
                 switch (builtin_decl) {
                     .list,
@@ -5603,7 +5667,7 @@ fn flatTypeIsConcreteHoistedConst(
                 }
             }
             if (nominal.isOpaque()) break :blk true;
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(self.types.getNominalBackingVar(nominal), visited);
+            break :blk try self.varIsStorableConstTypeInternal(self.types.getNominalBackingVar(nominal), visited);
         },
     };
 }
@@ -10330,12 +10394,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             const body_check_result = if (mb_anno_func) |expected_func| blk: {
-                const lambda_body_result = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
+                const lambda_body_result = try self.checkExprWithDetachedHoistFrames(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
                 break :blk lambda_body_result;
             } else blk: {
-                const lambda_body_result = try self.checkExpr(lambda.body, env, Expected.none());
+                const lambda_body_result = try self.checkExprWithDetachedHoistFrames(lambda.body, env, Expected.none());
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 break :blk lambda_body_result;
             };

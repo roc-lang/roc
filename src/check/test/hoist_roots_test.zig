@@ -200,6 +200,21 @@ test "hoist roots select record parent over closed list child" {
     try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_list));
 }
 
+test "hoist roots keep record parent with function field over closed list child" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    value = { f: |n| n + 1.I64, bytes: [1.U8, 2.U8] }
+        \\    List.len(value.bytes).to_i64_wrap() + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_record));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_list));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_closure));
+}
+
 test "hoist roots preserve list child inside runtime-dependent record" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {

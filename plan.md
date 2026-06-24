@@ -53,9 +53,10 @@ So a static iterator is not just a static list. It is a static record containing
 a function value, and that function value captures the static list plus cursor
 state.
 
-Two concrete blockers currently prevent this from becoming static data:
+The initial investigation found two concrete blockers preventing this from
+becoming static data:
 
-- `flatTypeIsConcreteHoistedConst` rejects all function types:
+- The checker storage predicate rejected all function types:
 
 ```zig
 .fn_pure,
@@ -65,7 +66,10 @@ Two concrete blockers currently prevent this from becoming static data:
 ```
 
 That makes records containing function fields fail the hoisted-constant storage
-filter even when the outer value is a perfectly valid compile-time value.
+filter even when the outer value is a perfectly valid compile-time value. This
+is now fixed by the `varIsStorableConstType` predicate, which still rejects
+bare function roots at the root boundary but accepts function leaves inside
+aggregates.
 
 - `constValueNeedsStaticData` is value-only and treats `.fn_value` as not
 needing static data:
@@ -196,15 +200,15 @@ filter must distinguish these cases explicitly:
 
 Implementation steps:
 
-- Rename or replace `varIsConcreteHoistedConstType` with a predicate whose name
+- [x] Rename or replace `varIsConcreteHoistedConstType` with a predicate whose name
   describes the actual contract, e.g. `varIsStorableConstType`.
-- Keep `exprCanBeStoredConstRoot` rejecting a standalone function-typed
+- [x] Keep `exprCanBeStoredConstRoot` rejecting a standalone function-typed
   expression. That prevents bare functions from becoming hoisted data roots.
-- Change the recursive type predicate so function types are valid leaves when
+- [x] Change the recursive type predicate so function types are valid leaves when
   they appear inside aggregates.
-- Reject only unresolved/open type content, runtime-only placeholders, and type
+- [x] Reject only unresolved/open type content, runtime-only placeholders, and type
   forms that truly have no const-store representation.
-- Update `hoistedRootHasConcreteStoredConstType` to use the new predicate.
+- [x] Update `hoistedRootHasConcreteStoredConstType` to use the new predicate.
 - Add debug assertions that a selected stored root with a function-containing
   aggregate reaches `HoistedConstTable.fromRoots` and gets a const template.
 
@@ -408,8 +412,8 @@ Success criteria:
 ## Final Checklist
 
 - [ ] Failing tests capture `List.iter` local root selection and static data.
-- [ ] Function-containing aggregates are allowed stored hoisted constants.
-- [ ] Bare function roots still use callable-root handling, not data roots.
+- [x] Function-containing aggregates are allowed stored hoisted constants.
+- [x] Bare function roots still use callable-root handling, not data roots.
 - [ ] Static-data selection consumes type/plan information.
 - [ ] Erased callable static data is covered by tests.
 - [ ] Finite callable static data is implemented and covered by tests.
