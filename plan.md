@@ -212,8 +212,8 @@ Tests:
 - [x] higher-order effectful function parameter makes caller effectful
 - [x] closure creation with effectful body is pure
 - [x] calling closure with effectful body is effectful
-- [ ] boxed lambda creation with effectful body is pure
-- [ ] calling boxed lambda with effectful body is effectful
+- [x] boxed lambda creation with effectful body is pure
+- [x] calling boxed lambda with effectful body is effectful
 - [x] self-recursive pure function stays pure
 - [x] self-recursive effectful function is effectful
 - [x] mutual recursion with one effectful member propagates to the group

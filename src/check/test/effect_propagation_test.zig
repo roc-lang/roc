@@ -411,6 +411,30 @@ test "effect propagation - closure call with effectful body is effectful" {
     , "EFFECTFUL TOP-LEVEL VALUE");
 }
 
+test "effect propagation - boxed lambda creation with effectful body is not effectful" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\boxed = Box.box(|| tick!({}))
+    );
+}
+
+test "effect propagation - boxed lambda call with effectful body is effectful" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\boxed = Box.box(|| tick!({}))
+        \\
+        \\top = Box.unbox(boxed)()
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
 test "effect propagation - self-recursive pure function stays pure" {
     try expectNoErrors(
         \\package [] {}
