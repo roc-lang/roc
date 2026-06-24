@@ -1,513 +1,565 @@
-# Destination-Passing and Allocation Reuse Plan
+# Effect Propagation And Const Root Plan
 
 ## Goal
 
-Roc should avoid constructing large temporary return values when the caller has
-storage that can receive the result directly. This includes:
+Fix Roc effect soundness and compile-time root selection together in checking.
 
-- updating a consumed `Box(T)` by writing the new `T` into the existing box
-  payload when uniqueness permits
-- repacking consumed boxed lambdas by reusing their erased-callable allocation
-  when uniqueness and payload layout permit
-- lowering large aggregate returns through caller-provided result slots
-- lowering record and tag construction into a demanded destination
-- lowering string and list producer calls so they can append into a unique
-  caller accumulator
+The checker should:
 
-All ownership and reuse decisions must be explicit before backend codegen.
-Backends lower LIR statements mechanically and must not infer uniqueness,
-capture layout, refcount policy, or result destinations from local code shape.
+- reject effectful calls in pure top-level values, pure functions, and expects
+- handle delayed static-dispatch effectfulness correctly
+- select maximal compile-time roots during the existing checker traversal
+- run `crash`, `dbg`, and `expect` during compile-time evaluation whenever the
+  containing expression has no runtime data dependency and no effectful call
+- store only reachable evaluated values in checked module data and static data
+- avoid a second expression walk and avoid a stored table for every expression
 
-## Current Shape To Improve
+The current hoisting implementation should be replaced. Do not build new logic
+on top of the current observable-effect pruning rules.
 
-The WASM-4 platform currently wraps the game model like this:
+## Required Invariants
+
+- Checking is the final user-facing stage for effect and compile-time
+  evaluation errors.
+- Static-dispatch effectfulness must be explicit checker output. No consumer may
+  guess it from method names, `!` spelling, or unresolved function types.
+- `crash`, `dbg`, and `expect` are not effectful calls. They must not disqualify
+  compile-time roots.
+- Effect dependencies are directed. A caller depending on a callee must not be
+  represented as equality.
+- Union-find is not the main effect solver. Strongly connected recursive groups
+  may be condensed, but unrelated caller/callee pairs must remain directed.
+- Ordinary nested expressions should use stack-local summaries. Store only data
+  needed after the current expression returns.
+- Root selection keeps maximal eligible roots. If a parent expression is a root,
+  child roots inside it are removed. If the parent later resolves effectful,
+  eligible children survive.
+- No leaf-shape rules. Numbers, strings, empty lists, records, and other leaves
+  follow the same parent-child root rule as every other expression.
+- No post-check stage may repair missing checked data or rerun checked
+  validation.
+
+## Current Bugs To Reproduce First
+
+These should fail on the current compiler and pass after the effect work lands.
+
+### Effectful Static Dispatch At Top Level
 
 ```roc
-update_for_host! : Box(Model) => Box(Model)
-update_for_host! = |boxed| {
-    update_fn! = main.update!
-    Box.box(update_fn!(Box.unbox(boxed)))
+package [] {}
+
+Eff := [Eff].{
+    tick! : Eff => U64
+    tick! = |_| 1
+}
+
+top = (Eff.Eff).tick!()
+```
+
+Expected: `effectful_top_level`.
+
+### Effectful Method In Pure Function Annotation
+
+```roc
+package [] {}
+
+Eff := [Eff].{
+    tick! : Eff => U64
+    tick! = |_| 1
+}
+
+direct : Eff -> U64
+direct = |x| x.tick!()
+```
+
+Expected: pure/effectful annotation mismatch. The same body with
+`direct : Eff => U64` should pass.
+
+### Pure Where Clause Resolved To Effectful Method
+
+```roc
+package [] {}
+
+uses_tick : a -> U64 where [a.tick! : a -> U64]
+uses_tick = |x| x.tick!()
+
+Eff := [Eff].{
+    tick! : Eff => U64
+    tick! = |_| 1
+}
+
+value = uses_tick(Eff.Eff)
+```
+
+Expected: the implementation method does not satisfy the pure where-clause
+method type.
+
+### Effectful Where Clause Propagates To Caller
+
+```roc
+package [] {}
+
+uses_tick : a => U64 where [a.tick! : a => U64]
+uses_tick = |x| x.tick!()
+
+Eff := [Eff].{
+    tick! : Eff => U64
+    tick! = |_| 1
+}
+
+top = uses_tick(Eff.Eff)
+```
+
+Expected: `uses_tick` itself is effectful, and `top` reports
+`effectful_top_level`.
+
+### Effectful Dispatch Inside Expect
+
+```roc
+package [] {}
+
+Eff := [Eff].{
+    tick! : Eff => U64
+    tick! = |_| 1
+}
+
+expect (Eff.Eff).tick!() == 1
+```
+
+Expected: `effectful_expect`.
+
+## Implementation Plan
+
+### Phase 1: Add Focused Effect Regression Tests
+
+Add checker tests before changing the implementation. Use the existing snapshot
+or focused check-test harness that best matches these diagnostics.
+
+Test cases:
+
+- direct top-level effectful function call still reports `effectful_top_level`
+- static-dispatch top-level method call reports `effectful_top_level`
+- pure function annotation rejects an effectful direct call
+- pure function annotation rejects an effectful method call
+- effectful function annotation accepts an effectful method call
+- pure where-clause rejects an effectful implementation method
+- effectful where-clause makes the wrapper effectful
+- `expect` rejects direct effectful calls
+- `expect` rejects delayed effectful dispatch
+- `dbg`, `expect`, and `crash` without effectful calls do not count as
+  effectful calls
+
+Additional static-dispatch shapes, where supported by current Roc syntax:
+
+- type-dispatch call
+- method equality
+- binop or unary dispatch
+- interpolation dispatch
+- iterator `iter` or `next` dispatch from `for`
+- imported nominal method
+
+Success criteria:
+
+- The known current bug cases fail before the implementation changes.
+- Existing direct-call effect tests still pass.
+- The tests distinguish direct effect calls from delayed static-dispatch effect
+  calls.
+
+### Phase 2: Add Effect Slots
+
+Introduce checker-owned effect slots for the places where effectfulness matters.
+
+Proposed data:
+
+```zig
+const EffectSlotId = enum(u32) { _ };
+
+const EffectSlotKind = union(enum) {
+    function_body: CIR.Expr.Idx,
+    top_level_value: CIR.Def.Idx,
+    expect_body: CIR.Node.Idx,
+    const_root_candidate: u32,
+};
+
+const EffectSlot = struct {
+    kind: EffectSlotKind,
+    direct_effect: bool,
+    outgoing_start: u32,
+    outgoing_len: u32,
+    resolved_effectful: ?bool,
+};
+
+const EffectEdge = struct {
+    from: EffectSlotId,
+    to: EffectSlotId,
+};
+```
+
+Add an active effect-slot stack to `Check.zig`.
+
+When checking:
+
+- create a slot for each lambda/function body before checking its body
+- create a slot for each top-level value RHS
+- create a slot for each `expect` body
+- mark the active slot on direct calls to resolved `fn_effectful` functions
+- add an edge from active slot to callee slot when calling a known local
+  function whose slot is known
+- keep direct-call behavior identical to today before touching static
+  dispatch
+
+Do not store a slot for every expression.
+
+Success criteria:
+
+- Existing direct-call effect behavior still passes.
+- Function creation is not effectful merely because the function body contains
+  effects; calling the function is what propagates to the caller.
+- Recursive and mutually recursive functions have directed edges and are solved
+  without recursion in the implementation.
+
+### Phase 3: Connect Static Dispatch To Effect Slots
+
+Static-dispatch calls already create dispatch function variables and store
+metadata for diagnostics. Extend this with effect watchers.
+
+Proposed data:
+
+```zig
+const DispatchEffectWatch = struct {
+    fn_var: Var,
+    slot: EffectSlotId,
+};
+```
+
+When `checkExpr` creates a dispatch function variable for:
+
+- method calls
+- type-method calls
+- binop/unary dispatch
+- interpolation dispatch
+- synthetic iterator dispatch
+- where-clause dispatch copied during instantiation
+
+record that the active effect slot watches that function variable.
+
+When static-dispatch resolution successfully checks a method against a dispatch
+function variable:
+
+- inspect the resolved dispatch function type
+- if it is effectful, mark all watching slots effectful
+- if it is pure, leave watchers unmarked
+- if it is still unbound at a point where checking output would be finalized,
+  make finalization handle it explicitly rather than guessing from source shape
+
+Where clauses must preserve effect kind:
+
+- `where [a.f : a -> b]` requires a pure implementation
+- `where [a.f : a => b]` requires an effectful implementation
+- an effectful where-clause call makes the wrapper effectful
+
+Success criteria:
+
+- The current method-call soundness bugs fail for the right reason before the
+  fix and pass after the fix.
+- A pure where-clause cannot be satisfied by an effectful method.
+- An effectful where-clause propagates to callers.
+- Dispatch diagnostics still point at the same source regions.
+
+### Phase 4: Finalize Effect Slots At The Right Boundaries
+
+Do not output a generalized function type until the effect slot for that
+function body is known.
+
+Normal function boundary:
+
+1. check the body
+2. drain static-dispatch constraints that are ready in the current environment
+3. finalize the function body's effect slot
+4. construct or unify the final function type as pure or effectful
+5. generalize
+
+Recursive function group boundary:
+
+1. collect effect slots and directed edges while checking group members
+2. process deferred type and dispatch constraints at the group root
+3. condense strongly connected effect groups
+4. finalize effectfulness for the whole group
+5. construct or unify final function types
+6. generalize the group
+
+Top-level value and expect boundaries:
+
+1. check the body
+2. drain ready dispatch constraints
+3. finalize that slot
+4. emit `effectful_top_level` or `effectful_expect` if the slot is effectful
+
+The implementation may keep `fn_unbound` internally while a function body is
+being checked, but checked output must not rely on unresolved effect kind.
+
+Success criteria:
+
+- Pure annotations reject delayed effectful dispatch.
+- Effectful annotations accept delayed effectful dispatch.
+- No checked module output treats an effectful function as pure.
+- Existing recursion tests keep passing.
+
+### Phase 5: Replace Expression `does_fx` With A Small Check Result
+
+After effect slots are stable, change `checkExpr` and block checking to return a
+small transient result rather than only `bool`.
+
+Proposed shape:
+
+```zig
+const ExprCheckResult = struct {
+    runtime_dep: bool,
+    root_state: RootState,
+};
+```
+
+Effectfulness is recorded through the active effect slot, not through this
+result. The expression result only needs the information required by the parent
+expression and by local binding summaries.
+
+Runtime dependency rules:
+
+- lambda arguments are runtime-dependent
+- match-bound values are runtime-dependent
+- loop-bound values are runtime-dependent
+- mutable `var` values and reassignments are runtime-dependent
+- immutable local bindings use the stored result of their RHS
+- top-level checked values are compile-time-known unless their checked result
+  says otherwise
+- imported checked values are compile-time-known unless their checked result
+  says otherwise
+- parent expressions OR child runtime dependency
+
+Store summaries only for bindings that can be looked up later.
+
+Success criteria:
+
+- No full per-expression summary table is introduced.
+- Runtime dependency through chains of local immutable bindings is detected.
+- Runtime dependency through function arguments, matches, loops, and mutable
+  variables is detected.
+
+### Phase 6: Add Maximal Root Candidate Selection
+
+Add a root-candidate stack managed by expression frames.
+
+Each `checkExpr` frame records:
+
+```text
+candidate_start = root_candidates.len
+```
+
+When the expression finishes:
+
+- if it is compile-time-known and effect-free, discard candidates added since
+  `candidate_start` and append the current expression as the root
+- if it is not eligible, keep child candidates
+- if effectfulness is delayed, store a tentative parent candidate that owns the
+  child-candidate range
+
+The delayed case is required for this shape:
+
+```roc
+foo = |x| {
+    sprite = [1, 2, 3]
+    x.tick!()
+    sprite
 }
 ```
 
-Today that creates these costs:
-
-- `Box.unbox` copies the full `Model` payload out of the box.
-- `update! : Model -> Model` builds a full replacement `Model`.
-- `Box.box` allocates a fresh box and copies the replacement into it.
-- The old box is released after the call.
-
-The Rust Rocci Bird port instead stores one mutable state value and writes
-fields in place. Roc should not copy that programming model, but the compiler
-should be able to produce the same broad storage pattern when Roc ownership
-makes it legal.
-
-## Design Summary
-
-Add a bounded set of result demands:
-
-```text
-return_slot(T)          write a by-memory result into ptr(T)
-reuse_box(T)            consume Box(T), return a unique Box(T) suitable as T's slot
-reuse_erased_callable   consume an erased callable and repack it when layouts permit
-append_into(Str)        build a returned Str by appending into a unique Str
-append_into(List(T))    build a returned List(T) by appending into a unique List(T)
-```
-
-The variants are keyed by proc id, result demand, and committed layouts.
-Identical keys share one variant. Root and host ABI signatures do not change;
-wrappers may call internal demand variants.
-
-## Phase 0: Baseline And Test Harness
-
-1. Capture the current optimized Rocci Bird wasm size and function section
-   summary.
-   - Build `/home/rtfeldman/code/roc-wasm4/examples/rocci-bird.roc` with the
-     local compiler and `--opt=size`.
-   - Record total wasm bytes, code section bytes, data section bytes, and top
-     function body sizes.
-   - Keep the script local unless it becomes stable enough for CI.
-
-2. Add compiler tests for the shapes this work must preserve:
-   - `Box.box(f(Box.unbox(x)))` with `T` containing a record, a tag, a list, and
-     a string.
-   - a function returning a boxed lambda whose capture contains a refcounted
-     value.
-   - a function returning a large record used immediately by another record
-     update.
-   - a string producer that concatenates two strings and is then concatenated
-     onto a unique string by its caller.
-
-3. Add debug-only IR inspection helpers if needed.
-   - Prefer focused Zig tests over text snapshots.
-   - Assert LIR operation kinds and RC effects, not backend instruction spelling.
+If `tick!` resolves effectful, the block is not a root but `sprite` remains a
+root. If the delayed call resolves pure and the block has no runtime dependency,
+the block may replace its children.
 
 Success criteria:
 
-- Current behavior is covered before any rewrite lands.
-- Tests can distinguish "fresh allocation" from "reuse-capable operation."
-- Rocci Bird baseline numbers are written in the PR notes or a local scratch
-  file for comparison.
+- Parent roots replace child roots.
+- Effectful or runtime-dependent parents preserve eligible children.
+- Delayed effect parents resolve correctly after dispatch finalization.
+- No expression-shape special cases are needed.
 
-## Phase 1: `reuse_box(T)`
+### Phase 7: Compile-Time Evaluation And Stored Consts
 
-### LIR Operation
+Update compile-time evaluation to consume final roots from the checker.
 
-Add a low-level op:
+Required behavior:
 
-```text
-box_prepare_update : Box(T) -> Box(T)
-```
+- evaluate all checked top-level expressions that are eligible for compile-time
+  evaluation
+- run `crash`, `dbg`, and `expect` during compile-time evaluation
+- report compile-time `crash`, `dbg`, and failed `expect` output in `roc check`
+- store only reachable evaluated values in checked module data and static data
+- do not store unreachable top-level values merely because they were evaluated
+  for diagnostics
 
-Meaning:
+Static data requirements:
 
-- Consumes the input box.
-- Returns a unique `Box(T)` containing the old payload.
-- If the input box is unique, returns the same allocation.
-- If the input box is not unique, allocates a fresh box, copies the old payload
-  into it, retains nested refcounted values as needed, and releases the consumed
-  input box.
-
-`RcEffect`:
-
-```text
-may_allocate = true
-may_retain_or_release = true
-may_runtime_uniqueness_check_args = arg 0
-consume_args = arg 0
-result_aliases_consumed_args = arg 0
-result_unique = true
-```
-
-ARC may set `unique_args` for arg 0 using the existing born-unique and
-no-live-borrow rules. Codegen skips the runtime uniqueness check when that bit
-is set.
-
-### Lowering Shape
-
-Before:
-
-```text
-old_payload = box_unbox(boxed)
-new_payload = update(old_payload)
-new_box = box_box(new_payload)
-ret new_box
-```
-
-After:
-
-```text
-prepared_box = box_prepare_update(boxed)
-payload_ptr = ptr_cast(prepared_box)
-old_payload = ptr_load(payload_ptr)
-new_payload = update(old_payload)
-ptr_store(payload_ptr, new_payload)
-ret prepared_box
-```
-
-This first form still materializes `old_payload` and `new_payload`, but it
-removes the outer box allocation and final box copy. Later phases replace the
-call and stores with destination-aware lowering.
-
-### Implementation Steps
-
-1. Add `box_prepare_update` to `src/base/LowLevel.zig`.
-2. Add RC metadata and debug comments beside `box_box` and `box_unbox`.
-3. Lower the op in:
-   - `src/backend/wasm/WasmCodeGen.zig`
-   - `src/backend/dev/LirCodeGen.zig`
-   - `src/backend/llvm/MonoLlvmCodeGen.zig`
-   - the LIR interpreter if it handles this op directly
-4. Add helper code for copying a box payload into a fresh box on the non-unique
-   runtime path.
-5. Add a pre-ARC LIR rewrite pass after TRMC and before ARC insertion.
-   - Detect the exact direct shape first: returned `Box.box(call(Box.unbox(arg)))`.
-   - Require matching `Box(T)` layouts.
-   - Reject shared statement tails, multiple uses of the unboxed value, and any
-     shape that is not represented explicitly.
-6. Wire the pass in `src/lir/checked_pipeline.zig`.
-7. Add certifier coverage for `box_prepare_update` through `RcEffect`.
+- top-level constant records should be stored statically when reachable
+- inline expressions equivalent to top-level constants should produce the same
+  stored static data after root selection
+- repeated static lists should share the same bytes where value identity allows
+  sharing
+- records that contain static lists should point at the shared static list data
 
 Success criteria:
 
-- The regression test shows `box_prepare_update` instead of `box_box` at the
-  final rebox point.
-- ARC output consumes the incoming box exactly once and returns one owned box.
-- Dev, wasm, and LLVM backends all pass focused tests.
-- Rocci Bird optimized wasm still runs.
+- Named top-level constants and equivalent inline expressions produce the same
+  static data for Rocci Bird sprite and animation shapes.
+- Unreachable top-level `crash`, `dbg`, and `expect` still run in `roc check`.
+- Unreachable successfully evaluated constants do not force binary data output.
 
-## Phase 2: Boxed Lambda Reuse
+### Phase 8: Remove The Old Hoisting Machinery
 
-### LIR Statement
+Delete the current hoist selection system after the new root selection passes
+tests.
 
-Erased callables are not ordinary boxes. Add a dedicated statement or extend
-`assign_packed_erased_fn` with an optional reuse input:
+Remove or replace:
 
-```text
-assign_repacked_erased_fn {
-    target: erased_callable
-    reuse: erased_callable
-    proc: LirProcSpecId
-    capture: LocalId?
-    capture_layout: layout.Idx?
-    on_drop: ErasedCallableOnDrop
-    next: CFStmtId
-}
-```
-
-Meaning:
-
-- Consumes `reuse`.
-- If `reuse` is unique and its payload size/alignment match the new payload,
-  call the old drop callback on the old capture, overwrite function pointer,
-  overwrite drop callback, write new capture bytes, and return the same
-  allocation.
-- Otherwise allocate a new erased callable exactly as `assign_packed_erased_fn`
-  does today, then release `reuse`.
-
-The first implementation should require same payload size and same payload
-alignment. Do not infer old payload size from an arbitrary `Box(a -> b)`.
-
-### Implementation Steps
-
-1. Add the statement to `src/lir/LIR.zig`, or add an explicit `reuse` field to
-   `assign_packed_erased_fn` if that is cleaner after code inspection.
-2. Extend ARC solving and insertion for the new statement.
-   - `reuse` is consumed and may be checked for uniqueness.
-   - `capture` is stored into the result and must be owned at the store point.
-   - The result aliases consumed `reuse` only on the reuse path, and is unique.
-3. Add a helper in each backend for erased-callable runtime uniqueness checks.
-4. Add overwrite code:
-   - read old drop callback
-   - call it with old capture pointer when present
-   - write new callable entry
-   - write new drop callback
-   - copy or store new capture bytes
-5. Add direct lowering only for known same-shape cases.
-   - A consumed erased callable immediately replaced with another erased
-     callable of the same payload layout is eligible.
-   - Unknown boxed-function values are not eligible.
-6. Add tests with:
-   - a primitive capture
-   - a capture containing a string or list
-   - nested boxed callable capture teardown
+- observable-effect markers used as root blockers
+- later-hoist blocking rules
+- leaf/root pruning rules
+- duplicate root-selection walks
+- code paths that infer root eligibility from source expression shape instead
+  of the checker result
 
 Success criteria:
 
-- Same-shape boxed lambda replacement emits the repack statement.
-- Old capture teardown runs exactly once.
-- Non-unique runtime path produces correct results and no leaks.
-- Unknown-size boxed function values keep ordinary fresh allocation behavior.
+- No remaining code treats `dbg`, `expect`, `crash`, `return`, `break`, or loop
+  syntax as a reason to reject a compile-time root.
+- Root selection has one owner in checking.
+- Checked module output consumes only final selected roots.
 
-## Phase 3: General `return_slot(T)`
+### Phase 9: Rocci Bird Verification
 
-### LIR Shape
+Use Rocci Bird as the integration check after focused compiler tests pass.
 
-For by-memory return layouts, create internal variants shaped like:
+Steps:
 
-```text
-original: f(args...) -> T
-slot:     f_slot(out: ptr(T), args...) -> {}
-```
+1. Build the local compiler in debug mode.
+2. Format `/home/rtfeldman/code/roc-wasm4/examples/rocci-bird.roc`.
+3. Build Rocci Bird with:
 
-The slot variant lowers the function body directly into `out`. Scalar, pointer,
-and zero-sized returns keep ordinary value returns.
+   ```sh
+   ./zig-out/bin/roc build /home/rtfeldman/code/roc-wasm4/examples/rocci-bird.roc --opt=size --no-cache
+   ```
 
-### Implementation Steps
-
-1. Add a result-demand key type in the LIR lowering layer.
-   - Include proc id, demand kind, result layout, and any element layout.
-   - Do not include call-site ids.
-2. Add proc-variant construction for `return_slot(T)`.
-   - Add a synthetic first local for `out: ptr(T)`.
-   - Use a zero-sized return layout for the slot variant.
-3. Add `lowerExprIntoPtr(dest_ptr, expr, layout, next)`.
-   - Base rule: lower `expr` normally into a temp, then `ptr_store(dest_ptr, temp)`.
-   - Specialized rules are added in later phases.
-4. Update direct call lowering:
-   - When the caller has a result slot, call the slot variant.
-   - Otherwise call the ordinary variant.
-5. Ensure root and host wrappers adapt between ABI value results and internal
-   slot variants.
-6. Add backend tests for by-memory returns on wasm, dev, and LLVM.
+4. Disassemble the wasm.
+5. Confirm sprite sheets and animation records are no longer rebuilt inline in
+   the update body.
+6. Confirm top-level and inline animation-cell expressions produce the same
+   static data.
+7. Record:
+   - total wasm bytes
+   - code section bytes
+   - data section bytes
+   - largest function bodies
+8. Serve the optimized and dev builds on the existing local WASM-4 ports when
+   requested.
 
 Success criteria:
 
-- Large internal returns can be written directly to a caller slot.
-- ABI-facing roots keep the same external behavior.
-- No backend chooses result slots on its own.
-- Compile-time evaluation still uses the single-variant mode unless explicitly
-  updated.
+- Rocci Bird builds with `--opt=size`.
+- The game still runs.
+- Sprite list data is stored statically and shared.
+- Equivalent inline/top-level constants no longer change wasm size materially.
+- The optimized wasm size moves toward the Rust comparison for reasons visible
+  in the disassembly.
 
-## Phase 4: Destination-Aware Record And Tag Construction
+## Test Matrix
 
-### New LIR Forms
+### Effect Soundness
 
-Add explicit destination writes for aggregates:
+- direct effectful call in top-level value
+- delayed static-dispatch effectful call in top-level value
+- direct effectful call in pure function annotation
+- delayed static-dispatch effectful call in pure function annotation
+- effectful function annotation with direct effectful call
+- effectful function annotation with delayed effectful dispatch
+- pure where-clause with pure implementation
+- pure where-clause with effectful implementation
+- effectful where-clause with effectful implementation
+- effectful where-clause called from top-level value
+- direct effectful call in `expect`
+- delayed dispatch effectful call in `expect`
+- `dbg` around pure value
+- `dbg` around effectful call
+- `crash` in otherwise pure compile-time value
+- `expect` in otherwise pure compile-time value
+- direct call through local function alias
+- direct call through imported function alias
+- static-dispatch method imported from another module
+- higher-order call with pure function parameter
+- higher-order call with effectful function parameter
+- closure creation with effectful body is not itself effectful
+- closure call with effectful body is effectful
+- self-recursive pure function
+- self-recursive effectful function
+- mutually recursive group where one member is effectful
+- mutually recursive group where all members are pure
 
-```text
-store_struct {
-    dest: ptr(Struct)
-    fields: LocalSpan
-    next: CFStmtId
-}
+### Const Root Selection
 
-store_tag {
-    dest: ptr(TagUnion)
-    variant_index: u16
-    discriminant: u16
-    payload: LocalId?
-    next: CFStmtId
-}
-```
+- top-level list literal becomes one root
+- record containing list literal becomes one root and replaces the child
+- inline top-level-equivalent animation cell list equals named top-level list
+- runtime-dependent parent preserves static child
+- effectful parent preserves static child
+- delayed-effect parent resolves pure and replaces child
+- delayed-effect parent resolves effectful and preserves child
+- lambda argument dependency blocks parent root
+- immutable local binding depending on lambda argument blocks downstream root
+- immutable local binding independent of lambda argument remains eligible
+- mutable `var` blocks parent root
+- reassignment blocks parent root
+- match-bound value blocks parent root
+- loop-bound value blocks parent root
+- top-level checked value lookup remains compile-time-known
+- imported checked value lookup remains compile-time-known
+- `if` with runtime condition preserves pure branch roots
+- `match` with runtime condition preserves pure branch roots
+- `crash` runs during compile-time evaluation
+- `dbg` runs during compile-time evaluation
+- `expect` runs during compile-time evaluation
+- unreachable top-level `crash` still reports during `roc check`
+- unreachable top-level successful constant is not stored in static data
 
-If direct field stores are needed for in-place updates, add field-level forms:
+### Static Data
 
-```text
-field_ptr(ptr(Struct), field_index) -> ptr(Field)
-tag_payload_ptr(ptr(TagUnion), variant_index) -> ptr(Payload)
-```
+- static list bytes are emitted once when shared
+- static record points at static list bytes
+- repeated sprite sheets share bytes
+- inline animation cells and named animation cells emit equivalent data
+- removed root children do not emit duplicate data
+- effectful parent does not prevent independent static child data
 
-These must carry layout indexes or committed field positions explicitly. A
-backend must never recover field offsets from names.
+## Done Checklist
 
-### Lowering Rules
-
-1. Closed record literal into slot:
-   - Lower each field.
-   - Store each field directly into `dest`.
-
-2. Record update into a distinct slot:
-   - Read unchanged fields from the base value.
-   - Lower changed fields.
-   - Store all fields into `dest`.
-
-3. Record update where `dest` aliases the consumed base:
-   - Identify fields whose old values are needed after their slot might be
-     overwritten.
-   - Move those fields to temporaries first.
-   - Write changed fields.
-   - Leave unchanged fields in place when their value is still valid and their
-     storage layout matches.
-   - Release overwritten old refcounted fields exactly once.
-
-4. Tag construction into slot:
-   - Lower payload into the slot's payload storage when possible.
-   - Write discriminant after payload writes that depend on the old tag payload.
-
-5. Tag transition where `dest` aliases the consumed old tag:
-   - Read/move every old payload field needed by the new value before changing
-     the discriminant.
-   - Release old payload fields not moved into the new value.
-   - Write new payload and discriminant in the explicit order chosen by LIR.
-
-### Implementation Steps
-
-1. Preserve record-update structure long enough for LIR lowering.
-   - Current monotype lowering expands `{ ..base, field: value }` into field
-     reads plus a fresh record.
-   - Add an explicit lowered expression form for record update, or record enough
-     data during lowering to reconstruct the update without source inspection.
-2. Add `lowerRecordIntoPtr` and `lowerTagIntoPtr`.
-3. Add alias-aware lowering for consumed base equals destination.
-4. Extend ARC for `store_struct`, `store_tag`, and any field-pointer forms.
-5. Extend the debug certifier for field moves and overwrite releases.
-6. Implement backend lowering by direct stores into the supplied pointer.
-7. Add tests for:
-   - record update with primitive fields
-   - record update with strings/lists
-   - tag transition with moved payload fields
-   - same-slot update where write order matters
-
-Success criteria:
-
-- LIR for a same-slot record update does not allocate a full replacement record.
-- Refcounted overwritten fields are released exactly once.
-- Tag transitions preserve results and pass the certifier.
-- Rocci Bird's `Model` update path no longer builds a full boxed replacement
-  before writing the result.
-
-## Phase 5: Connect `reuse_box(T)` To Slot Variants
-
-After Phases 1, 3, and 4 exist, rewrite:
-
-```text
-Box.box(update(Box.unbox(boxed)))
-```
-
-to:
-
-```text
-prepared_box = box_prepare_update(boxed)
-slot = ptr_cast(prepared_box)
-update_slot(slot, slot)
-ret prepared_box
-```
-
-`update_slot(slot, slot)` means the old payload is read from the same slot that
-receives the new payload. This is legal only when the slot variant's lowering
-uses the alias-aware record/tag rules from Phase 4.
-
-Success criteria:
-
-- The Rocci Bird platform wrapper calls the slot variant of `main.update!`.
-- The hot frame update does not allocate a fresh outer model box.
-- The wasm `update` body is materially smaller than the Phase 0 baseline.
-
-## Phase 6: `append_into(Str)`
-
-### Lowering Rules
-
-Under `append_into(Str)` demand:
-
-- string literal: append literal bytes to the accumulator
-- string variable: append that string to the accumulator
-- `Str.concat(left, right)`: lower `left` under the same append demand, then
-  lower `right` under the same append demand
-- direct call returning `Str`: call the callee's `append_into(Str)` variant
-- branch returning `Str`: each branch writes into the same accumulator
-- anything else: materialize ordinary `Str`, then append it explicitly
-
-The accumulator must be unique at the append site. Existing string runtime
-uniqueness checks remain unless ARC proves them redundant.
-
-### Implementation Steps
-
-1. Add a result-demand key for `append_into(Str)`.
-2. Add an internal proc variant:
-   - input accumulator local
-   - ordinary args
-   - return updated accumulator, or mutate an accumulator slot and return unit
-     after choosing the cleaner LIR shape
-3. Add lowering rules for literals, concat, direct calls, and branches.
-4. Use the ordinary materialize-then-append rule for all remaining expressions.
-5. Add tests with allocation counts:
-   - nested concat in one function
-   - concat producer called by a concat caller
-   - branch returning a concat
-   - non-unique accumulator takes the ordinary copy path
-
-Success criteria:
-
-- A producer that returns `a ++ b` can append both pieces into the caller's
-  unique accumulator.
-- No call-site-specific variant explosion occurs.
-- Existing `Str.concat` behavior stays correct for non-unique inputs.
-
-## Phase 7: `append_into(List(T))`
-
-Repeat Phase 6 for lists after the string form is stable.
-
-Additional constraints:
-
-- Element layout is part of the demand key.
-- Appended elements are owned at the point they are stored.
-- Seamless slices and list header layout rules remain enforced by existing list
-  operations.
-
-Tests:
-
-- list literal appended into a unique list
-- direct list producer called under append demand
-- branch returning list
-- refcounted element list
-- layout mismatch keeps ordinary materialization
-
-Success criteria:
-
-- List builders can append into a unique caller accumulator.
-- Refcounted elements move into the destination exactly once.
-- Existing in-place `List.map` rules are unchanged.
-
-## Phase 8: Rocci Bird Verification
-
-1. Rebuild the compiler in optimized mode.
-2. Rebuild Rocci Bird with `--opt=size`.
-3. Run Binaryen size optimization through the integrated wrapper.
-4. Record:
-   - final wasm byte size
-   - code section byte size
-   - data section byte size
-   - largest function body sizes
-5. Disassemble or parse the wasm enough to confirm:
-   - exported `update` is smaller than the Phase 0 baseline
-   - the platform wrapper does not allocate a fresh outer model box each frame
-   - sprite/static data remains in the data section
-   - hot model updates are not emitted as full aggregate copy chains
-6. Serve both optimized and dev builds through WASM-4 for manual testing.
-
-Success criteria:
-
-- The game works in optimized and dev builds.
-- The optimized wasm size moves toward the Rust port's 10,655-byte result.
-- Any remaining gap is explained by concrete remaining codegen or runtime costs,
-  especially dynamic Roc lists versus Rust fixed-capacity arrays.
-
-## Cross-Cutting Checks
-
-- Backends contain no ownership or uniqueness decisions.
-- Every new operation has explicit `RcEffect` or explicit ARC handling.
-- Debug certifier covers every new ownership-moving statement.
-- Root and host ABI behavior is unchanged.
-- Compile-time evaluation remains deterministic and uses a bounded variant set.
-- Variant keys are structural and do not include call-site ids.
-- `--opt=dev`, `--opt=size`, and `--opt=speed` agree on program results.
-- Focused tests pass before running broad suites.
-- Broad suites to run before landing:
-  - `zig build run-test-zig-module-lir_core`
-  - `zig build run-test-zig-module-lir`
-  - `zig build run-test-zig-trmc-lir`
-  - `zig build run-test-cli -- --include-llvm --filter "[size]"`
-  - Rocci Bird local `--opt=size` build
-
-## Open Design Decisions To Resolve During Implementation
-
-- Whether erased-callable reuse is a new statement or an extension of
-  `assign_packed_erased_fn`.
-- Whether slot variants return `{}` or return the destination pointer for easier
-  chaining.
-- Whether `append_into(Str)` should return the updated string header or mutate a
-  caller-owned header slot.
-- The exact field-pointer LIR shape for aggregate slot writes.
-- How much record-update structure should be preserved in Monotype versus
-  Lambda Solved before direct LIR lowering consumes it.
+- [ ] Regression tests reproduce the static-dispatch effect soundness bug.
+- [ ] Effect slots exist for function bodies, top-level values, expects, and
+      root candidates.
+- [ ] Direct effectful calls mark active slots.
+- [ ] Calls to known local functions add directed effect edges.
+- [ ] Static-dispatch function variables record effect watchers.
+- [ ] Dispatch resolution marks watcher slots when the selected method is
+      effectful.
+- [ ] Pure/effectful where-clause implementation checking is correct.
+- [ ] Function effect kinds are finalized before checked function output.
+- [ ] Top-level effect errors use finalized effect slots.
+- [ ] `expect` effect errors use finalized effect slots.
+- [ ] `checkExpr` returns a transient runtime-dependency/root summary.
+- [ ] Binding summaries are stored only where later lookups need them.
+- [ ] Root-candidate stack performs parent-child replacement.
+- [ ] Delayed-effect root candidates finalize correctly.
+- [ ] Old observable-effect hoist blocking is removed.
+- [ ] Compile-time evaluation runs `crash`, `dbg`, and `expect` for eligible
+      top-level expressions and roots.
+- [ ] Checked module output stores only reachable evaluated values.
+- [ ] Rocci Bird inline and named static data forms compile equivalently.
+- [ ] Rocci Bird `--opt=size` builds and the wasm disassembly confirms sprite
+      data is static rather than rebuilt in `update`.

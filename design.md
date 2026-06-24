@@ -81,6 +81,96 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
+## Checking Effects And Const Roots
+
+Checking owns Roc effect validation and compile-time root selection. These are
+checked-stage responsibilities, not post-check repairs. The checker must finish
+with explicit outputs for function effect kinds, top-level effect errors,
+effectful `expect` errors, and compile-time roots. Later stages consume those
+outputs directly.
+
+Roc effect propagation is a directed dataflow problem over function bodies and
+call sites. It must not be represented by one early boolean that is finalized
+before static dispatch has resolved. The checker maintains effect slots for the
+places where effectfulness is part of the checked result:
+
+- function and lambda bodies
+- top-level value right-hand sides
+- `expect` bodies
+- compile-time root candidates
+
+An effect slot becomes effectful when it contains a direct call to an effectful
+function, when a delayed static-dispatch call watched by the slot resolves to an
+effectful function, or when it calls another slot that is effectful. Ordinary
+calls add directed dependencies from caller slot to callee slot. Static-dispatch
+calls add watcher entries from the dispatch function variable to the active
+slot. When static-dispatch resolution later proves the selected method is
+effectful, the watcher marks or connects the owning slot before any checked
+output is finalized. The checker must not guess the effect of an unresolved
+dispatch call from an unbound function type.
+
+Effects are not inferred from source spelling alone. A `!` name contributes to
+identifier parsing and annotations, but the checked source of truth is the
+resolved function type and dispatch result. A method call whose syntax appears
+inside a pure-looking expression can still make that expression effectful after
+dispatch resolution. Conversely, `crash`, `dbg`, and `expect` are not real
+effectful calls. They are compile-time-observable constructs that must run
+during compile-time evaluation whenever the surrounding expression is otherwise
+eligible. They must never be used as reasons to reject a compile-time root.
+
+Effect finalization runs after ordinary type constraints, literal defaulting,
+and static-dispatch constraints have settled. It computes final slot
+effectfulness with directed graph propagation. Strongly connected recursive
+groups may be condensed, but unrelated caller and callee slots must not be
+unioned: a caller depending on a callee is a one-way dependency, not equality.
+After finalization, the checker uses the slot results to select `fn_pure`,
+`fn_effectful`, or the equivalent checked function kind, to report invalid pure
+annotations, to report effectful top-level values, and to report effectful
+`expect` bodies.
+
+Compile-time root selection uses the same checker traversal that already walks
+checked CIR expressions. There is no separate root-selection walk over every
+expression. While checking an expression, the checker returns a small transient
+summary to its parent:
+
+```text
+contains runtime-dependent data
+uses direct or delayed effects
+selected child root candidates
+```
+
+The summary is stack-local for ordinary nested expressions. The checker stores
+only the data needed after the current expression finishes: summaries for
+bindings that later lookups may read, effect slots and dispatch watchers,
+tentative root candidates, and final selected roots. It must not allocate a
+large per-expression table merely to answer root eligibility.
+
+Runtime dependency is computed bottom-up from checked CIR identity. Lambda
+arguments, match-bound values, loop-bound values, mutable variables, and
+reassignments are runtime-dependent. Immutable local definitions store the
+summary of their right-hand side; later local lookups consume that stored
+summary. Top-level checked values and imported checked values are
+compile-time-known unless their own checked summaries say otherwise. Parent
+expressions combine child summaries directly.
+
+Root selection keeps maximal eligible expressions. Each expression frame records
+the root-candidate stack length at entry. If the expression finishes as
+compile-time-known and effect-free, it removes child candidates added inside the
+frame and adds itself. If the expression is not eligible, its eligible child
+candidates remain. If the expression has delayed effect sources, the checker
+stores a tentative parent over its child candidates; effect finalization later
+keeps the parent and drops the children when the parent resolves effect-free,
+or drops the parent and keeps the children when the parent resolves effectful.
+This is the only parent-child replacement rule. There are no special cases for
+leaves, strings, numbers, empty lists, or other expression shapes.
+
+Compile-time evaluation must evaluate every checked top-level expression and
+every selected compile-time root that can be evaluated without effectful calls
+or runtime data. It must run `crash`, `dbg`, and `expect` during that evaluation
+and output their diagnostics. It should only store reachable evaluated values in
+checked module data and static data, so unreachable top-level values still
+produce compile-time diagnostics without forcing later dead-data removal.
+
 ## Backend Builtins
 
 Backend builtin linking is part of backend code generation, not a later repair
