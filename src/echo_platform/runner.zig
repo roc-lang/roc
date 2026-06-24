@@ -265,7 +265,7 @@ fn runEchoView(
     // stripped). The echo platform has only `Echo.line`, so order is
     // trivially correct — but additions must respect alphabetical order or
     // the wrong function will be called silently. See README "Host functions".
-    var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var hosted_fn_array = [_]HostedFn{echo_platform.echoLineHostedFn()};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
     echo_platform.g_roc_ops = &roc_ops;
