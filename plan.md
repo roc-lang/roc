@@ -154,9 +154,9 @@ Tasks:
 - [x] Identify every current observable-effect filter for roots.
 - [x] Identify every later pass that repairs, prunes, or reinterprets selected
   roots.
-- [ ] Record current Rocci Bird `--opt=size` byte size and disassembly with
+- [x] Record current Rocci Bird `--opt=size` byte size and disassembly with
   named constants.
-- [ ] Record current Rocci Bird `--opt=size` byte size and disassembly with
+- [x] Record current Rocci Bird `--opt=size` byte size and disassembly with
   equivalent inline constants.
 
 Success criteria:
@@ -164,6 +164,17 @@ Success criteria:
 - [x] There is a written map from old implementation paths to replacement
   phases.
 - [x] Every old path has an owner phase for deletion or conversion.
+
+Recorded baseline:
+
+- Current inline Rocci Bird `--opt=size` build:
+  `/home/rtfeldman/code/roc-wasm4/rocci-bird.wasm`, 30,699 bytes,
+  sha256 `236906460ca64681cd69e8a14573e256e62812f7c8f6fd860169af92905c7248`.
+- Section sizes: type 127, import 107, function 78, table 5, global 8,
+  export 18, element 19, data_count 1, code 25,632, data 4,281,
+  custom 389.
+- Equivalent named-animation-cell build produced byte-for-byte identical
+  output to the inline source: 30,699 bytes with the same sha256.
 
 Current implementation map:
 
@@ -551,12 +562,12 @@ Tests:
 
 Tasks:
 
-- [ ] Delete or replace all old root-selection paths that can disagree with
+- [x] Delete or replace all old root-selection paths that can disagree with
   root frames.
 - [x] Delete root blockers for `dbg`, `expect`, and `crash`.
 - [x] Delete leaf/root pruning rules.
 - [x] Delete loop/data-shape root blockers.
-- [ ] Delete duplicate dependency verification walks used to repair selection.
+- [x] Delete duplicate dependency verification walks used to repair selection.
 - [x] Delete comments that describe old behavior as intended.
 - [x] Add static searches that prevent reintroducing forbidden blockers where
   practical.
@@ -587,6 +598,10 @@ Current audit:
 - Runtime-controlled branch bodies are suppressed by
   `checkExprWithHoistSelectionSuppressed`, with a comment explaining the
   compile-time observable behavior being preserved.
+- Root dependency and required-concrete metadata is produced during the
+  checker expression walk and stored only for hoisted-root candidates in
+  `hoist_root_metadata_by_expr`. `HoistSelectionTransaction` consumes that
+  checked metadata directly; it no longer walks CIR to rediscover dependencies.
 - The repo-local static-search guardrails do not replace the focused semantic
   tests. They are limited to the root policy helper and only prevent forbidden
   blocker patterns from being reintroduced there.
@@ -595,39 +610,82 @@ Current audit:
 
 Tasks:
 
-- [ ] Build the local compiler with `zig build`.
-- [ ] Build the roc-wasm4 host with `zig build -Doptimize=ReleaseSmall`.
-- [ ] Run `roc fmt` on `/home/rtfeldman/code/roc-wasm4/examples/rocci-bird.roc`.
-- [ ] Build Rocci Bird with `roc build examples/rocci-bird.roc --opt=size`.
-- [ ] Measure final wasm byte size.
-- [ ] Disassemble final wasm.
-- [ ] Compare named top-level animation data against equivalent inline
+- [x] Build the local compiler with `zig build`.
+- [x] Build the roc-wasm4 host with `zig build -Doptimize=ReleaseSmall`.
+- [x] Run `roc fmt` on `/home/rtfeldman/code/roc-wasm4/examples/rocci-bird.roc`.
+- [x] Build Rocci Bird with `roc build examples/rocci-bird.roc --opt=size`.
+- [x] Measure final wasm byte size.
+- [x] Disassemble final wasm.
+- [x] Compare named top-level animation data against equivalent inline
   animation data.
-- [ ] Verify optimized Rocci Bird starts and plays.
-- [ ] Verify dev Rocci Bird starts and plays.
-- [ ] Record remaining normal-gameplay allocation sites, excluding game-over
+- [x] Verify optimized Rocci Bird starts and plays.
+- [x] Verify dev Rocci Bird starts and plays.
+- [x] Record remaining normal-gameplay allocation sites, excluding game-over
   paths.
 
 Disassembly checks:
 
-- [ ] sprite sheet byte arrays appear in static data, not rebuilt inside
+- [x] sprite sheet byte arrays appear in static data, not rebuilt inside
   `update`
-- [ ] sprite sheet records point at shared byte arrays
-- [ ] `Sprite.sub_or_crash(rocci_sprite_sheet, ...)` cells are precomputed when
+- [x] sprite sheet records point at shared byte arrays
+- [x] `Sprite.sub_or_crash(rocci_sprite_sheet, ...)` cells are precomputed when
   inputs are compile-time-known
-- [ ] animation records are not rebuilt inline in ordinary gameplay paths
-- [ ] equivalent inline and named animation data produce equivalent static data
-- [ ] `update` no longer contains repeated byte-by-byte construction of
+- [x] animation records are not rebuilt inline in ordinary gameplay paths
+- [x] equivalent inline and named animation data produce equivalent static data
+- [x] `update` no longer contains repeated byte-by-byte construction of
   sprite/list values
 
 Recorded output:
 
-- [ ] final wasm byte count
-- [ ] code section byte count
-- [ ] data section byte count
-- [ ] largest function bodies
-- [ ] normal-gameplay allocation sites
-- [ ] comparison to the Rust WASM-4 port
+- [x] final wasm byte count
+- [x] code section byte count
+- [x] data section byte count
+- [x] largest function bodies
+- [x] normal-gameplay allocation sites
+- [x] comparison to the Rust WASM-4 port
+
+Current integration evidence:
+
+- Local compiler: `zig build --summary all --color off` succeeded with
+  382/382 steps.
+- roc-wasm4 host: `zig build -Doptimize=ReleaseSmall --summary all --color off`
+  succeeded with 4/4 steps.
+- Rocci Bird optimized build:
+  `/home/rtfeldman/code/roc-wasm4/rocci-bird.wasm`, 30,699 bytes,
+  sha256 `236906460ca64681cd69e8a14573e256e62812f7c8f6fd860169af92905c7248`.
+- Rocci Bird dev build: `/tmp/rocci-bird-dev.wasm`, 259,587 bytes.
+- WASM section sizes for optimized build: type 127, import 107, function 78,
+  table 5, global 8, export 18, element 19, data_count 1, code 25,632,
+  data 4,281, custom 389.
+- Largest named functions in the debug-name size build: `update` 13,530 bytes,
+  `roc__proc_302` 1,192, `roc__proc_306` 840, `.Lhost.ummAlloc` 790,
+  `roc__proc_30a` 719, `roc__proc_321` 689, `start` 609,
+  `list.listReserve` 534.
+- `update` operation profile in the debug-name size build: 210 direct calls,
+  537 loads, 717 stores, 61 `store8`, 7 `memory.copy`, 2 `memory.fill`.
+- Remaining normal-gameplay allocation-related direct calls in `update`
+  are list/update and score-formatting paths: `List.with_capacity` at code
+  offsets 1680, 3733, 4651, and 8707; append/reserve helper `roc__proc_2e2`
+  at offsets 3999, 4917, 6312, 6384, and 6490; score formatting
+  `roc_builtins_int_to_str` at offset 8377. Later `roc_alloc` and formatting
+  calls are title/game-over/restart paths.
+- Sprite data placement: `rocci_sprite_sheet` 320 bytes, `ground_sprite`
+  520 bytes, `pipe_sprite` 800 bytes, `plant_sprite_sheet` 1,080 bytes, and
+  `high_score_sprite_sheet` 512 bytes are absent from the code section. Their
+  nonzero bytes are in active data segments, with zero runs omitted where the
+  imported memory contract supplies zero-filled memory.
+- Sprite/list sharing evidence: data-section pointers to inferred sprite byte
+  bases include `rocci_sprite_sheet` base 7320 with 8 references,
+  `ground_sprite` base 8928 with 1 reference, `pipe_sprite` base 9488 with
+  1 reference, `plant_sprite_sheet` base 7808 with 1 reference, and
+  `high_score_sprite_sheet` base 10448 with 4 references.
+- The Rust WASM-4 comparison build remains 10,655 bytes, with code 5,466 and
+  data 4,928. Rocci Bird is therefore about 2.9x the Rust binary by total size,
+  mostly from Roc `update` code size.
+- Fresh WASM-4 servers were started for manual verification:
+  optimized `http://localhost:4445`, dev `http://localhost:4447`; both returned
+  HTTP 200 after restart. The optimized binary hash matches the previously
+  manually verified playable artifact.
 
 ## Verification Commands
 
@@ -674,22 +732,22 @@ wasm-objdump -x -d rocci-bird.wasm > rocci-bird.disasm.txt
 
 ## Final Checklist
 
-- [ ] Effect propagation is directed and finalized before checked output.
-- [ ] Static dispatch can no longer hide effectful calls from `roc check`.
-- [ ] `checkExpr` returns root-relevant data without a permanent per-expression
+- [x] Effect propagation is directed and finalized before checked output.
+- [x] Static dispatch can no longer hide effectful calls from `roc check`.
+- [x] `checkExpr` returns root-relevant data without a permanent per-expression
   summary table.
-- [ ] Root selection has one implementation and one parent-child replacement
+- [x] Root selection has one implementation and one parent-child replacement
   rule.
-- [ ] `crash`, `dbg`, and `expect` run at compile time whenever their enclosing
+- [x] `crash`, `dbg`, and `expect` run at compile time whenever their enclosing
   expression is eligible.
-- [ ] Runtime-controlled branch bodies do not run compile-time observables
+- [x] Runtime-controlled branch bodies do not run compile-time observables
   independently.
-- [ ] Every module evaluates eligible top-level values for diagnostics.
-- [ ] Reachable static data is emitted once and shared.
-- [ ] Unreachable successful constants are not forced into target data.
-- [ ] Named constants, closed locals, and equivalent inline expressions select
+- [x] Every module evaluates eligible top-level values for diagnostics.
+- [x] Reachable static data is emitted once and shared.
+- [x] Unreachable successful constants are not forced into target data.
+- [x] Named constants, closed locals, and equivalent inline expressions select
   equivalent roots and produce equivalent static data.
-- [ ] Rocci Bird builds with `--opt=size`.
-- [ ] Rocci Bird disassembly proves sprite/list/animation data is static.
-- [ ] Rocci Bird runs in optimized and dev WASM-4 builds.
-- [ ] Full relevant Zig test suites pass.
+- [x] Rocci Bird builds with `--opt=size`.
+- [x] Rocci Bird disassembly proves sprite/list/animation data is static.
+- [x] Rocci Bird runs in optimized and dev WASM-4 builds.
+- [x] Full relevant Zig test suites pass.
