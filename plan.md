@@ -194,21 +194,20 @@ Current implementation map:
   `DelayedHoistRoot`, `HoistSelectionTransaction`, `hoist_expr_candidates`,
   `hoist_delayed_roots`, `hoist_known_values`, `hoist_selected_exprs`,
   `hoist_selected_bindings`, and `selected_hoisted_roots`.
-- Current source-shape filters are concentrated in
+- The initial source-shape filters were concentrated in
   `exprCanBeStandaloneConstRoot`, `exprCanCoverConstRootChildren`, and
-  `exprCanBeBindingConstRoot`. Phase 3 owns replacing these with expression
-  result and frame policy; Phase 6 owns deleting any leftover blockers.
-- Current observable-effect audit: `crash`, `dbg`, and `expect` are allowed by
+  `exprCanBeBindingConstRoot`. Those helpers now delegate to the single
+  `exprCanBeStoredConstRoot` policy described in Phase 6.
+- Observable-effect audit: `crash`, `dbg`, and `expect` are allowed by
   the root helpers and tested semantically. `expect_err` is still treated
   specially in child-covering policy, so Phase 6 must keep auditing it while
   deleting old source-shape filters.
-- Later root finalization currently lives in `finalizeDelayedHoistedRoots`,
-  `filterSelectedHoistedRootsForConstStorage`, `stageExprDependenciesInternal`,
-  and dependency/concreteness checks on selected roots. Delayed roots are part
-  of root-frame finalization. The const-storage filter is not root selection;
-  it removes roots whose checked type cannot become a stored const. Phase 6
-  owns deleting or replacing the remaining dependency metadata walk so it
-  cannot become a second selection analysis.
+- Later root finalization lives in `finalizeDelayedHoistedRoots`,
+  `filterSelectedHoistedRootsForConstStorage`, and dependency/concreteness
+  checks on selected roots. Delayed roots are part of root-frame finalization.
+  The const-storage filter is not root selection; it removes roots whose checked
+  type cannot become a stored const. The old dependency metadata walk has been
+  replaced by checker-produced `hoist_root_metadata_by_expr` entries.
 
 ## Phase 1: Effect Soundness
 
@@ -727,7 +726,10 @@ zig build -Doptimize=ReleaseSmall
   --opt=size \
   --output=rocci-bird.wasm
 wc -c rocci-bird.wasm
+# If wasm-objdump is available:
 wasm-objdump -x -d rocci-bird.wasm > rocci-bird.disasm.txt
+# On this machine, wasm-objdump was not installed, so section/function/data
+# checks were performed with a local WASM section parser.
 ```
 
 ## Final Checklist
