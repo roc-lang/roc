@@ -472,6 +472,102 @@ test "reachable top-level data lowers to internal static data exports" {
     try std.testing.expect(!exportsContainSequence(exports, &.{ 201, 202, 203, 204, 205, 206 }));
 }
 
+test "effectful parent still emits independent static child data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\tick! : {} => I64
+        \\tick! = |_| 7
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % 4
+        \\    record = { data: [17.U8, 34.U8, 51.U8, 68.U8], tick: tick!({}) }
+        \\    byte_value = match List.get(record.data, index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = byte_value + record.tick
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.StaticChildPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
+}
+
 test "tuple and tag static data share named and inline list payloads" {
     const gpa = std.testing.allocator;
 

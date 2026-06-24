@@ -399,7 +399,7 @@ Tests:
   emitted as reachable static data
 - [ ] inline animation cells and named animation cells emit equivalent data
 - [ ] child roots removed by parent root do not emit duplicate data
-- [ ] effectful parent does not prevent independent static child data
+- [x] effectful parent does not prevent independent static child data
 - [x] unreachable successfully evaluated value is not emitted as target data
 - [ ] non-storable reachable evaluated value is represented explicitly
 
