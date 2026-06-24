@@ -6677,6 +6677,38 @@ fn canonicalizedAssociatedForwardLookup(
     };
 }
 
+/// True when `import_idx` refers to the compiler builtin module, whose exposed
+/// layout is fixed per compiler version. References into it carry a compiler-fixed
+/// node index directly; references into user modules stay symbolic (name-based) so
+/// CIR remains a pure function of source.
+fn importIsBuiltin(self: *const Self, import_idx: Import.Idx) bool {
+    const idx = @intFromEnum(import_idx);
+    if (idx >= self.env.imports.imports.items.items.len) return false;
+    const str_idx = self.env.imports.imports.items.items[idx];
+    const name = self.env.common.strings.get(str_idx);
+    return std.mem.eql(u8, name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(name);
+}
+
+/// Record an external reference: builtin imports keep their compiler-fixed node
+/// (`computed_node`); user imports stay symbolic (`name_ident`, resolved later).
+fn pushExternalRefFor(
+    self: *Self,
+    import_idx: Import.Idx,
+    name_ident: Ident.Idx,
+    computed_node: u32,
+    kind: CIR.ExternalRef.Kind,
+    region: Region,
+) std.mem.Allocator.Error!CIR.ExternalRef.Idx {
+    const is_builtin = self.importIsBuiltin(import_idx);
+    return self.env.pushExternalRef(.{
+        .import_idx = import_idx,
+        .name_ident = if (is_builtin) base.Ident.Idx.NONE else name_ident,
+        .builtin_node = if (is_builtin) computed_node else 0,
+        .kind = kind,
+        .region = region,
+    });
+}
+
 fn canonicalizedExternalLookup(
     self: *Self,
     import_idx: Import.Idx,
@@ -6684,17 +6716,7 @@ fn canonicalizedExternalLookup(
     ident_idx: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
-    // CIR records the reference symbolically (import index + name); the imported
-    // module's node index is recovered later by external resolution, so it is not
-    // baked into CIR here. (`target_node_idx` is still computed by callers as an
-    // existence check; that guard is removed in a follow-up purity pass.)
-    const external_ref = try self.env.pushExternalRef(.{
-        .import_idx = import_idx,
-        .name_ident = base.Ident.Idx.NONE,
-        .builtin_node = target_node_idx,
-        .kind = .value,
-        .region = region,
-    });
+    const external_ref = try self.pushExternalRefFor(import_idx, ident_idx, target_node_idx, .value, region);
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
         .external_ref = external_ref,

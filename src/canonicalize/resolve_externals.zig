@@ -46,13 +46,9 @@ pub fn resolveExternalRefs(
 ) Allocator.Error!u32 {
     const refs = env.external_refs.items.items;
 
-    // Reused scratch for building "Module.item" qualified text.
-    var scratch: std.ArrayList(u8) = .empty;
-    defer scratch.deinit(gpa);
-
     var unresolved_count: u32 = 0;
     for (refs) |ref| {
-        if (!try resolveOneOk(gpa, env, imported_envs, ref, &scratch, diagnostics)) {
+        if (!try resolveOneOk(gpa, env, imported_envs, ref, diagnostics)) {
             unresolved_count += 1;
         }
     }
@@ -65,7 +61,6 @@ fn resolveOneOk(
     env: *const ModuleEnv,
     imported_envs: []const *ModuleEnv,
     ref: CIR.ExternalRef,
-    scratch: *std.ArrayList(u8),
     diagnostics: *Diagnostics,
 ) Allocator.Error!bool {
     // Builtin auto-imports carry a compiler-fixed target node; nothing to resolve
@@ -101,7 +96,7 @@ fn resolveOneOk(
 
     switch (ref.kind) {
         .value => {
-            if ((try lookupExposedValueNode(gpa, imported, name_text, scratch)) != null) return true;
+            if ((try lookupExposedNode(gpa, imported, name_text, .value)) != null) return true;
             try diagnostics.append(gpa, .{ .type_not_exposed = .{
                 .module_name = module_name_ident,
                 .type_name = ref.name_ident,
@@ -110,7 +105,7 @@ fn resolveOneOk(
             return false;
         },
         .type => {
-            if ((try lookupExposedTypeNode(gpa, imported, name_text, scratch)) != null) return true;
+            if ((try lookupExposedNode(gpa, imported, name_text, .type)) != null) return true;
             try diagnostics.append(gpa, .{ .type_not_exposed = .{
                 .module_name = module_name_ident,
                 .type_name = ref.name_ident,
@@ -119,7 +114,7 @@ fn resolveOneOk(
             return false;
         },
         .nominal_type => {
-            const node = (try lookupExposedTypeNode(gpa, imported, name_text, scratch)) orelse {
+            const node = (try lookupExposedNode(gpa, imported, name_text, .nominal_type)) orelse {
                 try diagnostics.append(gpa, .{ .type_not_exposed = .{
                     .module_name = module_name_ident,
                     .type_name = ref.name_ident,
@@ -205,6 +200,19 @@ pub fn lookupExposedNode(
     name_text: []const u8,
     kind: CIR.ExternalRef.Kind,
 ) Allocator.Error!?u32 {
+    // Strategy 1: direct by-ident lookup, matching canon's
+    // `getExposed{Value,Type}NodeIndexById` construction sites (the name was
+    // interned in the imported module under exactly this text, e.g. a deeply
+    // qualified member name).
+    if (imported_env.common.findIdent(name_text)) |ident| {
+        switch (kind) {
+            .value => if (imported_env.getExposedValueNodeIndexById(ident)) |node| return node,
+            .type, .nominal_type => if (imported_env.getExposedTypeNodeIndexById(ident)) |node| return node,
+        }
+    }
+
+    // Strategy 2: exposed-target lookup with the type-module qualification
+    // fallback, matching canon's `lookupImportedExposed{Value,Type}Node`.
     var scratch: std.ArrayList(u8) = .empty;
     defer scratch.deinit(gpa);
     return switch (kind) {
