@@ -130,6 +130,12 @@ A deliberate review pass, once the app suite is online, before any optimisation.
 - [ ] Review the baselines together: which paths are actually expensive, and on
       what inputs? This review is what turns the optimisation hypotheses below
       from suspicion into prioritised, evidence-backed work.
+- [ ] Wire the foundation counters into `expect_metric_delta` budget assertions
+      (not just captured numbers) on a representative event — at minimum
+      `active_graph_records_rebuilt` on a non-structural event and a single-row
+      splice. These budgets currently pass silently because nothing asserts them;
+      turning the budget into a gate is what makes the Phase 5 design-gap items
+      falsifiable rather than hopeful.
 
 ## Phase 5 — Re-prioritise the optimisation backlog
 
@@ -139,20 +145,99 @@ why we suspect it, and how we will know. Do not promote an item to active work
 until the Phase 4 baseline supports its hypothesis; an optimisation without
 measured evidence is speculation.
 
-### O(1) descriptor lookup by `elem_id`
+Two of the items below (the persistent rank-ordered propagation queue and
+incremental sink-route maintenance on splice) are **not pure optimisations**:
+they are gaps against `DESIGN.md`'s mandated propagation core and Complexity
+Discipline budget. They are listed here because they are still measured against
+the Phase 4 baselines, but they may be promoted ahead of the discretionary items
+when the baseline confirms the budget is being violated rather than merely
+suboptimal. The remaining items are genuine optimisations and stay strictly
+evidence-gated.
 
-- **Hypothesis:** indexing descriptors by `elem_id` (a dense array keyed by elem
-  id) and restricting structural patching to the spliced subtree removes
-  O(render_nodes²) behaviour in structural patch paths.
-- **Why we suspect it:** `findElementDesc` / `findTextNodeDesc` /
-  `findSignalTextNodeDesc` / `streamHasTextField` / `streamHasBoolField` are
-  linear scans over the stream called inside loops over render nodes, and
-  `applySplicedStructuralNodeDescriptorTarget` scans the whole active stream gated
-  only by a `seen[]` bit.
+### Persistent rank-ordered propagation queue (design gap, not optimisation)
+
+- **Hypothesis:** a single Engine-owned, rank-bucketed dirty queue — reusing the
+  existing `last_dirty_generation` stamp for dedup and `clearRetainingCapacity`
+  between events — replaces the per-event `ArrayList` → `toOwnedSlice` →
+  insertion-sort path with the queue `DESIGN.md` actually mandates.
+- **Why we suspect it:** `DESIGN.md` calls for "a single dirty priority queue per
+  propagation" keyed by topological rank, but
+  `dirtyActiveSignalRecordIdsForSources` builds a fresh worklist, owns-slices it,
+  and `sortActiveSignalRecordIdsByRank` re-sorts it on every event. The
+  generation-counter half of a proper dirty-set already exists; only the reused
+  queue half is missing. This is closing a stated design gap, not a speculative
+  tuning.
+- **How we'll know:** propagation produces the same dirty/changed sets and rank
+  ordering as today (specs green), and per-event allocation deltas for the
+  worklists drop to zero after warmup on a reused `HostEnv`.
+
+### Incremental sink-route maintenance on splice (design gap, not optimisation)
+
+- **Hypothesis:** patching sink routes only for records in the spliced subtree —
+  rather than re-walking the whole active stream — makes structural work scale
+  with the change, not the tree, as `DESIGN.md` requires.
+- **Why we suspect it:** `spliceActiveStreamReplacingTarget` calls
+  `rebuildActiveSinkSignalRoutesFromStream`, which re-walks every signal-bearing
+  table of the entire active stream to rebuild every sink route even for a
+  one-row change. `DESIGN.md` explicitly forbids "clear-and-rebuild of the whole
+  active signal graph on a structural change" and budgets dependency-graph
+  maintenance at O(affected scope). This is the single biggest algorithmic gap.
+- **How we'll know:** `expect_metric_delta active_graph_records_rebuilt` on a
+  single-row splice in the large-N app is bounded by the changed set, not N — the
+  counter `DESIGN.md` designed specifically to fail this path. The assertion is
+  the gate; wiring it is part of the item.
+
+### Per-cycle scratch/arena to remove dispatch allocation churn
+
+- **Hypothesis:** threading one arena (reset `.retain_capacity` per dispatch/
+  render cycle) plus a few persistent reused scratch buffers on the Engine
+  (`seen: []bool`, the dirty/changed/structural worklists) eliminates the bulk of
+  the transient malloc/free churn per event without changing behaviour.
+- **Why we suspect it:** every transient in a dispatch cycle currently round-trips
+  the safety GPA — the dirty/changed/structural worklists, `seen[]` (allocated
+  separately three times), per-element `next_children` `ArrayList`s, the
+  signal-graph route-rebuild temporaries, and the recursive `binder_stack`. These
+  are cycle-scoped buffers whose shape repeats every event.
+- **Constraint:** the arena is for engine-internal bookkeeping only. Boxed Roc
+  values outlive the cycle and must stay on the GPA with their refcounts and the
+  `roc_alloc` ledger — they must not be moved onto the arena.
+- **How we'll know:** the long-session `allocs − deallocs` gauge (see the leak
+  experiment) flattens earlier, and per-event allocation deltas for the named
+  buffers drop to zero after warmup; specs stay green.
+
+### O(1) identity/descriptor lookup (kill linear-scan-by-id)
+
+- **Hypothesis:** dense side tables for `elem_id → descriptor`, `token → record`,
+  and `node_id → active-stream index` — maintained on insert/remove, the way
+  `descriptor_indexes_by_elem_id` already is — plus restricting structural
+  patching to the spliced subtree, remove the O(render_nodes²) behaviour in the
+  structural patch paths.
+- **Why we suspect it:** `DESIGN.md` forbids answering "what id is this record?"
+  or "what descriptor owns this elem_id?" by walking a list, yet
+  `signalRecordByToken`, `stateIndexByNodeId`, `activeScopeSiteByNodeId`,
+  `activeWhenIndexByNodeId`, and `activeEachIndexByNodeId` are linear scans —
+  several called inside the per-change loop in `applyDirtyStructuralSignalsLocally`
+  — and `findElementDesc` / `findTextNodeDesc` / `findSignalTextNodeDesc` /
+  `streamHasTextField` / `streamHasBoolField` scan the stream inside loops over
+  render nodes. The accelerator pattern already exists in the file; it just is not
+  applied to these lookups.
 - **How we'll know:** add `stream_nodes_scanned` assertions on a single-row update
   in the large-N app; the counter must be bounded by the changed set, not by N,
   before and after — and the baseline must show the scan is actually a hot path
   worth removing.
+
+### Slot reclamation for monotonic identity tables
+
+- **Hypothesis:** a free-list of vacant slots for `scopes`, `node_identities`, and
+  `dom_identities` keeps long-session cost flat where it currently degrades.
+- **Why we suspect it:** these tables deactivate via an `active=false` tombstone
+  and never reclaim slots, so every linear scan over them pays for dead entries
+  and a long session degrades even where the algorithm is nominally bounded.
+  `DESIGN.md` budgets ledger ops at O(1) with the index stored in the header; the
+  same discipline should apply here.
+- **How we'll know:** the long-session leak experiment shows table sizes plateau
+  (not grow monotonically) under sustained churn, and identity-lookup
+  `stream_nodes_scanned` stays flat across a long session at fixed live N.
 
 ### Generated large-N `Ui.each` scaling app
 
