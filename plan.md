@@ -386,7 +386,7 @@ Tasks:
 Tests:
 
 - [x] static list bytes are emitted once when shared
-- [ ] static record points at static list bytes
+- [x] static record points at static list bytes
 - [x] repeated records sharing a list share the list bytes
 - [x] tuple containing list points at static list bytes
 - [x] tag payload containing list points at static list bytes
@@ -427,7 +427,7 @@ Tests:
 - [ ] focused effect tests pass
 - [x] focused root tests pass
 - [x] compile-time evaluation tests pass
-- [ ] static-data tests pass
+- [x] static-data tests pass
 
 ## Phase 7: Rocci Bird Integration
 

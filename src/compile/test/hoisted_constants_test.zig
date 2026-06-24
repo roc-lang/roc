@@ -466,7 +466,9 @@ test "reachable top-level data lowers to internal static data exports" {
 
     try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
     try expectInternalStaticValueExportsAreLinkableOnly(exports);
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68, 85, 102 }) orelse return error.SharedStaticPayloadNotFound;
     try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68, 85, 102 }));
+    try std.testing.expect(countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name) >= 2);
     try std.testing.expect(!exportsContainSequence(exports, &.{ 201, 202, 203, 204, 205, 206 }));
 }
 
