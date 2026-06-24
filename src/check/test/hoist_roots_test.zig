@@ -923,6 +923,52 @@ fn countBlockRootsEndingInCrash(test_env: *const TestEnv) usize {
     return count;
 }
 
+fn hoistRootPolicySource() []const u8 {
+    const source = @embedFile("../Check.zig");
+    const start = std.mem.indexOf(u8, source, "fn exprCanBeStoredConstRoot") orelse
+        @panic("missing hoist root policy function");
+    const end = std.mem.indexOfPos(u8, source, start, "/// In debug builds") orelse
+        @panic("missing hoist root policy function end marker");
+    return source[start..end];
+}
+
+fn expectPolicyDoesNotMention(needle: []const u8) !void {
+    try std.testing.expect(!std.mem.containsAtLeast(u8, hoistRootPolicySource(), 1, needle));
+}
+
+test "static search finds no root blocker for dbg expect or crash" {
+    try expectPolicyDoesNotMention(".e_dbg");
+    try expectPolicyDoesNotMention(".e_crash");
+    try expectPolicyDoesNotMention(".e_expect,");
+    try expectPolicyDoesNotMention(".e_expect\n");
+}
+
+test "static search finds no root blocker for leaves" {
+    try expectPolicyDoesNotMention(".e_str_segment");
+    try expectPolicyDoesNotMention(".e_bytes_literal");
+    try expectPolicyDoesNotMention(".e_num,");
+    try expectPolicyDoesNotMention(".e_num_from_numeral");
+    try expectPolicyDoesNotMention(".e_empty_list");
+    try expectPolicyDoesNotMention(".e_empty_record");
+    try expectPolicyDoesNotMention(".e_zero_argument_tag");
+}
+
+test "static search finds no data-shape root blockers" {
+    try expectPolicyDoesNotMention(".e_for");
+    try expectPolicyDoesNotMention(".e_list");
+    try expectPolicyDoesNotMention(".e_tuple");
+    try expectPolicyDoesNotMention(".e_record");
+    try expectPolicyDoesNotMention(".e_tag");
+    try expectPolicyDoesNotMention(".e_nominal");
+}
+
+test "static search shows return and break use explicit control-transfer policy" {
+    const policy = hoistRootPolicySource();
+    try std.testing.expect(std.mem.containsAtLeast(u8, policy, 1, "Non-local control transfer"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, policy, 1, ".e_return"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, policy, 1, ".e_break"));
+}
+
 test "hoist roots preserve children for local values indirectly depending on function arguments" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {

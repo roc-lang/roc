@@ -3645,143 +3645,27 @@ fn patternIsTopLevel(self: *Self, pattern: CIR.Pattern.Idx) bool {
     return self.top_level_ptrns.contains(pattern);
 }
 
+const HoistConstRootUse = enum {
+    standalone,
+    cover_children,
+    binding,
+};
+
 fn exprCanBeStandaloneConstRoot(self: *Self, expr: CIR.Expr.Idx) bool {
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
-    return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local,
-        .e_lookup_external,
-        .e_lookup_required,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        => false,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_crash,
-        .e_str,
-        .e_list,
-        .e_tuple,
-        .e_block,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_record,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
-        .e_run_low_level,
-        => true,
-        .e_return,
-        .e_break,
-        => false,
-    };
+    return self.exprCanBeStoredConstRoot(expr, .standalone);
 }
 
-/// True when this expression can replace already-bubbled child candidates with
-/// one larger stored data root. This is intentionally stricter than semantic
-/// eligibility: function/lambda/closure frames may contain closed child work,
-/// but they cannot cover that work as data roots.
 fn exprCanCoverConstRootChildren(self: *Self, expr: CIR.Expr.Idx) bool {
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
-    return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local,
-        .e_lookup_external,
-        .e_lookup_required,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        .e_run_low_level,
-        => false,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_crash,
-        .e_dbg,
-        .e_expect,
-        => true,
-        .e_expect_err => false,
-        .e_str,
-        .e_list,
-        .e_tuple,
-        .e_block,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_record,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        .e_for,
-        => true,
-        .e_return,
-        .e_break,
-        => false,
-    };
+    return self.exprCanBeStoredConstRoot(expr, .cover_children);
 }
 
 fn exprCanBeBindingConstRoot(self: *Self, expr: CIR.Expr.Idx) bool {
+    return self.exprCanBeStoredConstRoot(expr, .binding);
+}
+
+fn exprCanBeStoredConstRoot(self: *Self, expr: CIR.Expr.Idx, root_use: HoistConstRootUse) bool {
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
-        .e_run_low_level,
         .e_lookup_required,
         .e_runtime_error,
         .e_ellipsis,
@@ -3789,56 +3673,28 @@ fn exprCanBeBindingConstRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        => false,
-        .e_lookup_local,
-        .e_lookup_external,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_crash,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
-        .e_str,
-        .e_list,
-        .e_tuple,
-        .e_block,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_record,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        => true,
+        // Non-local control transfer is not a stored value root until the
+        // checked representation has an explicit continuation value.
         .e_return,
         .e_break,
         => false,
+
+        // Local and imported lookups are binding identities, not new
+        // standalone stored values. A binding whose RHS is a lookup may still
+        // keep that binding identity so later uses share the selected root.
+        .e_lookup_local,
+        .e_lookup_external,
+        => root_use == .binding,
+
+        // Low-level operations need explicit checked const-evaluation
+        // metadata before they can cover child roots as a stored value.
+        .e_run_low_level => false,
+
+        // `expect_err` is a compile-time observable wrapper, but it is not a
+        // value aggregate that can safely subsume already selected children.
+        .e_expect_err => root_use != .cover_children,
+
+        else => true,
     };
 }
 /// In debug builds, verifies that region and type arrays have matching lengths.

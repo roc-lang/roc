@@ -367,7 +367,7 @@ Tasks:
 - [x] Make nested delayed parents stable by explicit candidate intervals.
 - [x] Preserve local binding root identity when later lookup uses the binding.
 - [x] Preserve checked pattern extraction roots only when needed.
-- [ ] Delete leaf, string, number, empty-list, record, loop,
+- [x] Delete leaf, string, number, empty-list, record, loop,
   `crash`/`dbg`/`expect`, and source-shape root blockers.
 - [x] Delete old branch-child preservation rules that can select untaken
   runtime branches independently.
@@ -552,20 +552,20 @@ Tasks:
 
 - [ ] Delete or replace all old root-selection paths that can disagree with
   root frames.
-- [ ] Delete root blockers for `dbg`, `expect`, and `crash`.
-- [ ] Delete leaf/root pruning rules.
-- [ ] Delete loop/data-shape root blockers.
+- [x] Delete root blockers for `dbg`, `expect`, and `crash`.
+- [x] Delete leaf/root pruning rules.
+- [x] Delete loop/data-shape root blockers.
 - [ ] Delete duplicate dependency verification walks used to repair selection.
 - [ ] Delete comments that describe old behavior as intended.
-- [ ] Add static searches that prevent reintroducing forbidden blockers where
+- [x] Add static searches that prevent reintroducing forbidden blockers where
   practical.
 
 Tests:
 
-- [ ] static search finds no root blocker for `dbg`, `expect`, or `crash`
-- [ ] static search finds no root blocker for leaves
-- [ ] static search finds no data-shape root blocker for loops
-- [ ] static search shows `return` and `break` use explicit control-transfer
+- [x] static search finds no root blocker for `dbg`, `expect`, or `crash`
+- [x] static search finds no root blocker for leaves
+- [x] static search finds no data-shape root blocker for loops
+- [x] static search shows `return` and `break` use explicit control-transfer
   policy
 - [x] focused effect tests pass
 - [x] focused root tests pass
@@ -575,18 +575,20 @@ Tests:
 Current audit:
 
 - `exprCanBeStandaloneConstRoot`, `exprCanCoverConstRootChildren`, and
-  `exprCanBeBindingConstRoot` currently allow `crash`, `dbg`, `expect`,
-  numbers, strings, empty lists, empty records, records, tuples, tags, calls,
-  dispatch calls, field access, and `for`.
+  `exprCanBeBindingConstRoot` now delegate to one `exprCanBeStoredConstRoot`
+  policy. That policy rejects function values, compiler-placeholder/error
+  forms, platform-required lookups, low-level operations without explicit const
+  metadata, and `return`/`break` control transfer. It no longer mentions
+  `crash`, `dbg`, `expect`, leaves, records, tuples, tags, lists, or `for`.
 - `return` and `break` are excluded only as standalone stored roots; the
   checker marks those expressions runtime-dependent and includes the returned
   payload expression where appropriate.
 - Runtime-controlled branch bodies are suppressed by
   `checkExprWithHoistSelectionSuppressed`, with a comment explaining the
   compile-time observable behavior being preserved.
-- There is no repo-local static-search test harness yet. Do not replace the
-  focused semantic tests with source-text tests; if source searches are added,
-  they should be CI-side guardrails for forbidden blocker patterns only.
+- The repo-local static-search guardrails do not replace the focused semantic
+  tests. They are limited to the root policy helper and only prevent forbidden
+  blocker patterns from being reintroduced there.
 
 ## Phase 7: Rocci Bird Integration
 
