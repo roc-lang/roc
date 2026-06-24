@@ -331,12 +331,12 @@ pub const Store = struct {
 
     fn buildStructInternKeyFromFields(
         self: *Self,
-        alignment: std.mem.Alignment,
+        sort_key: layout_mod.SortKey,
         total_size: u32,
         fields: []const StructField,
     ) std.mem.Allocator.Error!void {
         try self.startInternKey(.struct_);
-        try self.appendInternKeyValue(@as(u8, @intCast(alignment.toByteUnits())));
+        try self.appendInternKeyValue(@as(u8, @intFromEnum(sort_key)));
         try self.appendInternKeyValue(total_size);
         try self.appendInternKeyValue(@as(u32, @intCast(fields.len)));
         for (fields) |field| {
@@ -348,14 +348,14 @@ pub const Store = struct {
 
     fn buildTagUnionInternKeyFromVariants(
         self: *Self,
-        alignment: std.mem.Alignment,
+        sort_key: layout_mod.SortKey,
         total_size: u32,
         discriminant_offset: u16,
         discriminant_size: u8,
         variant_layouts: []const Idx,
     ) std.mem.Allocator.Error!void {
         try self.startInternKey(.tag_union);
-        try self.appendInternKeyValue(@as(u8, @intCast(alignment.toByteUnits())));
+        try self.appendInternKeyValue(@as(u8, @intFromEnum(sort_key)));
         try self.appendInternKeyValue(total_size);
         try self.appendInternKeyValue(discriminant_offset);
         try self.appendInternKeyValue(discriminant_size);
@@ -391,7 +391,7 @@ pub const Store = struct {
             .struct_ => {
                 const info = self.getStructInfo(layout);
                 try self.startInternKey(.struct_);
-                try self.appendInternKeyValue(@as(u8, @intCast(info.alignment.toByteUnits())));
+                try self.appendInternKeyValue(@as(u8, @intFromEnum(layout.getStruct().sort_key)));
                 try self.appendInternKeyValue(info.size());
                 try self.appendInternKeyValue(@as(u32, @intCast(info.fields.len)));
                 for (0..info.fields.len) |i| {
@@ -404,7 +404,7 @@ pub const Store = struct {
             .tag_union => {
                 const info = self.getTagUnionInfo(layout);
                 try self.startInternKey(.tag_union);
-                try self.appendInternKeyValue(@as(u8, @intCast(info.alignment.toByteUnits())));
+                try self.appendInternKeyValue(@as(u8, @intFromEnum(layout.getTagUnion().sort_key)));
                 try self.appendInternKeyValue(info.size());
                 try self.appendInternKeyValue(info.data.discriminant_offset);
                 try self.appendInternKeyValue(info.data.discriminant_size);
@@ -426,11 +426,11 @@ pub const Store = struct {
 
     fn internStructShape(
         self: *Self,
-        alignment: std.mem.Alignment,
+        sort_key: layout_mod.SortKey,
         total_size: u32,
         fields: []const StructField,
     ) std.mem.Allocator.Error!Idx {
-        try self.buildStructInternKeyFromFields(alignment, total_size, fields);
+        try self.buildStructInternKeyFromFields(sort_key, total_size, fields);
         if (self.lookupInternedScratchKey()) |existing| return existing;
 
         const fields_start = self.struct_fields.items.len;
@@ -453,21 +453,21 @@ pub const Store = struct {
         });
         assertAppendIdx(expected_idx, struct_data_idx);
 
-        const layout_idx = try self.reserveLayout(Layout.struct_(alignment, struct_idx));
+        const layout_idx = try self.reserveLayout(Layout.struct_(sort_key, struct_idx));
         try self.rememberScratchInternKey(layout_idx);
         return layout_idx;
     }
 
     fn internTagUnionShape(
         self: *Self,
-        alignment: std.mem.Alignment,
         total_size: u32,
         discriminant_offset: u16,
         discriminant_size: u8,
         variant_layouts: []const Idx,
     ) std.mem.Allocator.Error!Idx {
+        const sort_key = self.tagUnionVariantsSortKey(variant_layouts, discriminant_size);
         try self.buildTagUnionInternKeyFromVariants(
-            alignment,
+            sort_key,
             total_size,
             discriminant_offset,
             discriminant_size,
@@ -501,7 +501,7 @@ pub const Store = struct {
             assertAppendIdx(expected_idx, idx);
         }
 
-        const layout_idx = try self.reserveLayout(Layout.tagUnion(alignment, .{ .int_idx = @intCast(tag_union_data_idx) }));
+        const layout_idx = try self.reserveLayout(Layout.tagUnion(sort_key, .{ .int_idx = @intCast(tag_union_data_idx) }));
         try self.rememberScratchInternKey(layout_idx);
         return layout_idx;
     }
@@ -592,7 +592,7 @@ pub const Store = struct {
             return try self.ensureZstLayout();
         }
         return self.internStructShape(
-            std.mem.Alignment.fromByteUnits(max_alignment),
+            self.structFieldsSortKey(temp_fields.items),
             total_size,
             temp_fields.items,
         );
@@ -624,7 +624,7 @@ pub const Store = struct {
             return try self.ensureZstLayout();
         }
         return self.internStructShape(
-            std.mem.Alignment.fromByteUnits(max_alignment),
+            self.structFieldsSortKey(fields),
             total_size,
             fields,
         );
@@ -662,7 +662,7 @@ pub const Store = struct {
                 .sort_key = if (field.is_padding)
                     .align_1
                 else
-                    self.layoutSortKey(self.getLayout(field.layout)),
+                    self.getLayout(field.layout).sortKey(),
                 .name = "",
             };
         }
@@ -714,7 +714,6 @@ pub const Store = struct {
         }
 
         return self.internTagUnionShape(
-            tag_union_alignment,
             total_size,
             discriminant_offset,
             discriminant_size,
@@ -766,7 +765,7 @@ pub const Store = struct {
         });
         assertAppendIdx(expected_idx, struct_data_idx);
 
-        return Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+        return Layout.struct_(self.structFieldsSortKey(temp_fields.items), struct_idx);
     }
 
     fn buildUninternedTagUnionLayout(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Layout {
@@ -824,7 +823,7 @@ pub const Store = struct {
             assertAppendIdx(expected_idx, idx);
         }
 
-        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
     /// Canonically intern a whole temporary logical layout graph.
@@ -1555,7 +1554,7 @@ pub const Store = struct {
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         return self.internStructShape(
-            std.mem.Alignment.fromByteUnits(max_alignment),
+            self.structFieldsSortKey(temp_fields.items),
             total_size,
             temp_fields.items,
         );
@@ -1588,8 +1587,11 @@ pub const Store = struct {
         ));
 
         const dummy_fields = [_]StructField{.{ .index = 0, .layout = .u64 }};
+        // The capture union's alignment comes from the 8-byte tag and the payloads,
+        // not the dummy field, so its class is computed from `max_alignment` (always
+        // ≥ 8, so never the pointer class and thus target-independent).
         return self.internStructShape(
-            std.mem.Alignment.fromByteUnits(max_alignment),
+            layout_mod.SortKey.fromAlignBytes(max_alignment),
             total_size,
             dummy_fields[0..],
         );
@@ -1715,7 +1717,7 @@ pub const Store = struct {
         const struct_data = self.getStructData(layout.getStruct().idx);
         return StructInfo{
             .data = struct_data,
-            .alignment = layout.getStruct().alignment,
+            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize()),
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -1732,7 +1734,7 @@ pub const Store = struct {
         return TagUnionInfo{
             .idx = layout.getTagUnion().idx,
             .data = tu_data,
-            .alignment = layout.getTagUnion().alignment,
+            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize()),
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -1758,12 +1760,12 @@ pub const Store = struct {
     }
 
     /// Get the canonical size of a tag union.
-    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, _: std.mem.Alignment) u32 {
+    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx) u32 {
         return self.getTagUnionData(tu_idx).size;
     }
 
     /// Get the canonical size of a struct.
-    pub fn getStructSize(self: *const Self, struct_idx: StructIdx, _: std.mem.Alignment) u32 {
+    pub fn getStructSize(self: *const Self, struct_idx: StructIdx) u32 {
         return self.getStructData(struct_idx).size;
     }
 
@@ -1967,8 +1969,8 @@ pub const Store = struct {
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
             },
             .struct_ => .{
-                .size = @intCast(self.getStructSize(layout.getStruct().idx, layout.getStruct().alignment)),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getStruct().alignment.toByteUnits())),
+                .size = @intCast(self.getStructSize(layout.getStruct().idx)),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getStruct().sort_key.alignment(target_usize).toByteUnits())),
             },
             .closure => blk: {
                 // Closure layout: header + aligned capture data
@@ -1982,8 +1984,8 @@ pub const Store = struct {
                 };
             },
             .tag_union => .{
-                .size = @intCast(self.getTagUnionSize(layout.getTagUnion().idx, layout.getTagUnion().alignment)),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getTagUnion().alignment.toByteUnits())),
+                .size = @intCast(self.getTagUnionSize(layout.getTagUnion().idx)),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getTagUnion().sort_key.alignment(target_usize).toByteUnits())),
             },
             .zst => .{
                 .size = 0, // Zero-sized types have size 0
@@ -1997,45 +1999,26 @@ pub const Store = struct {
         return self.layoutSizeAlign(layout).size;
     }
 
-    /// This layout's target-independent `SortKey` (see `layout.SortKey`).
-    ///
-    /// Pointers map to `.pointer` (sorting between 4- and 8-byte alignment);
-    /// fixed-width scalars to their alignment band. Aggregates fold to the max
-    /// sort key of their members. Recursion terminates because recursive types are
-    /// materialized as boxes (`.box` → `.pointer`), so this never cycles. Takes no
-    /// target: the result is identical on 32-bit and 64-bit targets.
-    pub fn layoutSortKey(self: *const Self, layout: Layout) layout_mod.SortKey {
-        return switch (layout.tag) {
-            .scalar => switch (layout.getScalar().tag) {
-                .int => layout_mod.SortKey.fromAlignBytes(layout.getScalar().getInt().alignment().toByteUnits()),
-                .frac => layout_mod.SortKey.fromAlignBytes(layout.getScalar().getFrac().alignment().toByteUnits()),
-                .str, .opaque_ptr => .pointer,
-            },
-            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
-            .zst => .align_1,
-            .struct_ => blk: {
-                const sd = self.getStructData(layout.getStruct().idx);
-                const fields = self.struct_fields.sliceRange(sd.getFields());
-                var key: layout_mod.SortKey = .align_1;
-                for (0..fields.len) |i| {
-                    const field = fields.get(@intCast(i));
-                    // Padding spacers impose no alignment (align-1), so they never
-                    // raise the sort key.
-                    if (field.is_padding) continue;
-                    key = key.max(self.layoutSortKey(self.getLayout(field.layout)));
-                }
-                break :blk key;
-            },
-            .tag_union => blk: {
-                const tu = self.getTagUnionData(layout.getTagUnion().idx);
-                var key = layout_mod.SortKey.fromAlignBytes(tu.discriminantAlignment().toByteUnits());
-                const variants = self.tag_union_variants.sliceRange(tu.getVariants());
-                for (0..variants.len) |i| {
-                    key = key.max(self.layoutSortKey(self.getLayout(variants.get(@intCast(i)).payload_layout)));
-                }
-                break :blk key;
-            },
-        };
+    /// The alignment class of a struct from its (already-committed) fields — the
+    /// max sort key of its non-padding fields. Used at commit time to compute the
+    /// `sort_key` stored on the struct layout.
+    fn structFieldsSortKey(self: *const Self, fields: []const StructField) layout_mod.SortKey {
+        var key: layout_mod.SortKey = .align_1;
+        for (fields) |field| {
+            if (field.is_padding) continue;
+            key = key.max(self.getLayout(field.layout).sortKey());
+        }
+        return key;
+    }
+
+    /// The alignment class of a tag union from its variant payloads and
+    /// discriminant size. Used at commit time.
+    fn tagUnionVariantsSortKey(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8) layout_mod.SortKey {
+        var key = layout_mod.SortKey.fromAlignBytes(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
+        for (variant_layouts) |variant_idx| {
+            key = key.max(self.getLayout(variant_idx).sortKey());
+        }
+        return key;
     }
 
     /// Check if a layout is zero-sized
@@ -2403,7 +2386,7 @@ test "uninterned struct layouts use the same stable alignment sort as interned o
 
     try testing.expectEqual(LayoutTag.struct_, interned_layout.tag);
     try testing.expectEqual(LayoutTag.struct_, uninterned_layout.tag);
-    try testing.expectEqual(interned_layout.getStruct().alignment, uninterned_layout.getStruct().alignment);
+    try testing.expectEqual(interned_layout.getStruct().sort_key, uninterned_layout.getStruct().sort_key);
 
     const interned_struct = store.getStructData(interned_layout.getStruct().idx);
     const uninterned_struct = store.getStructData(uninterned_layout.getStruct().idx);

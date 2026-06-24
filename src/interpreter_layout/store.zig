@@ -421,8 +421,8 @@ pub const Store = struct {
         const SortKeyCtx = struct {
             store: *Self,
             pub fn lessThan(ctx: @This(), lhs: SortEntry, rhs: SortEntry) bool {
-                const lhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(lhs.layout));
-                const rhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(rhs.layout));
+                const lhs_key = ctx.store.getLayout(lhs.layout).sortKey();
+                const rhs_key = ctx.store.getLayout(rhs.layout).sortKey();
                 if (lhs_key != rhs_key) return lhs_key.sortsBefore(rhs_key);
                 const lhs_str = ctx.store.getFieldName(lhs.name);
                 const rhs_str = ctx.store.getFieldName(rhs.name);
@@ -470,7 +470,7 @@ pub const Store = struct {
         assertAppendIdx(expected_idx, struct_data_idx);
         self.struct_data.get(struct_data_idx).contains_refcounted = self.structContainsRefcounted(struct_idx);
 
-        return try self.insertLayout(Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx));
+        return try self.insertLayout(Layout.struct_(self.structSortKeyByIdx(struct_idx), struct_idx));
     }
 
     /// Insert a tuple layout from concrete element layouts.
@@ -493,8 +493,8 @@ pub const Store = struct {
         const SortKeyCtx = struct {
             store: *Self,
             pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
-                const lhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(lhs.layout));
-                const rhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(rhs.layout));
+                const lhs_key = ctx.store.getLayout(lhs.layout).sortKey();
+                const rhs_key = ctx.store.getLayout(rhs.layout).sortKey();
                 if (lhs_key != rhs_key) return lhs_key.sortsBefore(rhs_key);
                 return lhs.index < rhs.index;
             }
@@ -534,7 +534,7 @@ pub const Store = struct {
         const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
         self.struct_data.get(struct_data_idx).contains_refcounted = self.structContainsRefcounted(struct_idx);
-        return try self.insertLayout(Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx));
+        return try self.insertLayout(Layout.struct_(self.structSortKeyByIdx(struct_idx), struct_idx));
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -591,7 +591,7 @@ pub const Store = struct {
         assertAppendIdx(expected_tag_union_idx, tag_union_data_list_idx);
         self.tag_union_data.get(tag_union_data_list_idx).contains_refcounted = self.tagUnionContainsRefcounted(.{ .int_idx = @intCast(tag_union_data_idx) });
 
-        const tu_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        const tu_layout = Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
         return try self.insertLayout(tu_layout);
     }
 
@@ -628,7 +628,7 @@ pub const Store = struct {
         const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
         self.struct_data.get(struct_data_idx).contains_refcounted = self.structContainsRefcounted(struct_idx);
-        const capture_layout = Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+        const capture_layout = Layout.struct_(self.structSortKeyByIdx(struct_idx), struct_idx);
         return try self.insertLayout(capture_layout);
     }
 
@@ -669,7 +669,10 @@ pub const Store = struct {
         const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
         self.struct_data.get(struct_data_idx).contains_refcounted = self.structContainsRefcounted(struct_idx);
-        const union_layout = Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+        // The capture union's alignment comes from the 8-byte tag and payloads,
+        // not the dummy field, so its class is computed from `max_alignment`
+        // (always ≥ 8, so never the pointer class and thus target-independent).
+        const union_layout = Layout.struct_(layout_mod.SortKey.fromAlignBytes(max_alignment), struct_idx);
         return try self.insertLayout(union_layout);
     }
 
@@ -735,7 +738,7 @@ pub const Store = struct {
         const struct_data = self.getStructData(layout.getStruct().idx);
         return StructInfo{
             .data = struct_data,
-            .alignment = layout.getStruct().alignment,
+            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize()),
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -752,7 +755,7 @@ pub const Store = struct {
         return TagUnionInfo{
             .idx = layout.getTagUnion().idx,
             .data = tu_data,
-            .alignment = layout.getTagUnion().alignment,
+            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize()),
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -840,7 +843,7 @@ pub const Store = struct {
         assertAppendIdx(expected_tag_union_idx, tag_union_data_list_idx);
         self.tag_union_data.get(tag_union_data_list_idx).contains_refcounted = self.tagUnionContainsRefcounted(.{ .int_idx = @intCast(tag_union_data_idx) });
 
-        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return Layout.tagUnion(self.tagUnionSortKeyByIdx(.{ .int_idx = @intCast(tag_union_data_idx) }), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
     /// Get the canonical size of a struct.
@@ -983,7 +986,7 @@ pub const Store = struct {
         for (self.struct_data.items.items, 0..) |sd, i| {
             if (sd.size == 0 and sd.fields.count == 0) {
                 const struct_idx = StructIdx{ .int_idx = @intCast(i) };
-                const empty_layout = Layout.struct_(std.mem.Alignment.@"1", struct_idx);
+                const empty_layout = Layout.struct_(.align_1, struct_idx);
                 return try self.insertLayout(empty_layout);
             }
         }
@@ -1000,7 +1003,7 @@ pub const Store = struct {
         } else if (@intFromEnum(struct_data_idx) != expected_idx) {
             unreachable;
         }
-        const empty_layout = Layout.struct_(std.mem.Alignment.@"1", struct_idx);
+        const empty_layout = Layout.struct_(.align_1, struct_idx);
         return try self.insertLayout(empty_layout);
     }
 
@@ -1102,7 +1105,7 @@ pub const Store = struct {
             .struct_ => .{
                 // Use pre-computed size from StructData to avoid infinite recursion on recursive types
                 .size = @intCast(self.struct_data.get(@enumFromInt(layout.getStruct().idx.int_idx)).size),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getStruct().alignment.toByteUnits())),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getStruct().sort_key.alignment(target_usize).toByteUnits())),
             },
             .closure => blk: {
                 // Closure layout: header + aligned capture data
@@ -1118,7 +1121,7 @@ pub const Store = struct {
             .tag_union => .{
                 // Use pre-computed size from TagUnionData to avoid infinite recursion on recursive types
                 .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.getTagUnion().idx.int_idx)).size),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getTagUnion().alignment.toByteUnits())),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getTagUnion().sort_key.alignment(target_usize).toByteUnits())),
             },
             .zst => .{
                 .size = 0, // Zero-sized types have size 0
@@ -1132,43 +1135,41 @@ pub const Store = struct {
         return self.layoutSizeAlign(layout).size;
     }
 
-    /// This layout's target-independent `SortKey` (see `layout.SortKey`).
-    ///
-    /// Pointers map to `.pointer` (sorting between 4- and 8-byte alignment);
-    /// fixed-width scalars to their alignment band. Aggregates fold to the max
-    /// sort key of their members. Recursion terminates because recursive types are
-    /// materialized as boxes (`.box` → `.pointer`), so this never cycles. Takes no
-    /// target: the result is identical on 32-bit and 64-bit targets.
-    pub fn layoutSortKey(self: *const Self, layout: Layout) layout_mod.SortKey {
-        return switch (layout.tag) {
-            .scalar => switch (layout.getScalar().tag) {
-                .int => layout_mod.SortKey.fromAlignBytes(layout.getScalar().getInt().alignment().toByteUnits()),
-                .frac => layout_mod.SortKey.fromAlignBytes(layout.getScalar().getFrac().alignment().toByteUnits()),
-                .str, .opaque_ptr => .pointer,
-            },
-            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
-            .zst => .align_1,
-            .struct_ => blk: {
-                const sd = self.getStructData(layout.getStruct().idx);
-                const fields = self.struct_fields.sliceRange(sd.getFields());
-                var key: layout_mod.SortKey = .align_1;
-                for (0..fields.len) |i| {
-                    const field = fields.get(@intCast(i));
-                    if (field.is_padding) continue;
-                    key = key.max(self.layoutSortKey(self.getLayout(field.layout)));
-                }
-                break :blk key;
-            },
-            .tag_union => blk: {
-                const tu = self.getTagUnionData(layout.getTagUnion().idx);
-                var key = layout_mod.SortKey.fromAlignBytes(tu.discriminantAlignment().toByteUnits());
-                const variants = self.tag_union_variants.sliceRange(tu.getVariants());
-                for (0..variants.len) |i| {
-                    key = key.max(self.layoutSortKey(self.getLayout(variants.get(@intCast(i)).payload_layout)));
-                }
-                break :blk key;
-            },
-        };
+    /// The alignment class of an already-committed struct — the max sort key of
+    /// its non-padding fields. Used at commit time to compute the `sort_key`
+    /// stored on the struct layout.
+    fn structSortKeyByIdx(self: *const Self, struct_idx: StructIdx) layout_mod.SortKey {
+        const sd = self.getStructData(struct_idx);
+        const fields = self.struct_fields.sliceRange(sd.getFields());
+        var key: layout_mod.SortKey = .align_1;
+        for (0..fields.len) |i| {
+            const field = fields.get(@intCast(i));
+            if (field.is_padding) continue;
+            key = key.max(self.getLayout(field.layout).sortKey());
+        }
+        return key;
+    }
+
+    /// The alignment class of a tag union from its variant payloads and
+    /// discriminant size. Used at commit time.
+    fn tagUnionVariantsSortKey(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8) layout_mod.SortKey {
+        var key = layout_mod.SortKey.fromAlignBytes(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
+        for (variant_layouts) |variant_idx| {
+            key = key.max(self.getLayout(variant_idx).sortKey());
+        }
+        return key;
+    }
+
+    /// The alignment class of an already-committed tag union — max sort key of its
+    /// variant payloads and discriminant. Used at commit time.
+    fn tagUnionSortKeyByIdx(self: *const Self, tu_idx: TagUnionIdx) layout_mod.SortKey {
+        const tu = self.getTagUnionData(tu_idx);
+        var key = layout_mod.SortKey.fromAlignBytes(tu.discriminantAlignment().toByteUnits());
+        const variants = self.tag_union_variants.sliceRange(tu.getVariants());
+        for (0..variants.len) |i| {
+            key = key.max(self.getLayout(variants.get(@intCast(i)).payload_layout).sortKey());
+        }
+        return key;
     }
 
     /// Check if a layout is zero-sized
@@ -1395,8 +1396,8 @@ pub const Store = struct {
         const SortKeyCtx = struct {
             store: *Self,
             pub fn lessThan(ctx: @This(), lhs: SortEntry, rhs: SortEntry) bool {
-                const lhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(lhs.layout_idx));
-                const rhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(rhs.layout_idx));
+                const lhs_key = ctx.store.getLayout(lhs.layout_idx).sortKey();
+                const rhs_key = ctx.store.getLayout(rhs.layout_idx).sortKey();
                 if (lhs_key != rhs_key) return lhs_key.sortsBefore(rhs_key);
                 const lhs_str = ctx.store.getFieldName(lhs.name);
                 const rhs_str = ctx.store.getFieldName(rhs.name);
@@ -1447,7 +1448,7 @@ pub const Store = struct {
 
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-        return Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+        return Layout.struct_(self.structSortKeyByIdx(struct_idx), struct_idx);
     }
 
     fn finishTuple(
@@ -1476,8 +1477,8 @@ pub const Store = struct {
         const SortKeyCtx = struct {
             store: *Self,
             pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
-                const lhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(lhs.layout));
-                const rhs_key = ctx.store.layoutSortKey(ctx.store.getLayout(rhs.layout));
+                const lhs_key = ctx.store.getLayout(lhs.layout).sortKey();
+                const rhs_key = ctx.store.getLayout(rhs.layout).sortKey();
                 if (lhs_key != rhs_key) return lhs_key.sortsBefore(rhs_key);
                 return lhs.index < rhs.index;
             }
@@ -1523,7 +1524,7 @@ pub const Store = struct {
 
         self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
 
-        return Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+        return Layout.struct_(self.structSortKeyByIdx(struct_idx), struct_idx);
     }
 
     /// Finalizes a tag union layout after all variant payload layouts have been computed.
@@ -1614,7 +1615,7 @@ pub const Store = struct {
         // Clear resolved variants for this tag union
         self.work.resolved_tag_union_variants.shrinkRetainingCapacity(pending.resolved_variants_start);
 
-        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not
