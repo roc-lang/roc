@@ -397,7 +397,7 @@ Tests:
 - [x] inline `sub_or_crash` animation cells point at shared sprite sheet bytes
 - [x] inline imported opaque animation cells through a boxed hosted model are
   emitted as reachable static data
-- [ ] inline animation cells and named animation cells emit equivalent data
+- [x] inline animation cells and named animation cells emit equivalent data
 - [ ] child roots removed by parent root do not emit duplicate data
 - [x] effectful parent does not prevent independent static child data
 - [x] unreachable successfully evaluated value is not emitted as target data

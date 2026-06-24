@@ -829,6 +829,98 @@ test "inline sub_or_crash cells inside runtime record become shared static data"
     try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 3);
 }
 
+test "named and inline animation cells emit equivalent static data" {
+    const gpa = std.testing.allocator;
+
+    const common_prefix =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\Sprite : {
+        \\    data : List(U8),
+        \\    region : { src_x : U64, src_y : U64, width : U64, height : U64 },
+        \\}
+        \\
+        \\Cell : { frames : U64, sprite : Sprite }
+        \\
+        \\sheet : Sprite
+        \\sheet = {
+        \\    data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\    region: { src_x: 0, src_y: 0, width: 2, height: 2 },
+        \\}
+        \\
+        \\sub : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Try(Sprite, {})
+        \\sub = |sprite, region| Ok({ ..sprite, region })
+        \\
+        \\sub_or_crash : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Sprite
+        \\sub_or_crash = |sprite, region|
+        \\    match sub(sprite, region) {
+        \\        Ok(sub_sprite) => sub_sprite
+        \\        Err(_) => {
+        \\            crash "bad sprite"
+        \\        }
+        \\    }
+        \\
+    ;
+
+    const named_suffix =
+        \\named_cells : List(Cell)
+        \\named_cells = [
+        \\    { frames: 5.U64, sprite: sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\    { frames: 6.U64, sprite: sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\]
+        \\
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    cells: named_cells,
+        \\}
+        \\
+        \\main! = |args| {
+        \\    anim = make_anim(List.len(args))
+        \\    _ = match List.get(anim.cells, 0) {
+        \\        Ok(cell) => cell.sprite.region.src_x.to_i64_wrap()
+        \\        Err(_) => 0
+        \\    }
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    ;
+    const inline_suffix =
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    cells: [
+        \\        { frames: 5.U64, sprite: sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 6.U64, sprite: sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\    ],
+        \\}
+        \\
+        \\main! = |args| {
+        \\    anim = make_anim(List.len(args))
+        \\    _ = match List.get(anim.cells, 0) {
+        \\        Ok(cell) => cell.sprite.region.src_x.to_i64_wrap()
+        \\        Err(_) => 0
+        \\    }
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    ;
+
+    const named_source = try std.mem.concat(gpa, u8, &.{ common_prefix, named_suffix });
+    defer gpa.free(named_source);
+    const inline_source = try std.mem.concat(gpa, u8, &.{ common_prefix, inline_suffix });
+    defer gpa.free(inline_source);
+
+    const named_exports = try buildStaticDataExportsForAppSource(gpa, named_source);
+    defer static_data_exports.deinitProvidedDataExports(gpa, named_exports);
+    const inline_exports = try buildStaticDataExportsForAppSource(gpa, inline_source);
+    defer static_data_exports.deinitProvidedDataExports(gpa, inline_exports);
+
+    try expectStaticDataExportsEquivalent(gpa, named_exports, inline_exports);
+}
+
 test "inline imported opaque cells through boxed model become static data" {
     const gpa = std.testing.allocator;
 
@@ -2910,6 +3002,79 @@ fn writeBoxedSpritePlatform(dir: anytype) anyerror!void {
     });
 }
 
+fn buildStaticDataExportsForAppSource(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+) anyerror![]@import("backend").StaticDataExport {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = source,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(allocator, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, root.root_requests.runtime_requests);
+    defer allocator.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    return try static_data_exports.buildProvidedDataExports(
+        allocator,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+}
+
 fn expectReportDoesNotContain(
     allocator: std.mem.Allocator,
     report: *const @import("reporting").Report,
@@ -3110,6 +3275,81 @@ fn countExportsContainingSequence(exports: []const @import("backend").StaticData
         if (std.mem.find(u8, static_export.bytes, sequence) != null) count += 1;
     }
     return count;
+}
+
+fn expectStaticDataExportsEquivalent(
+    allocator: std.mem.Allocator,
+    left: []const @import("backend").StaticDataExport,
+    right: []const @import("backend").StaticDataExport,
+) anyerror!void {
+    try std.testing.expectEqual(left.len, right.len);
+
+    const matched = try allocator.alloc(bool, right.len);
+    defer allocator.free(matched);
+    @memset(matched, false);
+
+    for (left) |left_export| {
+        var found = false;
+        for (right, matched) |right_export, *is_matched| {
+            if (is_matched.*) continue;
+            if (!staticDataExportEquivalentIgnoringSymbolNames(left, right, left_export, right_export)) continue;
+            is_matched.* = true;
+            found = true;
+            break;
+        }
+        try std.testing.expect(found);
+    }
+}
+
+fn staticDataExportEquivalentIgnoringSymbolNames(
+    left_exports: []const @import("backend").StaticDataExport,
+    right_exports: []const @import("backend").StaticDataExport,
+    left: @import("backend").StaticDataExport,
+    right: @import("backend").StaticDataExport,
+) bool {
+    if (left.symbol_offset != right.symbol_offset) return false;
+    if (left.alignment != right.alignment) return false;
+    if (left.is_global != right.is_global) return false;
+    if (left.is_exported != right.is_exported) return false;
+    if (!std.mem.eql(u8, left.bytes, right.bytes)) return false;
+    if (left.relocations.len != right.relocations.len) return false;
+
+    for (left.relocations, right.relocations) |left_relocation, right_relocation| {
+        if (left_relocation.offset != right_relocation.offset) return false;
+        if (left_relocation.addend != right_relocation.addend) return false;
+        if (left_relocation.kind != right_relocation.kind) return false;
+
+        const left_target = findStaticDataExportBySymbol(left_exports, left_relocation.target_symbol_name);
+        const right_target = findStaticDataExportBySymbol(right_exports, right_relocation.target_symbol_name);
+        if (left_target == null or right_target == null) {
+            if (!std.mem.eql(u8, left_relocation.target_symbol_name, right_relocation.target_symbol_name)) return false;
+            continue;
+        }
+        if (!staticDataRelocationTargetsEquivalent(left_target.?, right_target.?)) return false;
+    }
+
+    return true;
+}
+
+fn staticDataRelocationTargetsEquivalent(
+    left: @import("backend").StaticDataExport,
+    right: @import("backend").StaticDataExport,
+) bool {
+    return left.symbol_offset == right.symbol_offset and
+        left.alignment == right.alignment and
+        left.is_global == right.is_global and
+        left.is_exported == right.is_exported and
+        std.mem.eql(u8, left.bytes, right.bytes);
+}
+
+fn findStaticDataExportBySymbol(
+    exports: []const @import("backend").StaticDataExport,
+    symbol_name: []const u8,
+) ?@import("backend").StaticDataExport {
+    for (exports) |static_export| {
+        if (std.mem.eql(u8, static_export.symbol_name, symbol_name)) return static_export;
+    }
+    return null;
 }
 
 fn countInternalStaticValueRelocationsTo(exports: []const @import("backend").StaticDataExport, symbol_name: []const u8) usize {
