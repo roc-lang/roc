@@ -1736,10 +1736,10 @@ fn markCurrentHoistRuntimeDependency(self: *Self) void {
     self.hoist_frames.items[self.hoist_frames.items.len - 1].has_runtime_dependency = true;
 }
 
-fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!bool {
+fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!ExprCheckResult {
     self.hoist_selection_suppressed_depth += 1;
     defer self.hoist_selection_suppressed_depth -= 1;
-    return (try self.checkExpr(expr, env, expected)).does_fx;
+    return try self.checkExpr(expr, env, expected);
 }
 
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
@@ -10768,19 +10768,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_if => |if_expr| {
-            does_fx = try self.checkIfElseExpr(expr_idx, expr_region, env, if_expr, expected) or does_fx;
+            does_fx = (try self.checkIfElseExpr(expr_idx, expr_region, env, if_expr, expected)).does_fx or does_fx;
         },
         .e_match => |match| {
-            does_fx = try self.checkMatchExpr(expr_idx, env, match, expected) or does_fx;
+            does_fx = (try self.checkMatchExpr(expr_idx, env, match, expected)).does_fx or does_fx;
         },
         .e_binop => |binop| {
-            does_fx = try self.checkBinopExpr(expr_idx, expr_region, env, binop) or does_fx;
+            does_fx = (try self.checkBinopExpr(expr_idx, expr_region, env, binop)).does_fx or does_fx;
         },
         .e_unary_minus => |unary| {
-            does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, env, unary) or does_fx;
+            does_fx = (try self.checkUnaryMinusExpr(expr_idx, expr_region, env, unary)).does_fx or does_fx;
         },
         .e_unary_not => |unary| {
-            does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary) or does_fx;
+            does_fx = (try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary)).does_fx or does_fx;
         },
         .e_field_access => |field_access| {
             does_fx = (try self.checkExpr(field_access.receiver, env, Expected.none())).does_fx or does_fx;
@@ -11068,14 +11068,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_for => |for_expr| {
-            does_fx = try self.checkIteratorForLoop(
+            does_fx = (try self.checkIteratorForLoop(
                 ModuleEnv.nodeIdxFrom(expr_idx),
                 for_expr.patt,
                 for_expr.expr,
                 for_expr.body,
                 env,
                 expr_region,
-            ) or does_fx;
+            )).does_fx or does_fx;
 
             // Like cor, loop bodies are ordinary expressions whose final value is
             // discarded by the loop construct itself. The loop expression still
@@ -12273,14 +12273,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_for => |for_stmt| {
                 const for_region = self.cir.store.getStatementRegion(stmt_idx);
-                check_result.include(ExprCheckResult.fromDoesFx(try self.checkIteratorForLoop(
+                check_result.include(try self.checkIteratorForLoop(
                     ModuleEnv.nodeIdxFrom(stmt_idx),
                     for_stmt.patt,
                     for_stmt.expr,
                     for_stmt.body,
                     env,
                     for_region,
-                )));
+                ));
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, for_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
@@ -12492,7 +12492,7 @@ fn checkIfElseExpr(
     env: *Env,
     if_: @FieldType(CIR.Expr, @tagName(.e_if)),
     expected: Expected,
-) std.mem.Allocator.Error!bool {
+) std.mem.Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
     const expected_branch_ret = expected.branch_result;
@@ -12512,13 +12512,13 @@ fn checkIfElseExpr(
     const first_branch = self.cir.store.getIfBranch(first_branch_idx);
 
     // Check the condition of the 1st branch
-    var does_fx = (try self.checkExpr(first_branch.cond, env, Expected.none())).does_fx;
+    var check_result = try self.checkExpr(first_branch.cond, env, Expected.none());
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(env, expr_region);
     _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
 
     // Then we check the 1st branch's body
-    does_fx = (try self.checkExpr(first_branch.body, env, expected.forBranchBody())).does_fx or does_fx;
+    check_result.include(try self.checkExpr(first_branch.body, env, expected.forBranchBody()));
 
     if (expected_branch_ret) |expected_ret| {
         const branch_ctx = problem.Context{ .if_branch = .{
@@ -12542,13 +12542,13 @@ fn checkIfElseExpr(
         const branch = self.cir.store.getIfBranch(branch_idx);
 
         // Check the branches condition
-        does_fx = (try self.checkExpr(branch.cond, env, Expected.none())).does_fx or does_fx;
+        check_result.include(try self.checkExpr(branch.cond, env, Expected.none()));
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
         const branch_bool_var = try self.freshBool(env, expr_region);
         _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
 
         // Check the branch body
-        does_fx = (try self.checkExpr(branch.body, env, expected.forBranchBody())).does_fx or does_fx;
+        check_result.include(try self.checkExpr(branch.body, env, expected.forBranchBody()));
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
@@ -12575,13 +12575,13 @@ fn checkIfElseExpr(
                 for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
                     const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
 
-                    does_fx = (try self.checkExpr(remaining_branch.cond, env, Expected.none())).does_fx or does_fx;
+                    check_result.include(try self.checkExpr(remaining_branch.cond, env, Expected.none()));
                     const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
                     const fresh_bool = try self.freshBool(env, expr_region);
                     _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
-                    does_fx = (try self.checkExpr(remaining_branch.body, env, expected.forBranchBody())).does_fx or does_fx;
+                    check_result.include(try self.checkExpr(remaining_branch.body, env, expected.forBranchBody()));
                     try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
                 }
 
@@ -12594,7 +12594,7 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    does_fx = (try self.checkExpr(if_.final_else, env, expected.forBranchBody())).does_fx or does_fx;
+    check_result.include(try self.checkExpr(if_.final_else, env, expected.forBranchBody()));
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
@@ -12630,7 +12630,7 @@ fn checkIfElseExpr(
         _ = try self.unify(if_expr_var, branch_var, env);
     }
 
-    return does_fx;
+    return check_result;
 }
 
 // match //
@@ -12642,7 +12642,7 @@ fn checkMatchExpr(
     env: *Env,
     match: CIR.Expr.Match,
     expected: Expected,
-) Allocator.Error!bool {
+) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -12655,7 +12655,7 @@ fn checkMatchExpr(
     const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
 
     // Check the match's condition
-    var does_fx = (try self.checkExpr(match.cond, env, Expected.none())).does_fx;
+    var check_result = try self.checkExpr(match.cond, env, Expected.none());
     const cond_var = ModuleEnv.varFrom(match.cond);
     const cond_always_crashes = self.exprAlwaysCrashes(match.cond);
     if (!match.is_try_suffix) {
@@ -12738,14 +12738,14 @@ fn checkMatchExpr(
 
         // Check guard if present
         if (first_branch.guard) |guard_idx| {
-            does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()));
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const guard_bool_var = try self.freshBool(env, expr_region);
             _ = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Check the first branch's value, then use that at the branch_var
-        does_fx = (try self.checkExpr(first_branch.value, env, expected.forBranchBody())).does_fx or does_fx;
+        check_result.include(try self.checkExpr(first_branch.value, env, expected.forBranchBody()));
         val_var = ModuleEnv.varFrom(first_branch.value);
 
         // Check first branch body against expected return type
@@ -12793,14 +12793,14 @@ fn checkMatchExpr(
 
         // Check guard if present
         if (branch.guard) |guard_idx| {
-            does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()));
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
             _ = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Then, check the body
-        does_fx = (try self.checkExpr(branch.value, env, expected.forBranchBody())).does_fx or does_fx;
+        check_result.include(try self.checkExpr(branch.value, env, expected.forBranchBody()));
 
         // Check branch body against expected return type BEFORE pairwise unification.
         // Pairwise unification poisons ALL connected vars via union-find on failure,
@@ -12849,7 +12849,7 @@ fn checkMatchExpr(
                     try self.recordHoistMatchBranchContextualBindings(other_branch_ptrn_idxs, match_hoist_owner);
 
                     // Then check the other branch's exprs
-                    does_fx = try self.checkExprWithHoistSelectionSuppressed(other_branch.value, env, expected.forBranchBody()) or does_fx;
+                    check_result.include(try self.checkExprWithHoistSelectionSuppressed(other_branch.value, env, expected.forBranchBody()));
                     try self.unifyWith(ModuleEnv.varFrom(other_branch.value), .err, env);
                 }
 
@@ -12905,7 +12905,7 @@ fn checkMatchExpr(
                 // Type error in pattern - exhaustiveness checking can't proceed
                 // This is expected when there are polymorphic types or type mismatches
                 // Don't report exhaustiveness errors in this case
-                return does_fx;
+                return check_result;
             },
         };
         defer result.deinit(self.cir.gpa);
@@ -12956,21 +12956,21 @@ fn checkMatchExpr(
         }
     }
 
-    return does_fx;
+    return check_result;
 }
 
 // unary minus //
 
 /// Check the unary expr.
 /// Desugars `-a` to `a.negate() : a -> a`,
-fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = (try self.checkExpr(unary.expr, env, Expected.none())).does_fx;
+    const check_result = try self.checkExpr(unary.expr, env, Expected.none());
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -12985,21 +12985,21 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
-    return does_fx;
+    return check_result;
 }
 
 // unary not //
 
 /// Check the unary expr.
 /// Desugars `!a` to `a.not() : a -> a`,
-fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
+fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryNot) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = (try self.checkExpr(unary.expr, env, Expected.none())).does_fx;
+    const check_result = try self.checkExpr(unary.expr, env, Expected.none());
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -13014,7 +13014,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
     // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
-    return does_fx;
+    return check_result;
 }
 
 // binop //
@@ -13026,7 +13026,7 @@ fn checkBinopExpr(
     expr_region: Region,
     env: *Env,
     binop: CIR.Expr.Binop,
-) Allocator.Error!bool {
+) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -13035,9 +13035,8 @@ fn checkBinopExpr(
     const rhs_var = @as(Var, ModuleEnv.varFrom(binop.rhs));
 
     // Check operands first
-    var does_fx = false;
-    does_fx = (try self.checkExpr(binop.lhs, env, Expected.none())).does_fx or does_fx;
-    does_fx = (try self.checkExpr(binop.rhs, env, Expected.none())).does_fx or does_fx;
+    var check_result = try self.checkExpr(binop.lhs, env, Expected.none());
+    check_result.include(try self.checkExpr(binop.rhs, env, Expected.none()));
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
@@ -13058,10 +13057,10 @@ fn checkBinopExpr(
             const rhs_is_from_numeral = self.varLiteralKind(rhs_var) == .numeral;
 
             if (lhs_is_from_numeral and try self.reportDefinitelyInvalidNumericBinopOperand(rhs_var, expr_var, expr_idx, binop.op, .rhs, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
             if (rhs_is_from_numeral and try self.reportDefinitelyInvalidNumericBinopOperand(lhs_var, expr_var, expr_idx, binop.op, .lhs, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // Eagerly unify the operands, but ONLY when the dispatcher's
@@ -13092,12 +13091,12 @@ fn checkBinopExpr(
                 const arg_unify_result = try self.unify(target, other, env);
                 if (!arg_unify_result.isOk()) {
                     try self.unifyWith(expr_var, .err, env);
-                    return does_fx;
+                    return check_result;
                 }
             }
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // Arithmetic binops are homogeneous in the RETURN only: the result
@@ -13134,7 +13133,7 @@ fn checkBinopExpr(
                 };
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // For comparison binops, lhs and rhs must have the same type.
@@ -13142,7 +13141,7 @@ fn checkBinopExpr(
 
             if (!arg_unify_result.isOk()) {
                 try self.unifyWith(expr_var, .err, env);
-                return does_fx;
+                return check_result;
             }
 
             const arg_var = rhs_var;
@@ -13164,13 +13163,13 @@ fn checkBinopExpr(
         },
         .eq => {
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
             if (!arg_unify_result.isOk()) {
                 try self.unifyWith(expr_var, .err, env);
-                return does_fx;
+                return check_result;
             }
 
             const eq_ret_var = try self.freshBool(env, expr_region);
@@ -13199,7 +13198,7 @@ fn checkBinopExpr(
             // should be a non-breaking change.
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // Unify lhs and rhs to ensure both operands have the same type
@@ -13208,7 +13207,7 @@ fn checkBinopExpr(
             // If unification failed, short-circuit and set the expression to error
             if (!arg_unify_result.isOk()) {
                 try self.unifyWith(expr_var, .err, env);
-                return does_fx;
+                return check_result;
             }
 
             // Get the eq method + ret var
@@ -13267,7 +13266,7 @@ fn checkBinopExpr(
         },
     }
 
-    return does_fx;
+    return check_result;
 }
 
 fn reportDefinitelyInvalidNumericBinopOperand(
@@ -13574,13 +13573,11 @@ fn checkIteratorForLoop(
     body: CIR.Expr.Idx,
     env: *Env,
     loop_region: Region,
-) Allocator.Error!bool {
-    var does_fx = false;
-
+) Allocator.Error!ExprCheckResult {
     try self.checkPattern(pattern, .for_, env);
     const item_var: Var = ModuleEnv.varFrom(pattern);
 
-    does_fx = (try self.checkExpr(iterable, env, Expected.none())).does_fx or does_fx;
+    var check_result = try self.checkExpr(iterable, env, Expected.none());
     const iterable_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(iterable));
     const iterable_var: Var = ModuleEnv.varFrom(iterable);
 
@@ -13608,8 +13605,8 @@ fn checkIteratorForLoop(
 
     try self.cir.recordForLoopDispatchPlan(loop_node, ModuleEnv.nodeIdxFrom(pattern), ModuleEnv.nodeIdxFrom(iterable), iter_fn_var, next_fn_var);
 
-    does_fx = (try self.checkExpr(body, env, Expected.none())).does_fx or does_fx;
-    return does_fx;
+    check_result.include(try self.checkExpr(body, env, Expected.none()));
+    return check_result;
 }
 
 fn mkMethodCallConstraint(
