@@ -863,6 +863,147 @@ test "top-level expect failure reports during compile-time evaluation" {
     try std.testing.expect(found);
 }
 
+test "effectful top-level call is rejected before compile-time dbg can run" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\tick! : {} => Str
+        \\tick! = |_| "effectful debug should not run"
+        \\
+        \\bad = {
+        \\    dbg tick!({})
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found_effectful = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "EFFECTFUL TOP-LEVEL VALUE")) {
+            found_effectful = true;
+            try std.testing.expectEqualStrings("main", entry.module_name);
+        }
+        if (std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) {
+            try expectReportDoesNotContain(gpa, entry.report, "\"effectful debug should not run\"");
+        }
+    }
+    try std.testing.expect(found_effectful);
+}
+
+test "effectful selected-root candidate is not evaluated by compile-time finalization" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\tick! : {} => Str
+        \\tick! = |_| "effectful debug should not run"
+        \\
+        \\sentinel = {
+        \\    dbg "compile-time finalizer ran"
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    _ = dbg tick!({})
+        \\    _ = sentinel
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var saw_sentinel = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportDoesNotContain(gpa, entry.report, "\"effectful debug should not run\"");
+        if (try reportContains(gpa, entry.report, "\"compile-time finalizer ran\"")) {
+            saw_sentinel = true;
+        }
+    }
+    try std.testing.expect(saw_sentinel);
+}
+
 test "hoisted pattern extraction failure reports original destructure region" {
     const gpa = std.testing.allocator;
 
@@ -1691,22 +1832,7 @@ fn expectReportDoesNotContain(
     report: *const @import("reporting").Report,
     needle: []const u8,
 ) anyerror!void {
-    var rendered = std.array_list.Managed(u8).init(allocator);
-    defer rendered.deinit();
-
-    var unmanaged = rendered.moveToUnmanaged();
-    defer rendered = unmanaged.toManaged(allocator);
-
-    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(allocator, &unmanaged);
-    defer unmanaged = writer_alloc.toArrayList();
-
-    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
-        error.OutOfMemory,
-        error.WriteFailed,
-        => return error.OutOfMemory,
-    };
-
-    try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) == null);
+    try std.testing.expect(!try reportContains(allocator, report, needle));
 }
 
 fn expectReportContains(
@@ -1714,6 +1840,14 @@ fn expectReportContains(
     report: *const @import("reporting").Report,
     needle: []const u8,
 ) anyerror!void {
+    try std.testing.expect(try reportContains(allocator, report, needle));
+}
+
+fn reportContains(
+    allocator: std.mem.Allocator,
+    report: *const @import("reporting").Report,
+    needle: []const u8,
+) anyerror!bool {
     var rendered = std.array_list.Managed(u8).init(allocator);
     defer rendered.deinit();
 
@@ -1729,7 +1863,7 @@ fn expectReportContains(
         => return error.OutOfMemory,
     };
 
-    try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) != null);
+    return std.mem.find(u8, writer_alloc.written(), needle) != null;
 }
 
 fn countStaticDataLiteralAssignments(store: *const lir.LirStore) usize {

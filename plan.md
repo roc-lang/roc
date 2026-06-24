@@ -690,7 +690,7 @@ wasm-objdump -x -d rocci-bird.wasm > rocci-bird.disasm.txt
 - [x] `roc check` reports compile-time `crash`, `dbg`, and failed `expect`
       diagnostics.
 - [x] Duplicate diagnostics from shared top-level/root sources are avoided.
-- [ ] Effectful calls are rejected before compile-time evaluation can run them.
+- [x] Effectful calls are rejected before compile-time evaluation can run them.
 
 ### Static Data
 
