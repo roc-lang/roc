@@ -2381,6 +2381,28 @@ const Builder = struct {
         };
     }
 
+    fn restoredConstFnLiveType(
+        self: *Builder,
+        fn_view: ModuleView,
+        fn_value: anytype,
+        requested_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names, &self.unsolved_monos);
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+        var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph);
+        defer fn_ctx.deinit();
+
+        try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, requested_ty);
+        const root_node = try fn_ctx.instNode(fn_value.source_fn_ty);
+        if (!self.unsolved_monos.contains(requested_ty)) {
+            try graph.addMonoView(root_node, requested_ty);
+        }
+        return try graph.monoFor(root_node);
+    }
+
     fn constFnDefToMono(self: *Builder, fn_def: anytype) Allocator.Error!Ast.FnDef {
         return switch (fn_def) {
             .local_template => |template| .{ .local_template = template },
@@ -2400,6 +2422,44 @@ const Builder = struct {
         };
     }
 
+    fn constNodeIntrinsicMonoType(
+        self: *Builder,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+    ) Allocator.Error!?Type.TypeId {
+        return switch (store_view.const_store.get(node)) {
+            .scalar => |scalar| try self.primitiveType(switch (scalar) {
+                .i8 => .i8,
+                .i16 => .i16,
+                .i32 => .i32,
+                .i64 => .i64,
+                .i128 => .i128,
+                .u8 => .u8,
+                .u16 => .u16,
+                .u32 => .u32,
+                .u64 => .u64,
+                .u128 => .u128,
+                .f32_bits => .f32,
+                .f64_bits => .f64,
+                .dec_bits => .dec,
+            }),
+            .tuple => |items| blk: {
+                const tys = try self.allocator.alloc(Type.TypeId, items.len);
+                defer self.allocator.free(tys);
+                for (items, 0..) |item, item_index| {
+                    tys[item_index] = (try self.constNodeIntrinsicMonoType(store_view, item)) orelse return null;
+                }
+                break :blk try self.program.types.add(.{ .tuple = try self.program.types.addSpan(tys) });
+            },
+            .fn_value => |captured_fn_id| blk: {
+                const captured_fn = store_view.const_store.getFn(captured_fn_id);
+                break :blk try self.lowerType(self.moduleForConstFnDef(captured_fn.fn_def), captured_fn.source_fn_ty);
+            },
+            .zst => try self.program.types.add(.zst),
+            else => null,
+        };
+    }
+
     fn restoreConstFnExpr(
         self: *Builder,
         store_view: ModuleView,
@@ -2416,9 +2476,13 @@ const Builder = struct {
         if (fn_value.fn_def == .encode_to_runtime) {
             return try self.restoreConstEncodeToRuntimeFnExpr(store_view, fn_value, ty);
         }
-        var template = try self.constFnTemplateToMono(fn_value, ty);
+        const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
+        const live_fn_ty = switch (fn_value.fn_def) {
+            .nested => try self.restoredConstFnLiveType(fn_view, fn_value, ty),
+            else => ty,
+        };
+        var template = try self.constFnTemplateToMono(fn_value, live_fn_ty);
         if (fn_value.captures.len == 0) {
-            const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(fn_view, template);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
@@ -2426,7 +2490,6 @@ const Builder = struct {
             });
         }
 
-        const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names, &self.unsolved_monos);
         defer graph.destroy();
         const saved_graph = self.active_graph;
@@ -2434,7 +2497,7 @@ const Builder = struct {
         defer self.active_graph = saved_graph;
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph);
         defer fn_ctx.deinit();
-        try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
+        try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, live_fn_ty);
         try fn_ctx.seedStoredLocalProcContexts(template.local_proc_contexts);
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
@@ -2459,22 +2522,63 @@ const Builder = struct {
 
         for (fn_value.captures, 0..) |capture, index| {
             const binder = constCaptureBinder(capture.id);
-            const capture_ty = checkedBinderType(fn_view, binder);
-            const lowered_ty = try fn_ctx.lowerType(capture_ty);
+            const capture_value = store_view.const_store.get(capture.value);
+            const CaptureType = struct {
+                view: ModuleView,
+                checked_ty: checked.CheckedTypeId,
+                static_data_checked_ty: ?checked.CheckedTypeId,
+                intrinsic_ty: ?Type.TypeId = null,
+                context_ty: bool = false,
+            };
+            const capture_type: CaptureType = switch (capture_value) {
+                .fn_value => |captured_fn_id| blk: {
+                    const captured_fn = store_view.const_store.getFn(captured_fn_id);
+                    const captured_fn_view = self.moduleForConstFnDef(captured_fn.fn_def);
+                    break :blk .{
+                        .view = captured_fn_view,
+                        .checked_ty = captured_fn.source_fn_ty,
+                        .static_data_checked_ty = null,
+                    };
+                },
+                else => blk: {
+                    if (try self.constNodeIntrinsicMonoType(store_view, capture.value)) |intrinsic_ty| {
+                        break :blk .{
+                            .view = store_view,
+                            .checked_ty = undefined,
+                            .static_data_checked_ty = null,
+                            .intrinsic_ty = intrinsic_ty,
+                        };
+                    }
+                    break :blk .{
+                        .view = fn_view,
+                        .checked_ty = checkedBinderType(fn_view, binder),
+                        .static_data_checked_ty = null,
+                        .context_ty = true,
+                    };
+                },
+            };
+            const type_view = capture_type.view;
+            const lowered_ty = capture_type.intrinsic_ty orelse if (capture_type.context_ty)
+                try fn_ctx.lowerType(capture_type.checked_ty)
+            else
+                try self.lowerType(type_view, capture_type.checked_ty);
             const value_expr = if (static_data_const_ref) |const_ref| value_expr: {
                 if (!moduleBytesEqual(checked.constModuleId(const_ref).bytes, store_view.key.bytes)) {
                     Common.invariant("static-data const context referenced a different ConstStore module");
                 }
-                const fallback = try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, fn_view, capture.value, lowered_ty, const_ref);
-                if (self.static_data_literals and self.constNodeMayUseStaticDataCandidate(store_view, capture.value, .allow)) {
-                    const id = try self.staticDataValue(const_ref, capture.value, capture_ty);
-                    break :value_expr try self.staticDataCandidateExpr(lowered_ty, id, fallback);
+                const fallback = try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, capture.value, lowered_ty, const_ref);
+                if (capture_type.static_data_checked_ty) |static_data_checked_ty| {
+                    if (self.static_data_literals and self.constNodeMayUseStaticDataCandidate(store_view, capture.value, .allow)) {
+                        const id = try self.staticDataValue(const_ref, capture.value, static_data_checked_ty);
+                        break :value_expr try self.staticDataCandidateExpr(lowered_ty, id, fallback);
+                    }
                 }
                 break :value_expr fallback;
-            } else try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, lowered_ty);
-            const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
+            } else try fn_ctx.restoreConstNodeAtType(store_view, type_view, capture.value, lowered_ty);
+            const restored_ty = self.program.exprs.items[@intFromEnum(value_expr)].ty;
+            const local = try self.program.addLocalWithBinder(self.symbols.fresh(), restored_ty, binder);
             try bindLocalName(self.program, fn_view, local, binder);
-            const pat = try self.program.addPat(.{ .ty = lowered_ty, .data = .{ .bind = local } });
+            const pat = try self.program.addPat(.{ .ty = restored_ty, .data = .{ .bind = local } });
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
             captures[index] = .{

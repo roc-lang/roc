@@ -836,13 +836,15 @@ const HoistSelectionTransaction = struct {
         self: *HoistSelectionTransaction,
         pattern: CIR.Pattern.Idx,
         extraction: HoistPatternExtraction,
-    ) Allocator.Error!u32 {
+    ) Allocator.Error!?u32 {
         if (self.checker.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
         if (self.staged_bindings.get(pattern)) |root_index| return root_index;
 
         var root_metadata = RootMetadataScratch{};
         defer root_metadata.deinit(self.checker.gpa);
-        try self.stageStoredRootMetadata(extraction.base_expr, &root_metadata);
+        if (!try self.stagePatternExtractionBaseMetadata(extraction.base_expr, &root_metadata)) {
+            return null;
+        }
         const dependencies = try root_metadata.cloneDependencies(self.checker.gpa);
         errdefer if (dependencies.len != 0) self.checker.gpa.free(dependencies);
         const required_concrete_patterns = try root_metadata.cloneRequiredConcretePatterns(self.checker.gpa);
@@ -866,6 +868,26 @@ const HoistSelectionTransaction = struct {
         return root_index;
     }
 
+    fn stagePatternExtractionBaseMetadata(
+        self: *HoistSelectionTransaction,
+        expr: CIR.Expr.Idx,
+        root_metadata: *RootMetadataScratch,
+    ) Allocator.Error!bool {
+        switch (self.checker.cir.store.getExpr(expr)) {
+            .e_lookup_local => |lookup| {
+                if (self.checker.patternIsTopLevel(lookup.pattern_idx)) return true;
+                const root_index = try self.stageBindingRoot(lookup.pattern_idx) orelse return false;
+                try root_metadata.appendDependencyRoot(self.checker.gpa, root_index);
+                return true;
+            },
+            .e_lookup_external => return true,
+            else => {
+                try self.stageStoredRootMetadata(expr, root_metadata);
+                return true;
+            },
+        }
+    }
+
     fn stageBindingRoot(
         self: *HoistSelectionTransaction,
         pattern: CIR.Pattern.Idx,
@@ -880,7 +902,7 @@ const HoistSelectionTransaction = struct {
                 return root_index;
             },
             .pattern_extraction => |extraction| {
-                const root_index = try self.stagePatternExtractionRoot(pattern, extraction);
+                const root_index = try self.stagePatternExtractionRoot(pattern, extraction) orelse return null;
                 try self.stageKnownUpdate(pattern, root_index);
                 return root_index;
             },
@@ -2761,7 +2783,8 @@ fn ensureHoistedPatternExtractionRoot(
     if (self.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
     var transaction = HoistSelectionTransaction.init(self);
     defer transaction.deinit();
-    const root_index = try transaction.stagePatternExtractionRoot(pattern, extraction);
+    const root_index = try transaction.stagePatternExtractionRoot(pattern, extraction) orelse
+        hoistSelectionInvariant("pattern extraction base could not be staged as a const root");
     try transaction.commit();
     return root_index;
 }
