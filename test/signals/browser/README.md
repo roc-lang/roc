@@ -57,19 +57,26 @@ offset/length pairs.
 wasm app, calls `roc_ui_mount`, applies command-buffer records to the DOM, and
 routes click/input/check events back through `roc_ui_event`. It records the
 records drained by the most recent host call in `lastCommands` so guards can
-assert the per-event patch budget.
+inspect the command-buffer codec.
 
 `dom_double.mjs` is a dependency-free DOM stand-in implementing exactly the
 surface `runtime.mjs` touches, so the executor can be driven under `node --test`
 without jsdom.
 
-`executor.test.mjs`, `counter_app.test.mjs`, and `stable_text_app.test.mjs`
-re-assert engine semantics (count changes, one `set_text` per click, pruning,
-retained-value budget) through the DOM double. Per `../DESIGN.md` and
-`../NEXT_STEPS.md` Phase 2, these are slated for removal: the native spec runner
-already owns that coverage and asserts it more precisely. The codec/boundary
-guards (`wasm_memory_views.test.mjs`, `controlled_input_policy.test.mjs`) stay.
-wasm next to the page, then serve the browser asset directory:
+`runtime_contract.test.mjs` keeps the JS-side surface narrow: op-code to DOM-op
+mapping, event payload marshalling, listener cleanup, and command-buffer reads
+after memory growth. It deliberately does not re-assert app semantics or work
+budgets; the native spec runner owns those.
+
+Run the guard with:
+
+```sh
+node --test test/signals/browser/runtime_contract.test.mjs
+```
+
+## Build and Serve
+
+Build a wasm artifact next to the page, then serve the browser asset directory:
 
 ```sh
 test/signals/serve.py
@@ -85,7 +92,7 @@ The helper builds `test/signals/src/wasm_host.zig` with `ReleaseSmall`, builds
 the app with `--target=wasm32 --opt=size`, writes
 `test/signals/browser/counter.wasm`, and serves only `test/signals/browser`.
 
-Build a different app or use the dev backend with:
+Build a different app or use the dev app optimization mode with:
 
 ```sh
 test/signals/serve.py test/signals/apps/ops_dashboard.roc --port 9001
@@ -93,6 +100,8 @@ test/signals/serve.py --app-opt dev
 ```
 
 Use `--no-server` when you only want the build steps.
+With `--no-server` and no app argument, the helper builds the maintained
+six-app suite instead of the counter demo.
 
 `../src/signal_graph.zig` owns the active graph node shape, dependent-edge
 mutation, reachable-dependent traversal, and rank sorting. The native host

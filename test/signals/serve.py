@@ -17,6 +17,14 @@ REPO_ROOT = SIGNALS_DIR.parent.parent
 BROWSER_DIR = SIGNALS_DIR / "browser"
 DEFAULT_APP = SIGNALS_DIR / "apps" / "counter.roc"
 DEFAULT_ROC_BIN = REPO_ROOT / "zig-out" / "bin" / "roc"
+APP_SUITE = (
+    SIGNALS_DIR / "apps" / "ops_dashboard.roc",
+    SIGNALS_DIR / "apps" / "checkout_wizard.roc",
+    SIGNALS_DIR / "apps" / "kanban_board.roc",
+    SIGNALS_DIR / "apps" / "identity_stress.roc",
+    SIGNALS_DIR / "apps" / "component_composition.roc",
+    SIGNALS_DIR / "apps" / "async_effects.roc",
+)
 
 
 def parse_args():
@@ -29,8 +37,11 @@ def parse_args():
     parser.add_argument(
         "app",
         nargs="?",
-        default=str(DEFAULT_APP.relative_to(REPO_ROOT)),
-        help="Roc app to build. Defaults to test/signals/apps/counter.roc.",
+        default=None,
+        help=(
+            "Roc app to build. Defaults to test/signals/apps/counter.roc when "
+            "serving, or the maintained six-app suite with --no-server."
+        ),
     )
     parser.add_argument(
         "--port",
@@ -133,6 +144,12 @@ def build_app(roc_bin, app, output, app_opt):
     )
 
 
+def default_apps(no_server):
+    if no_server:
+        return APP_SUITE
+    return (DEFAULT_APP,)
+
+
 def serve(port, wasm_relative):
     wasm_url = f"./{wasm_relative.as_posix()}"
     if wasm_relative.as_posix() == "counter.wasm":
@@ -161,14 +178,20 @@ def serve(port, wasm_relative):
 def main():
     args = parse_args()
 
-    app = repo_path(args.app)
-    if not app.is_file():
-        raise SystemExit(f"missing app: {app}")
+    apps = [repo_path(args.app)] if args.app else list(default_apps(args.no_server))
+    for app in apps:
+        if not app.is_file():
+            raise SystemExit(f"missing app: {app}")
+
+    if len(apps) > 1 and args.output:
+        raise SystemExit("--output is only valid when building one app")
+    if len(apps) > 1 and not args.no_server:
+        raise SystemExit("serving requires a single app")
 
     if args.output:
         output = repo_path(args.output)
     else:
-        output = BROWSER_DIR / f"{app.stem}.wasm"
+        output = BROWSER_DIR / f"{apps[0].stem}.wasm"
 
     wasm_relative = browser_relative(output)
     if not args.no_server and wasm_relative is None:
@@ -176,12 +199,14 @@ def main():
             f"when serving, --output must be under {BROWSER_DIR}: {output}"
         )
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-
     roc_bin = command_path(args.roc_bin)
     ensure_roc(roc_bin)
     build_host()
-    build_app(roc_bin, app, output, args.app_opt)
+
+    for app in apps:
+        app_output = output if len(apps) == 1 else BROWSER_DIR / f"{app.stem}.wasm"
+        app_output.parent.mkdir(parents=True, exist_ok=True)
+        build_app(roc_bin, app, app_output, args.app_opt)
 
     if args.no_server:
         return
