@@ -568,6 +568,35 @@ test "effectful parent still emits independent static child data" {
     try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
 }
 
+test "parent static root does not emit removed child root data" {
+    const gpa = std.testing.allocator;
+
+    const exports = try buildStaticDataExportsForAppSource(gpa,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % 4
+        \\    record = { data: [17.U8, 34.U8, 51.U8, 68.U8], width: 4.U64 }
+        \\    byte_value = match List.get(record.data, index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = byte_value + record.width.to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.StaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueExports(exports));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name));
+}
+
 test "tuple and tag static data share named and inline list payloads" {
     const gpa = std.testing.allocator;
 

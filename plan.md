@@ -378,7 +378,7 @@ Tasks:
 - [ ] Store records that point at shared static list bytes.
 - [ ] Store tuples and tag payloads that point at shared static list bytes.
 - [ ] Ensure opaque static data uses checked backing values only when allowed.
-- [ ] Ensure removed child roots do not emit duplicate static data.
+- [x] Ensure removed child roots do not emit duplicate static data.
 - [ ] Ensure target static-data emission consumes evaluated checked values, not
   source/CIR shape.
 - [ ] Ensure lowering knows exactly when it is lowering a root's own entry
@@ -399,7 +399,7 @@ Tests:
 - [x] inline imported opaque animation cells through a boxed hosted model are
   emitted as reachable static data
 - [x] inline animation cells and named animation cells emit equivalent data
-- [ ] child roots removed by parent root do not emit duplicate data
+- [x] child roots removed by parent root do not emit duplicate data
 - [x] effectful parent does not prevent independent static child data
 - [x] unreachable successfully evaluated value is not emitted as target data
 - [ ] non-storable reachable evaluated value is represented explicitly

@@ -343,9 +343,9 @@ const GeneratedHelperDefEntry = union(enum) {
 };
 
 const StaticDataUse = struct {
-    const_ref: checked.ConstId,
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
-    ty: Type.TypeId,
 };
 
 const Builder = struct {
@@ -1895,12 +1895,12 @@ const Builder = struct {
         self: *Builder,
         const_ref: checked.ConstId,
         checked_type: checked.CheckedTypeId,
-        ty: Type.TypeId,
     ) Allocator.Error!Common.StaticDataId {
+        const node = self.constNode(const_ref);
         const gop = try self.static_data_ids.getOrPut(.{
-            .const_ref = const_ref,
+            .module = node.module.key,
+            .node = node.id,
             .checked_type = checked_type,
-            .ty = ty,
         });
         if (!gop.found_existing) {
             const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(self.program.static_data_values.items.len)));
@@ -4149,7 +4149,7 @@ const BodyContext = struct {
                 if (self.builder.static_data_literals and
                     self.builder.constNodeNeedsStaticData(self.view, stored.node))
                 {
-                    const id = try self.builder.staticDataValue(entry.const_ref, entry.checked_type, ty);
+                    const id = try self.builder.staticDataValue(entry.const_ref, entry.checked_type);
                     break :blk try self.builder.program.addExpr(.{
                         .ty = ty,
                         .data = .{ .static_data = id },
@@ -9021,7 +9021,7 @@ const BodyContext = struct {
                 if (self.builder.static_data_literals and
                     self.builder.constNodeNeedsStaticData(store_view, stored.node))
                 {
-                    const id = try self.builder.staticDataValue(const_use.const_ref, requested_ty, ty);
+                    const id = try self.builder.staticDataValue(const_use.const_ref, requested_ty);
                     break :blk try self.builder.program.addExpr(.{
                         .ty = ty,
                         .data = .{ .static_data = id },
