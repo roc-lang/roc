@@ -192,6 +192,134 @@ test "effect propagation - imported effectful nominal method reports top-level e
     try test_env.assertFirstTypeError("EFFECTFUL TOP-LEVEL VALUE");
 }
 
+test "effect propagation - effectful type method reports top-level effect" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\Thing := [Thing].{
+        \\    make! : {} => Thing
+        \\    make! = |_| Thing
+        \\}
+        \\
+        \\top = Thing.make!({})
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - effectful interpolation dispatch reports top-level effect" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\Text := [Text].{
+        \\    from_interpolation : Str, Iter((U64, Str)) => Text
+        \\    from_interpolation = |_, _| Text
+        \\}
+        \\
+        \\top : Text
+        \\top = "score ${1.U64}"
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - effectful iterator dispatch reports top-level effect" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\Bag := [Bag].{
+        \\    iter : Bag => Iter(U64)
+        \\    iter = |_| Iter.single(1.U64)
+        \\}
+        \\
+        \\top = {
+        \\    var total = 0.U64
+        \\    for item in Bag.Bag {
+        \\        total = total + item
+        \\    }
+        \\    total
+        \\}
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - local function alias preserves effectfulness" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\alias = tick!
+        \\
+        \\top = alias({})
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - imported function alias preserves effectfulness" {
+    var imported = try TestEnv.init("A",
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+    );
+    defer imported.deinit();
+    try imported.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import A
+        \\
+        \\alias = A.tick!
+        \\
+        \\top = alias({})
+    , "A", &imported);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - higher-order pure function parameter stays pure" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\call : ({} -> U64) -> U64
+        \\call = |fn| fn({})
+        \\
+        \\top = call(|_| 1)
+    );
+}
+
+test "effect propagation - higher-order effectful function parameter is effectful" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\call : ({} => U64) => U64
+        \\call = |fn| fn({})
+        \\
+        \\top = call(tick!)
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
+test "effect propagation - closure creation with effectful body is not effectful" {
+    try expectNoErrors(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\closure = || tick!({})
+    );
+}
+
+test "effect propagation - closure call with effectful body is effectful" {
+    try expectOneTypeError(
+        \\package [] {}
+        \\
+        \\tick! : {} => U64
+        \\tick! = |_| 1
+        \\
+        \\closure = || tick!({})
+        \\
+        \\top = closure()
+    , "EFFECTFUL TOP-LEVEL VALUE");
+}
+
 test "effect propagation - dbg expect and crash are not effectful calls" {
     try expectNoErrors(
         \\package [] {}
