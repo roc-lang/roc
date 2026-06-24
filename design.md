@@ -1079,10 +1079,12 @@ Checking errors are dependency-local for hoistability. A malformed expression,
 unresolved static-dispatch call, type error, or other checker-owned diagnostic
 poisons the expression that owns the error and any expression that explicitly
 depends on it. It does not poison sibling definitions, unrelated top-level
-values, unrelated imported modules, or the checked program as a whole. If one
-definition is erroneous and another definition is independently
-compile-time-known, the independent definition must still be evaluated during
-checking and, when reachable, emitted as static data.
+values, unrelated imported modules, or the checked program as a whole. A checked
+artifact that carries diagnostics is still a valid input to every independent
+compile-time-evaluation decision whose expression/dependency region is
+well-checked. If one definition is erroneous and another definition is
+independently compile-time-known, the independent definition must still be
+evaluated during checking and, when reachable, emitted as static data.
 The checked artifact must therefore be able to contain both diagnostics and
 successful compile-time root requests. The presence of diagnostics is not an
 artifact-level root-selection failure.
