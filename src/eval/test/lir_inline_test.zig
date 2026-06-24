@@ -254,13 +254,13 @@ test "optimized debug effect lowering erases inline dbg and expect" {
 
 test "nominal record lays out fields in declared order" {
     const allocator = std.testing.allocator;
-    // Declared order { z: U16, y: U16, x: U32 } is padding-free, so it is kept
-    // verbatim. It differs from both alphabetical order ({ x, y, z }) and the
-    // descending-alignment sort, which would both hoist the U32 to offset 0.
+    // The unnamed `_ : {}` field opts this nominal record into declared-order
+    // layout, so { z: U16, y: U16, x: U32 } is kept verbatim. Without the marker
+    // it would sort structurally and hoist the U32 to offset 0.
     const source =
         \\module [main]
         \\
-        \\Account := { z : U16, y : U16, x : U32 }
+        \\Account := { z : U16, y : U16, x : U32, _ : {} }
         \\
         \\main : Account -> Account
         \\main = |account| account
@@ -289,7 +289,7 @@ test "imported nominal record lays out fields in declared order" {
     const acct_module =
         \\module [Account]
         \\
-        \\Account := { z : U16, y : U16, x : U32 }
+        \\Account := { z : U16, y : U16, x : U32, _ : {} }
     ;
     // An imported nominal record must lay out identically to a local one, or
     // values would be read with the wrong offsets across module boundaries.

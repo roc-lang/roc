@@ -1103,6 +1103,44 @@ const TypeTable = struct {
         };
     }
 
+    /// Target-independent `SortKey` for a type table entry (see `layout.SortKey`).
+    /// Mirrors `layout.Store.layoutSortKey` over glue's own type representation so
+    /// `roc glue` orders structural records/tuples identically to the layout store
+    /// on both 32-bit and 64-bit targets.
+    fn getSortKey(self: *const TypeTable, type_id: u64) layout.SortKey {
+        if (type_id >= self.entries.items.len) return .align_1;
+        return self.getSortKeyForRepr(self.entries.items[@intCast(type_id)]);
+    }
+
+    fn getSortKeyForRepr(self: *const TypeTable, repr: CollectedTypeRepr) layout.SortKey {
+        return switch (repr) {
+            .bool_, .u8_, .i8_, .unit, .unknown => .align_1,
+            .u16_, .i16_ => .align_2,
+            .u32_, .i32_, .f32_ => .align_4,
+            .u64_, .i64_, .f64_, .dec => .align_8,
+            .u128_, .i128_ => .align_16,
+            .box, .str_, .list, .function => .pointer,
+            .record => |rec| blk: {
+                var key: layout.SortKey = .align_1;
+                for (rec.fields) |field| {
+                    if (field.is_padding) continue;
+                    key = key.max(self.getSortKey(field.type_id));
+                }
+                break :blk key;
+            },
+            .tag_union => |tu| blk: {
+                const disc_size = layout.TagUnionData.discriminantSize(tu.tags.len);
+                var key = layout.SortKey.fromAlignBytes(
+                    layout.TagUnionData.alignmentForDiscriminantSize(disc_size).toByteUnits(),
+                );
+                for (tu.tags) |tag| {
+                    for (tag.payload_ids) |pid| key = key.max(self.getSortKey(pid));
+                }
+                break :blk key;
+            },
+        };
+    }
+
     fn convertCheckedType(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -1216,13 +1254,13 @@ const TypeTable = struct {
     };
 
     /// Reconstructs a nominal record in DECLARED source order, with unnamed `_` /
-    /// `_name` fields reinstated as padding spacers, then reordered into the
-    /// runtime field order by the shared `field_order.computeNominalFieldOrder`
-    /// (the exact function the layout store uses). Returns `null` when the
-    /// declaration is unavailable (no `source_decl`, declaring module not found,
-    /// or the annotation is not a record), so the caller falls back to the
-    /// structural backing order. `backing` provides each named field's already
-    /// converted `type_id`/size/alignment, matched by field-name text.
+    /// `_name` fields reinstated as padding spacers and C-style padding inserted
+    /// between fields, matching the layout store's `putNominalStructFields`.
+    /// Returns `null` — so the caller falls back to the structural backing order —
+    /// when the record has no `_` field (it then lays out structurally), or when
+    /// the declaration is unavailable (no `source_decl`, declaring module not
+    /// found, or the annotation is not a record). `backing` provides each named
+    /// field's already converted `type_id`/size/alignment, matched by name text.
     fn nominalRecordInDeclaredOrder(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -1262,8 +1300,6 @@ const TypeTable = struct {
         // record (matched by name); each unnamed field becomes a padding spacer
         // whose size is its declared type's size and whose alignment is 1.
         const collected = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
-        const shapes = try self.gpa.alloc(layout.field_order.FieldShape, anno_fields.len);
-        defer self.gpa.free(shapes);
 
         var padding_cursor: usize = 0;
         var pad_index: usize = 0;
@@ -1292,7 +1328,6 @@ const TypeTable = struct {
                     .alignment = 1,
                     .is_padding = true,
                 };
-                shapes[i] = .{ .size = @intCast(sa.size), .alignment = 1 };
             } else {
                 const field_name = module_env.getIdentText(field.name);
                 const match = backingFieldByName(backing, field_name) orelse {
@@ -1306,25 +1341,23 @@ const TypeTable = struct {
                     .alignment = match.alignment,
                     .is_padding = false,
                 };
-                shapes[i] = .{ .size = @intCast(match.size), .alignment = @intCast(match.alignment) };
             }
             populated = i + 1;
         }
 
-        // Runtime order: the shared nominal field-order permutation. This keeps
-        // declared order when it is already padding-free (the common case).
-        const order = try self.gpa.alloc(u16, anno_fields.len);
-        defer self.gpa.free(order);
-        try layout.field_order.computeNominalFieldOrder(self.gpa, shapes, order);
+        // A nominal record keeps its declared order only when it opts in with an
+        // unnamed `_` field. Without one it lays out like a structural record, so
+        // fall back to the structural backing order.
+        if (pad_index == 0) {
+            self.freeCollectedRecordFields(collected, populated);
+            return null;
+        }
 
-        const ordered = try self.gpa.alloc(CollectedRecordField, anno_fields.len);
-        for (order, 0..) |src, dst| ordered[dst] = collected[src];
-        self.gpa.free(collected);
-
-        // Size/alignment from laying the ordered fields out with no padding.
+        // Declared order, verbatim, with C-style padding inserted between fields as
+        // alignment requires (the padding amount can differ on 32- vs 64-bit).
         var max_alignment: u64 = 1;
         var offset: u64 = 0;
-        for (ordered) |field| {
+        for (collected) |field| {
             if (field.alignment > max_alignment) max_alignment = field.alignment;
             if (field.alignment > 0) {
                 const rem = offset % field.alignment;
@@ -1338,7 +1371,7 @@ const TypeTable = struct {
             if (rem != 0) record_size += max_alignment - rem;
         }
 
-        return .{ .fields = ordered, .size = record_size, .alignment = max_alignment };
+        return .{ .fields = collected, .size = record_size, .alignment = max_alignment };
     }
 
     /// Finds a backing record field by its name text, returning its converted
@@ -1401,13 +1434,13 @@ const TypeTable = struct {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
-        // Structural records order by descending alignment then ascending field
+        // Structural records order by descending sort key then ascending field
         // name, computed by the shared field-order module the layout store uses.
         const structural = try self.gpa.alloc(layout.field_order.StructuralField, fields.len);
         defer self.gpa.free(structural);
         for (fields, 0..) |field, i| {
             structural[i] = .{
-                .alignment = @intCast(field_sizes[i].alignment),
+                .sort_key = self.getSortKey(field_type_ids[i]),
                 .name = artifact.canonical_names.recordFieldLabelText(field.name),
             };
         }
@@ -1478,7 +1511,15 @@ const TypeTable = struct {
             field_names[i] = try std.fmt.allocPrint(self.gpa, "_{d}", .{i});
         }
 
-        // Sort by alignment descending, then name ascending (matching Roc ABI)
+        // Sort by sort key descending, then name ascending (matching Roc ABI). The
+        // sort key is target-independent (a pointer sorts between 4- and 8-byte
+        // alignment), so the element order matches the layout store on both targets.
+        const field_sort_keys = try self.gpa.alloc(layout.SortKey, elems.len);
+        defer self.gpa.free(field_sort_keys);
+        for (0..elems.len) |i| {
+            field_sort_keys[i] = self.getSortKey(field_type_ids[i]);
+        }
+
         var field_indices = try self.gpa.alloc(usize, elems.len);
         defer self.gpa.free(field_indices);
         for (0..elems.len) |i| {
@@ -1486,19 +1527,17 @@ const TypeTable = struct {
         }
 
         const SortCtx = struct {
-            sizes: []const SizeAlign,
+            sort_keys: []const layout.SortKey,
             names: []const []const u8,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_align = ctx.sizes[a].alignment;
-                const b_align = ctx.sizes[b].alignment;
-                if (a_align != b_align) {
-                    return a_align > b_align; // descending alignment
+                if (ctx.sort_keys[a] != ctx.sort_keys[b]) {
+                    return ctx.sort_keys[a].sortsBefore(ctx.sort_keys[b]);
                 }
                 return std.mem.order(u8, ctx.names[a], ctx.names[b]) == .lt;
             }
         };
-        std.mem.sort(usize, field_indices, SortCtx{ .sizes = field_sizes, .names = field_names }, SortCtx.lessThan);
+        std.mem.sort(usize, field_indices, SortCtx{ .sort_keys = field_sort_keys, .names = field_names }, SortCtx.lessThan);
 
         const collected_fields = try self.gpa.alloc(CollectedRecordField, elems.len);
         var max_alignment: u64 = 0;

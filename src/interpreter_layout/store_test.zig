@@ -90,9 +90,10 @@ test "fromTypeVar - bool type" {
     const bool_layout_idx = try lt.layout_store.insertLayout(bool_layout);
 
     const retrieved_layout = lt.layout_store.getLayout(bool_layout_idx);
-    try testing.expect(retrieved_layout.tag == .scalar);
-    try testing.expectEqual(layout.ScalarTag.int, retrieved_layout.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.u8, retrieved_layout.getScalar().getInt());
+    // Bool is the canonical two-nullary tag union (tag-union metadata index 0),
+    // a 1-byte discriminant with no payload.
+    try testing.expect(retrieved_layout.tag == .tag_union);
+    try testing.expectEqual(@as(u16, 0), retrieved_layout.getTagUnion().idx.int_idx);
     try testing.expectEqual(@as(u32, 1), lt.layout_store.layoutSize(retrieved_layout));
 }
 
@@ -931,11 +932,11 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
 }
 
 // -- Record field offset by name --
-// These tests verify that getRecordFieldOffsetByName correctly handles
-// all three record field ordering cases: alphabetical (same alignment),
-// opposite alphabetical pattern, and alignment-overridden ordering.
+// These tests verify record field ordering for all three cases:
+// alphabetical (same alignment), opposite alphabetical pattern, and
+// alignment-overridden ordering, checked via the original-index offset API.
 
-test "getRecordFieldOffsetByName - same alignment, alphabetical order" {
+test "record field order - same alignment, alphabetical order" {
     // {len: U64, start: U64} — both 8-byte alignment, sorted alphabetically:
     // len at offset 0, start at offset 8
     var lt = try LayoutTest.init(testing.allocator);
@@ -954,12 +955,13 @@ test "getRecordFieldOffsetByName - same alignment, alphabetical order" {
     const record_layout = lt.layout_store.getLayout(record_idx);
     const rid = record_layout.getStruct().idx;
 
-    // len < start alphabetically, so len is first
-    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = len_ident }));
-    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = start_ident }));
+    // len < start alphabetically, so len is first. Passed order was [start, len],
+    // so start has original index 0 and len has original index 1.
+    try testing.expectEqual(@as(u32, 0), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
+    try testing.expectEqual(@as(u32, 8), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 0));
 }
 
-test "getRecordFieldOffsetByName - same alignment, opposite alphabetical pattern" {
+test "record field order - same alignment, opposite alphabetical pattern" {
     // {aaa: U64, zzz: U64} — both 8-byte alignment, sorted alphabetically:
     // aaa at offset 0, zzz at offset 8
     // This is the "opposite" pattern from {len, start}: here the semantically
@@ -980,11 +982,12 @@ test "getRecordFieldOffsetByName - same alignment, opposite alphabetical pattern
     const record_layout = lt.layout_store.getLayout(record_idx);
     const rid = record_layout.getStruct().idx;
 
-    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = aaa_ident }));
-    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = zzz_ident }));
+    // Passed order was [zzz, aaa], so zzz has original index 0 and aaa index 1.
+    try testing.expectEqual(@as(u32, 0), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
+    try testing.expectEqual(@as(u32, 8), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 0));
 }
 
-test "getRecordFieldOffsetByName - alignment overrides alphabetical order" {
+test "record field order - alignment overrides alphabetical order" {
     // {len: U8, start: U64} — same field names as test 1, but different types.
     // start has alignment 8, len has alignment 1. Higher alignment sorts first,
     // so: start at offset 0, len at offset 8 (opposite of pure alphabetical).
@@ -1005,9 +1008,10 @@ test "getRecordFieldOffsetByName - alignment overrides alphabetical order" {
     const record_layout = lt.layout_store.getLayout(record_idx);
     const rid = record_layout.getStruct().idx;
 
-    // start (U64, align=8) comes before len (U8, align=1) due to alignment sort
-    try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = start_ident }));
-    try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = 0, .ident = len_ident }));
+    // start (U64, align=8) comes before len (U8, align=1) due to alignment sort.
+    // Passed order was [len, start], so len has original index 0 and start index 1.
+    try testing.expectEqual(@as(u32, 0), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
+    try testing.expectEqual(@as(u32, 8), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 0));
 }
 
 test "record field names resolve correctly across module ident stores" {
@@ -1045,6 +1049,7 @@ test "record field names resolve correctly across module ident stores" {
     const record_layout = layout_store.getLayout(record_idx);
     const rid = record_layout.getStruct().idx;
 
-    try testing.expectEqual(@as(u32, 0), layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = builtin_module_idx, .ident = builtin_len }));
-    try testing.expectEqual(@as(u32, 8), layout_store.getRecordFieldOffsetByName(rid, .{ .module_idx = builtin_module_idx, .ident = builtin_start }));
+    // Passed order was [start, len], so start has original index 0 and len index 1.
+    try testing.expectEqual(@as(u32, 0), layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
+    try testing.expectEqual(@as(u32, 8), layout_store.getStructFieldOffsetByOriginalIndex(rid, 0));
 }

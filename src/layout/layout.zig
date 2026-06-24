@@ -407,6 +407,48 @@ pub const RocAlignment = enum(u3) {
     }
 };
 
+/// Target-independent key for ordering aggregate fields by alignment.
+///
+/// A pointer sorts strictly between 4-byte and 8-byte alignment. Because a
+/// pointer is the only type whose real alignment varies by target (4 bytes on a
+/// 32-bit target, 8 on a 64-bit one), giving it a fixed slot between `align_4`
+/// and `align_8` makes a record/tuple's field order identical on both targets —
+/// the foundation for caching layout across pointer widths.
+///
+/// This is purely an ordering key: it has no byte value and must never be used as
+/// an actual alignment. Use `std.mem.Alignment` (e.g. `Layout.alignment`) for
+/// offsets, sizes, and allocation.
+pub const SortKey = enum(u8) {
+    align_1 = 0,
+    align_2 = 1,
+    align_4 = 2,
+    pointer = 3,
+    align_8 = 4,
+    align_16 = 5,
+
+    /// Sort key for a fixed (non-pointer) power-of-two alignment in bytes.
+    pub fn fromAlignBytes(bytes: u64) SortKey {
+        return switch (bytes) {
+            1 => .align_1,
+            2 => .align_2,
+            4 => .align_4,
+            8 => .align_8,
+            16 => .align_16,
+            else => unreachable, // alignments are powers of two up to 16
+        };
+    }
+
+    /// The greater of two sort keys (used to fold an aggregate's children).
+    pub fn max(a: SortKey, b: SortKey) SortKey {
+        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+    }
+
+    /// Whether `a` sorts before `b` in the field order (higher key first).
+    pub fn sortsBefore(a: SortKey, b: SortKey) bool {
+        return @intFromEnum(a) > @intFromEnum(b);
+    }
+};
+
 /// Size and alignment information
 pub const SizeAlign = packed struct(u32) {
     size: u29, // u29 can represent sizes up to ~1GiB (is 1 byte shy of it).
