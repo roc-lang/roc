@@ -55,88 +55,32 @@ test "NoMetrics is a zero-size no-op metrics sink" {
 
 const EventPayloadKind = engine.EventPayloadKind;
 const SignalKind = engine.SignalKind;
-const HostEventDescriptor = engine.HostEventDescriptor;
 const HostActiveEventDesc = engine.HostActiveEventDesc(HostValueTypeTag);
 const HostPendingTask = engine.HostPendingTask;
-const HostSignalEventRoute = engine.HostSignalEventRoute;
-
-const HostValueCell = engine.HostValueCell;
-const HostState = engine.HostState;
-const HostSignalDescriptor = engine.HostSignalDescriptor;
-const HostSignalRoute = engine.HostSignalRoute;
-const HostSignalDependentsRoute = engine.HostSignalDependentsRoute;
 
 const HostSignalCacheSlot = engine.HostSignalCacheSlot;
 
-const HostEachRowScopeStep = engine.HostEachRowScopeStep;
-const HostScopeStep = engine.HostScopeStep;
-const HostScope = engine.HostScope;
-const deinitHostScopeStep = engine.deinitHostScopeStep;
-
 const HostNodeScopeSiteKind = engine.HostNodeScopeSiteKind;
-const HostRenderNodeKind = engine.HostRenderNodeKind;
-const HostRenderNode = engine.HostRenderNode;
 const HostBinderToken = engine.HostBinderToken;
 const HostSignalToken = engine.HostSignalToken;
 const HostBinderBinding = engine.HostBinderBinding;
 
-const retainHostCallable = engine.retainHostCallable;
-
-const retainHostSignalToken = engine.retainHostSignalToken;
-
-const HostSignalConstRecord = engine.HostSignalConstRecord;
-const HostSignalMapRecord = engine.HostSignalMapRecord;
-const HostSignalMap2Record = engine.HostSignalMap2Record;
-const HostSignalCombineRecord = engine.HostSignalCombineRecord;
-const HostSignalTaskSourceRecord = engine.HostSignalTaskSourceRecord;
-const HostSignalIntervalSourceRecord = engine.HostSignalIntervalSourceRecord;
 const HostSignalRecordPayload = engine.HostSignalRecordPayload;
 
 const HostSignalRecord = engine.HostSignalRecord;
 
 const HostSignalBinding = engine.HostSignalBinding;
-const HostSignalEvalResult = engine.HostSignalEvalResult;
 
 const HostNodeScopeSiteDesc = engine.HostNodeScopeSiteDesc;
-const HostElementDesc = engine.HostElementDesc;
-const HostNodeTextNodeDesc = engine.HostNodeTextNodeDesc;
-const HostNodeSignalTextNodeDesc = engine.HostNodeSignalTextNodeDesc;
-const HostNodeStaticTextAttrDesc = engine.HostNodeStaticTextAttrDesc;
-const HostNodeSignalTextAttrDesc = engine.HostNodeSignalTextAttrDesc;
-const HostNodeStaticBoolAttrDesc = engine.HostNodeStaticBoolAttrDesc;
-const HostNodeSignalBoolAttrDesc = engine.HostNodeSignalBoolAttrDesc;
-const HostNodeOnChangeDesc = engine.HostNodeOnChangeDesc;
-const HostNodeCleanupDesc = engine.HostNodeCleanupDesc;
 const HostNodeEventDesc = engine.HostNodeEventDesc;
-const HostNodeStateDesc = engine.HostNodeStateDesc;
 const HostNodeWhenDesc = engine.HostNodeWhenDesc;
 const HostNodeEachDesc = engine.HostNodeEachDesc;
-const HostSignalRecordTokenEntry = engine.HostSignalRecordTokenEntry;
 
-const HostActiveSignalGraphNode = engine.HostActiveSignalGraphNode;
-
-const HostTextFieldDescriptorIndexes = engine.HostTextFieldDescriptorIndexes;
-const HostBoolFieldDescriptorIndexes = engine.HostBoolFieldDescriptorIndexes;
-const HostEventDescriptorIndexes = engine.HostEventDescriptorIndexes;
-const HostElemDescriptorIndex = engine.HostElemDescriptorIndex;
 const HostNodeDescriptorStream = engine.HostNodeDescriptorStream;
 
-const HostActiveTextSignalSinkKind = engine.HostActiveTextSignalSinkKind;
-const HostActiveTextSignalSink = engine.HostActiveTextSignalSink;
-const HostActiveBoolSignalSink = engine.HostActiveBoolSignalSink;
-const HostActiveChangeSignalSink = engine.HostActiveChangeSignalSink;
 const HostActiveStructuralSignalKind = engine.HostActiveStructuralSignalKind;
-const HostActiveStructuralSignal = engine.HostActiveStructuralSignal;
 const HostDirtyStructuralSignal = engine.HostDirtyStructuralSignal;
-const HostEachSite = engine.HostEachSite;
-const HostStructuralReplacementTarget = engine.HostStructuralReplacementTarget;
-const HostStructuralPatchTargets = engine.HostStructuralPatchTargets;
-const HostStructuralSplice = engine.HostStructuralSplice;
-const HostStructuralSpliceAndTargets = engine.HostStructuralSpliceAndTargets;
-const RecomputeApplyOutcome = engine.RecomputeApplyOutcome;
 const HostKeyedRowDiffResult = engine.HostKeyedRowDiffResult;
-const HostEachRowRenderSegment = engine.HostEachRowRenderSegment;
-const HostEachRowRenderMove = engine.HostEachRowRenderMove;
 
 const HostRenderMetrics = render.Metrics;
 
@@ -639,15 +583,6 @@ fn u64SliceContains(items: []const u64, target: u64) bool {
     return false;
 }
 
-fn failSignalGraphError(err: anyerror, unknown_node_message: []const u8, missing_dependent_message: []const u8) noreturn {
-    switch (err) {
-        error.OutOfMemory => std.process.exit(1),
-        error.UnknownNode => failHost(unknown_node_message),
-        error.MissingDependent => failHost(missing_dependent_message),
-        else => failHost("signal graph operation failed"),
-    }
-}
-
 fn failScopeTreeError(err: anyerror, unknown_scope_message: []const u8) noreturn {
     switch (err) {
         error.OutOfMemory => std.process.exit(1),
@@ -673,16 +608,6 @@ fn failScopeOrIdentityTableError(err: anyerror, unknown_scope_message: []const u
     }
 }
 
-fn failEventLookupError(err: HostEngine.EventLookupError) noreturn {
-    switch (err) {
-        error.EventIdZero => failHost("event id 0 is not registered"),
-        error.MissingSignalEventRoute => failHost("event id has no host source signal route descriptor"),
-        error.SignalEventRouteIndexMismatch => failHost("host signal event route table is not indexed by event id"),
-        error.MissingEventDescriptor => failHost("event id has no host event descriptor"),
-        error.EventDescriptorIndexMismatch => failHost("host event descriptor table is not indexed by event id"),
-    }
-}
-
 fn failSignalLookupError(err: HostEngine.SignalLookupError) noreturn {
     switch (err) {
         error.MissingSignalRoute => failHost("state id has no host signal route descriptor"),
@@ -697,15 +622,6 @@ fn failSignalLookupError(err: HostEngine.SignalLookupError) noreturn {
 fn failRocHostRequiredError(err: HostEngine.RocHostRequiredError, message: []const u8) noreturn {
     switch (err) {
         error.MissingRocHost => failHost(message),
-    }
-}
-
-fn failKeyedRowsError(err: anyerror) noreturn {
-    switch (err) {
-        error.OutOfMemory => std.process.exit(1),
-        error.DuplicateKey => failHost("Ui.each keyed scope received duplicate keys"),
-        error.MismatchedExistingHashes => failHost("keyed row diff received mismatched existing ids and hashes"),
-        else => failHost("keyed row diff operation failed"),
     }
 }
 
@@ -1051,25 +967,6 @@ const HostEnv = struct {
         }
     }
 
-    fn sourceSignalIdsForEvent(self: *HostEnv, event_id: u64) []const u64 {
-        return self.engine.sourceSignalIdsForEvent(event_id) catch |err| {
-            failEventLookupError(err);
-        };
-    }
-
-    fn eventPayloadKind(self: *HostEnv, event_id: u64) EventPayloadKind {
-        return self.engine.eventPayloadKind(event_id) catch |err| {
-            failEventLookupError(err);
-        };
-    }
-
-    fn validateEventPayload(self: *HostEnv, event_id: u64, expected_payload_kind: EventPayloadKind) void {
-        _ = self.sourceSignalIdsForEvent(event_id);
-        if (self.eventPayloadKind(event_id) != expected_payload_kind) {
-            failHost("DOM binding payload kind does not match Roc event descriptor");
-        }
-    }
-
     fn signalKindFromAbi(kind: u64) SignalKind {
         return switch (kind) {
             @intFromEnum(SignalKind.source) => .source,
@@ -1175,14 +1072,6 @@ const HostEnv = struct {
 
     fn requireActiveSignalRecordId(self: *HostEnv, record: *const HostSignalRecord) u64 {
         return self.engine.requireActiveSignalRecordId(record);
-    }
-
-    fn rebuildActiveSinkSignalRoutesFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
-        return self.engine.rebuildActiveSinkSignalRoutesFromStream(self, stream);
-    }
-
-    fn rebuildActiveSignalGraphFromStream(self: *HostEnv, stream: *const HostNodeDescriptorStream) void {
-        return self.engine.rebuildActiveSignalGraphFromStream(self, stream);
     }
 
     fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
@@ -1306,30 +1195,10 @@ const HostEnv = struct {
         }
     }
 
-    fn signalIdsForState(self: *HostEnv, state_id: u64) []const u64 {
-        return self.engine.signalIdsForState(state_id) catch |err| {
-            failSignalLookupError(err);
-        };
-    }
-
-    fn dependentSignalIdsForSignal(self: *HostEnv, signal_id: u64) []const u64 {
-        return self.engine.dependentSignalIdsForSignal(signal_id) catch |err| {
-            failSignalLookupError(err);
-        };
-    }
-
-    fn appendSignalAndDependents(self: *HostEnv, allocator: std.mem.Allocator, signal_ids: *std.ArrayListUnmanaged(u64), signal_id: u64) void {
-        self.engine.appendSignalAndDependents(allocator, signal_ids, signal_id);
-    }
-
     fn signalRank(self: *HostEnv, signal_id: u64) u64 {
         return self.engine.signalRank(signal_id) catch |err| {
             failSignalLookupError(err);
         };
-    }
-
-    fn sortSignalIdsByRank(self: *HostEnv, signal_ids: []u64) void {
-        self.engine.sortSignalIdsByRank(signal_ids);
     }
 
     fn dirtySignalIdsForEvent(self: *HostEnv, allocator: std.mem.Allocator, event_id: u64) []u64 {
@@ -1342,22 +1211,6 @@ const HostEnv = struct {
 
     fn dependentActiveSignalRecordIds(self: *HostEnv, record_id: u64) []const u64 {
         return self.engine.dependentActiveSignalRecordIds(record_id);
-    }
-
-    fn appendActiveSignalAndDependents(self: *HostEnv, allocator: std.mem.Allocator, record_ids: *std.ArrayListUnmanaged(u64), record_id: u64) void {
-        self.engine.appendActiveSignalAndDependents(allocator, record_ids, record_id);
-    }
-
-    fn sortActiveSignalRecordIdsByRank(self: *HostEnv, record_ids: []u64) void {
-        self.engine.sortActiveSignalRecordIdsByRank(record_ids);
-    }
-
-    fn dirtyActiveSignalRecordIdsForSources(self: *HostEnv, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64) []u64 {
-        return self.engine.dirtyActiveSignalRecordIdsForSources(allocator, dirty_source_node_ids);
-    }
-
-    fn dirtyActiveSignalRecordIdsForRoots(self: *HostEnv, allocator: std.mem.Allocator, root_record_ids: []const u64) []u64 {
-        return self.engine.dirtyActiveSignalRecordIdsForRoots(allocator, root_record_ids);
     }
 
     fn recordDispatch(self: *HostEnv) void {
@@ -1386,16 +1239,6 @@ const HostEnv = struct {
         return self.cloneHostValue(self.engine.states.items[state_index].cell.value);
     }
 
-    fn ensureStateFromDesc(self: *HostEnv, roc_host: *abi.RocHost, desc: HostNodeStateDesc) void {
-        self.engine.ensureStateFromDesc(self, roc_host, desc);
-    }
-
-    fn syncStatesFromNodeStream(self: *HostEnv, roc_host: *abi.RocHost, stream: *const HostNodeDescriptorStream) void {
-        for (stream.states.items) |desc| {
-            self.ensureStateFromDesc(roc_host, desc);
-        }
-    }
-
     fn updateStateValue(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64, value: HostValue) bool {
         const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("event referenced an unknown active state node");
         const state = &self.engine.states.items[state_index];
@@ -1407,10 +1250,6 @@ const HostEnv = struct {
         state.cell.replaceValue(roc_host, value);
         state.version += 1;
         return true;
-    }
-
-    fn deactivateState(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64) void {
-        self.engine.deactivateState(roc_host, node_id);
     }
 
     pub fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
@@ -1469,28 +1308,6 @@ const HostEnv = struct {
         self.engine.disposeScopeSubtree(self, roc_host, scope_id);
     }
 
-    fn activeEachRowScopes(self: *HostEnv, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) []u64 {
-        return self.engine.activeEachRowScopes(allocator, parent_scope_id, site_ordinal) catch |err| {
-            failScopeTreeError(err, "scope id has no host scope descriptor");
-        };
-    }
-
-    fn eachRowScopeKeyEquals(self: *HostEnv, roc_host: *abi.RocHost, scope_id: u64, key: HostValue) bool {
-        return self.engine.eachRowScopeKeyEquals(roc_host, scope_id, key);
-    }
-
-    fn eachRowScopeKeyValue(self: *HostEnv, scope_id: u64) HostValue {
-        return self.engine.eachRowScopeKeyValue(scope_id);
-    }
-
-    fn hashEachKeyValue(self: *HostEnv, roc_host: *abi.RocHost, key_hash: abi.RocErasedCallable, key: HostValue) u64 {
-        return self.engine.hashEachKeyValue(roc_host, key_hash, key);
-    }
-
-    fn eachKeysEqual(self: *HostEnv, roc_host: *abi.RocHost, key_eq: abi.RocErasedCallable, left: HostValue, right: HostValue) bool {
-        return self.engine.eachKeysEqual(roc_host, key_eq, left, right);
-    }
-
     fn eachRowScopeValues(self: *HostEnv, scope_id: u64) engine.EachRowValues {
         return self.engine.eachRowScopeValues(scope_id);
     }
@@ -1545,10 +1362,6 @@ const HostEnv = struct {
         self.walkElemIdentitySites(elem, branch_scope_id, &ordinal);
         return branch_scope_id;
     }
-
-    // resolveNodeBinderRef now lives in the shared engine; this struct-level alias
-    // keeps `HostEnv.resolveNodeBinderRef(...)` call sites resolving.
-    const resolveNodeBinderRef = engine.resolveNodeBinderRef;
 
     fn bindNodeSignal(self: *HostEnv, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) HostSignalBinding {
         return self.engine.bindNodeSignal(allocator, stream, expr, binder_stack);
@@ -1694,10 +1507,6 @@ const HostEnv = struct {
         return self.collectElemWhenBranchDescriptors(roc_host, stream, site, active_branch, elem);
     }
 
-    fn collectActiveWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, dirty_source_node_ids: []const u64) u64 {
-        return self.engine.collectActiveWhenBranchDescriptors(self, roc_host, stream, site, when, active_branch, dirty_source_node_ids);
-    }
-
     fn collectElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const HostValue) HostKeyedRowDiffResult {
         if (site.kind != .each) {
             failHost("Elem row collection requires an each scope site");
@@ -1731,315 +1540,6 @@ const HostEnv = struct {
         }
 
         return diff;
-    }
-
-    fn syncActiveEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc) HostKeyedRowDiffResult {
-        return self.engine.syncActiveEachRowScopes(self, roc_host, site, each);
-    }
-
-    fn collectActiveEachRowDescriptorsFromDiff(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, diff: HostKeyedRowDiffResult, dirty_source_node_ids: []const u64) void {
-        return self.engine.collectActiveEachRowDescriptorsFromDiff(self, roc_host, stream, site, each, diff, dirty_source_node_ids);
-    }
-
-    fn collectActiveEachSingleRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, dirty_source_node_ids: []const u64) void {
-        return self.engine.collectActiveEachSingleRowDescriptors(self, roc_host, stream, site, each, row_scope_id, dirty_source_node_ids);
-    }
-
-    fn eachSiteRowAncestorScopeId(self: *HostEnv, scope_id: u64, site: HostEachSite) ?u64 {
-        return self.engine.eachSiteRowAncestorScopeId(scope_id, site) catch |err| {
-            failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
-        };
-    }
-
-    fn lastRenderEndIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
-        return self.engine.lastRenderEndIndexInScopeSubtree(stream, root_scope_id);
-    }
-
-    fn scopeIsDescendantOrSelf(self: *HostEnv, scope_id: u64, root_scope_id: u64) bool {
-        return self.engine.scopeIsDescendantOrSelf(scope_id, root_scope_id) catch |err| {
-            failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
-        };
-    }
-
-    // renderNodeScopeId now lives in the shared engine; this struct-level alias
-    // keeps `HostEnv.renderNodeScopeId(...)` call sites resolving.
-    const renderNodeScopeId = engine.renderNodeScopeId;
-
-    // elemScopeId now lives in the shared engine; this struct-level alias
-    // keeps `HostEnv.elemScopeId(...)` call sites resolving.
-    const elemScopeId = engine.elemScopeId;
-
-    fn streamNodeIdInScopeSubtree(self: *HostEnv, previous: *const HostNodeDescriptorStream, node_id: u64, root_scope_id: u64) bool {
-        return self.engine.streamNodeIdInScopeSubtree(previous, node_id, root_scope_id);
-    }
-
-    fn scopeSubtreeHasDirtyStructuralSource(self: *HostEnv, previous: *const HostNodeDescriptorStream, root_scope_id: u64, dirty_source_node_ids: []const u64) bool {
-        return self.engine.scopeSubtreeHasDirtyStructuralSource(previous, root_scope_id, dirty_source_node_ids);
-    }
-
-    fn cloneHostSignalCacheSlot(self: *HostEnv, slot: HostSignalCacheSlot, metrics: *RuntimeMetrics) HostSignalCacheSlot {
-        return self.engine.cloneHostSignalCacheSlot(self, slot, metrics);
-    }
-
-    fn activeEventTransformByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
-        return self.engine.activeEventTransformByIndex(event_index) catch |err| switch (err) {
-            error.MissingActiveEvent => failHost("active event table is missing a retained transform"),
-        };
-    }
-
-    fn activeEventPayloadDropByIndex(self: *HostEnv, event_index: usize) abi.RocErasedCallable {
-        return self.engine.activeEventPayloadDropByIndex(event_index) catch |err| switch (err) {
-            error.MissingActiveEvent => failHost("active event table is missing a retained payload drop"),
-        };
-    }
-
-    fn activeEventPayloadTagByIndex(self: *HostEnv, event_index: usize) HostValueTypeTag {
-        return self.engine.activeEventPayloadTagByIndex(event_index) catch |err| switch (err) {
-            error.MissingActiveEvent => failHost("active event table is missing a retained payload tag"),
-        };
-    }
-
-    fn scopeIsEachSiteRowDescendantOrSelf(self: *HostEnv, scope_id: u64, site: HostEachSite) bool {
-        return self.engine.scopeIsEachSiteRowDescendantOrSelf(scope_id, site) catch |err| {
-            failScopeTreeError(err, "scope descriptor referenced an unknown parent scope");
-        };
-    }
-
-    fn scopeIsInReplacementTarget(self: *HostEnv, scope_id: u64, target: HostStructuralReplacementTarget) bool {
-        return self.engine.scopeIsInReplacementTarget(scope_id, target);
-    }
-
-    fn renderNodeInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, node: HostRenderNode, root_scope_id: u64) bool {
-        return self.engine.renderNodeInScopeSubtree(stream, node, root_scope_id);
-    }
-
-    fn renderNodeInReplacementTarget(self: *HostEnv, stream: *const HostNodeDescriptorStream, node: HostRenderNode, target: HostStructuralReplacementTarget) bool {
-        return self.engine.renderNodeInReplacementTarget(stream, node, target);
-    }
-
-    fn elemIdInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, elem_id: u64, root_scope_id: u64) bool {
-        const scope_id = HostEnv.elemScopeId(stream, elem_id) orelse failHost("descriptor referenced an element outside the render stream");
-        return self.scopeIsDescendantOrSelf(scope_id, root_scope_id);
-    }
-
-    fn elemIdInReplacementTarget(self: *HostEnv, stream: *const HostNodeDescriptorStream, elem_id: u64, target: HostStructuralReplacementTarget) bool {
-        return self.engine.elemIdInReplacementTarget(stream, elem_id, target);
-    }
-
-    fn countRenderNodesInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) usize {
-        var count: usize = 0;
-        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
-        for (stream.render_nodes.items) |node| {
-            if (self.renderNodeInScopeSubtree(stream, node, root_scope_id)) count += 1;
-        }
-        return count;
-    }
-
-    fn countRenderNodesInReplacementTarget(self: *HostEnv, stream: *const HostNodeDescriptorStream, target: HostStructuralReplacementTarget) usize {
-        var count: usize = 0;
-        self.engine.recordStreamNodesScanned(stream.render_nodes.items.len);
-        for (stream.render_nodes.items) |node| {
-            if (self.renderNodeInReplacementTarget(stream, node, target)) count += 1;
-        }
-        return count;
-    }
-
-    fn firstRenderIndexInScopeSubtree(self: *HostEnv, stream: *const HostNodeDescriptorStream, root_scope_id: u64) ?usize {
-        return self.engine.firstRenderIndexInScopeSubtree(stream, root_scope_id);
-    }
-
-    fn streamNodeIdInReplacementTarget(self: *HostEnv, previous: *const HostNodeDescriptorStream, node_id: u64, target: HostStructuralReplacementTarget) bool {
-        return self.engine.streamNodeIdInReplacementTarget(previous, node_id, target);
-    }
-
-    // adjustedRenderInsertIndex now lives in the shared engine; this struct-level
-    // alias keeps `HostEnv.adjustedRenderInsertIndex(...)` call sites resolving.
-    const adjustedRenderInsertIndex = engine.adjustedRenderInsertIndex;
-
-    fn appendRenderNodeDescriptorFromStream(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, source: *const HostNodeDescriptorStream, node: HostRenderNode) void {
-        const allocator = self.gpa.allocator();
-        switch (node.kind) {
-            .element => {
-                const desc = findElementDesc(source, node.elem_id) orelse failMissingRenderDescriptor("appendRenderNodeDescriptorFromStream", node);
-                _ = dest.appendElement(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.tag);
-            },
-            .text => {
-                const desc = findTextNodeDesc(source, node.elem_id) orelse failMissingRenderDescriptor("appendRenderNodeDescriptorFromStream", node);
-                dest.appendTextNode(allocator, desc.elem_id, desc.parent_elem_id, desc.scope_id, desc.value);
-            },
-            .signal_text => {
-                const desc = findSignalTextNodeDesc(source, node.elem_id) orelse failMissingRenderDescriptor("appendRenderNodeDescriptorFromStream", node);
-                const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-                dest.appendSignalTextNode(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, signal, desc.read);
-                dest.signal_text_nodes.items[dest.signal_text_nodes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-            },
-        }
-    }
-
-    fn appendEventDescriptorFromStream(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, desc: HostNodeEventDesc, event_index: usize) void {
-        const allocator = self.gpa.allocator();
-        const payload_tag = if (desc.owns_payload_tag) desc.payload_tag else self.activeEventPayloadTagByIndex(event_index);
-        const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index);
-        const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index);
-        dest.appendEventWithBorrowedPayloadTag(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_tag, payload_drop, transform);
-    }
-
-    fn appendPreviousNonRenderDescriptorsExcludingTarget(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, target: HostStructuralReplacementTarget, replace_index: usize, removed_render_count: usize, replacement_render_count: usize) void {
-        const allocator = self.gpa.allocator();
-        const previous = &self.engine.active_stream;
-
-        for (previous.static_text_attrs.items) |desc| {
-            if (self.elemIdInReplacementTarget(previous, desc.elem_id, target)) continue;
-            dest.appendStaticTextAttr(allocator, desc.elem_id, desc.field, desc.value);
-        }
-        for (previous.signal_text_attrs.items) |desc| {
-            if (self.elemIdInReplacementTarget(previous, desc.elem_id, target)) continue;
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendSignalTextAttr(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
-            dest.signal_text_attrs.items[dest.signal_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.static_bool_attrs.items) |desc| {
-            if (self.elemIdInReplacementTarget(previous, desc.elem_id, target)) continue;
-            dest.appendStaticBoolAttr(allocator, desc.elem_id, desc.field, desc.value);
-        }
-        for (previous.signal_bool_attrs.items) |desc| {
-            if (self.elemIdInReplacementTarget(previous, desc.elem_id, target)) continue;
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendSignalBoolAttr(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
-            dest.signal_bool_attrs.items[dest.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.on_changes.items) |desc| {
-            if (self.scopeIsInReplacementTarget(desc.scope_id, target)) continue;
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendOnChange(allocator, roc_host, &self.engine.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
-            dest.on_changes.items[dest.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.cleanups.items) |desc| {
-            if (self.scopeIsInReplacementTarget(desc.scope_id, target)) continue;
-            dest.appendCleanup(allocator, desc.scope_id, desc.name);
-        }
-        for (previous.events.items, 0..) |desc, event_index| {
-            if (self.elemIdInReplacementTarget(previous, desc.elem_id, target)) continue;
-            self.appendEventDescriptorFromStream(roc_host, dest, desc, event_index);
-        }
-
-        for (previous.scope_sites.items) |desc| {
-            if (self.scopeIsInReplacementTarget(desc.scope_id, target)) continue;
-            const render_insert_index = HostEnv.adjustedRenderInsertIndex(desc.render_insert_index, replace_index, removed_render_count, replacement_render_count);
-            dest.appendScopeSiteAt(allocator, desc.node_id, desc.scope_id, desc.ordinal, desc.parent_elem_id, render_insert_index, desc.kind, desc.binder_bindings);
-        }
-        for (previous.states.items) |desc| {
-            if (self.streamNodeIdInReplacementTarget(previous, desc.node_id, target)) continue;
-            dest.appendState(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, desc.initial, desc.eq, desc.drop);
-        }
-        for (previous.whens.items) |desc| {
-            if (self.streamNodeIdInReplacementTarget(previous, desc.node_id, target)) continue;
-            const condition = desc.condition.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendWhen(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, condition, desc.read, desc.when_false, desc.when_true);
-            dest.whens.items[dest.whens.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (previous.eaches.items) |desc| {
-            if (self.streamNodeIdInReplacementTarget(previous, desc.node_id, target)) continue;
-            const items = desc.items.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendEach(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, items, desc.items_to_values, desc.key_hash, desc.key_of, desc.key_eq, desc.key_drop, desc.item_eq, desc.item_drop, desc.row);
-            dest.eaches.items[dest.eaches.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-    }
-
-    fn appendReplacementNonRenderDescriptors(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, replacement: *const HostNodeDescriptorStream, render_insert_offset: usize) void {
-        const allocator = self.gpa.allocator();
-
-        for (replacement.static_text_attrs.items) |desc| {
-            dest.appendStaticTextAttr(allocator, desc.elem_id, desc.field, desc.value);
-        }
-        for (replacement.signal_text_attrs.items) |desc| {
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendSignalTextAttr(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
-            dest.signal_text_attrs.items[dest.signal_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (replacement.static_bool_attrs.items) |desc| {
-            dest.appendStaticBoolAttr(allocator, desc.elem_id, desc.field, desc.value);
-        }
-        for (replacement.signal_bool_attrs.items) |desc| {
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendSignalBoolAttr(allocator, roc_host, &self.engine.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
-            dest.signal_bool_attrs.items[dest.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (replacement.on_changes.items) |desc| {
-            const signal = desc.signal.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendOnChange(allocator, roc_host, &self.engine.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
-            dest.on_changes.items[dest.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (replacement.cleanups.items) |desc| {
-            dest.appendCleanup(allocator, desc.scope_id, desc.name);
-        }
-        for (replacement.events.items, 0..) |desc, event_index| {
-            self.appendEventDescriptorFromStream(roc_host, dest, desc, event_index);
-        }
-
-        for (replacement.scope_sites.items) |desc| {
-            dest.appendScopeSiteAt(allocator, desc.node_id, desc.scope_id, desc.ordinal, desc.parent_elem_id, render_insert_offset + desc.render_insert_index, desc.kind, desc.binder_bindings);
-        }
-        for (replacement.states.items) |desc| {
-            dest.appendState(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, desc.initial, desc.eq, desc.drop);
-        }
-        for (replacement.whens.items) |desc| {
-            const condition = desc.condition.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendWhen(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, condition, desc.read, desc.when_false, desc.when_true);
-            dest.whens.items[dest.whens.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-        for (replacement.eaches.items) |desc| {
-            const items = desc.items.cloneRetained(allocator, &self.engine.pending_roc_metrics);
-            dest.appendEach(allocator, roc_host, &self.engine.pending_roc_metrics, desc.node_id, items, desc.items_to_values, desc.key_hash, desc.key_of, desc.key_eq, desc.key_drop, desc.item_eq, desc.item_drop, desc.row);
-            dest.eaches.items[dest.eaches.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(desc.cached_value, &self.engine.pending_roc_metrics);
-        }
-    }
-
-    fn copyActiveStreamReplacingTarget(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, target: HostStructuralReplacementTarget, render_insert_index: usize, replacement: *const HostNodeDescriptorStream) void {
-        const previous = &self.engine.active_stream;
-        if (render_insert_index > previous.render_nodes.items.len) failHost("structural replacement render insertion point is outside the active stream");
-
-        const removed_render_count = self.countRenderNodesInReplacementTarget(previous, target);
-        const replacement_render_count = replacement.render_nodes.items.len;
-        var inserted_replacement = false;
-
-        for (previous.render_nodes.items, 0..) |node, index| {
-            if (!inserted_replacement and index == render_insert_index) {
-                for (replacement.render_nodes.items) |replacement_node| {
-                    self.appendRenderNodeDescriptorFromStream(roc_host, dest, replacement, replacement_node);
-                }
-                inserted_replacement = true;
-            }
-
-            if (self.renderNodeInReplacementTarget(previous, node, target)) continue;
-            self.appendRenderNodeDescriptorFromStream(roc_host, dest, previous, node);
-        }
-
-        if (!inserted_replacement) {
-            if (render_insert_index != previous.render_nodes.items.len) failHost("structural replacement render insertion point was not reached");
-            for (replacement.render_nodes.items) |replacement_node| {
-                self.appendRenderNodeDescriptorFromStream(roc_host, dest, replacement, replacement_node);
-            }
-        }
-
-        self.appendPreviousNonRenderDescriptorsExcludingTarget(roc_host, dest, target, render_insert_index, removed_render_count, replacement_render_count);
-        self.appendReplacementNonRenderDescriptors(roc_host, dest, replacement, render_insert_index);
-    }
-
-    fn copyActiveStreamReplacingScope(self: *HostEnv, roc_host: *abi.RocHost, dest: *HostNodeDescriptorStream, replaced_scope_id: u64, render_insert_index: usize, replacement: *const HostNodeDescriptorStream) void {
-        self.copyActiveStreamReplacingTarget(roc_host, dest, .{ .scope = replaced_scope_id }, render_insert_index, replacement);
-    }
-
-    fn spliceActiveStreamReplacingTarget(self: *HostEnv, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
-        return self.engine.spliceActiveStreamReplacingTarget(self, roc_host, target, render_insert_index, replacement);
-    }
-
-    fn spliceActiveStreamReplacingScope(self: *HostEnv, roc_host: *abi.RocHost, replaced_scope_id: u64, render_insert_index: usize, replacement: *HostNodeDescriptorStream) HostStructuralSplice {
-        return self.engine.spliceActiveStreamReplacingScope(self, roc_host, replaced_scope_id, render_insert_index, replacement);
-    }
-
-    fn copyActiveScopeSubtreeDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root_scope_id: u64) void {
-        self.engine.copyActiveScopeSubtreeDescriptors(self, roc_host, stream, root_scope_id);
     }
 
     fn collectActiveElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem, dirty_source_node_ids: []const u64) void {
@@ -2463,16 +1963,6 @@ fn failHost(message: []const u8) noreturn {
     std.process.exit(1);
 }
 
-fn failMissingRenderDescriptor(context: []const u8, node: HostRenderNode) noreturn {
-    var message: [192]u8 = undefined;
-    const rendered = std.fmt.bufPrint(
-        &message,
-        "{s}: render node {d} with kind {s} has no matching descriptor",
-        .{ context, node.elem_id, @tagName(node.kind) },
-    ) catch "render node has no matching descriptor";
-    failHost(rendered);
-}
-
 fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) bool {
     if (field.*) |existing| {
         if (std.mem.eql(u8, existing, value)) return false;
@@ -2582,14 +2072,6 @@ fn runtimeMetricValue(metrics: RuntimeMetrics, name: []const u8) ?i64 {
     return null;
 }
 
-fn setElementTextIfChanged(host: *HostEnv, elem: *DomElement, text: []const u8) bool {
-    if (replaceOwnedString(host.gpa.allocator(), &elem.text, text)) {
-        elem.text_update_count += 1;
-        return true;
-    }
-    return false;
-}
-
 fn setElementText(host: *HostEnv, elem: *DomElement, text: []const u8) void {
     setOwnedString(host.gpa.allocator(), &elem.text, text);
     elem.text_update_count += 1;
@@ -2630,15 +2112,6 @@ fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) bool {
 fn setElementChecked(elem: *DomElement, checked: bool) void {
     elem.checked = checked;
     elem.checked_update_count += 1;
-}
-
-fn setElementDisabledIfChanged(elem: *DomElement, disabled: bool) bool {
-    if (elem.disabled != disabled) {
-        elem.disabled = disabled;
-        elem.disabled_update_count += 1;
-        return true;
-    }
-    return false;
 }
 
 fn setElementDisabled(elem: *DomElement, disabled: bool) void {
@@ -2731,21 +2204,6 @@ fn appendDomNode(host: *HostEnv, elem_id: u64, parent_elem_id: u64, tag: []const
     parent.children.append(allocator, child.id) catch std.process.exit(1);
 }
 
-// Pure descriptor-stream readers now live in the shared engine; re-exported here
-// so existing native call sites and the structural collection/apply helpers keep
-// their unqualified names.
-const findElementDesc = engine.findElementDesc;
-const findTextNodeDesc = engine.findTextNodeDesc;
-const findSignalTextNodeDesc = engine.findSignalTextNodeDesc;
-const findSignalTextNodeDescMutable = engine.findSignalTextNodeDescMutable;
-const streamHasTextField = engine.streamHasTextField;
-const streamHasBoolField = engine.streamHasBoolField;
-const maxRenderElemId = engine.maxRenderElemId;
-const renderNodeTag = engine.renderNodeTag;
-const streamElemTag = engine.streamElemTag;
-const renderNodeParentElemId = engine.renderNodeParentElemId;
-const streamElemParentElemId = engine.streamElemParentElemId;
-
 fn findDomChildIndex(elem: *const DomElement, child_id: u64) ?usize {
     for (elem.children.items, 0..) |id, index| {
         if (id == child_id) return index;
@@ -2758,40 +2216,8 @@ fn ensureDomNode(host: *HostEnv, elem_id: u64, tag: []const u8) void {
     appendDetachedDomNode(host, elem_id, tag);
 }
 
-fn cloneCachedSignalValue(host: *HostEnv, cache_slot: *const HostSignalCacheSlot) HostValue {
-    return host.engine.cloneCachedSignalValue(host, cache_slot);
-}
-
-fn hostSignalRecordDropCallable(host: *HostEnv, record: *const HostSignalRecord) abi.RocErasedCallable {
-    return host.engine.hostSignalRecordDropCallable(host, record);
-}
-
-fn dropHostSignalRecordValue(host: *HostEnv, roc_host: *abi.RocHost, record: *const HostSignalRecord, value: HostValue) void {
-    host.engine.dropHostSignalRecordValue(host, roc_host, record, value);
-}
-
-fn evalHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord) HostValue {
-    return host.engine.evalHostSignalRecord(host, roc_host, record);
-}
-
-fn evalDirtyHostSignalRecord(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
-    return host.engine.evalDirtyHostSignalRecord(host, roc_host, record, dirty_source_node_ids, dirty_generation);
-}
-
-fn evalHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *HostSignalBinding) HostValue {
-    return host.engine.evalHostSignalBinding(host, roc_host, signal);
-}
-
-fn evalDirtyHostSignalBinding(host: *HostEnv, roc_host: *abi.RocHost, signal: *HostSignalBinding, dirty_source_node_ids: []const u64, dirty_generation: u64) HostSignalEvalResult {
-    return host.engine.evalDirtyHostSignalBinding(host, roc_host, signal, dirty_source_node_ids, dirty_generation);
-}
-
 fn propagateDirtyActiveSignals(host: *HostEnv, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
     return host.engine.propagateDirtyActiveSignals(host, roc_host, allocator, dirty_source_node_ids, dirty_generation);
-}
-
-fn propagateDirtyActiveSignalRecordIds(host: *HostEnv, roc_host: *abi.RocHost, allocator: std.mem.Allocator, dirty_record_ids: []const u64, dirty_source_node_ids: []const u64, dirty_generation: u64) []u64 {
-    return host.engine.propagateDirtyActiveSignalRecordIds(host, roc_host, allocator, dirty_record_ids, dirty_source_node_ids, dirty_generation);
 }
 
 fn hostSignalRecordEqCallable(host: *HostEnv, record: *const HostSignalRecord) abi.RocErasedCallable {
@@ -2806,36 +2232,8 @@ fn hostSignalBindingDropCallable(host: *HostEnv, signal: *const HostSignalBindin
     return host.engine.hostSignalBindingDropCallable(host, signal);
 }
 
-fn recordSignalPrune(host: *HostEnv) void {
-    host.engine.recordSignalPrune();
-}
-
 fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) bool {
     return host.engine.updateDirtySignalCache(roc_host, cache_slot, value);
-}
-
-fn evalSignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
-    return host.engine.evalSignalTextField(host, roc_host, elem_id, field, signal, read, cache_slot);
-}
-
-fn evalSignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
-    return host.engine.evalSignalBoolField(host, roc_host, elem_id, field, signal, read, cache_slot);
-}
-
-fn evalDirtySignalTextField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
-    return host.engine.evalDirtySignalTextField(host, roc_host, elem_id, field, signal, read, cache_slot, dirty_source_node_ids, dirty_generation);
-}
-
-fn evalDirtySignalBoolField(host: *HostEnv, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
-    return host.engine.evalDirtySignalBoolField(host, roc_host, elem_id, field, signal, read, cache_slot, dirty_source_node_ids, dirty_generation);
-}
-
-fn dispatchEffectSourceValue(host: *HostEnv, roc_host: *abi.RocHost, record: *HostSignalRecord, value: HostValue) CommandCounts {
-    return host.engine.dispatchEffectSourceValue(host, roc_host, record, value);
-}
-
-fn startTaskCommand(host: *HostEnv, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: abi.__AnonStruct76) CommandCounts {
-    return host.engine.startTaskCommand(host, roc_host, owner_scope_id, cmd);
 }
 
 fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
@@ -2952,10 +2350,6 @@ fn replaceDomChildrenForStructuralParent(host: *HostEnv, parent_elem_id: u64, ne
     parent.children.deinit(allocator);
     parent.children = .empty;
     parent.children.appendSlice(allocator, next_child_ids) catch std.process.exit(1);
-}
-
-fn applyStructuralNodeDescriptorTarget(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, targets: HostStructuralPatchTargets) CommandCounts {
-    return host.engine.applyStructuralNodeDescriptorTarget(host, roc_host, stream, targets);
 }
 
 fn applyNodeDescriptorStream(host: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream) CommandCounts {
