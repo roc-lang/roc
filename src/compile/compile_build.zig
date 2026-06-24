@@ -1218,7 +1218,7 @@ pub const BuildEnv = struct {
         // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const source_read = self.readSourceFile(file_abs) catch |err| {
+        const source_read = self.readHeaderSourceFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
                     var report = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
@@ -1516,7 +1516,18 @@ pub const BuildEnv = struct {
         file_state: ?watch_inputs.State,
     };
 
-    fn readSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
+    fn readHeaderSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
+        if (!self.track_watch_inputs) {
+            return .{
+                .source = try self.readFile(path),
+                .file_state = null,
+            };
+        }
+
+        return try self.readSourceFileWithState(path);
+    }
+
+    fn readSourceFileWithState(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
         const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.AccessDenied => return error.AccessDenied,
@@ -1524,10 +1535,7 @@ pub const BuildEnv = struct {
             error.IoError => return error.IoError,
             error.OutOfMemory => return error.OutOfMemory,
         };
-        const file_state: ?watch_inputs.State = if (self.track_watch_inputs)
-            .{ .hash = watch_inputs.hashBytes(data) }
-        else
-            null;
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
 
         const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
             self.gpa.free(data);

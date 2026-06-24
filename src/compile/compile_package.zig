@@ -1043,7 +1043,7 @@ pub const PackageEnv = struct {
     fn doParse(self: *PackageEnv, module_id: ModuleId) (Allocator.Error || error{FileNotFound})!void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
-        const source_read = self.readModuleSource(st.path) catch |read_err| {
+        const source_read = self.readModuleSourceForParse(st.path) catch |read_err| {
             // Note: Let the FileNotFound error propagate naturally
             // The existing error handling will report it appropriately
             st.source_file_state = if (self.track_watch_inputs) .missing else null;
@@ -1207,16 +1207,37 @@ pub const PackageEnv = struct {
         file_state: ?watch_inputs.State,
     };
 
-    fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
+    fn readModuleSourceForParse(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
+        if (!self.track_watch_inputs) {
+            return .{
+                .source = try self.readModuleSource(path),
+                .file_state = null,
+            };
+        }
+
+        return try self.readModuleSourceWithState(path);
+    }
+
+    fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
         const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.FileNotFound,
         };
-        const file_state: ?watch_inputs.State = if (self.track_watch_inputs)
-            .{ .hash = watch_inputs.hashBytes(data) }
-        else
-            null;
+
+        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
+        // This reallocates to the correct size if normalization occurs, ensuring
+        // proper memory management when the buffer is freed later.
+        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
+    }
+
+    fn readModuleSourceWithState(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})!SourceRead {
+        const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring

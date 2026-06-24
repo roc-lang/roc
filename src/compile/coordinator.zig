@@ -4211,7 +4211,7 @@ pub const Coordinator = struct {
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const source_read = try self.readModuleSource(task.path, task_allocs.module);
+        const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
         const src = source_read.source;
 
         // Checked-module disk cache lookup happens after canonicalization, when
@@ -4499,14 +4499,29 @@ pub const Coordinator = struct {
         file_state: ?watch_inputs.State,
     };
 
-    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
+    fn readModuleSourceForParse(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
+        if (!self.track_watch_inputs) {
+            return .{
+                .source = try self.readModuleSource(path, module_alloc),
+                .file_state = null,
+            };
+        }
+
+        return try self.readModuleSourceWithState(path, module_alloc);
+    }
+
+    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })![]u8 {
         const data = try self.roc_ctx.readFile(path, module_alloc);
-        const file_state: ?watch_inputs.State = if (self.track_watch_inputs)
-            .{ .hash = watch_inputs.hashBytes(data) }
-        else
-            null;
+        errdefer module_alloc.free(data);
 
         // Normalize line endings
+        return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
+    }
+
+    fn readModuleSourceWithState(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
+        const data = try self.roc_ctx.readFile(path, module_alloc);
+        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+
         const source = base.source_utils.normalizeLineEndingsRealloc(module_alloc, data) catch |err| {
             module_alloc.free(data);
             return err;
@@ -5047,7 +5062,7 @@ test "Coordinator readModuleSource hashes raw CRLF source bytes" {
     defer coord.deinit();
     coord.setWatchInputTracking(true);
 
-    const read = try coord.readModuleSource(main_path, allocator);
+    const read = try coord.readModuleSourceWithState(main_path, allocator);
     defer allocator.free(read.source);
 
     try testing.expectEqualStrings("module [main]\n\nmain = 1\n", read.source);
