@@ -32,6 +32,8 @@ pub const AutoImportedType = Can.AutoImportedType;
 /// Resolve a module's symbolic external references against its imported modules.
 pub const resolveExternalRefs = @import("resolve_externals.zig").resolveExternalRefs;
 pub const ResolveExternalDiagnostics = @import("resolve_externals.zig").Diagnostics;
+/// On-the-fly single external-reference node lookup (no diagnostics).
+pub const lookupExposedExternalNode = @import("resolve_externals.zig").lookupExposedNode;
 
 /// Canonicalize a full module file.
 ///

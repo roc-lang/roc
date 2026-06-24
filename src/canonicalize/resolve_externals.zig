@@ -29,54 +29,45 @@ const ExposedItemTarget = collections.ExposedItemTarget;
 /// the source-pure CIR's own diagnostics).
 pub const Diagnostics = std.ArrayList(Diagnostic);
 
-/// Resolve every symbolic external reference in `env` against `imported_envs`
-/// (indexed by resolved module index). Returns a table index-parallel to
-/// `env.external_refs`; appends a diagnostic to `diagnostics` for each reference
-/// that cannot be resolved (its table entry is marked `unresolved`).
+/// Validate every symbolic external reference in `env` against `imported_envs`
+/// (indexed by resolved module index), appending a diagnostic for each reference
+/// that cannot be resolved. Returns the number of unresolved references so the
+/// caller can block artifact publication.
+///
+/// Consumers (the checker, artifact publication, hoisting analysis) recover the
+/// imported node index on the fly from the same exposed-items lookup, so no
+/// resolution table is stored; this pass exists solely to emit the
+/// dependency-dependent diagnostics exactly once per module.
 pub fn resolveExternalRefs(
     gpa: Allocator,
     env: *const ModuleEnv,
     imported_envs: []const *ModuleEnv,
     diagnostics: *Diagnostics,
-) Allocator.Error!CIR.ResolvedExternal.SafeList {
+) Allocator.Error!u32 {
     const refs = env.external_refs.items.items;
-    var table = try CIR.ResolvedExternal.SafeList.initCapacity(gpa, refs.len);
-    errdefer table.deinit(gpa);
 
     // Reused scratch for building "Module.item" qualified text.
     var scratch: std.ArrayList(u8) = .empty;
     defer scratch.deinit(gpa);
 
+    var unresolved_count: u32 = 0;
     for (refs) |ref| {
-        const resolved = try resolveOne(gpa, env, imported_envs, ref, &scratch, diagnostics);
-        _ = try table.append(gpa, resolved);
+        if (!try resolveOneOk(gpa, env, imported_envs, ref, &scratch, diagnostics)) {
+            unresolved_count += 1;
+        }
     }
 
-    return table;
+    return unresolved_count;
 }
 
-const unresolved: CIR.ResolvedExternal = .{
-    .resolved_module_idx = 0,
-    .target_node_idx = 0,
-    .status = @intFromEnum(CIR.ResolvedExternal.Status.unresolved),
-};
-
-fn ok(module_idx: u32, node_idx: u32) CIR.ResolvedExternal {
-    return .{
-        .resolved_module_idx = module_idx,
-        .target_node_idx = node_idx,
-        .status = @intFromEnum(CIR.ResolvedExternal.Status.ok),
-    };
-}
-
-fn resolveOne(
+fn resolveOneOk(
     gpa: Allocator,
     env: *const ModuleEnv,
     imported_envs: []const *ModuleEnv,
     ref: CIR.ExternalRef,
     scratch: *std.ArrayList(u8),
     diagnostics: *Diagnostics,
-) Allocator.Error!CIR.ResolvedExternal {
+) Allocator.Error!bool {
     const module_name_ident = env.imports.getIdentIdx(ref.import_idx) orelse base.Ident.Idx.NONE;
     const name_text = env.getIdent(ref.name_ident);
 
@@ -90,7 +81,7 @@ fn resolveOne(
                 .region = ref.region,
             } });
         }
-        return unresolved;
+        return false;
     };
 
     if (module_idx >= imported_envs.len) {
@@ -99,33 +90,29 @@ fn resolveOne(
             .type_name = ref.name_ident,
             .region = ref.region,
         } });
-        return unresolved;
+        return false;
     }
 
     const imported = imported_envs[module_idx];
 
     switch (ref.kind) {
         .value => {
-            const node = (try lookupExposedValueNode(gpa, imported, name_text, scratch)) orelse {
-                try diagnostics.append(gpa, .{ .type_not_exposed = .{
-                    .module_name = module_name_ident,
-                    .type_name = ref.name_ident,
-                    .region = ref.region,
-                } });
-                return unresolved;
-            };
-            return ok(module_idx, node);
+            if ((try lookupExposedValueNode(gpa, imported, name_text, scratch)) != null) return true;
+            try diagnostics.append(gpa, .{ .type_not_exposed = .{
+                .module_name = module_name_ident,
+                .type_name = ref.name_ident,
+                .region = ref.region,
+            } });
+            return false;
         },
         .type => {
-            const node = (try lookupExposedTypeNode(gpa, imported, name_text, scratch)) orelse {
-                try diagnostics.append(gpa, .{ .type_not_exposed = .{
-                    .module_name = module_name_ident,
-                    .type_name = ref.name_ident,
-                    .region = ref.region,
-                } });
-                return unresolved;
-            };
-            return ok(module_idx, node);
+            if ((try lookupExposedTypeNode(gpa, imported, name_text, scratch)) != null) return true;
+            try diagnostics.append(gpa, .{ .type_not_exposed = .{
+                .module_name = module_name_ident,
+                .type_name = ref.name_ident,
+                .region = ref.region,
+            } });
+            return false;
         },
         .nominal_type => {
             const node = (try lookupExposedTypeNode(gpa, imported, name_text, scratch)) orelse {
@@ -134,18 +121,18 @@ fn resolveOne(
                     .type_name = ref.name_ident,
                     .region = ref.region,
                 } });
-                return unresolved;
+                return false;
             };
             // A nominal-type reference must resolve to a nominal declaration, not
             // a type alias.
             switch (imported.store.getStatement(@enumFromInt(node))) {
-                .s_nominal_decl => return ok(module_idx, node),
+                .s_nominal_decl => return true,
                 .s_alias_decl => {
                     try diagnostics.append(gpa, .{ .type_alias_but_needed_nominal = .{
                         .name = ref.name_ident,
                         .region = ref.region,
                     } });
-                    return unresolved;
+                    return false;
                 },
                 else => {
                     try diagnostics.append(gpa, .{ .type_not_exposed = .{
@@ -153,7 +140,7 @@ fn resolveOne(
                         .type_name = ref.name_ident,
                         .region = ref.region,
                     } });
-                    return unresolved;
+                    return false;
                 },
             }
         },
@@ -203,6 +190,25 @@ fn lookupTargetByText(imported_env: *const ModuleEnv, text: []const u8) ?Exposed
     return null;
 }
 
+/// On-the-fly resolution of a single external reference's target node in
+/// `imported_env`, by name and kind, without emitting diagnostics. Used by
+/// consumers that inspect a module other than the one currently being checked
+/// (e.g. cross-module hoisting analysis), where the per-checked-module
+/// resolution is not available as a precomputed table.
+pub fn lookupExposedNode(
+    gpa: Allocator,
+    imported_env: *const ModuleEnv,
+    name_text: []const u8,
+    kind: CIR.ExternalRef.Kind,
+) Allocator.Error!?u32 {
+    var scratch: std.ArrayList(u8) = .empty;
+    defer scratch.deinit(gpa);
+    return switch (kind) {
+        .value => lookupExposedValueNode(gpa, imported_env, name_text, &scratch),
+        .type, .nominal_type => lookupExposedTypeNode(gpa, imported_env, name_text, &scratch),
+    };
+}
+
 test "qualifiedText builds Module.item" {
     const gpa = std.testing.allocator;
     var scratch: std.ArrayList(u8) = .empty;
@@ -214,7 +220,7 @@ test "qualifiedText builds Module.item" {
     try std.testing.expectEqualStrings("Pkg.Mod.baz", out2);
 }
 
-test "resolveExternalRefs on a module with no external refs yields an empty table" {
+test "resolveExternalRefs on a module with no external refs reports nothing" {
     const gpa = std.testing.allocator;
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
@@ -222,9 +228,8 @@ test "resolveExternalRefs on a module with no external refs yields an empty tabl
     var diags: Diagnostics = .empty;
     defer diags.deinit(gpa);
 
-    var table = try resolveExternalRefs(gpa, &env, &.{}, &diags);
-    defer table.deinit(gpa);
+    const unresolved_count = try resolveExternalRefs(gpa, &env, &.{}, &diags);
 
-    try std.testing.expectEqual(@as(usize, 0), table.len());
+    try std.testing.expectEqual(@as(u32, 0), unresolved_count);
     try std.testing.expectEqual(@as(usize, 0), diags.items.len);
 }

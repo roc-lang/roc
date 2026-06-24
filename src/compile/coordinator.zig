@@ -5058,6 +5058,14 @@ pub const Coordinator = struct {
             try appendReportOwned(worker_alloc, &reports, rep);
         }
 
+        // Render external-resolution diagnostics (dependency-dependent, produced
+        // outside canonicalization to keep CIR source-pure) into the module's
+        // reports alongside the checker's own problems.
+        for (typecheck_output.resolve_diagnostics.items) |diag| {
+            const rep = try env.diagnosticToReport(diag, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, &reports, rep);
+        }
+
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
         var checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact =

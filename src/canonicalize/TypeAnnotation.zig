@@ -351,7 +351,7 @@ pub const TypeAnno = union(enum) {
         },
         external: struct {
             module_idx: CIR.Import.Idx,
-            target_node_idx: u32,
+            external_ref: CIR.ExternalRef.Idx,
         },
         /// Pending external lookup - deferred until dependencies are canonicalized
         pending: struct {

@@ -1131,30 +1131,6 @@ pub const ExternalRef = struct {
     pub const SafeList = collections.SafeList(ExternalRef);
 };
 
-/// The resolution of one `ExternalRef` against the (now-available) imported
-/// modules: the imported module's index and the resolved node index within it.
-/// Produced by `check/resolve_externals.zig` and stored with the type-checked
-/// artifact (not with CIR), because it depends on the imported modules' contents.
-/// The list is index-parallel to `ModuleEnv.external_refs` (`ExternalRef.Idx` ==
-/// `ResolvedExternal.Idx`).
-pub const ResolvedExternal = extern struct {
-    resolved_module_idx: u32,
-    target_node_idx: u32,
-    /// 0 = ok, 1 = unresolved (a diagnostic was emitted; consumers treat the
-    /// reference as `.err`). Kept as a fixed-width int for relocation-invariant
-    /// serialization alongside the checked artifact.
-    status: u32,
-
-    pub const Status = enum(u32) { ok = 0, unresolved = 1 };
-
-    pub fn isOk(self: ResolvedExternal) bool {
-        return self.status == @intFromEnum(Status.ok);
-    }
-
-    pub const Idx = enum(u32) { _ };
-    pub const SafeList = collections.SafeList(ResolvedExternal);
-};
-
 // Real Report type from the reporting module
 pub const Report = reporting.Report;
 

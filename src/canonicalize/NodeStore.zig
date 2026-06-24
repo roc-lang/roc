@@ -765,7 +765,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // Handle external lookups
             return CIR.Expr{ .e_lookup_external = .{
                 .module_idx = @enumFromInt(p.module_idx),
-                .target_node_idx = @intCast(p.target_node_idx),
+                .external_ref = @enumFromInt(p.target_node_idx),
                 .ident_idx = @bitCast(p.ident_idx),
                 .region = store.getRegionAt(node_idx),
             } };
@@ -949,7 +949,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = @enumFromInt(p.module_idx),
-                    .target_node_idx = @intCast(p.target_node_idx),
+                    .external_ref = @enumFromInt(p.target_node_idx),
                     .backing_expr = @enumFromInt(backing.start),
                     .backing_type = @enumFromInt(backing.len),
                 },
@@ -1733,7 +1733,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             return CIR.Pattern{
                 .nominal_external = .{
                     .module_idx = @enumFromInt(p.module_idx),
-                    .target_node_idx = @intCast(p.target_node_idx),
+                    .external_ref = @enumFromInt(p.target_node_idx),
                     .backing_pattern = @enumFromInt(backing.start),
                     .backing_type = @enumFromInt(backing.len),
                 },
@@ -1874,7 +1874,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                 .local => .{ .local = .{ .decl_idx = @enumFromInt(apply_data.value1) } },
                 .external => .{ .external = .{
                     .module_idx = @enumFromInt(apply_data.value1),
-                    .target_node_idx = @intCast(apply_data.value2),
+                    .external_ref = @enumFromInt(apply_data.value2),
                 } },
                 .pending => .{ .pending = .{
                     .module_idx = @enumFromInt(apply_data.value1),
@@ -1910,7 +1910,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                 .local => .{ .local = .{ .decl_idx = @enumFromInt(base_data.start) } },
                 .external => .{ .external = .{
                     .module_idx = @enumFromInt(base_data.start),
-                    .target_node_idx = @intCast(base_data.len),
+                    .external_ref = @enumFromInt(base_data.len),
                 } },
                 .pending => .{ .pending = .{
                     .module_idx = @enumFromInt(base_data.start),
@@ -2309,7 +2309,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_external_lookup;
             node.setPayload(.{ .expr_external_lookup = .{
                 .module_idx = @intFromEnum(e.module_idx),
-                .target_node_idx = e.target_node_idx,
+                .target_node_idx = @intFromEnum(e.external_ref),
                 .ident_idx = @bitCast(e.ident_idx),
             } });
         },
@@ -2463,7 +2463,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             });
             node.setPayload(.{ .expr_nominal_external = .{
                 .module_idx = @intFromEnum(e.module_idx),
-                .target_node_idx = @intCast(e.target_node_idx),
+                .target_node_idx = @intFromEnum(e.external_ref),
                 .backing_span2_idx = backing_span2_idx,
             } });
         },
@@ -2973,7 +2973,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             });
             node.setPayload(.{ .pattern_nominal_external = .{
                 .module_idx = @intFromEnum(n.module_idx),
-                .target_node_idx = @intCast(n.target_node_idx),
+                .target_node_idx = @intFromEnum(n.external_ref),
                 .backing_span2_idx = backing_span2_idx,
             } });
         },
@@ -3119,7 +3119,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                     .args_len = a.args.span.len,
                     .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external),
                     .value1 = @intFromEnum(ext.module_idx),
-                    .value2 = @intCast(ext.target_node_idx),
+                    .value2 = @intFromEnum(ext.external_ref),
                 },
                 .pending => |pend| .{
                     .args_len = a.args.span.len,
@@ -3164,7 +3164,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                 },
                 .external => |ext| .{
                     .start = @intFromEnum(ext.module_idx),
-                    .len = @intCast(ext.target_node_idx),
+                    .len = @intFromEnum(ext.external_ref),
                 },
                 .pending => |pend| .{
                     .start = @intFromEnum(pend.module_idx),

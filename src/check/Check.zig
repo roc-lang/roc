@@ -66,12 +66,6 @@ cir: *ModuleEnv,
 regions: Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
-/// Resolution of this module's symbolic external references (`cir.external_refs`)
-/// against `imported_modules`, populated before `checkFile` and consulted by the
-/// `e_lookup_external` / nominal / pattern / type-anno external arms instead of a
-/// CIR-embedded node index. Owned; freed in `deinit`. Index-parallel to
-/// `cir.external_refs`.
-resolved_externals: CIR.ResolvedExternal.SafeList = .{},
 /// Module envs whose public APIs are semantically visible through imported checked data.
 owner_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through direct imports.
@@ -1187,7 +1181,6 @@ pub fn fixupTypeWriter(self: *Self) void {
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
     self.regions.deinit(self.gpa);
-    self.resolved_externals.deinit(self.gpa);
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
     self.import_mapping.deinit();
@@ -3784,7 +3777,7 @@ fn unifyTypedLiteralWithExplicitType(
             _ = try self.unify(flex_var, resolved_var, env);
         },
         .external => |external| {
-            if (try self.resolveVarFromExternal(external.import_idx, external.target_node_idx)) |ext_ref| {
+            if (try self.resolveVarFromExternal(external.external_ref)) |ext_ref| {
                 const instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
@@ -3824,7 +3817,7 @@ fn explicitTypeSuffixVar(
             _ = try self.unify(suffix_var, resolved_var, env);
         },
         .external => |external| {
-            if (try self.resolveVarFromExternal(external.import_idx, external.target_node_idx)) |ext_ref| {
+            if (try self.resolveVarFromExternal(external.external_ref)) |ext_ref| {
                 const instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
@@ -5193,7 +5186,13 @@ fn hoistedCallableDefForExpr(
         .e_lookup_local => |lookup| hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
         .e_lookup_external => |external| blk: {
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
+            // `module` may be an imported module here (not the one being checked),
+            // so resolve the reference on the fly from its symbolic name rather
+            // than the current module's resolution table.
+            const ref = module.getExternalRef(external.external_ref).*;
+            const name_text = module.getIdent(ref.name_ident);
+            const node = (can.lookupExposedExternalNode(self.gpa, imported_module, name_text, ref.kind) catch break :blk null) orelse break :blk null;
+            break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(node));
         },
         .e_str,
         .e_str_segment,
@@ -7890,7 +7889,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     }
                 },
                 .external => |ext| {
-                    if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                    if (try self.resolveVarFromExternal(ext.external_ref)) |ext_ref| {
                         const ext_instantiated_var = try self.instantiateVar(
                             ext_ref.local_var,
                             env,
@@ -8041,7 +8040,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     _ = try self.unify(anno_var, instantiated_var, env);
                 },
                 .external => |ext| {
-                    if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                    if (try self.resolveVarFromExternal(ext.external_ref)) |ext_ref| {
                         // Resolve the referenced type
                         const ext_resolved = self.types.resolveVar(ext_ref.local_var).desc.content;
                         const ext_is_alias = ext_resolved == .alias;
@@ -8900,7 +8899,7 @@ fn checkPatternHelp(
             const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var);
 
             // Resolve the external type declaration
-            if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
+            if (try self.resolveVarFromExternal(nominal.external_ref)) |ext_ref| {
                 // Use shared nominal type checking logic
                 _ = try self.checkNominalTypeUsage(
                     pattern_var,
@@ -9952,7 +9951,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Resolve the external type declaration
-            if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
+            if (try self.resolveVarFromExternal(nominal.external_ref)) |ext_ref| {
                 // Use shared nominal type checking logic
                 _ = try self.checkNominalTypeUsage(
                     expr_var,
@@ -10180,7 +10179,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_lookup_external => |ext| {
             // With WaitingForDependencies phase, dependencies are guaranteed to be Done
             // before canonicalization, so target_node_idx is always valid.
-            if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+            if (try self.resolveVarFromExternal(ext.external_ref)) |ext_ref| {
                 const ext_instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
@@ -11246,10 +11245,13 @@ fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
             return ident.eql(self.cir.idents.builtin_str_inspect);
         },
         .e_lookup_external => |ext| {
-            const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
+            const ref = self.cir.getExternalRef(ext.external_ref).*;
+            const module_idx = self.cir.imports.getResolvedModule(ref.import_idx) orelse return false;
             if (module_idx >= self.imported_modules.len) return false;
             const other_env = self.imported_modules[module_idx];
-            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, ext.target_node_idx));
+            const name_text = self.cir.getIdent(ref.name_ident);
+            const resolved_node = (can.lookupExposedExternalNode(self.gpa, other_env, name_text, ref.kind) catch return false) orelse return false;
+            const def_idx: CIR.Def.Idx = @enumFromInt(resolved_node);
             const ident = patternIdentInModule(other_env, def_idx) orelse return false;
             return ident.eql(other_env.idents.builtin_str_inspect);
         },
@@ -13855,22 +13857,27 @@ const ExternalType = struct {
 /// unification fails.
 fn resolveVarFromExternal(
     self: *Self,
-    import_idx: CIR.Import.Idx,
-    node_idx: u32,
+    external_ref: CIR.ExternalRef.Idx,
 ) std.mem.Allocator.Error!?ExternalType {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse {
-        // Canonicalization should already have reported an import error.
-        // Keep checking by treating this type reference as unresolved.
-        return null;
-    };
+    // Resolve the symbolic external reference on the fly against the imported
+    // modules. CIR only records the import index + referenced name (so it stays a
+    // pure function of source); the imported module's node index is recovered
+    // here from its exposed-items table. A diagnostic for an unresolvable
+    // reference is emitted once by the resolution pass; here we just treat it as
+    // unresolved and keep checking.
+    const ref = self.cir.getExternalRef(external_ref).*;
+    const module_idx = self.cir.imports.getResolvedModule(ref.import_idx) orelse return null;
     if (module_idx < self.imported_modules.len) {
         const other_module_env = self.imported_modules[module_idx];
 
+        const name_text = self.cir.getIdent(ref.name_ident);
+        const resolved_node = (try can.lookupExposedExternalNode(self.gpa, other_module_env, name_text, ref.kind)) orelse return null;
+
         // The idx of the expression in the other module
-        const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
+        const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(resolved_node));
 
         // Check if we've already copied this import
         const cache_key = ImportCacheKey{

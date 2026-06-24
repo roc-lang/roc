@@ -316,9 +316,14 @@ pub const TypeCheckOutput = struct {
     /// Nanoseconds spent evaluating compile-time roots/constants and storing
     /// their results (the post-type-inference finalization step).
     comptime_eval_ns: u64 = 0,
+    /// Diagnostics from resolving symbolic external references against imports.
+    /// These depend on the imported modules' contents, so they are kept out of
+    /// the source-pure CIR and rendered into the module's reports by the caller.
+    resolve_diagnostics: can.ResolveExternalDiagnostics = .empty,
 
     pub fn deinit(self: *TypeCheckOutput) void {
         if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+        self.resolve_diagnostics.deinit(self.checker.gpa);
         self.checker.deinit();
     }
 
@@ -1732,14 +1737,15 @@ pub const PackageEnv = struct {
         errdefer checker.deinit();
 
         // Resolve this module's symbolic external references against its
-        // now-available imports, producing the side table the checker consults
-        // for cross-module lookups (kept out of the source-pure CIR). Imports
-        // were already resolved (`setResolvedModule`) by the coordinator before
-        // this call. Resolution diagnostics are rendered into the module's
-        // reports alongside the checker's own problems.
-        var resolve_diags: can.ResolveExternalDiagnostics = .empty;
-        defer resolve_diags.deinit(check_alloc);
-        checker.resolved_externals = try can.resolveExternalRefs(check_alloc, env, imported_envs, &resolve_diags);
+        // now-available imports. Imports were already resolved
+        // (`setResolvedModule`) by the coordinator before this call. This pass
+        // only emits the dependency-dependent diagnostics (kept out of the
+        // source-pure CIR); consumers recover the imported node index on demand.
+        // Ownership of the diagnostics transfers to the returned output so the
+        // caller can render them into the module's reports.
+        var resolve_diagnostics: can.ResolveExternalDiagnostics = .empty;
+        errdefer resolve_diagnostics.deinit(check_alloc);
+        const unresolved_externals = try can.resolveExternalRefs(check_alloc, env, imported_envs, &resolve_diagnostics);
 
         // For app modules with platform requirements, defer finalizing numeric defaults
         // until after platform requirements are checked, so numeric literals can be
@@ -1749,7 +1755,8 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
-        if (moduleHasArtifactBlockingCanonicalizeDiagnostics(env) or
+        if (unresolved_externals > 0 or
+            moduleHasArtifactBlockingCanonicalizeDiagnostics(env) or
             try moduleHasDuplicateTopLevelValueDefs(check_alloc, env) or
             checkerHasArtifactBlockingProblems(&checker) or
             !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
@@ -1758,6 +1765,7 @@ pub const PackageEnv = struct {
             return .{
                 .checker = checker,
                 .checked_artifact = null,
+                .resolve_diagnostics = resolve_diagnostics,
             };
         }
 
@@ -1787,6 +1795,7 @@ pub const PackageEnv = struct {
                     .checker = checker,
                     .checked_artifact = null,
                     .comptime_eval_ns = eval_timing.ns,
+                    .resolve_diagnostics = resolve_diagnostics,
                 };
             },
             else => |other| return other,
@@ -1797,6 +1806,7 @@ pub const PackageEnv = struct {
             .checker = checker,
             .checked_artifact = checked_artifact,
             .comptime_eval_ns = eval_timing.ns,
+            .resolve_diagnostics = resolve_diagnostics,
         };
     }
 
@@ -1970,6 +1980,14 @@ pub const PackageEnv = struct {
         defer rb.deinit();
         for (typecheck_output.checker.problems.problems.items) |prob| {
             var rep = try rb.build(prob);
+            errdefer rep.deinit();
+            try st.reports.append(self.gpa, rep);
+        }
+
+        // Render external-resolution diagnostics (kept out of the source-pure CIR)
+        // into this module's reports.
+        for (typecheck_output.resolve_diagnostics.items) |diag| {
+            var rep = try env.diagnosticToReport(diag, self.gpa, st.path);
             errdefer rep.deinit();
             try st.reports.append(self.gpa, rep);
         }

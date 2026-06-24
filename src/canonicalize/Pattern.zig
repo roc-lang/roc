@@ -82,7 +82,7 @@ pub const Pattern = union(enum) {
     /// ```
     nominal_external: struct {
         module_idx: CIR.Import.Idx,
-        target_node_idx: u32,
+        external_ref: CIR.ExternalRef.Idx,
         backing_pattern: Pattern.Idx,
         backing_type: CIR.Expr.NominalBackingType,
     },

@@ -6684,9 +6684,20 @@ fn canonicalizedExternalLookup(
     ident_idx: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
+    // CIR records the reference symbolically (import index + name); the imported
+    // module's node index is recovered later by external resolution, so it is not
+    // baked into CIR here. (`target_node_idx` is still computed by callers as an
+    // existence check; that guard is removed in a follow-up purity pass.)
+    _ = target_node_idx;
+    const external_ref = try self.env.pushExternalRef(.{
+        .import_idx = import_idx,
+        .name_ident = ident_idx,
+        .kind = .value,
+        .region = region,
+    });
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
-        .target_node_idx = target_node_idx,
+        .external_ref = external_ref,
         .ident_idx = ident_idx,
         .region = region,
     } }, region);

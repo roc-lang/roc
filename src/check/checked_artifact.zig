@@ -11359,6 +11359,7 @@ pub const ResolvedValueRefTable = struct {
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
+                modules,
                 artifact_key,
                 expr_idx,
                 imports,
@@ -11573,8 +11574,9 @@ fn validateAllLookupRefsResolved(
 }
 
 fn categorizeValueRef(
-    _: Allocator,
+    allocator: Allocator,
     module: TypedCIR.Module,
+    modules: *const TypedCIR.Modules,
     artifact_key: CheckedModuleArtifactKey,
     expr_idx: CIR.Expr.Idx,
     imports: []const PublishImportArtifact,
@@ -11599,12 +11601,39 @@ fn categorizeValueRef(
             local_pattern_roles,
             checked_bodies,
         ),
-        .e_lookup_external => |external| categorizeImportedValueRef(
-            module,
-            external.module_idx,
-            external.target_node_idx,
-            imports,
-        ),
+        .e_lookup_external => |external| blk: {
+            // Recover the imported node index on the fly from the symbolic
+            // reference (CIR stores only the import index + name, keeping it a
+            // pure function of source).
+            const owner_env = module.moduleEnvConst();
+            const ref = owner_env.getExternalRef(external.external_ref).*;
+            const resolved_module_idx = module.resolvedImportModule(external.module_idx) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: external lookup import {d} has no resolved module",
+                        .{@intFromEnum(external.module_idx)},
+                    );
+                }
+                unreachable;
+            };
+            const imported_env = modules.module(resolved_module_idx).moduleEnvConst();
+            const name_text = owner_env.getIdent(ref.name_ident);
+            const target_node = (try can.lookupExposedExternalNode(allocator, imported_env, name_text, ref.kind)) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: external lookup '{s}' not exposed by resolved module {d}",
+                        .{ name_text, resolved_module_idx },
+                    );
+                }
+                unreachable;
+            };
+            break :blk categorizeImportedValueRef(
+                module,
+                external.module_idx,
+                target_node,
+                imports,
+            );
+        },
         .e_lookup_required => |required| categorizeRequiredValueRef(
             required.requires_idx.toU32(),
             platform_required_declarations,
