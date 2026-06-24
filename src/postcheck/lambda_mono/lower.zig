@@ -45,6 +45,8 @@ pub fn run(
     owned.lifted.source_files = .empty;
     program.static_data_values = owned.lifted.static_data_values;
     owned.lifted.static_data_values = .empty;
+    program.local_proc_contexts = owned.lifted.local_proc_contexts;
+    owned.lifted.local_proc_contexts = .empty;
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program, options);

@@ -33,6 +33,8 @@ pub const StringLiteralId = Lifted.StringLiteralId;
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
+pub const LocalProcContext = Mono.LocalProcContext;
+
 /// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -430,6 +432,7 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
+    local_proc_contexts: std.ArrayList(LocalProcContext),
     proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
@@ -481,6 +484,7 @@ pub const Program = struct {
             .branches = .empty,
             .if_branches = .empty,
             .string_literals = string_literals,
+            .local_proc_contexts = .empty,
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
@@ -518,6 +522,7 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
+        self.local_proc_contexts.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -742,6 +747,10 @@ pub const Program = struct {
 
     pub fn stringLiteral(self: *const Program, id: StringLiteralId) Mono.StringLiteral {
         return self.string_literals.items[@intFromEnum(id)];
+    }
+
+    pub fn localProcContextSpan(self: *const Program, span: Mono.Span(LocalProcContext)) []const LocalProcContext {
+        return self.local_proc_contexts.items[span.start .. span.start + span.len];
     }
 };
 
