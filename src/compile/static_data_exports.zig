@@ -185,7 +185,7 @@ const StaticDataBuilder = struct {
                 .procedure => continue,
             };
 
-            const const_node = self.constNode(data.const_ref);
+            const const_node = self.constNode(data.const_ref, null);
             const request = self.requestedLayout(data.checked_type);
             const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
             const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
@@ -205,7 +205,7 @@ const StaticDataBuilder = struct {
         }
 
         for (self.lowered.lir_result.static_data_values.items, 0..) |value, index| {
-            const const_node = self.constNode(value.const_ref);
+            const const_node = self.constNode(value.const_ref, value.node);
             const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, @enumFromInt(@as(u32, @intCast(index))));
             errdefer self.allocator.free(symbol_name);
 
@@ -241,8 +241,9 @@ const StaticDataBuilder = struct {
         self.allocator.free(value.relocations);
     }
 
-    fn constNode(self: *StaticDataBuilder, ref: CheckedModule.ConstId) ConstNode {
+    fn constNode(self: *StaticDataBuilder, ref: CheckedModule.ConstId, node: ?CheckedModule.ConstNodeId) ConstNode {
         const module = self.moduleForConst(ref);
+        if (node) |id| return .{ .module = module, .id = id };
         const template = module.templates.get(ref);
         return switch (template.state) {
             .stored_const => |stored| .{ .module = module, .id = stored.node },

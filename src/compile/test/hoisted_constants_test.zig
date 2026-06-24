@@ -929,6 +929,42 @@ test "reachable local List.iter hoist stores iterator const data" {
     try std.testing.expect(stored_iter_root_count >= 1);
     try std.testing.expect(countSelectedHoistedConstResolvedRefs(app_view) >= 1);
     try std.testing.expect(countSelectedHoistedConstResolvedRefsWithListAndFn(app_view, 2) >= 1);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(countStaticDataLiteralAssignmentsToListLength(root_view, imports, &lowered, 2) >= 1);
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const point_payload_bytes = [_]u8{
+        1, 0, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0, 0, 0,
+        3, 0, 0, 0, 0, 0, 0, 0,
+        4, 0, 0, 0, 0, 0, 0, 0,
+    };
+    _ = findExportContainingSequence(exports, &point_payload_bytes) orelse return error.PointListStaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &point_payload_bytes));
 }
 
 test "inline sub_or_crash cells inside runtime record become shared static data" {
@@ -3375,7 +3411,7 @@ fn countStaticDataLiteralAssignmentsToListLength(
             .assign_literal => |assign| switch (assign.value) {
                 .static_data => |id| {
                     const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
-                    const node = constNodeForStaticData(root, imports, static_data.const_ref);
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
                     if (constNodeContainsListLength(node.module, node.id, len)) count += 1;
                 },
                 else => {},
@@ -3394,7 +3430,7 @@ fn countStaticDataValuesContainingListU8(
 ) usize {
     var count: usize = 0;
     for (lowered.lir_result.static_data_values.items) |static_data| {
-        const node = constNodeForStaticData(root, imports, static_data.const_ref);
+        const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
         if (constNodeContainsListU8(node.module, node.id, bytes)) count += 1;
     }
     return count;
@@ -3412,7 +3448,7 @@ fn countStaticDataLiteralAssignmentsToListU8(
             .assign_literal => |assign| switch (assign.value) {
                 .static_data => |id| {
                     const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
-                    const node = constNodeForStaticData(root, imports, static_data.const_ref);
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
                     if (constNodeContainsListU8(node.module, node.id, bytes)) count += 1;
                 },
                 else => {},
@@ -3437,8 +3473,10 @@ fn constNodeForStaticData(
     root: check.CheckedArtifact.LoweringModuleView,
     imports: []const check.CheckedArtifact.ImportedModuleView,
     const_ref: check.CheckedArtifact.ConstId,
+    node: ?check.CheckedArtifact.ConstNodeId,
 ) StaticConstNode {
     const module = constModuleForStaticData(root, imports, const_ref);
+    if (node) |id| return .{ .module = module, .id = id };
     const template = module.templates.get(const_ref);
     return switch (template.state) {
         .stored_const => |stored| .{ .module = module, .id = stored.node },

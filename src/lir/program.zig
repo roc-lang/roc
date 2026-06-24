@@ -123,6 +123,7 @@ pub const ConstRootPlan = struct {
 /// One checked value that is materialized as readonly target data.
 pub const StaticDataValue = struct {
     const_ref: checked.ConstId,
+    node: ?checked.ConstNodeId = null,
     checked_type: checked.CheckedTypeId,
     layout_idx: layout.Idx,
     plan: ConstPlanId,

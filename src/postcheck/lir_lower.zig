@@ -414,6 +414,7 @@ const Lowerer = struct {
         const lir_id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
         try self.result.static_data_values.append(self.allocator, .{
             .const_ref = request.const_ref,
+            .node = request.node,
             .checked_type = request.checked_type,
             .layout_idx = layout_idx,
             .plan = try self.constPlanOfType(ty),

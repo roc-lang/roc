@@ -642,7 +642,7 @@ zig build -Doptimize=ReleaseSmall
 ## Final Checklist
 
 - [x] Failing tests capture local `List.iter` root selection.
-- [ ] Failing tests capture local `List.iter` static-data emission.
+- [x] Failing tests capture local `List.iter` static-data emission.
 - [x] Function-containing aggregates are allowed stored hoisted constants.
 - [x] Bare function roots still use callable-root handling, not data roots.
 - [x] Root selection has no invalid leaf/source-shape/observable filters.
