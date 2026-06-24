@@ -4823,6 +4823,54 @@ test "check type - primitive-backed nominal lifts string literal" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Token");
 }
 
+test "check type - explicit value-backed nominal construction" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\toDistance : U64 -> Distance
+        \\toDistance = |n| Distance.(n)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U64 -> Distance");
+}
+
+test "check type - bare value does not lift into nominal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\toDistance : U64 -> Distance
+        \\toDistance = |n| n
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - explicit construction backing mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\d : Distance
+        \\d = Distance.("x")
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - opaque nominal construction in defining module" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Secret :: U64
+        \\
+        \\s : Secret
+        \\s = Secret.(7)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Secret");
+}
+
 // early return //
 
 test "check type - early return - pass" {
