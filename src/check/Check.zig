@@ -156,6 +156,10 @@ active_effect_slots: std.ArrayListUnmanaged(EffectSlotId),
 dispatch_effect_watches: std.ArrayListUnmanaged(DispatchEffectWatch),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// Final expression summaries for checked top-level values.
+top_level_check_summaries: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, ExprCheckResult),
+/// Final expression summaries for checked function/lambda bodies.
+function_body_check_summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ExprCheckResult),
 /// Local block-statement (`s_decl`) function patterns whose body is currently
 /// being type-checked. Used to detect self-recursion (and references to an
 /// enclosing in-flight def) of LOCAL function defs so their recursive references
@@ -1217,6 +1221,8 @@ fn initAssumePrepared(
         .active_effect_slots = .empty,
         .dispatch_effect_watches = .empty,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
+        .top_level_check_summaries = .{},
+        .function_body_check_summaries = .{},
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
@@ -1366,6 +1372,8 @@ pub fn deinit(self: *Self) void {
     self.active_effect_slots.deinit(self.gpa);
     self.dispatch_effect_watches.deinit(self.gpa);
     self.top_level_ptrns.deinit();
+    self.top_level_check_summaries.deinit(self.gpa);
+    self.function_body_check_summaries.deinit(self.gpa);
     self.local_processing_ptrns.deinit(self.gpa);
     self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
@@ -2710,6 +2718,161 @@ test "local check summaries are scoped to lexical blocks" {
 
     try std.testing.expect(!state.checker.local_check_summaries.contains(pattern));
     try std.testing.expectEqual(@as(usize, 0), state.checker.local_check_summary_scope_patterns.items.len);
+}
+
+fn testDefByName(checker: *Self, name: []const u8) !CIR.Def.Idx {
+    const idents = checker.cir.getIdentStoreConst();
+    for (checker.cir.store.sliceDefs(checker.cir.all_defs)) |def_idx| {
+        const def = checker.cir.store.getDef(def_idx);
+        switch (checker.cir.store.getPattern(def.pattern)) {
+            .assign => |assign| {
+                if (std.mem.eql(u8, name, idents.getText(assign.ident))) return def_idx;
+            },
+            else => {},
+        }
+    }
+    return error.ExpectedDef;
+}
+
+fn expectTopLevelRuntimeDep(checker: *Self, name: []const u8, expected: RuntimeDep) !void {
+    const def_idx = try testDefByName(checker, name);
+    const def = checker.cir.store.getDef(def_idx);
+    const summary = checker.top_level_check_summaries.get(def.pattern) orelse return error.ExpectedTopLevelCheckSummary;
+    try std.testing.expectEqual(expected, summary.runtime_dep.?);
+}
+
+fn expectFirstFunctionBodyRuntimeDep(checker: *Self, expected: RuntimeDep) !void {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(checker.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        switch (checker.cir.store.getExpr(expr_idx)) {
+            .e_lambda => |lambda| {
+                const summary = checker.function_body_check_summaries.get(lambda.body) orelse continue;
+                try std.testing.expectEqual(expected, summary.runtime_dep.?);
+                return;
+            },
+            else => {},
+        }
+    }
+    return error.ExpectedFunctionBodyCheckSummary;
+}
+
+test "runtime dependency summaries classify compile-time-known lookups" {
+    const TestEnv = @import("test/TestEnv.zig");
+
+    {
+        const source =
+            \\value = 1.I64
+            \\main = value
+        ;
+        var test_env = try TestEnv.init("SummaryTopLevel", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, "main", .compile_time_known);
+    }
+
+    {
+        const source =
+            \\main = {
+            \\  x = 1.I64
+            \\  x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryLocal", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, "main", .compile_time_known);
+    }
+
+    {
+        const source_a =
+            \\main! : I64 -> I64
+            \\main! = |x| x
+        ;
+        var test_env_a = try TestEnv.init("A", source_a);
+        defer test_env_a.deinit();
+        try test_env_a.assertNoErrors();
+
+        const source_b =
+            \\import A
+            \\
+            \\main = A.main!(1.I64)
+        ;
+        var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+        defer test_env_b.deinit();
+        try test_env_b.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env_b.checker, "main", .compile_time_known);
+    }
+}
+
+test "runtime dependency summaries classify runtime-bound lookups" {
+    const TestEnv = @import("test/TestEnv.zig");
+
+    {
+        const source =
+            \\main = |x| x
+        ;
+        var test_env = try TestEnv.init("SummaryLambda", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectFirstFunctionBodyRuntimeDep(&test_env.checker, .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = |arg| {
+            \\  x = arg
+            \\  x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryIndirectLambda", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectFirstFunctionBodyRuntimeDep(&test_env.checker, .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = match 1 {
+            \\  x => x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryMatch", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, "main", .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = {
+            \\  for x in [1] {
+            \\    x
+            \\  }
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryLoop", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, "main", .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = {
+            \\  var x = 1.I64
+            \\  x = 2.I64
+            \\  x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryMutable", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, "main", .runtime_dependent);
+    }
 }
 
 test "hoist known value insertion leaves no state when map allocation fails" {
@@ -7480,7 +7643,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     self.checking_binding_rhs_pattern = def.pattern;
     const effect_slot = try self.beginEffectSlot(.{ .top_level_value = def_idx });
     defer self.endEffectSlot(effect_slot);
-    const def_is_effectful = (try self.checkExpr(def.expr, env, expectation)).isKnownEffectful();
+    const def_check_result = try self.checkExpr(def.expr, env, expectation);
+    try self.top_level_check_summaries.put(self.gpa, def.pattern, def_check_result);
+    const def_is_effectful = def_check_result.isKnownEffectful();
     if (def_is_effectful or try self.effectSlotIsEffectful(effect_slot)) {
         try self.reportTopLevelEffectSlot(effect_slot, env);
     }
@@ -10339,9 +10504,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 break :blk;
             }
 
-            if (self.local_check_summaries.get(lookup.pattern_idx)) |summary| {
+            const local_summary = self.local_check_summaries.get(lookup.pattern_idx);
+            if (local_summary) |summary| {
                 check_result.include(summary);
             }
+            if (self.top_level_check_summaries.get(lookup.pattern_idx)) |summary| {
+                check_result.include(summary);
+            }
+
+            const summary_says_compile_time_known = if (local_summary) |summary| known_summary: {
+                if (summary.runtime_dep) |dep| {
+                    break :known_summary dep == .compile_time_known;
+                }
+                break :known_summary false;
+            } else false;
 
             var lookup_has_runtime_dependency = false;
             const compile_time_known_binding = known: {
@@ -10368,6 +10544,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     lookup_has_runtime_dependency = true;
                     break :known true;
                 }
+                if (summary_says_compile_time_known) break :known true;
                 break :known false;
             };
             if (!compile_time_known_binding) {
@@ -10588,17 +10765,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             }
 
-            const legacy_body_is_effectful = if (mb_anno_func) |expected_func| blk: {
-                const lambda_body_is_effectful = (try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret))).isKnownEffectful();
+            const body_check_result = if (mb_anno_func) |expected_func| blk: {
+                const lambda_body_result = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
-                break :blk lambda_body_is_effectful;
+                break :blk lambda_body_result;
             } else blk: {
-                const lambda_body_is_effectful = (try self.checkExpr(lambda.body, env, Expected.none())).isKnownEffectful();
+                const lambda_body_result = try self.checkExpr(lambda.body, env, Expected.none());
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
-                break :blk lambda_body_is_effectful;
+                break :blk lambda_body_result;
             };
-            const body_is_effectful = legacy_body_is_effectful or try self.effectSlotIsEffectful(effect_slot);
+            try self.function_body_check_summaries.put(self.gpa, lambda.body, body_check_result);
+            const body_is_effectful = body_check_result.isKnownEffectful() or try self.effectSlotIsEffectful(effect_slot);
 
             // Process any pending return constraints (from early returns / ? operator) before
             // creating the function type. This must happen after the body is fully checked
@@ -11418,6 +11596,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     }
 
+    check_result.markCompileTimeKnown();
     try hoist_frame.finish(check_result.isKnownEffectful());
     return check_result;
 }

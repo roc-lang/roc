@@ -805,16 +805,16 @@ wc -c rocci-bird.wasm
 - [x] `checkExpr` returns `ExprCheckResult`.
 - [x] Blocks and statements combine `ExprCheckResult`.
 - [x] Expression effect propagation no longer depends on old `does_fx`.
-- [ ] Immutable local binding summaries are stored only when later lookups need
-      them.
-- [ ] Runtime dependency from lambda arguments is detected by the new summary.
-- [ ] Runtime dependency from match-bound values is detected by the new
-      summary.
-- [ ] Runtime dependency from loop-bound values is detected by the new summary.
-- [ ] Runtime dependency from mutable variables and reassignment is detected by
-      the new summary.
-- [ ] Top-level checked value lookups are compile-time-known.
-- [ ] Imported checked value lookups are compile-time-known.
+- [x] Immutable local binding summaries are stored only when later lookups need
+  them.
+- [x] Runtime dependency from lambda arguments is detected by the new summary.
+- [x] Runtime dependency from match-bound values is detected by the new
+  summary.
+- [x] Runtime dependency from loop-bound values is detected by the new summary.
+- [x] Runtime dependency from mutable variables and reassignment is detected by
+  the new summary.
+- [x] Top-level checked value lookups are compile-time-known.
+- [x] Imported checked value lookups are compile-time-known.
 - [ ] Root-candidate stack exists.
 - [ ] Every expression uses root frames.
 - [ ] Parent root selection removes child roots in the same frame.
