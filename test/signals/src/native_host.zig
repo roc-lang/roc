@@ -1218,230 +1218,14 @@ const HostEnv = struct {
         return self.engine.syncEachRowScopes(self, roc_host, parent_scope_id, site_ordinal, keys, items, key_hash, key_eq, key_drop, item_eq, item_drop);
     }
 
-    fn walkElemIdentitySites(self: *HostEnv, elem: abi.Elem, scope_id: u64, ordinal: *u64) void {
-        self.validateScopeId(scope_id);
-
-        switch (elem.tag) {
-            .Element => {
-                for (elem.payload.element.children.items()) |child| {
-                    self.walkElemIdentitySites(child, scope_id, ordinal);
-                }
-            },
-            .State => {
-                _ = self.internNodeIdentity(scope_id, ordinal.*);
-                ordinal.* += 1;
-                self.walkElemIdentitySites(elem.payload.state.child.*, scope_id, ordinal);
-            },
-            .Component => {
-                const site_ordinal = ordinal.*;
-                _ = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                const component_scope_id = self.internComponentScope(scope_id, site_ordinal);
-                var component_ordinal: u64 = 0;
-                self.walkElemIdentitySites(elem.payload.component.child.*, component_scope_id, &component_ordinal);
-            },
-            .When => {
-                _ = self.internNodeIdentity(scope_id, ordinal.*);
-                ordinal.* += 1;
-            },
-            .Each => {
-                _ = self.internNodeIdentity(scope_id, ordinal.*);
-                ordinal.* += 1;
-            },
-            .Cleanup, .OnChange, .Text, .TextSignal => {},
-        }
-    }
-
-    fn walkElemRootIdentitySites(self: *HostEnv, root: abi.Elem) void {
-        const root_scope_id = self.internRootScope();
-        var ordinal: u64 = 0;
-        self.walkElemIdentitySites(root, root_scope_id, &ordinal);
-    }
-
-    fn walkElemWhenBranchIdentitySites(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch, elem: abi.Elem) u64 {
-        const branch_scope_id = self.internWhenBranchScope(parent_scope_id, site_ordinal, branch);
-        var ordinal: u64 = 0;
-        self.walkElemIdentitySites(elem, branch_scope_id, &ordinal);
-        return branch_scope_id;
-    }
-
     fn bindNodeSignal(self: *HostEnv, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) HostSignalBinding {
         return self.engine.bindNodeSignal(allocator, stream, expr, binder_stack);
-    }
-
-    fn collectNodeAttrDescriptor(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
-        return self.engine.collectNodeAttrDescriptor(self, roc_host, stream, elem_id, attr, binder_stack);
-    }
-
-    fn collectElemDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding)) void {
-        self.validateScopeId(scope_id);
-
-        const allocator = self.gpa.allocator();
-        switch (elem.tag) {
-            .Element => {
-                const payload = elem.payload.element;
-                const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
-                dom_ordinal.* += 1;
-                _ = stream.appendElement(allocator, elem_id, parent_elem_id, scope_id, payload.tag.asSlice());
-                for (payload.attrs.items()) |attr| {
-                    self.collectNodeAttrDescriptor(roc_host, stream, elem_id, attr, binder_stack.items);
-                }
-                for (payload.children.items()) |child| {
-                    self.collectElemDescriptors(roc_host, stream, child, scope_id, elem_id, ordinal, dom_ordinal, binder_stack);
-                }
-            },
-            .Text => {
-                const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
-                dom_ordinal.* += 1;
-                stream.appendTextNode(allocator, elem_id, parent_elem_id, scope_id, elem.payload.text.asSlice());
-            },
-            .TextSignal => {
-                const elem_id = self.internDomIdentity(scope_id, dom_ordinal.*);
-                dom_ordinal.* += 1;
-                const text_signal = elem.payload.text_signal;
-                const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
-                stream.appendSignalTextNode(allocator, roc_host, &self.engine.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
-            },
-            .Cleanup => {
-                stream.appendCleanup(allocator, scope_id, elem.payload.cleanup.cleanup.asSlice());
-            },
-            .OnChange => {
-                const payload = elem.payload.on_change;
-                const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack.items);
-                stream.appendOnChange(allocator, roc_host, &self.engine.pending_roc_metrics, scope_id, signal, payload.to_cmd);
-            },
-            .State => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .state, binder_stack.items);
-                stream.appendState(allocator, roc_host, &self.engine.pending_roc_metrics, node_id, elem.payload.state.initial, elem.payload.state.eq, elem.payload.state.drop);
-                binder_stack.append(allocator, .{ .token = elem.payload.state.binder, .node_id = node_id }) catch std.process.exit(1);
-                self.collectElemDescriptors(roc_host, stream, elem.payload.state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack);
-                _ = binder_stack.pop() orelse unreachable;
-            },
-            .Component => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .component, binder_stack.items);
-                const component_scope_id = self.internComponentScope(scope_id, site_ordinal);
-                var component_ordinal: u64 = 0;
-                var component_dom_ordinal: u64 = 0;
-                self.collectElemDescriptors(roc_host, stream, elem.payload.component.child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack);
-            },
-            .When => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
-                const condition = self.bindNodeSignal(allocator, stream, elem.payload.when.condition.*, binder_stack.items);
-                stream.appendWhen(allocator, roc_host, &self.engine.pending_roc_metrics, node_id, condition, elem.payload.when.read, elem.payload.when.when_false.*, elem.payload.when.when_true.*);
-            },
-            .Each => {
-                const site_ordinal = ordinal.*;
-                const node_id = self.internNodeIdentity(scope_id, site_ordinal);
-                ordinal.* += 1;
-                stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .each, binder_stack.items);
-                const items = self.bindNodeSignal(allocator, stream, elem.payload.each.items.*, binder_stack.items);
-                stream.appendEach(
-                    allocator,
-                    roc_host,
-                    &self.engine.pending_roc_metrics,
-                    node_id,
-                    items,
-                    elem.payload.each.items_to_values,
-                    elem.payload.each.key_hash,
-                    elem.payload.each.key_of,
-                    elem.payload.each.key_eq,
-                    elem.payload.each.key_drop,
-                    elem.payload.each.item_eq,
-                    elem.payload.each.item_drop,
-                    elem.payload.each.row,
-                );
-            },
-        }
-    }
-
-    fn collectElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem) void {
-        const root_scope_id = self.internRootScope();
-        const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-        defer binder_stack.deinit(allocator);
-        var ordinal: u64 = 0;
-        var dom_ordinal: u64 = 0;
-        self.collectElemDescriptors(roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack);
-    }
-
-    fn collectElemWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, branch: HostScopeBranch, elem: abi.Elem) u64 {
-        if (site.kind != .when) {
-            failHost("Elem branch collection requires a when scope site");
-        }
-        const branch_scope_id = self.internWhenBranchScope(site.scope_id, site.ordinal, branch);
-        const allocator = self.gpa.allocator();
-        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-        defer binder_stack.deinit(allocator);
-        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
-        var ordinal: u64 = 0;
-        var dom_ordinal: u64 = 0;
-        self.collectElemDescriptors(roc_host, stream, elem, branch_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack);
-        return branch_scope_id;
     }
 
     fn activeWhenBranchScopeId(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) ?u64 {
         return self.engine.activeWhenBranchScopeId(parent_scope_id, site_ordinal, branch) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
-    }
-
-    fn collectElemActiveWhenBranchDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, when: HostNodeWhenDesc, active_branch: HostScopeBranch, elem: abi.Elem) u64 {
-        if (site.kind != .when) {
-            failHost("Elem active branch collection requires a when scope site");
-        }
-        if (site.node_id != when.node_id) {
-            failHost("Elem active branch collection received mismatched when descriptors");
-        }
-
-        if (self.activeWhenBranchScopeId(site.scope_id, site.ordinal, active_branch.opposite())) |inactive_scope_id| {
-            self.disposeScopeSubtree(roc_host, inactive_scope_id);
-        }
-
-        return self.collectElemWhenBranchDescriptors(roc_host, stream, site, active_branch, elem);
-    }
-
-    fn collectElemEachRowDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, items: []const HostValue) HostKeyedRowDiffResult {
-        if (site.kind != .each) {
-            failHost("Elem row collection requires an each scope site");
-        }
-        if (site.node_id != each.node_id) {
-            failHost("Elem row collection received mismatched each descriptors");
-        }
-
-        const allocator = self.gpa.allocator();
-        const keys = allocator.alloc(HostValue, items.len) catch std.process.exit(1);
-        defer allocator.free(keys);
-
-        for (items, 0..) |item, index| {
-            keys[index] = callErasedHostValueToHostValue(roc_host, each.key_of, item);
-        }
-
-        const diff = self.syncEachRowScopes(roc_host, site.scope_id, site.ordinal, keys, items, each.key_hash, each.key_eq, each.key_drop, each.item_eq, each.item_drop);
-
-        var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
-        defer binder_stack.deinit(allocator);
-        binder_stack.appendSlice(allocator, site.binder_bindings) catch std.process.exit(1);
-
-        for (diff.scope_ids) |row_scope_id| {
-            const row_values = self.eachRowScopeValues(row_scope_id);
-            const row_elem = callErasedHostValueHostValueToElem(roc_host, each.row, row_values.key, row_values.item);
-            defer abi.decrefElem(row_elem, roc_host);
-
-            var ordinal: u64 = 0;
-            var dom_ordinal: u64 = 0;
-            self.collectElemDescriptors(roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack);
-        }
-
-        return diff;
     }
 
     fn collectActiveElemRootDescriptors(self: *HostEnv, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem, dirty_source_node_ids: []const u64) void {
@@ -5573,64 +5357,6 @@ test "signals host row scopes retain key and item equality thunks" {
     try std.testing.expectEqual(row_scope_id, next.scope_ids[0]);
 }
 
-test "signals host walks Elem identity-bearing sites only" {
-    test_erased_callable_drop_count = 0;
-
-    var host = HostEnv.init();
-    var roc_host = makeSignalsRocHost(&host);
-    host.engine.roc_host = &roc_host;
-    defer {
-        deinitTestHostIdentity(&host);
-        _ = host.gpa.deinit();
-    }
-
-    const nested_state = testNodeState(&roc_host, testNodeText(&roc_host, "nested"));
-    const branch_true = testNodeState(&roc_host, testNodeText(&roc_host, "true"));
-    const branch_false = testNodeState(&roc_host, testNodeText(&roc_host, "false"));
-    const when_elem = testNodeWhen(&roc_host, branch_true, branch_false);
-    const each_elem = testNodeEach(&roc_host);
-    const nested_children = [_]abi.Elem{
-        testNodeText(&roc_host, "ordinary text"),
-        when_elem,
-        each_elem,
-    };
-    const nested_element = testElement(&roc_host, &nested_children);
-    const root_children = [_]abi.Elem{
-        testNodeText(&roc_host, "root text"),
-        nested_state,
-        nested_element,
-    };
-    const root = testElement(&roc_host, &root_children);
-    defer abi.decrefElem(root, &roc_host);
-
-    host.walkElemRootIdentitySites(root);
-    try std.testing.expectEqual(@as(usize, 3), host.engine.node_identities.items.len);
-    try std.testing.expectEqual(@as(u64, 0), host.engine.node_identities.items[0].scope_id);
-    try std.testing.expectEqual(@as(u64, 0), host.engine.node_identities.items[0].ordinal);
-    try std.testing.expectEqual(@as(u64, 0), host.engine.node_identities.items[1].scope_id);
-    try std.testing.expectEqual(@as(u64, 1), host.engine.node_identities.items[1].ordinal);
-    try std.testing.expectEqual(@as(u64, 0), host.engine.node_identities.items[2].scope_id);
-    try std.testing.expectEqual(@as(u64, 2), host.engine.node_identities.items[2].ordinal);
-
-    host.walkElemRootIdentitySites(root);
-    try std.testing.expectEqual(@as(usize, 3), host.engine.node_identities.items.len);
-
-    const true_scope = host.walkElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
-    try std.testing.expectEqual(@as(usize, 4), host.engine.node_identities.items.len);
-    try std.testing.expectEqual(true_scope, host.engine.node_identities.items[3].scope_id);
-    try std.testing.expectEqual(@as(u64, 0), host.engine.node_identities.items[3].ordinal);
-
-    const true_scope_again = host.walkElemWhenBranchIdentitySites(0, 1, .true_branch, when_elem.payload.when.when_true.*);
-    try std.testing.expectEqual(true_scope, true_scope_again);
-    try std.testing.expectEqual(@as(usize, 4), host.engine.node_identities.items.len);
-
-    const false_scope = host.walkElemWhenBranchIdentitySites(0, 1, .false_branch, when_elem.payload.when.when_false.*);
-    try std.testing.expect(false_scope != true_scope);
-    try std.testing.expectEqual(@as(usize, 5), host.engine.node_identities.items.len);
-    try std.testing.expectEqual(false_scope, host.engine.node_identities.items[4].scope_id);
-    try std.testing.expectEqual(@as(u64, 0), host.engine.node_identities.items[4].ordinal);
-}
-
 test "signals host collects Elem descriptor stream" {
     test_erased_callable_drop_count = 0;
 
@@ -5638,7 +5364,7 @@ test "signals host collects Elem descriptor stream" {
     var roc_host = makeSignalsRocHost(&host);
     host.engine.roc_host = &roc_host;
     defer {
-        deinitTestHostIdentity(&host);
+        host.deinit();
         _ = host.gpa.deinit();
     }
 
@@ -5676,7 +5402,7 @@ test "signals host collects Elem descriptor stream" {
     const root = testElementWith(&roc_host, "section", &root_attrs, &root_children);
     defer abi.decrefElem(root, &roc_host);
 
-    host.collectElemRootDescriptors(&roc_host, &stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
 
     try std.testing.expectEqual(@as(usize, 2), stream.elements.items.len);
     try std.testing.expectEqual(@as(u64, 1), stream.elements.items[0].elem_id);
@@ -5687,13 +5413,16 @@ test "signals host collects Elem descriptor stream" {
     try std.testing.expectEqual(@as(u64, 1), stream.elements.items[1].parent_elem_id);
     try std.testing.expectEqualStrings("span", stream.elements.items[1].tag);
 
-    try std.testing.expectEqual(@as(usize, 2), stream.text_nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 3), stream.text_nodes.items.len);
     try std.testing.expectEqual(@as(u64, 2), stream.text_nodes.items[0].elem_id);
     try std.testing.expectEqual(@as(u64, 1), stream.text_nodes.items[0].parent_elem_id);
     try std.testing.expectEqualStrings("intro", stream.text_nodes.items[0].value);
     try std.testing.expectEqual(@as(u64, 5), stream.text_nodes.items[1].elem_id);
     try std.testing.expectEqual(@as(u64, 4), stream.text_nodes.items[1].parent_elem_id);
     try std.testing.expectEqualStrings("state child", stream.text_nodes.items[1].value);
+    try std.testing.expectEqual(@as(u64, 7), stream.text_nodes.items[2].elem_id);
+    try std.testing.expectEqual(@as(u64, 1), stream.text_nodes.items[2].parent_elem_id);
+    try std.testing.expectEqualStrings("true branch", stream.text_nodes.items[2].value);
 
     try std.testing.expectEqual(@as(usize, 2), stream.signal_text_nodes.items.len);
     try std.testing.expectEqual(@as(u64, 3), stream.signal_text_nodes.items[0].elem_id);
@@ -5705,7 +5434,7 @@ test "signals host collects Elem descriptor stream" {
     try std.testing.expectEqual(@as(std.meta.Tag(HostSignalRecordPayload), .ref), std.meta.activeTag(stream.signal_text_nodes.items[1].signal.record.payload));
     try std.testing.expectEqual(@as(usize, 1), stream.signal_text_nodes.items[1].signal.source_node_ids.len);
     try std.testing.expectEqual(stream.scope_sites.items[0].node_id, stream.signal_text_nodes.items[1].signal.source_node_ids[0]);
-    try std.testing.expectEqual(@as(u64, 7), stream.next_elem_id);
+    try std.testing.expectEqual(@as(u64, 8), stream.next_elem_id);
 
     try std.testing.expectEqual(@as(usize, 3), stream.static_text_attrs.items.len);
     try std.testing.expectEqual(RenderTextField.role, stream.static_text_attrs.items[0].field);
@@ -5775,7 +5504,7 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
     var roc_host = makeSignalsRocHost(&host);
     host.engine.roc_host = &roc_host;
     defer {
-        deinitTestHostIdentity(&host);
+        host.deinit();
         _ = host.gpa.deinit();
     }
 
@@ -5796,15 +5525,15 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
     const root = testElementWith(&roc_host, "section", &root_attrs, &root_children);
     defer abi.decrefElem(root, &roc_host);
 
-    host.collectElemRootDescriptors(&roc_host, &stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
 
-    try std.testing.expectEqual(@as(u64, 23), host.engine.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 38), host.engine.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.engine.pending_roc_metrics.closure_releases);
 
     stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
 
-    try std.testing.expectEqual(@as(u64, 23), host.engine.pending_roc_metrics.closure_retains);
-    try std.testing.expectEqual(@as(u64, 23), host.engine.pending_roc_metrics.closure_releases);
+    try std.testing.expectEqual(@as(u64, 38), host.engine.pending_roc_metrics.closure_retains);
+    try std.testing.expectEqual(@as(u64, 30), host.engine.pending_roc_metrics.closure_releases);
 }
 
 test "signals host preserves explicit signal tokens across cloned descriptors" {
@@ -5814,7 +5543,7 @@ test "signals host preserves explicit signal tokens across cloned descriptors" {
     var roc_host = makeSignalsRocHost(&host);
     host.engine.roc_host = &roc_host;
     defer {
-        deinitTestHostIdentity(&host);
+        host.deinit();
         _ = host.gpa.deinit();
     }
 
@@ -5830,7 +5559,7 @@ test "signals host preserves explicit signal tokens across cloned descriptors" {
     const root = testElement(&roc_host, &root_children);
     defer abi.decrefElem(root, &roc_host);
 
-    host.collectElemRootDescriptors(&roc_host, &stream, root);
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
 
     try std.testing.expectEqual(@as(usize, 2), stream.signal_text_nodes.items.len);
     const first = stream.signal_text_nodes.items[0].signal.record;
@@ -5946,202 +5675,4 @@ test "signals host keeps live allocations flat across repeated events" {
     }
 
     try expectHostValueI64(host.stateValueByNodeId(state_id), 100);
-}
-
-test "signals host carries binder context into Elem when branch collection" {
-    test_erased_callable_drop_count = 0;
-
-    var host = HostEnv.init();
-    var roc_host = makeSignalsRocHost(&host);
-    host.engine.roc_host = &roc_host;
-    defer {
-        deinitTestHostIdentity(&host);
-        _ = host.gpa.deinit();
-    }
-
-    var stream: HostNodeDescriptorStream = .{};
-    defer stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
-
-    const state_token = newTestBinderToken(&roc_host);
-    const branch_children = [_]abi.Elem{
-        testNodeTextSignal(&roc_host, testNodeRefExpr(state_token)),
-    };
-    const branch_true = testElementWith(&roc_host, "span", &.{}, &branch_children);
-    const when_elem = testNodeWhen(&roc_host, branch_true, testNodeText(&roc_host, "hidden"));
-    const state_child_children = [_]abi.Elem{
-        when_elem,
-    };
-    const state_child = testElementWith(&roc_host, "div", &.{}, &state_child_children);
-    const root = testNodeStateWithToken(&roc_host, state_token, state_child);
-    defer abi.decrefElem(root, &roc_host);
-
-    host.collectElemRootDescriptors(&roc_host, &stream, root);
-
-    try std.testing.expectEqual(@as(usize, 2), stream.scope_sites.items.len);
-    const state_site = stream.scope_sites.items[0];
-    const when_site = stream.scope_sites.items[1];
-    try std.testing.expectEqual(HostNodeScopeSiteKind.state, state_site.kind);
-    try std.testing.expectEqual(HostNodeScopeSiteKind.when, when_site.kind);
-    try std.testing.expectEqual(@as(usize, 1), when_site.binder_bindings.len);
-    try std.testing.expect(when_site.binder_bindings[0].token == state_token);
-    try std.testing.expectEqual(state_site.node_id, when_site.binder_bindings[0].node_id);
-    try std.testing.expectEqual(@as(usize, 0), stream.signal_text_nodes.items.len);
-
-    const branch_scope_id = host.collectElemWhenBranchDescriptors(&roc_host, &stream, when_site, .true_branch, when_elem.payload.when.when_true.*);
-
-    try std.testing.expect(branch_scope_id != 0);
-    try std.testing.expectEqual(@as(usize, 2), stream.elements.items.len);
-    try std.testing.expectEqual(@as(u64, 2), stream.elements.items[1].elem_id);
-    try std.testing.expectEqual(@as(u64, 1), stream.elements.items[1].parent_elem_id);
-    try std.testing.expectEqual(branch_scope_id, stream.elements.items[1].scope_id);
-    try std.testing.expectEqualStrings("span", stream.elements.items[1].tag);
-    try std.testing.expectEqual(@as(usize, 1), stream.signal_text_nodes.items.len);
-    try std.testing.expectEqual(branch_scope_id, stream.signal_text_nodes.items[0].scope_id);
-    try std.testing.expectEqual(@as(usize, 1), stream.signal_text_nodes.items[0].signal.source_node_ids.len);
-    try std.testing.expectEqual(state_site.node_id, stream.signal_text_nodes.items[0].signal.source_node_ids[0]);
-}
-
-test "signals host disposes inactive Elem when branch scope" {
-    test_erased_callable_drop_count = 0;
-
-    var host = HostEnv.init();
-    var roc_host = makeSignalsRocHost(&host);
-    host.engine.roc_host = &roc_host;
-    defer {
-        deinitTestHostIdentity(&host);
-        _ = host.gpa.deinit();
-    }
-
-    const branch_true = testNodeState(&roc_host, testNodeText(&roc_host, "true branch"));
-    const branch_false = testNodeState(&roc_host, testNodeText(&roc_host, "false branch"));
-    const when_elem = testNodeWhen(&roc_host, branch_true, branch_false);
-    const root_children = [_]abi.Elem{when_elem};
-    const root = testElementWith(&roc_host, "section", &.{}, &root_children);
-    defer abi.decrefElem(root, &roc_host);
-
-    var true_stream: HostNodeDescriptorStream = .{};
-    defer true_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
-    host.collectElemRootDescriptors(&roc_host, &true_stream, root);
-    const true_scope = host.collectElemActiveWhenBranchDescriptors(&roc_host, &true_stream, true_stream.scope_sites.items[0], true_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
-
-    try std.testing.expectEqual(@as(usize, 2), true_stream.scope_sites.items.len);
-    const true_state_id = true_stream.scope_sites.items[1].node_id;
-    try std.testing.expectEqual(true_scope, true_stream.scope_sites.items[1].scope_id);
-    try std.testing.expect(host.engine.scopes.items[@intCast(true_scope)].active);
-    try std.testing.expect(host.engine.node_identities.items[@intCast(true_state_id)].active);
-
-    var false_stream: HostNodeDescriptorStream = .{};
-    defer false_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
-    host.collectElemRootDescriptors(&roc_host, &false_stream, root);
-    const false_scope = host.collectElemActiveWhenBranchDescriptors(&roc_host, &false_stream, false_stream.scope_sites.items[0], false_stream.whens.items[0], .false_branch, when_elem.payload.when.when_false.*);
-
-    try std.testing.expect(false_scope != true_scope);
-    try std.testing.expect(!host.engine.scopes.items[@intCast(true_scope)].active);
-    try std.testing.expect(!host.engine.node_identities.items[@intCast(true_state_id)].active);
-    try std.testing.expect(host.engine.scopes.items[@intCast(false_scope)].active);
-    try std.testing.expectEqual(@as(u64, 1), host.engine.pending_roc_metrics.scopes_disposed);
-    const false_state_id = false_stream.scope_sites.items[1].node_id;
-
-    var true_again_stream: HostNodeDescriptorStream = .{};
-    defer true_again_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
-    host.collectElemRootDescriptors(&roc_host, &true_again_stream, root);
-    const true_again_scope = host.collectElemActiveWhenBranchDescriptors(&roc_host, &true_again_stream, true_again_stream.scope_sites.items[0], true_again_stream.whens.items[0], .true_branch, when_elem.payload.when.when_true.*);
-
-    try std.testing.expect(true_again_scope != true_scope);
-    try std.testing.expect(true_again_scope != false_scope);
-    try std.testing.expect(!host.engine.scopes.items[@intCast(false_scope)].active);
-    try std.testing.expect(!host.engine.node_identities.items[@intCast(false_state_id)].active);
-    try std.testing.expect(host.engine.scopes.items[@intCast(true_again_scope)].active);
-    try std.testing.expectEqual(@as(u64, 2), host.engine.pending_roc_metrics.scopes_disposed);
-    try std.testing.expect(true_again_stream.scope_sites.items[1].node_id != true_state_id);
-}
-
-test "signals host collects Elem each row bodies by keyed scope" {
-    test_erased_callable_drop_count = 0;
-
-    var host = HostEnv.init();
-    var roc_host = makeSignalsRocHost(&host);
-    host.engine.roc_host = &roc_host;
-    defer {
-        deinitTestHostIdentity(&host);
-        _ = host.gpa.deinit();
-    }
-
-    const root_children = [_]abi.Elem{
-        testNodeEach(&roc_host),
-    };
-    const root = testElementWith(&roc_host, "section", &.{}, &root_children);
-    defer abi.decrefElem(root, &roc_host);
-
-    var initial_stream: HostNodeDescriptorStream = .{};
-    defer initial_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
-    host.collectElemRootDescriptors(&roc_host, &initial_stream, root);
-
-    try std.testing.expectEqual(@as(usize, 1), initial_stream.scope_sites.items.len);
-    try std.testing.expectEqual(HostNodeScopeSiteKind.each, initial_stream.scope_sites.items[0].kind);
-    try std.testing.expectEqual(@as(usize, 1), initial_stream.eaches.items.len);
-
-    const initial_items = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(3) };
-    const initial = host.collectElemEachRowDescriptors(&roc_host, &initial_stream, initial_stream.scope_sites.items[0], initial_stream.eaches.items[0], &initial_items);
-    defer freeKeyedRowDiff(&host, initial);
-
-    try std.testing.expectEqual(@as(u64, 0), initial.rows_reused);
-    try std.testing.expectEqual(@as(u64, 3), initial.rows_created);
-    try std.testing.expectEqual(@as(u64, 0), initial.rows_removed);
-    try std.testing.expectEqual(@as(u64, 0), initial.row_items_unchanged);
-    try std.testing.expectEqual(@as(u64, 0), initial.row_items_updated);
-    try std.testing.expectEqual(@as(usize, 4), initial_stream.scope_sites.items.len);
-    try std.testing.expectEqual(@as(usize, 3), initial_stream.states.items.len);
-    try std.testing.expectEqual(@as(usize, 3), initial_stream.text_nodes.items.len);
-
-    try std.testing.expectEqual(initial.scope_ids[0], initial_stream.scope_sites.items[1].scope_id);
-    try std.testing.expectEqual(initial.scope_ids[1], initial_stream.scope_sites.items[2].scope_id);
-    try std.testing.expectEqual(initial.scope_ids[2], initial_stream.scope_sites.items[3].scope_id);
-    try std.testing.expectEqual(@as(u64, 0), initial_stream.scope_sites.items[1].ordinal);
-    try std.testing.expectEqual(@as(u64, 0), initial_stream.scope_sites.items[2].ordinal);
-    try std.testing.expectEqual(@as(u64, 0), initial_stream.scope_sites.items[3].ordinal);
-    try std.testing.expectEqualStrings("row-1-1", initial_stream.text_nodes.items[0].value);
-    try std.testing.expectEqualStrings("row-2-2", initial_stream.text_nodes.items[1].value);
-    try std.testing.expectEqualStrings("row-3-3", initial_stream.text_nodes.items[2].value);
-
-    const state_for_key_2 = host.internNodeIdentity(initial.scope_ids[1], 0);
-
-    var reordered_stream: HostNodeDescriptorStream = .{};
-    defer reordered_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
-    host.collectElemRootDescriptors(&roc_host, &reordered_stream, root);
-
-    const reordered_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(2) };
-    const reordered = host.collectElemEachRowDescriptors(&roc_host, &reordered_stream, reordered_stream.scope_sites.items[0], reordered_stream.eaches.items[0], &reordered_items);
-    defer freeKeyedRowDiff(&host, reordered);
-
-    try std.testing.expectEqual(@as(u64, 3), reordered.rows_reused);
-    try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
-    try std.testing.expectEqual(@as(u64, 0), reordered.rows_removed);
-    try std.testing.expectEqual(@as(u64, 3), reordered.row_items_unchanged);
-    try std.testing.expectEqual(@as(u64, 0), reordered.row_items_updated);
-    try std.testing.expectEqual(initial.scope_ids[2], reordered.scope_ids[0]);
-    try std.testing.expectEqual(initial.scope_ids[0], reordered.scope_ids[1]);
-    try std.testing.expectEqual(initial.scope_ids[1], reordered.scope_ids[2]);
-    try std.testing.expectEqual(state_for_key_2, host.internNodeIdentity(reordered.scope_ids[2], 0));
-    try std.testing.expectEqual(state_for_key_2, reordered_stream.scope_sites.items[3].node_id);
-
-    var changed_stream: HostNodeDescriptorStream = .{};
-    defer changed_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
-    host.collectElemRootDescriptors(&roc_host, &changed_stream, root);
-
-    const changed_items = [_]HostValue{ testHostValueI64(2), testHostValueI64(4) };
-    const changed = host.collectElemEachRowDescriptors(&roc_host, &changed_stream, changed_stream.scope_sites.items[0], changed_stream.eaches.items[0], &changed_items);
-    defer freeKeyedRowDiff(&host, changed);
-
-    try std.testing.expectEqual(@as(u64, 1), changed.rows_reused);
-    try std.testing.expectEqual(@as(u64, 1), changed.rows_created);
-    try std.testing.expectEqual(@as(u64, 2), changed.rows_removed);
-    try std.testing.expectEqual(@as(u64, 1), changed.row_items_unchanged);
-    try std.testing.expectEqual(@as(u64, 0), changed.row_items_updated);
-    try std.testing.expectEqual(initial.scope_ids[1], changed.scope_ids[0]);
-    try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[0]);
-    try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[2]);
-    try std.testing.expect(!host.engine.scopes.items[@intCast(initial.scope_ids[0])].active);
-    try std.testing.expect(!host.engine.scopes.items[@intCast(initial.scope_ids[2])].active);
-    try std.testing.expectEqual(state_for_key_2, host.internNodeIdentity(changed.scope_ids[0], 0));
 }
