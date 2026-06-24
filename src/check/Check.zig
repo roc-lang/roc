@@ -549,6 +549,7 @@ const HoistFrame = struct {
     binding_rhs: bool,
     binding_pattern: ?CIR.Pattern.Idx,
     candidate_start: usize,
+    delayed_start: usize,
     deferred_dependency_start: usize,
     has_runtime_dependency: bool = false,
     has_contextual_dependency: bool = false,
@@ -567,6 +568,8 @@ const DelayedHoistRoot = struct {
     effect_slot: EffectSlotId,
     child_exprs: []CIR.Expr.Idx,
     deferred_binding_dependencies: []CIR.Pattern.Idx,
+    child_delayed_start: usize,
+    child_delayed_end: usize,
 
     fn deinit(self: *DelayedHoistRoot, allocator: Allocator) void {
         allocator.free(self.child_exprs);
@@ -1764,6 +1767,7 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator
         .binding_rhs = binding_rhs,
         .binding_pattern = if (binding_rhs) self.checking_binding_rhs_pattern else null,
         .candidate_start = self.hoist_expr_candidates.items.len,
+        .delayed_start = self.hoist_delayed_roots.items.len,
         .deferred_dependency_start = self.hoist_deferred_binding_dependencies.items.len,
     });
     self.last_hoist_result = null;
@@ -1783,6 +1787,10 @@ fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
     }
     _ = self.hoist_frames.pop();
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
+    for (self.hoist_delayed_roots.items[frame.delayed_start..]) |*root| {
+        root.deinit(self.gpa);
+    }
+    self.hoist_delayed_roots.shrinkRetainingCapacity(frame.delayed_start);
     if (frame.binding_rhs) {
         self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
     }
@@ -1796,6 +1804,8 @@ fn appendDelayedHoistRoot(
     effect_slot: EffectSlotId,
     child_exprs: []const CIR.Expr.Idx,
     deferred_binding_dependencies: []const CIR.Pattern.Idx,
+    child_delayed_start: usize,
+    child_delayed_end: usize,
 ) Allocator.Error!void {
     const child_copy = try self.gpa.alloc(CIR.Expr.Idx, child_exprs.len);
     errdefer self.gpa.free(child_copy);
@@ -1811,11 +1821,22 @@ fn appendDelayedHoistRoot(
         .effect_slot = effect_slot,
         .child_exprs = child_copy,
         .deferred_binding_dependencies = dependency_copy,
+        .child_delayed_start = child_delayed_start,
+        .child_delayed_end = child_delayed_end,
     });
 }
 
 fn finalizeDelayedHoistedRoots(self: *Self) Allocator.Error!void {
-    for (self.hoist_delayed_roots.items) |*delayed| {
+    const delayed_count = self.hoist_delayed_roots.items.len;
+    const keep_delayed = try self.gpa.alloc(bool, delayed_count);
+    defer self.gpa.free(keep_delayed);
+    @memset(keep_delayed, true);
+
+    var delayed_index = delayed_count;
+    while (delayed_index > 0) {
+        delayed_index -= 1;
+        if (!keep_delayed[delayed_index]) continue;
+        const delayed = &self.hoist_delayed_roots.items[delayed_index];
         var transaction = HoistSelectionTransaction.init(self);
         defer transaction.deinit();
 
@@ -1827,6 +1848,9 @@ fn finalizeDelayedHoistedRoots(self: *Self) Allocator.Error!void {
                 _ = try transaction.stageBindingRoot(dependency);
             }
         } else {
+            for (delayed.child_delayed_start..delayed.child_delayed_end) |child_delayed_index| {
+                keep_delayed[child_delayed_index] = false;
+            }
             _ = try transaction.stageExprRoot(delayed.expr, delayed.pattern);
         }
         try transaction.commit();
@@ -1908,6 +1932,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, check_result: ExprCheckResu
                 self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]
             else
                 &.{},
+            frame.delayed_start,
+            self.hoist_delayed_roots.items.len,
         );
     }
     if (should_flush_child_candidates or should_flush_deferred_binding_dependencies) {
@@ -2534,6 +2560,7 @@ const HoistSelectionTestState = struct {
         checker.effect_slots = .empty;
         checker.effect_edges = .empty;
         checker.dispatch_effect_watches = .empty;
+        checker.top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(allocator);
         checker.hoist_frames = .empty;
         checker.hoist_expr_candidates = .empty;
         checker.hoist_delayed_roots = .empty;
@@ -2562,6 +2589,7 @@ const HoistSelectionTestState = struct {
         self.checker.effect_slots.deinit(self.allocator);
         self.checker.effect_edges.deinit(self.allocator);
         self.checker.dispatch_effect_watches.deinit(self.allocator);
+        self.checker.top_level_ptrns.deinit();
         self.checker.hoist_frames.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
         for (self.checker.hoist_delayed_roots.items) |*root| {
@@ -2856,6 +2884,103 @@ test "delayed hoist finalization preserves children for effectful parent" {
 
     try std.testing.expectEqual(@as(usize, 0), state.checker.selected_hoisted_roots.items.len);
     try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_delayed_roots.items.len);
+
+    try state.checker.finalizeDelayedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_delayed_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(child_expr, state.checker.selected_hoisted_roots.items[0].expr);
+}
+
+test "nested delayed hoist finalization keeps pure outer parent root" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("HoistSelection",
+        \\main = |_| {
+        \\    x = 1.I64 + 2.I64
+        \\    x
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    const child_expr = try state.borrowCheckedContext(&test_env.checker);
+    const inner_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_dispatch_call);
+    const outer_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_block);
+
+    var outer_guard = try state.checker.beginHoistFrame(outer_expr, false);
+    defer outer_guard.deinit();
+
+    var inner_guard = try state.checker.beginHoistFrame(inner_expr, false);
+    defer inner_guard.deinit();
+    try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
+    var inner_result = ExprCheckResult.compileTimeKnown();
+    const inner_fn_var: Var = @enumFromInt(101);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&inner_result, inner_expr, inner_fn_var);
+    const inner_slot = switch (inner_result.root_effect.?) {
+        .delayed => |slot| slot,
+        .effect_free,
+        .effectful,
+        => return error.ExpectedDelayedRootEffect,
+    };
+    try inner_guard.finish(inner_result);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_delayed_roots.items.len);
+
+    var outer_result = ExprCheckResult.compileTimeKnown();
+    outer_result.root_effect = .{ .delayed = inner_slot };
+    const outer_fn_var: Var = @enumFromInt(102);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&outer_result, outer_expr, outer_fn_var);
+    try outer_guard.finish(outer_result);
+    try std.testing.expectEqual(@as(usize, 2), state.checker.hoist_delayed_roots.items.len);
+
+    try state.checker.finalizeDelayedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_delayed_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(outer_expr, state.checker.selected_hoisted_roots.items[0].expr);
+}
+
+test "nested delayed hoist finalization preserves children for effectful inner root" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("HoistSelection",
+        \\main = |_| {
+        \\    x = 1.I64 + 2.I64
+        \\    x
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    const child_expr = try state.borrowCheckedContext(&test_env.checker);
+    const inner_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_dispatch_call);
+    const outer_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_block);
+
+    var outer_guard = try state.checker.beginHoistFrame(outer_expr, false);
+    defer outer_guard.deinit();
+
+    var inner_guard = try state.checker.beginHoistFrame(inner_expr, false);
+    defer inner_guard.deinit();
+    try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
+    var inner_result = ExprCheckResult.compileTimeKnown();
+    const inner_fn_var: Var = @enumFromInt(201);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&inner_result, inner_expr, inner_fn_var);
+    const inner_slot = switch (inner_result.root_effect.?) {
+        .delayed => |slot| slot,
+        .effect_free,
+        .effectful,
+        => return error.ExpectedDelayedRootEffect,
+    };
+    state.checker.effectSlotPtr(inner_slot).direct_effect = true;
+    try inner_guard.finish(inner_result);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_delayed_roots.items.len);
+
+    var outer_result = ExprCheckResult.compileTimeKnown();
+    outer_result.root_effect = .{ .delayed = inner_slot };
+    const outer_fn_var: Var = @enumFromInt(202);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&outer_result, outer_expr, outer_fn_var);
+    try outer_guard.finish(outer_result);
+    try std.testing.expectEqual(@as(usize, 2), state.checker.hoist_delayed_roots.items.len);
 
     try state.checker.finalizeDelayedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_delayed_roots.items.len);
