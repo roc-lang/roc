@@ -303,24 +303,24 @@ Tests:
 - [x] empty record can be a maximal root
 - [x] record containing list selects the record, not the list child
 - [x] list inside runtime-dependent record stays as child root
-- [ ] nested closed block selects the block root
-- [ ] runtime-dependent block preserves independent closed child roots
-- [ ] closed `return` payload can be selected, but `return` is not a root
+- [x] nested closed block selects the block root
+- [x] runtime-dependent block preserves independent closed child roots
+- [x] closed `return` payload can be selected, but `return` is not a root
 - [ ] closed `break` payload can be selected, but `break` is not a root
-- [ ] closed `for` expression can be covered by a parent root
-- [ ] runtime-condition `if` does not publish independent branch-body roots
-- [ ] runtime-scrutinee `match` does not publish independent branch-body roots
-- [ ] compile-time-known `if` selects the enclosing `if` root
-- [ ] compile-time-known `match` selects the enclosing `match` root
-- [ ] untaken branch `crash` is not selected independently
+- [x] closed `for` expression can be covered by a parent root
+- [x] runtime-condition `if` does not publish independent branch-body roots
+- [x] runtime-scrutinee `match` does not publish independent branch-body roots
+- [x] compile-time-known `if` selects the enclosing `if` root
+- [x] compile-time-known `match` selects the enclosing `match` root
+- [x] untaken branch `crash` is not selected independently
 - [ ] `crash` in selected compile-time branch reports at compile time
 - [ ] `dbg` in selected compile-time branch reports at compile time
 - [ ] failed `expect` in selected compile-time branch reports at compile time
-- [ ] effectful parent preserves independent static child root
+- [x] effectful parent preserves independent static child root
 - [ ] direct effectful call blocks containing parent root
-- [ ] delayed parent resolving pure replaces children
-- [ ] delayed parent resolving effectful preserves children
-- [ ] nested delayed parents finalize in stable order
+- [x] delayed parent resolving pure replaces children
+- [x] delayed parent resolving effectful preserves children
+- [x] nested delayed parents finalize in stable order
 - [ ] named top-level constant and equivalent inline expression select
   equivalent roots
 - [ ] closed local constant and equivalent inline expression select equivalent
@@ -330,10 +330,10 @@ Tests:
 - [x] inline imported opaque `sub_or_crash` cells through a boxed hosted model
   select static cells data even when the first use forces a forward top-level
   sprite-sheet definition
-- [ ] record destructure extracts necessary compile-time root
-- [ ] tuple destructure extracts necessary compile-time root
-- [ ] tag payload destructure extracts necessary compile-time root
-- [ ] nested destructure extracts necessary compile-time root
+- [x] record destructure extracts necessary compile-time root
+- [x] tuple destructure extracts necessary compile-time root
+- [x] tag payload destructure extracts necessary compile-time root
+- [x] nested destructure extracts necessary compile-time root
 
 ## Phase 4: Compile-Time Evaluation And Diagnostics
 
