@@ -17296,6 +17296,13 @@ fn literalConstraintSatisfiedByNominalBacking(
             },
         }
 
+        // `backing_nominal` didn't match the terminal builtin above, so we are
+        // about to lift *through* it to a deeper backing. Re-check opacity at
+        // this level: a literal must not be coerced through an opaque boundary
+        // this module is not allowed to see past, even when the outer nominal
+        // is transparent.
+        if (!backing_nominal.canLiftInner(self.cir.qualified_module_ident)) return false;
+
         for (self.scratch_vars.sliceFromStart(visited_top)) |visited_var| {
             const visited_resolved = self.types.resolveVar(visited_var);
             if (visited_resolved.desc_idx == backing_resolved.desc_idx) return false;
