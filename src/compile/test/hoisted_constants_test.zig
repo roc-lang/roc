@@ -434,7 +434,7 @@ test "reachable top-level data lowers to internal static data exports" {
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
 
-    try std.testing.expect(countStoredHoistedListLength(app_view, 2) >= 1);
+    try std.testing.expect(countStoredHoistedListLength(app_view, 6) >= 1);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);

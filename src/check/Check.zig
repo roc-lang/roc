@@ -150,10 +150,15 @@ effect_slots: std.ArrayListUnmanaged(EffectSlot),
 effect_edges: std.ArrayListUnmanaged(EffectEdge),
 /// Function binding patterns mapped to their checker-owned body effect slot.
 function_effect_slots_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, EffectSlotId),
+/// Function binding patterns whose checked body contains runtime-source-only work.
+function_runtime_source_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Stack of currently active effect slots.
 active_effect_slots: std.ArrayListUnmanaged(EffectSlotId),
 /// Static-dispatch function variables watched by active effect slots.
 dispatch_effect_watches: std.ArrayListUnmanaged(DispatchEffectWatch),
+/// Resolved static-dispatch function variables whose selected implementation
+/// contains runtime-source-only work.
+dispatch_runtime_source_fn_vars: std.AutoHashMapUnmanaged(Var, void),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// Final expression summaries for checked top-level values.
@@ -917,6 +922,9 @@ const HoistSelectionTransaction = struct {
             .e_call => |call| {
                 try self.stageExprDependenciesInternal(call.func, context, root_metadata);
                 try self.stageExprSpanDependencies(call.args, context, root_metadata);
+                if (self.checker.callableExprHasRuntimeSource(self.checker.cir, call.func)) {
+                    root_metadata.has_runtime_source = true;
+                }
             },
             .e_method_call => |call| {
                 try self.stageExprDependenciesInternal(call.receiver, context, root_metadata);
@@ -925,6 +933,9 @@ const HoistSelectionTransaction = struct {
             .e_dispatch_call => |call| {
                 try self.stageExprDependenciesInternal(call.receiver, context, root_metadata);
                 try self.stageExprSpanDependencies(call.args, context, root_metadata);
+                if (self.checker.dispatchHasRuntimeSource(call.constraint_fn_var)) {
+                    root_metadata.has_runtime_source = true;
+                }
             },
             .e_record => |record| try self.stageRecordDependencies(record.fields, record.ext, context, root_metadata),
             .e_tag => |tag| try self.stageExprSpanDependencies(tag.args, context, root_metadata),
@@ -940,6 +951,11 @@ const HoistSelectionTransaction = struct {
             .e_interpolation => |interpolation| {
                 try self.stageExprDependenciesInternal(interpolation.first, context, root_metadata);
                 try self.stageExprSpanDependencies(interpolation.parts, context, root_metadata);
+                if (interpolation.constraint_fn_var) |fn_var| {
+                    if (self.checker.dispatchHasRuntimeSource(fn_var)) {
+                        root_metadata.has_runtime_source = true;
+                    }
+                }
             },
             .e_structural_eq => |eq| {
                 try self.stageExprDependenciesInternal(eq.lhs, context, root_metadata);
@@ -952,10 +968,16 @@ const HoistSelectionTransaction = struct {
             .e_method_eq => |eq| {
                 try self.stageExprDependenciesInternal(eq.lhs, context, root_metadata);
                 try self.stageExprDependenciesInternal(eq.rhs, context, root_metadata);
+                if (self.checker.dispatchHasRuntimeSource(eq.constraint_fn_var)) {
+                    root_metadata.has_runtime_source = true;
+                }
             },
             .e_type_method_call => |call| try self.stageExprSpanDependencies(call.args, context, root_metadata),
             .e_type_dispatch_call => |call| {
                 try self.stageExprSpanDependencies(call.args, context, root_metadata);
+                if (self.checker.dispatchHasRuntimeSource(call.constraint_fn_var)) {
+                    root_metadata.has_runtime_source = true;
+                }
             },
             .e_tuple_access => |access| try self.stageExprDependenciesInternal(access.tuple, context, root_metadata),
         }
@@ -1417,8 +1439,10 @@ fn initAssumePrepared(
         .effect_slots = .empty,
         .effect_edges = .empty,
         .function_effect_slots_by_pattern = .{},
+        .function_runtime_source_patterns = .{},
         .active_effect_slots = .empty,
         .dispatch_effect_watches = .empty,
+        .dispatch_runtime_source_fn_vars = .{},
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .top_level_check_summaries = .{},
         .function_body_check_summaries = .{},
@@ -1573,8 +1597,10 @@ pub fn deinit(self: *Self) void {
     self.effect_slots.deinit(self.gpa);
     self.effect_edges.deinit(self.gpa);
     self.function_effect_slots_by_pattern.deinit(self.gpa);
+    self.function_runtime_source_patterns.deinit(self.gpa);
     self.active_effect_slots.deinit(self.gpa);
     self.dispatch_effect_watches.deinit(self.gpa);
+    self.dispatch_runtime_source_fn_vars.deinit(self.gpa);
     self.top_level_ptrns.deinit();
     self.top_level_check_summaries.deinit(self.gpa);
     self.function_body_check_summaries.deinit(self.gpa);
@@ -1820,6 +1846,14 @@ fn recordFunctionEffectSlotForBinding(self: *Self, pattern: CIR.Pattern.Idx, slo
     try self.function_effect_slots_by_pattern.put(self.gpa, pattern, slot);
 }
 
+fn recordFunctionRuntimeSourceForBinding(self: *Self, pattern: CIR.Pattern.Idx, has_runtime_source: bool) Allocator.Error!void {
+    if (has_runtime_source) {
+        try self.function_runtime_source_patterns.put(self.gpa, pattern, {});
+    } else {
+        _ = self.function_runtime_source_patterns.remove(pattern);
+    }
+}
+
 fn recordDirectCalleeEffectDependency(self: *Self, callee: CIR.Expr.Idx) Allocator.Error!void {
     switch (self.cir.store.getExpr(callee)) {
         .e_lookup_local => |lookup| {
@@ -1828,6 +1862,101 @@ fn recordDirectCalleeEffectDependency(self: *Self, callee: CIR.Expr.Idx) Allocat
         },
         else => {},
     }
+}
+
+fn moduleNodeHasRuntimeSource(module: *const ModuleEnv, node_idx: CIR.Node.Idx) bool {
+    const dep = module.runtimeDependencySummaryForNode(node_idx) orelse return false;
+    return switch (dep) {
+        .compile_time_known => false,
+        .runtime_dependent,
+        .poisoned,
+        => true,
+    };
+}
+
+fn defHasRuntimeSource(module: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    const def = module.store.getDef(def_idx);
+    const def_expr = module.store.getExpr(def.expr);
+    const body_expr = switch (def_expr) {
+        .e_lambda => |lambda| lambda.body,
+        .e_closure => |closure| switch (module.store.getExpr(closure.lambda_idx)) {
+            .e_lambda => |lambda| lambda.body,
+            else => return moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.expr)) or
+                moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.pattern)),
+        },
+        else => return moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.expr)) or
+            moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.pattern)),
+    };
+    return moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(body_expr)) or
+        moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.expr)) or
+        moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.pattern));
+}
+
+fn importedModuleForImport(
+    self: *Self,
+    module: *const ModuleEnv,
+    import_idx: CIR.Import.Idx,
+) ?*const ModuleEnv {
+    const module_idx = module.imports.getResolvedModule(import_idx) orelse return null;
+    if (module_idx >= self.imported_modules.len) return null;
+    return self.imported_modules[module_idx];
+}
+
+fn topLevelDefForPattern(module: *const ModuleEnv, pattern: CIR.Pattern.Idx) ?CIR.Def.Idx {
+    return topLevelDefForNode(module, ModuleEnv.nodeIdxFrom(pattern));
+}
+
+fn topLevelDefForNode(module: *const ModuleEnv, node: CIR.Node.Idx) ?CIR.Def.Idx {
+    for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
+        const def = module.store.getDef(def_idx);
+        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.pattern) == node or ModuleEnv.nodeIdxFrom(def.expr) == node) {
+            return def_idx;
+        }
+    }
+    return null;
+}
+
+fn callableExprHasRuntimeSource(
+    self: *Self,
+    module: *const ModuleEnv,
+    callee: CIR.Expr.Idx,
+) bool {
+    return switch (module.store.getExpr(callee)) {
+        .e_lookup_local => |lookup| {
+            if (module == self.cir and self.function_runtime_source_patterns.contains(lookup.pattern_idx)) return true;
+            const def_idx = topLevelDefForPattern(module, lookup.pattern_idx) orelse return false;
+            return defHasRuntimeSource(module, def_idx);
+        },
+        .e_lookup_external => |external| {
+            const imported_module = self.importedModuleForImport(module, external.module_idx) orelse return false;
+            const def_idx = topLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx)) orelse return false;
+            return defHasRuntimeSource(imported_module, def_idx);
+        },
+        .e_closure => |closure| switch (module.store.getExpr(closure.lambda_idx)) {
+            .e_lambda => |lambda| moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(lambda.body)),
+            else => false,
+        },
+        .e_lambda => |lambda| moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(lambda.body)),
+        else => false,
+    };
+}
+
+fn recordDispatchRuntimeSourceIfNeeded(
+    self: *Self,
+    constraint_fn_var: Var,
+    method_module: *const ModuleEnv,
+    method_def: CIR.Def.Idx,
+) Allocator.Error!void {
+    if (defHasRuntimeSource(method_module, method_def)) {
+        try self.dispatch_runtime_source_fn_vars.put(self.gpa, constraint_fn_var, {});
+    }
+}
+
+fn dispatchHasRuntimeSource(self: *Self, fn_var: Var) bool {
+    if (self.dispatch_runtime_source_fn_vars.count() == 0) return false;
+    if (self.dispatch_runtime_source_fn_vars.contains(fn_var)) return true;
+    const resolved = self.types.resolveVar(fn_var).var_;
+    return resolved != fn_var and self.dispatch_runtime_source_fn_vars.contains(resolved);
 }
 
 fn recordDispatchEffectWatch(self: *Self, fn_var: Var) Allocator.Error!void {
@@ -2757,6 +2886,8 @@ const HoistSelectionTestState = struct {
         checker.effect_slots = .empty;
         checker.effect_edges = .empty;
         checker.dispatch_effect_watches = .empty;
+        checker.function_runtime_source_patterns = .{};
+        checker.dispatch_runtime_source_fn_vars = .{};
         checker.top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(allocator);
         checker.hoist_frames = .empty;
         checker.hoist_expr_candidates = .empty;
@@ -2786,6 +2917,8 @@ const HoistSelectionTestState = struct {
         self.checker.effect_slots.deinit(self.allocator);
         self.checker.effect_edges.deinit(self.allocator);
         self.checker.dispatch_effect_watches.deinit(self.allocator);
+        self.checker.function_runtime_source_patterns.deinit(self.allocator);
+        self.checker.dispatch_runtime_source_fn_vars.deinit(self.allocator);
         self.checker.top_level_ptrns.deinit();
         self.checker.hoist_frames.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
@@ -4222,6 +4355,7 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 }
 
 const BuiltinNominalDecl = union(enum) {
+    str,
     list,
     box,
     try_type,
@@ -4289,6 +4423,7 @@ fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind)
 
 fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
     return switch (decl) {
+        .str => self.cir.idents.builtin_str,
         .list => self.cir.idents.builtin_list,
         .box => self.cir.idents.builtin_box,
         .try_type => self.cir.idents.builtin_try,
@@ -4301,6 +4436,7 @@ fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
 
 fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
     return switch (decl) {
+        .str => "Str",
         .list => "List",
         .box => "Box",
         .try_type => "Try",
@@ -4360,6 +4496,7 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
         const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
+            .str => indices.str_type,
             .list => indices.list_type,
             .box => indices.box_type,
             .try_type => indices.try_type,
@@ -4629,6 +4766,7 @@ fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u
 
 fn builtinNominalDeclForIdentInEnv(source_env: *const ModuleEnv, type_ident: Ident.Idx) ?BuiltinNominalDecl {
     const common = source_env.idents;
+    if (type_ident.eql(common.str) or type_ident.eql(common.builtin_str)) return .str;
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
     if (type_ident.eql(common.@"try") or type_ident.eql(common.builtin_try)) return .try_type;
@@ -4659,6 +4797,7 @@ fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) 
     }
 
     const indices = self.builtin_ctx.builtin_indices orelse return null;
+    if (raw_decl == @intFromEnum(indices.str_type)) return .str;
     if (raw_decl == @intFromEnum(indices.list_type)) return .list;
     if (raw_decl == @intFromEnum(indices.box_type)) return .box;
     if (raw_decl == @intFromEnum(indices.try_type)) return .try_type;
@@ -5752,6 +5891,7 @@ fn flatTypeIsConcreteHoistedConst(
                 switch (builtin_decl) {
                     .list,
                     .box,
+                    .str,
                     .fields,
                     .field,
                     .num,
@@ -10596,6 +10736,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             };
             try self.function_body_check_summaries.put(self.gpa, lambda.body, body_check_result);
             try self.recordRuntimeDependencySummary(ModuleEnv.nodeIdxFrom(lambda.body), body_check_result);
+            if (is_binding_rhs) {
+                if (binding_rhs_pattern) |pattern| {
+                    try self.recordFunctionRuntimeSourceForBinding(pattern, body_check_result.has_runtime_source);
+                }
+            }
             const body_is_effectful = body_check_result.isKnownEffectful() or try self.effectSlotIsEffectful(effect_slot);
 
             // Process any pending return constraints (from early returns / ? operator) before
@@ -10732,6 +10877,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         const mb_func = if (mb_func_info) |info| info.func else null;
 
                         try self.recordDirectCalleeEffectDependency(call.func);
+                        if (self.callableExprHasRuntimeSource(self.cir, call.func)) {
+                            check_result.markRuntimeSource();
+                        }
 
                         // If the function being called is effectful, mark this expression as effectful
                         if (mb_func_info) |info| {
@@ -16274,6 +16422,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatch(constraint, method_var);
+                        try self.recordDispatchRuntimeSourceIfNeeded(constraint.fn_var, original_env, def_idx);
                     }
                 }
                 break :dispatch_resolution;
@@ -16517,6 +16666,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatch(constraint, method_var);
+                        try self.recordDispatchRuntimeSourceIfNeeded(constraint.fn_var, original_env, def_idx);
                     }
                 }
                 break :dispatch_resolution;

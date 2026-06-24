@@ -297,12 +297,12 @@ Tasks:
 
 Tests:
 
-- [ ] number literal can be a maximal root
-- [ ] string literal can be a maximal root
-- [ ] empty list can be a maximal root
-- [ ] empty record can be a maximal root
-- [ ] record containing list selects the record, not the list child
-- [ ] list inside runtime-dependent record stays as child root
+- [x] number literal can be a maximal root
+- [x] string literal can be a maximal root
+- [x] empty list can be a maximal root
+- [x] empty record can be a maximal root
+- [x] record containing list selects the record, not the list child
+- [x] list inside runtime-dependent record stays as child root
 - [ ] nested closed block selects the block root
 - [ ] runtime-dependent block preserves independent closed child roots
 - [ ] closed `return` payload can be selected, but `return` is not a root
@@ -425,7 +425,7 @@ Tests:
 - [ ] static search shows `return` and `break` use explicit control-transfer
   policy
 - [ ] focused effect tests pass
-- [ ] focused root tests pass
+- [x] focused root tests pass
 - [ ] compile-time evaluation tests pass
 - [ ] static-data tests pass
 

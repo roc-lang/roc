@@ -123,6 +123,81 @@ test "hoist roots selected for direct closed arithmetic function body" {
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
+test "hoist roots selected for closed number literal" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| 42.I64
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_typed_int);
+}
+
+test "hoist roots selected for closed string literal" {
+    var test_env = try TestEnv.init("Test",
+        \\main : {} -> Str
+        \\main = |_| "Roc"
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_str);
+}
+
+test "hoist roots selected for concrete closed empty list" {
+    var test_env = try TestEnv.init("Test",
+        \\main : {} -> List(U64)
+        \\main = |_| []
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_empty_list);
+}
+
+test "hoist roots selected for closed empty record" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_empty_record);
+}
+
+test "hoist roots select record parent over closed list child" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| { nums: [1.U64, 2.U64] }
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_record));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_list));
+}
+
+test "hoist roots preserve list child inside runtime-dependent record" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    record = { nums: [1.U64, 2.U64], runtime: arg }
+        \\    record.runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_record));
+    try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
+}
+
 test "hoist roots select closed ordinary call dependencies first" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
