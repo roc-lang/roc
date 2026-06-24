@@ -1835,6 +1835,14 @@ const Formatter = struct {
                     },
                 }
             },
+            .nominal_apply => |na| {
+                // Format nominal value/tuple construction: Type.(arg1, arg2, ...)
+                try fmt.formatExprDiscard(na.mapper);
+                try fmt.push('.');
+                const mapper_region = fmt.nodeRegion(@intFromEnum(na.mapper));
+                const args_region = AST.TokenizedRegion{ .start = mapper_region.end, .end = region.end };
+                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(na.args), Formatter.formatExpr);
+            },
             .malformed => {
                 // Output nothing for malformed node
             },
@@ -3173,6 +3181,13 @@ const Formatter = struct {
                         }
 
                         return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(m.args));
+                    },
+                    .nominal_apply => |na| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, na.mapper)) {
+                            return true;
+                        }
+
+                        return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(na.args));
                     },
                     .lambda => |l| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.body)) {

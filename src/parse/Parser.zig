@@ -2154,6 +2154,7 @@ const ExprCollectionResult = union(enum) {
     tuple,
     apply: ExprAfterApplyArgsState,
     method_apply: ExprAfterMethodArgsState,
+    nominal_apply: ExprAfterNominalApplyArgsState,
     arrow_apply: ExprArrowAppAfterArgsState,
 };
 
@@ -2177,6 +2178,12 @@ const ExprAfterMethodArgsState = struct {
     min_bp: u8,
     receiver: AST.Expr.Idx,
     method_token: Token.Idx,
+};
+
+const ExprAfterNominalApplyArgsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    mapper: AST.Expr.Idx,
 };
 
 const ExprAfterBinaryRhsState = struct {
@@ -3343,6 +3350,24 @@ fn runExprStatementKernel(
                 continue :expr_kernel .record_fields_next;
             }
 
+            if (tok == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
+                self.advance();
+                self.advance();
+                try expr_collections.enter(open_allocator, .{
+                    .start = expr_finish_state.start,
+                    .min_bp = null,
+                    .scratch_top = self.store.scratchExprTop(),
+                    .end_token = .CloseRound,
+                    .result = .{ .nominal_apply = .{
+                        .start = expr_finish_state.start,
+                        .min_bp = expr_finish_state.min_bp,
+                        .mapper = expr_finish_state.expr,
+                    } },
+                    .close_error = .expected_expr_apply_close_round,
+                });
+                continue :expr_kernel .collection_next;
+            }
+
             if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
                 if (tok == .NoSpaceDotInt or tok == .DotInt) {
                     const elem_token = self.pos;
@@ -3961,6 +3986,15 @@ fn runExprStatementKernel(
                                 .region = .{ .start = method_state.start, .end = self.pos },
                             } });
                             expr_finish_state = .{ .start = method_state.start, .min_bp = method_state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        },
+                        .nominal_apply => |nominal_state| {
+                            const expr = try self.store.addExpr(.{ .nominal_apply = .{
+                                .mapper = nominal_state.mapper,
+                                .args = span,
+                                .region = .{ .start = nominal_state.start, .end = self.pos },
+                            } });
+                            expr_finish_state = .{ .start = nominal_state.start, .min_bp = nominal_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
                         .arrow_apply => |arrow_state| {

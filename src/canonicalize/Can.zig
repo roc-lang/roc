@@ -9585,6 +9585,17 @@ fn runExprKernel(
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = nr.backing, .target = .scratch });
                 },
+                .nominal_apply => |na| {
+                    // Canonicalization of nominal value/tuple construction is a later task.
+                    const region = self.parse_ir.tokenizedRegionToRegion(na.region);
+                    const feature = try self.env.insertString("nominal value/tuple construction");
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
+                    continue :expr_kernel_loop .dispatch;
+                },
                 .record_builder => |rb| {
                     const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
                     const fields_slice = self.parse_ir.store.recordFieldSlice(rb.fields);

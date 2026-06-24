@@ -8,41 +8,18 @@ type=snippet
 x = 0.()
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_081.md:1:6:1:7
-PARSE ERROR - fuzz_crash_081.md:1:7:1:8
-PARSE ERROR - fuzz_crash_081.md:1:8:1:9
+NOT IMPLEMENTED - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**NOT IMPLEMENTED**
+This feature is not yet implemented: nominal value/tuple construction
 
-**fuzz_crash_081.md:1:6:1:7:**
+**fuzz_crash_081.md:1:5:1:9:**
 ```roc
 x = 0.()
 ```
-     ^
+    ^^^^
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_081.md:1:7:1:8:**
-```roc
-x = 0.()
-```
-      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_081.md:1:8:1:9:**
-```roc
-x = 0.()
-```
-       ^
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 # TOKENS
@@ -57,27 +34,25 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
-			(e-int (raw "0")))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))))
+			(e-nominal-apply
+				(mapper (e-int (raw "0")))))))
 ~~~
 # FORMATTED
 ~~~roc
-x = 0
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-num (value "0"))))
+		(e-runtime-error (tag "not_implemented"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Dec"))))
+		(expr (type "Error"))))
 ~~~
