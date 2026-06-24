@@ -981,6 +981,39 @@ test "hoist roots preserve children for mutable local dependencies" {
     try std.testing.expect(test_env.checker.selectedHoistedRoots().len > 0);
 }
 
+test "hoist roots preserve children for reassigned local dependencies" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    var x = 41.I64
+        \\    x = 42.I64
+        \\    y = x + 1.I64
+        \\    y
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_dispatch_call));
+    try std.testing.expect(test_env.checker.selectedHoistedRoots().len > 0);
+}
+
+test "hoist roots preserve children for loop-bound value dependencies" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    for item in [1.I64, 2.I64] {
+        \\        y = item + 1.I64
+        \\        y
+        \\    }
+        \\    {}
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_dispatch_call));
+    try std.testing.expect(test_env.checker.selectedHoistedRoots().len > 0);
+}
+
 test "hoist roots selected for observable debug expressions" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {

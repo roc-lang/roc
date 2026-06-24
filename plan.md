@@ -258,9 +258,9 @@ Tests:
 - [ ] immutable local depending indirectly on a lambda argument is runtime-dependent
 - [ ] local alias of compile-time-known local stays compile-time-known
 - [ ] match-bound value blocks a containing parent root
-- [ ] loop-bound value blocks a containing parent root
+- [x] loop-bound value blocks a containing parent root
 - [ ] mutable local blocks a containing parent root
-- [ ] reassignment blocks a containing parent root
+- [x] reassignment blocks a containing parent root
 - [ ] top-level checked value lookup stays compile-time-known
 - [ ] imported checked value lookup stays compile-time-known
 - [x] forward top-level constant lookup does not poison the forcing expression
