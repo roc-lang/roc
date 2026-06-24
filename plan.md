@@ -1,18 +1,18 @@
 # Complete Compile-Time Roots And Static Data Plan
 
-## Objective
+## Goal
 
-Finish the compiler work required for this statement to be true without hidden
-exceptions:
+Complete the compiler work required for this statement to be true without
+asterisks:
 
 > Every eligible top-level value and every eligible top-level-equivalent
-> expression is evaluated during checking, maximal selected roots are
-> subsumed correctly, compile-time observables run during that evaluation, and
-> every reachable evaluated value with a valid runtime representation is emitted
-> once as target static data and shared by later uses.
+> expression is evaluated during checking; maximal selected roots are subsumed
+> correctly; compile-time observables run during that evaluation; and every
+> reachable evaluated value that needs a target static representation is
+> emitted once as static data and shared by later uses.
 
-The concrete integration target is Rocci Bird with
-`on_screen_collided!` keeping:
+The concrete proof case is Rocci Bird with the `on_screen_collided!`
+`base_points` value left in this shape:
 
 ```roc
 base_points = [
@@ -21,102 +21,118 @@ base_points = [
 ].iter()
 ```
 
-The final Rocci Bird proof must build with `--opt=size`, disassemble the wasm,
-and confirm that the `base_points` list, the `Iter` record, its step callable,
-and callable captures are restored from static data instead of rebuilt as
-ordinary runtime aggregate/closure construction.
+The final proof is not just "Rocci Bird builds." The final proof is:
 
-## Current Findings
+- `base_points` is evaluated during checking.
+- The static list backing for those points is emitted once.
+- The `Iter` value is emitted as static data.
+- The iterator `step` callable is represented by static callable data.
+- The callable captures point at the same static list backing.
+- `on_screen_collided!` no longer rebuilds the base list, iterator record, or
+  base iterator closure at runtime.
 
-The current branch has real pieces of the desired pipeline:
+## Terms
 
-- effect slots and delayed dispatch watchers in `src/check/Check.zig`
-- root frames and maximal-root candidate intervals in `src/check/Check.zig`
-- selected hoisted roots in `src/check/hoist_roots.zig`
-- checked hoisted constants in `src/check/checked_artifact.zig`
-- compile-time finalization into `ConstStore` in `src/eval/compile_time_finalization.zig`
-- `ConstStore` support for lists, records, tags, boxes, and function values in
-  `src/check/const_store.zig`
-- static data materialization in `src/compile/static_data_exports.zig`
+An expression is eligible for compile-time evaluation when all of these are
+true:
 
-The `.iter()` experiment exposes the remaining gap. `Iter(item)` is an opaque
-record with:
+- it has no runtime data dependency
+- it is unconditionally evaluated at the point where the selected root is
+  evaluated
+- it contains no effectful call
+- it is not poisoned by an already-owned checking error
 
-```roc
-{
-    len_if_known : [Known(U64), Unknown],
-    step : () -> [One(...), Skip(...), Done],
-}
-```
+`crash`, `dbg`, and `expect` are compile-time observables. They are not
+effectful calls. If an eligible selected root contains them, they must run
+during checking.
 
-So a static iterator is not just a static list. It is a static record containing
-a function value, and that function value captures the static list plus cursor
-state.
+Runtime-controlled branch bodies, match guards, and match branch values are not
+standalone roots. Their contents can only run at compile time through an
+eligible enclosing control expression.
 
-The initial investigation found two concrete blockers preventing this from
-becoming static data:
+Evaluation and target static-data emission are separate:
 
-- The checker storage predicate rejected all function types:
+- all eligible top-level values and selected hoisted roots must be evaluated
+  during checking so diagnostics are correct
+- successful unreachable values do not need target static data
+- reachable evaluated values that need a target static representation must be
+  emitted once and shared
+
+## Current State
+
+The branch already has the major pieces of the pipeline:
+
+- checker root frames and selected-root intervals in `src/check/Check.zig`
+- selected hoisted root records in `src/check/hoist_roots.zig`
+- compile-time root publication in `src/check/checked_artifact.zig`
+- checked `ConstStore` support for lists, records, tags, boxes, strings, and
+  function values in `src/check/const_store.zig`
+- compile-time finalization through LIR interpretation in
+  `src/eval/compile_time_finalization.zig`
+- Monotype restoration of stored consts in `src/postcheck/monotype/lower.zig`
+- LIR const plans for records, lists, boxes, finite callables, and erased
+  callables in `src/postcheck/solved_lir_lower.zig`
+- static-data export materialization in `src/compile/static_data_exports.zig`
+
+This part is already implemented and tested:
+
+- a function-valued aggregate can be a stored hoisted constant
+- a bare function root is still rejected as a data root and restored through
+  callable-root handling
+
+The remaining blockers are:
+
+- no failing test yet locks down the local `List.iter`/`Iter` shape
+- static-data selection in Monotype is still value-only:
 
 ```zig
-.fn_pure,
-.fn_effectful,
-.fn_unbound,
-=> false,
+fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNodeId) bool
 ```
 
-That makes records containing function fields fail the hoisted-constant storage
-filter even when the outer value is a perfectly valid compile-time value. This
-is now fixed by the `varIsStorableConstType` predicate, which still rejects
-bare function roots at the root boundary but accepts function leaves inside
-aggregates.
-
-- `constValueNeedsStaticData` is value-only and treats `.fn_value` as not
-needing static data:
+- that value-only function treats `.fn_value` as "no static data," which is
+  wrong for a reachable aggregate whose runtime representation contains a
+  callable payload
+- static-data export generation still rejects finite callable plans:
 
 ```zig
-.zst,
-.scalar,
-.str,
-.crash,
-.fn_value,
-=> false,
+.fn_value => staticDataInvariant("provided function-valued data export reached finite callable static materialization")
 ```
 
-That is only correct for a bare function constant that can be restored as a
-callable expression. It is wrong for an aggregate whose runtime layout contains
-an erased callable pointer or a finite callable payload. Static-data selection
-must consume the checked type / monotype / const plan, not just the
-`ConstStore` value tag.
+- erased callable static data exists, but needs focused tests in the
+  callable-containing aggregate path
+- cross-module compile-time diagnostics need tests proving every eligible
+  module-level root is evaluated even when unreachable from runtime roots
+- Rocci Bird has not yet been rebuilt and disassembled after the full static
+  callable path is complete
 
-## Non-Negotiable Invariants
+## Invariants
 
-- Checking is the last user-facing stage for type errors, effect errors, static
-  dispatch errors, compile-time `crash`, `dbg`, and `expect`.
-- Effectful calls are never executed during compile-time evaluation.
-- Creating a function value is not an effectful call, even if calling that
-  function would be effectful.
-- Function values inside a compile-time aggregate are valid const-store values.
-  The aggregate must not be rejected only because it contains a function field.
-- A bare function value root remains a callable root, not a hoisted data root.
-- Runtime-controlled branch bodies, match guards, and match branch values are
-  not independent roots. Their contents may be evaluated only through an
-  enclosing eligible control expression.
-- Maximal root selection has exactly one subsumption rule: an eligible parent
-  replaces child candidates from its own frame interval.
-- Static data emission consumes checked roots, `ConstStore`, checked types, and
-  explicit const plans. It must not rediscover eligibility from source shape,
-  CIR shape, wasm bytes, object symbols, or backend code.
-- Backends only consume explicit LIR static-data literals and static-data
-  exports. They must not know why a value was hoisted.
+- There is one source of truth for root eligibility: the checker's existing
+  expression traversal in `src/check/Check.zig`.
+- There is one subsumption rule: an eligible parent frame replaces child
+  candidates in that frame's candidate interval.
+- No backend may rediscover root eligibility from source shape, names, wasm
+  bytes, object symbols, or generated code.
+- No stage after checking reports user-facing type/effect/static-dispatch
+  errors.
+- Effectful calls are never evaluated at compile time.
+- Creating a function value is not an effectful call.
+- Function values inside compile-time aggregates are valid `ConstStore` values.
+- Static-data export writing consumes explicit `ConstStore` nodes, checked
+  types, LIR layouts, and LIR const plans.
+- Backends only lower explicit LIR statements and static-data exports.
 
-## Phase 1: Add Failing Focused Tests
+## Phase 1: Lock The Bug Down With Failing Tests
 
-Start by locking down the actual missing behavior. These tests should fail
-before implementation changes and pass unchanged after the fix.
+Add tests before implementation changes. Each test should fail for the current
+reason, not because of syntax, platform setup, or missing imports.
 
-- Add a checker/root-selection test for a closed local `List.iter` RHS inside a
-  runtime-dependent function:
+### Checker Root Tests
+
+File: `src/check/test/hoist_roots_test.zig`
+
+Add a test for a closed local iterator RHS inside a runtime-dependent
+function:
 
 ```roc
 main = |arg| {
@@ -126,298 +142,507 @@ main = |arg| {
 }
 ```
 
-Expected: the local RHS is eligible for compile-time evaluation as a binding
-root, despite containing the generated `step` closure in its final value.
+Expected:
 
-- Add a checker/root-selection test that a closed aggregate containing a
-  function field is not filtered by the "concrete stored const type" pass:
+- the selected root for `base` exists
+- the root is a binding root or root body for the full iterator value, not just
+  the child list
+- no standalone closure/function root is selected
+- no child list root remains if the iterator parent is selected
+
+Add a control test where the parent is runtime-dependent and the closed child
+survives:
+
+```roc
+main = |arg| {
+    value = {
+        base: [{ x: 1.I64, y: 2.I64 }].iter(),
+        runtime: arg,
+    }
+    value.runtime
+}
+```
+
+Expected:
+
+- the runtime-dependent record is not selected
+- the closed iterator child remains selected
+
+Add a callable aggregate subsumption test:
 
 ```roc
 main = |arg| {
     value = { f: |n| n + 1.I64, bytes: [1.U8, 2.U8] }
     _ = arg
-    value.bytes
+    value
 }
 ```
 
-Expected: the aggregate can be selected/stored; the bare function expression is
-not selected as a standalone data root.
+Expected:
 
-- Add a compile/static-data test for a reachable local `List.iter` value.
-  Expected checked artifact state:
+- the record root is selected
+- the list child is not selected
+- the function expression is not selected as a data root
 
-  - one hoisted constant exists for the iterator value
-  - the corresponding `ConstStore` node is a record/nominal backing containing
-    a `fn_value`
-  - the captured list bytes are present once
+### Compile-Time Diagnostic Tests
 
-- Add a static-data export test for an aggregate containing an erased callable.
-  Expected LIR/static-data state:
+File: `src/eval/test/eval_comptime_finalization_tests.zig` or a new focused
+test file under `src/eval/test`.
 
-  - the aggregate is restored as an `.assign_literal .static_data`
-  - the static data export for the aggregate has a relocation to a static
-    erased-callable allocation
-  - the erased-callable allocation has a function-pointer relocation and
-    relocations for any captured heap data
+Use the existing publish/finalization helpers in `src/eval/test_helpers.zig`.
+Add tests for:
 
-- Add a static-data export test for an aggregate containing a finite callable
-  value. If finite callable materialization is not implemented yet, this test
-  should document the missing path and fail until that path lands.
+- unused top-level `crash` in the root module reports during `roc check`
+- unused top-level `crash` in an imported module reports during `roc check`
+- unused top-level `dbg` in an imported module reports during `roc check`
+- unused failed `expect` in an imported module reports during `roc check`
+- an unreachable successful top-level constant is evaluated but does not create
+  target static data
+- two selected roots that share a top-level dependency produce the diagnostic
+  once
 
-- Add an integration-style compiler test matching the Rocci Bird shape:
+### Static-Data Tests
+
+File: `src/compile/test/hoisted_constants_test.zig`
+
+Add a static-data test for a reachable local `List.iter` value:
 
 ```roc
-main = |anim_index| {
-    base_points = [
-        { x: 11.I32, y: 2.I32 },
-        { x: 13.I32, y: 3.I32 },
-    ].iter()
-
-    collision_points =
-        if anim_index == 2 {
-            base_points.append({ x: 2, y: 1 })
-        } else {
-            base_points
-        }
-
-    Iter.fold(collision_points, 0.I32, |acc, point| acc + point.x + point.y)
+main! = |args| {
+    base = [{ x: 1.I64, y: 2.I64 }, { x: 3.I64, y: 4.I64 }].iter()
+    total = Iter.fold(base, 0.I64, |acc, point| acc + point.x + point.y + List.len(args).to_i64_wrap())
+    _ = total
+    Ok({})
 }
 ```
 
-Expected: `base_points` is static. The `if` branch bodies are not independent
-roots because they are runtime-control-dependent.
+Expected checked/LIR state:
 
-## Phase 2: Split Root Eligibility From Const-Storability
+- at least one hoisted constant exists for the iterator value
+- the stored `ConstStore` node for that hoisted constant contains a
+  `.fn_value`
+- lowering emits `.assign_literal .static_data` for the iterator use
+- the point-list payload bytes appear once in static exports
 
-The checker currently uses type concreteness as a late storage filter. That
-filter must distinguish these cases explicitly:
+Add erased callable aggregate coverage:
 
-- bare function root: not a hoisted data constant
-- aggregate containing function values: valid stored constant
-- open/flex/rigid unresolved type: not a stored constant
-- effectful function value: storable as a value; only calling it is effectful
-- effectful call inside the root: not eligible for compile-time evaluation
+- a record containing an erased callable that captures a list
+- expected static-data export has a relocation to an erased callable allocation
+- that erased callable allocation has a function-pointer relocation and a
+  relocation to the captured list backing
 
-Implementation steps:
+Add finite callable aggregate coverage:
 
-- [x] Rename or replace `varIsConcreteHoistedConstType` with a predicate whose name
-  describes the actual contract, e.g. `varIsStorableConstType`.
-- [x] Keep `exprCanBeStoredConstRoot` rejecting a standalone function-typed
-  expression. That prevents bare functions from becoming hoisted data roots.
-- [x] Change the recursive type predicate so function types are valid leaves when
-  they appear inside aggregates.
-- [x] Reject only unresolved/open type content, runtime-only placeholders, and type
-  forms that truly have no const-store representation.
-- [x] Update `hoistedRootHasConcreteStoredConstType` to use the new predicate.
-- Add debug assertions that a selected stored root with a function-containing
-  aggregate reaches `HoistedConstTable.fromRoots` and gets a const template.
+- zero-capture finite callable in a record
+- finite callable capturing a scalar
+- finite callable capturing a list
+- finite callable capturing another finite callable
+- finite callable in a multi-variant callable set, so the discriminant path is
+  tested
 
-Success criteria:
+These tests should initially expose the `.fn_value` materialization invariant.
 
-- Function-valued aggregates are not removed by
-  `filterSelectedHoistedRootsForConstStorage`.
-- Existing tests that prevent bare function roots from becoming data roots
-  still pass.
-- Top-level callable roots still use `.compile_time_callable`.
+## Phase 2: Finish Checker Eligibility And Subsumption
 
-## Phase 3: Make Static-Data Selection Type/Plan-Aware
+Files:
 
-`constValueNeedsStaticData(view, value)` is too weak. Whether a stored value
-needs static data depends on the runtime representation selected for the
-checked type.
+- `src/check/Check.zig`
+- `src/check/hoist_roots.zig`
+- `src/check/checked_artifact.zig`
+- `src/check/test/hoist_roots_test.zig`
 
-Implementation steps:
+Tasks:
 
-- Replace `constNodeNeedsStaticData(view, node)` with a function that also
-  receives the monotype/type shape available at the use site.
-- Recurse through the `ConstStore` node and the monotype together.
-- Return `true` for:
+1. Audit every remaining root-selection suppression path in `Check.zig`.
+   Valid suppressions are only:
 
-  - non-empty lists
-  - boxes with non-ZST runtime payloads
-  - erased callable values, because their runtime representation is a pointer
-    to an erased-callable payload
-  - finite callable values whose runtime layout contains non-zero capture/tag
-    payload data
-  - aggregates containing any child that needs static data
+   - runtime data dependency
+   - runtime control dependency
+   - effectful call
+   - checker-error poison
+   - unsupported control-transfer root shape until continuation roots exist
 
-- Return `false` for:
+2. Remove or rewrite any remaining source-shape filters that reject leaves,
+   strings, numbers, empty lists, records, calls, `crash`, `dbg`, or `expect`
+   as a category.
 
-  - scalars
-  - small/direct strings that do not need backing storage
-  - ZSTs
-  - bare finite callables whose selected runtime layout is zero-sized and has
-    no capture payload
+3. Keep lambda body root selection detached from function value creation, but
+   ensure detached bodies publish their own eligible final-expression roots
+   only when those bodies are unconditionally evaluated in their own context.
 
-- Update both stored-const restore paths in `src/postcheck/monotype/lower.zig`:
+4. Add debug assertions after
+   `filterSelectedHoistedRootsForConstStorage` proving:
 
-  - `restoredHoistedConstAtType`
-  - `restoreConstUseAtType`
+   - selected stored roots are not function-typed at the root boundary
+   - selected stored roots can contain nested function-typed leaves
+   - every selected root that survives filtering gets a `HoistedConstTable`
+     entry
 
-- Keep the decision in Monotype lowering, where the checked value and requested
-  monotype are both available. Do not move this decision to a backend.
+5. Strengthen maximal-root tests:
 
-Success criteria:
-
-- An `Iter` record restored at runtime lowers to `.static_data` instead of
-  rebuilding its record and packing its `step` callable.
-- A bare function-valued constant still restores as a callable expression and
-  does not request a static data literal.
-
-## Phase 4: Complete Callable Static Materialization
-
-The static-data builder already supports erased callable payloads through
-`.erased_fn`. It must also have a complete story for any callable layout that a
-stored aggregate can contain.
-
-Implementation steps:
-
-- Keep and test the existing erased-callable path:
-
-  - write a static allocation for the erased-callable payload
-  - write the function-pointer relocation
-  - write capture fields using the explicit `CaptureSlot` plans
-  - use the static-data allocation header/refcount conventions
-
-- Implement finite callable static materialization for `.fn_value` const plans:
-
-  - select the matching `FnVariant` from the stored `ConstFn`
-  - if the callable layout is ZST, write no bytes
-  - if it is a single-variant capture payload, write the capture payload
-    directly using `variant.captures`
-  - if it is a tag-union layout, write the discriminant and selected capture
-    payload into the selected variant's layout
-  - recursively materialize capture values, including lists, boxes, strings,
-    erased callables, and nested callable values
-
-- Replace the current invariant:
-
-```zig
-.fn_value => staticDataInvariant(...)
-```
-
-with explicit finite-callable materialization.
-
-- Add materialization tests for:
-
-  - zero-capture finite callable in an aggregate
-  - finite callable capturing a scalar
-  - finite callable capturing a list
-  - finite callable capturing another callable
-  - erased callable capturing a list
-  - erased callable capturing another erased callable
+   - parent record over child list
+   - parent record over child list plus function field
+   - parent iterator over child list plus step closure
+   - runtime-dependent parent preserving child iterator
+   - delayed pure dispatch replacing children
+   - delayed effectful dispatch preserving children
+   - runtime-controlled branch body not publishing a closed child root
+   - compile-time-known branch with `crash` reporting at check time
+   - untaken runtime branch with `crash` not reporting at check time
 
 Success criteria:
 
-- Static-data export generation succeeds for every callable-containing
-  aggregate that the checker/ConstStore can produce.
-- Unsupported callable shapes are represented by missing explicit producer data,
-  not by a source-shape fallback or backend guess.
+- `zig build run-test-zig-module-check` passes.
+- There is still exactly one parent-over-child interval replacement rule.
+- The `List.iter` checker tests prove inline and named iterator shapes are
+  equivalent when dependencies/effects/control are equivalent.
 
-## Phase 5: Verify Compile-Time Evaluation Coverage
+## Phase 3: Prove Compile-Time Evaluation Covers All Modules
 
-The plan is not complete until every module and every selected eligible root is
-evaluated during checking, including unreachable top-level values needed only
-for diagnostics.
+Files:
 
-Implementation steps:
+- `src/check/checked_artifact.zig`
+- `src/eval/compile_time_finalization.zig`
+- `src/eval/test_helpers.zig`
+- `src/eval/test/eval_comptime_finalization_tests.zig`
 
-- Audit `CompileTimeRootTable.fromModule`, `RootRequestTable.fromModule`, and
-  `CompileTimeRequestScheduler`.
-- Add or strengthen tests for:
+Current architecture:
 
-  - unused top-level `crash` in the root module
-  - unused top-level `crash` in an imported module
-  - unused top-level `dbg` in an imported module
-  - unused top-level failed `expect` in an imported module
-  - an unreachable successful top-level constant that is evaluated for
-    diagnostics but not emitted as target static data
-  - selected roots shared by top-level values and local uses producing one
-    diagnostic
+- `CompileTimeRootTable.fromModule` publishes top-level values, selected
+  hoisted roots, literal conversion roots, and `expect` roots for one module.
+- `RootRequestTable.fromModule` requests concrete compile-time roots and test
+  expects.
+- `CompileTimeRequestScheduler` sorts each module's compile-time requests by
+  explicit const dependencies.
+- `compile_time_finalization.zig` lowers and evaluates those requests, fills
+  root payloads, and fills stored const templates.
+- imported modules are published before dependents, so their finalizers should
+  run as each artifact is published.
 
-Success criteria:
+Tasks:
 
-- `roc check` evaluates all eligible diagnostic roots across the import graph.
-- Successful unreachable values do not appear in target static data unless a
-  reachable checked root references them.
+1. Audit package/coordinator publication paths to prove every imported module
+   goes through `publishFromTypedModule` with `CompileTimeFinalization.finalizer()`.
 
-## Phase 6: Verify Maximal Root Subsumption
+2. Add tests that would fail if imported modules were published without
+   compile-time finalization.
 
-The checker already has root frames and delayed intervals, but the completed
-work must prove this for callable-containing aggregates too.
+3. Add tests that would fail if compile-time request sorting skipped a
+   dependency or let a dependent run before its stored const dependency.
 
-Tests to add or strengthen:
+4. Add tests that successful unreachable constants are evaluated for
+   diagnostics but not emitted as target static data when no reachable root
+   references them.
 
-- parent record containing list and function field replaces the child list root
-- parent record containing `List.iter(...)` replaces the child list root
-- runtime-dependent parent preserves an eligible callable-containing child root
-- delayed static dispatch resolving pure replaces children
-- delayed static dispatch resolving effectful preserves children
-- runtime-controlled branch body does not publish a closed child root
-- compile-time-known branch containing `crash` reports the crash during
-  checking
-- untaken runtime branch containing `crash` does not report during checking
+5. Add tests that `dbg` and `expect` diagnostics dedupe by source/root and are
+   not duplicated when a dependency is shared by multiple selected roots.
 
 Success criteria:
 
-- There is still exactly one subsumption rule: eligible parent frame replaces
-  children in its own interval.
-- There are no new leaf/type/source-shape root filters.
+- `roc check` reports compile-time `crash`, `dbg`, and failed `expect` from
+  eligible top-level roots in every module in the import graph.
+- successful unreachable constants do not appear in `static_data_values` or
+  static-data exports unless a reachable root references them.
+
+## Phase 4: Make Static-Data Selection Explicit And Type-Aware
+
+Files:
+
+- `src/postcheck/monotype/lower.zig`
+- `src/postcheck/monotype/ast.zig` only if a new expression/data marker is
+  needed
+- `src/postcheck/monotype_lifted/*` only if a new marker must pass through
+  lifting
+- `src/postcheck/lambda_solved/*` only if a new marker must pass through
+  solving
+- `src/postcheck/lambda_mono/*` only if a new marker must pass through lambda
+  mono
+- `src/postcheck/solved_lir_lower.zig`
+- `src/compile/test/hoisted_constants_test.zig`
+
+The current `constNodeNeedsStaticData(view, node)` must be replaced. It is
+wrong because it looks only at the `ConstStore` value tag. It cannot tell the
+difference between:
+
+- a bare finite callable constant, which should restore as a callable value
+- a record/opaque/iterator value whose runtime representation contains a
+  callable payload that must be stored as part of the aggregate
+
+Implement the smallest architecture change that still obeys the pipeline
+boundaries:
+
+1. Replace `constNodeNeedsStaticData(view, node)` with a function whose inputs
+   include:
+
+   - the `ConstStore` node
+   - whether this is the root node or a nested child
+   - the lowered Monotype type at the use site
+   - the checked type used for the static-data request
+
+2. Recurse through the `ConstStore` node and Monotype type together. The
+   recursion must unwrap named/nominal backing types through explicit checked
+   backing data. It must assert if the value shape and type shape disagree.
+
+3. Return `true` for reachable stored const uses whose target runtime
+   representation needs backing/static bytes or relocations:
+
+   - non-empty lists
+   - strings that are not fully small/direct
+   - boxes with non-ZST payloads
+   - erased callable values
+   - nested finite callable values whose stored function has capture payload or
+     whose callable set needs a runtime discriminant
+   - aggregates containing any child that needs static data
+
+4. Return `false` for:
+
+   - scalars
+   - ZSTs
+   - small/direct strings
+   - empty lists
+   - bare callable constants that should restore through callable handling
+   - finite callables whose runtime representation is ZST
+
+5. Update both Monotype stored-const restore paths:
+
+   - `restoredHoistedConstAtType`
+   - `restoreConstUseAtType`
+
+6. If Monotype type information is still not precise enough to distinguish a
+   finite callable with runtime tag payload from a ZST callable, do not add a
+   source-shape guess. Instead, carry an explicit stored-const marker farther
+   through the post-check pipeline until `solved_lir_lower.zig` has the
+   callable const plan and layout, then make the `.static_data` decision there.
+   That is a larger change, but it is the correct escape hatch if Monotype
+   lacks explicit data.
+
+Success criteria:
+
+- an `Iter` record use lowers to `.assign_literal .static_data`
+- a bare function-valued constant still restores without static-data literals
+- static-data selection uses explicit checked/Monotype/LIR data only
+- no backend or wasm post-pass participates in the decision
+
+## Phase 5: Complete Callable Static-Data Materialization
+
+File: `src/compile/static_data_exports.zig`
+
+Current erased callable support:
+
+- `.erased_fn` writes a pointer to an erased-callable allocation
+- the erased-callable allocation contains a function-pointer relocation
+- captures are written by `writeCaptures` using explicit capture slots and
+  child const plans
+
+Keep that path and cover it with tests.
+
+Implement finite callable materialization for `.fn_value` const plans.
+
+Tasks:
+
+1. Replace the `.fn_value => staticDataInvariant(...)` branch in `writeValue`
+   with `writeFnValue`.
+
+2. Add `fnVariantForConstFn(set_id, fn_value)`:
+
+   - load `lir.Program.FnSet`
+   - select the `FnVariant` whose template matches the stored `ConstFn`
+   - use the same template equality as erased callable materialization
+   - assert if no variant matches
+
+3. Implement `writeFnValue`:
+
+   - verify the `ConstStore` node is `.fn_value`
+   - verify the requested layout matches the `FnSet.layout`
+   - if the callable value layout is ZST, verify all selected capture layout
+     data is ZST and write no bytes
+   - if the callable value layout is a single-variant capture payload, write
+     captures directly at `base_offset` with `writeCaptures`
+   - if the callable value layout is a tag union, write the selected variant
+     discriminant and write captures into the selected payload layout
+   - if the selected variant has no captures but the callable layout is a tag
+     union, still write the discriminant
+
+4. Reuse `writeCaptures` for finite callables. Do not duplicate capture field
+   ordering logic.
+
+5. Make capture recursion support:
+
+   - scalar captures
+   - list captures
+   - string captures
+   - box captures
+   - finite callable captures
+   - erased callable captures
+   - nominal/opaque captured values
+
+6. Make static allocation dedup include callable allocations by bytes plus
+   relocations, as it already does for list/string/box allocations.
+
+Success criteria:
+
+- static-data export generation succeeds for erased and finite callable
+  aggregates
+- unsupported callable shapes fail only because explicit producer data is
+  missing or inconsistent
+- no source-shape fallback is introduced
+
+## Phase 6: Keep Reachability And Target Emission Separate
+
+Files:
+
+- `src/lir/checked_pipeline.zig`
+- `src/lir/reachable_procs.zig`
+- `src/compile/static_data_exports.zig`
+- `src/compile/test/hoisted_constants_test.zig`
+
+Tasks:
+
+1. Verify `collectStaticDataRequests` is only for provided data roots and does
+   not accidentally emit unreachable compile-time values.
+
+2. Verify internal hoisted/static values are emitted only when runtime LIR has
+   an `.assign_literal .static_data` use.
+
+3. Verify imported static consts referenced by the root module can be
+   materialized from imported module `ConstStore` data.
+
+4. Verify `ReachableProcs.run` marks procedures reachable through erased
+   callable static data and marks capture const plans through both erased and
+   finite callable plans.
+
+5. Add tests for:
+
+   - reachable imported static list
+   - reachable imported iterator/callable aggregate
+   - unreachable imported successful constant not emitted
+   - provided data root containing function field
+   - internal hoisted data root containing function field
+
+Success criteria:
+
+- evaluation coverage does not imply target emission
+- target emission is strictly reachability-driven
+- callable static data marks the procedures and child const plans it needs
 
 ## Phase 7: Rocci Bird Proof
 
-Use the Rocci Bird source with `.iter()` left on `base_points`.
+Keep the `.iter()` change in Rocci Bird.
 
-Steps:
-
-1. Build the compiler with `zig build`.
-2. Build the wasm4 host with `zig build -Doptimize=ReleaseSmall`.
-3. Build Rocci Bird:
+Source repo:
 
 ```sh
 cd /home/rtfeldman/code/roc-wasm4
+```
+
+Compiler repo:
+
+```sh
+cd /home/rtfeldman/code/worktrees/roc/vivid-canyon/roc
+```
+
+Steps:
+
+1. Build the compiler:
+
+```sh
+zig build
+```
+
+2. Build the wasm4 host in size mode:
+
+```sh
+cd /home/rtfeldman/code/roc-wasm4
+zig build -Doptimize=ReleaseSmall
+```
+
+3. Build Rocci Bird:
+
+```sh
 /home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc build \
   examples/rocci-bird.roc \
   --opt=size \
   --output=rocci-bird.wasm
 ```
 
-4. Record the byte size and sha256.
+4. Record:
+
+- byte size
+- sha256
+- compiler commit
+- wasm4 commit
+
 5. Disassemble the wasm.
-6. Confirm:
 
-   - the `base_points` list bytes are in static data
-   - the `Iter` record is in static data
-   - the `step` callable is represented by static callable data
-   - the callable capture points at the same static list bytes
-   - `update`/`on_screen_collided!` no longer constructs `base_points.iter()`
-     at runtime
-   - any remaining `Iter.append` helpers come only from the runtime-controlled
-     `collision_points` branch expressions, not from rebuilding `base_points`
+6. Confirm in the disassembly:
 
-7. If the goal is also to make all three collision-point variants static, make
-   that an explicit source or language decision. Under the current semantic
-   rules, branch values controlled by runtime `anim_index` are not independent
-   roots, because hoisting them would run compile-time observables in branch
-   bodies that the source program might not evaluate.
+- the point list bytes appear in static data
+- the point list bytes appear once
+- the `Iter` record is loaded from static data
+- the `step` callable is loaded from static callable data
+- the callable capture references the same static point-list allocation
+- `on_screen_collided!` does not contain runtime construction of
+  `base_points.iter()`
+- any remaining iterator append code corresponds to runtime-controlled branch
+  expressions, not rebuilding the base iterator
+
+7. Run the game through wasm4 and verify behavior still matches the current
+   working build.
 
 Success criteria:
 
-- Rocci Bird builds and runs.
-- The `.iter()` change no longer increases code size by pulling in runtime
-  construction of the base iterator.
-- The final report distinguishes the semantic static-data win from any
-  remaining runtime iterator append code caused by runtime branch control.
+- Rocci Bird builds with `--opt=size`
+- the `.iter()` version is no larger because of runtime base-iterator rebuilds
+- the disassembly proves static sharing, not merely a smaller byte count
+
+## Phase 8: Required Verification Commands
+
+Run targeted tests as each phase lands:
+
+```sh
+zig build run-test-zig-module-check -- --test-filter "hoist roots"
+zig build run-test-zig-module-compile -- --test-filter "static data"
+zig build run-test-zig-module-compile -- --test-filter "hoisted"
+zig build run-test-eval
+```
+
+Then run the full relevant suites:
+
+```sh
+zig build run-test-zig-module-check
+zig build run-test-zig-module-compile
+zig build run-test-eval
+```
+
+Before each commit:
+
+```sh
+zig fmt <changed .zig files>
+git diff --check
+```
+
+Final integration verification:
+
+```sh
+zig build
+cd /home/rtfeldman/code/roc-wasm4
+zig build -Doptimize=ReleaseSmall
+/home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc build examples/rocci-bird.roc --opt=size --output=rocci-bird.wasm
+```
 
 ## Final Checklist
 
-- [ ] Failing tests capture `List.iter` local root selection and static data.
+- [ ] Failing tests capture local `List.iter` root selection.
+- [ ] Failing tests capture local `List.iter` static-data emission.
 - [x] Function-containing aggregates are allowed stored hoisted constants.
 - [x] Bare function roots still use callable-root handling, not data roots.
-- [ ] Static-data selection consumes type/plan information.
+- [ ] Root selection has no invalid leaf/source-shape/observable filters.
+- [ ] Imported eligible top-level diagnostics run during checking.
+- [ ] Unreachable successful evaluated constants do not emit target static data.
+- [ ] Maximal root subsumption is tested for callable-containing aggregates.
+- [ ] Static-data selection consumes explicit value and type/layout data.
 - [ ] Erased callable static data is covered by tests.
 - [ ] Finite callable static data is implemented and covered by tests.
-- [ ] Compile-time diagnostics run for eligible roots across all modules.
-- [ ] Maximal root subsumption is tested for callable-containing aggregates.
+- [ ] Reachability marks callable static-data procedures and capture plans.
 - [ ] Rocci Bird with `base_points.iter()` builds with `--opt=size`.
 - [ ] Rocci Bird disassembly proves the base iterator is static, shared data.
