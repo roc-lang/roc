@@ -107,6 +107,7 @@ pub const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
     fn_id: ?FnId = null,
+    static_data: ?Common.StaticDataRequest = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.

@@ -100,6 +100,11 @@ This part is already implemented and tested:
 - a function-valued aggregate can be a stored hoisted constant
 - a bare function root is still rejected as a data root and restored through
   callable-root handling
+- provided static-data layout requests carry the originating `const_ref`/node
+  through Monotype, Lambda Solved, Lambda Mono, and LIR, so provided data
+  exports with the same checked type but different concrete callable values use
+  the exact value-specific layout/const plan instead of the first matching
+  checked type
 
 The remaining blockers are:
 
@@ -112,10 +117,9 @@ fn constNodeNeedsStaticData(_: *Builder, view: ModuleView, node: checked.ConstNo
 - that value-only function treats `.fn_value` as "no static data," which is
   wrong for a reachable aggregate whose runtime representation contains a
   callable payload
-- finite callable static-data materialization is covered for zero-capture
-  provided data and captured-list provided data, but still needs complete
-  focused coverage for scalar-capture, nested-callable-capture, and
-  multi-variant callable-set layouts
+- finite callable static-data materialization is covered for zero-capture,
+  scalar-capture, captured-list, nested-callable-capture, and multi-variant
+  callable-set provided data
 - erased callable static data is covered in the callable-containing aggregate
   path
 - cross-module compile-time diagnostics need tests proving every eligible
@@ -705,7 +709,7 @@ zig build -Doptimize=ReleaseSmall
 - [x] Finite callable static data materializes a captured static list.
 - [ ] Static-data selection consumes explicit value and type/layout data.
 - [x] Erased callable static data is covered by tests.
-- [ ] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
+- [x] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
 - [ ] Reachability marks callable static-data procedures and capture plans.
 - [ ] Rocci Bird with `base_points.iter()` builds with `--opt=size`.
 - [ ] Rocci Bird disassembly proves the base iterator is static, shared data.

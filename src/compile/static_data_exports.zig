@@ -187,7 +187,7 @@ const StaticDataBuilder = struct {
             };
 
             const const_node = self.constNode(data.const_ref, null);
-            const request = self.requestedLayout(data.checked_type);
+            const request = self.requestedLayout(data);
             const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
             const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
             errdefer self.allocator.free(symbol_name);
@@ -295,11 +295,20 @@ const StaticDataBuilder = struct {
         staticDataInvariant("static data export referenced a const outside the lowering module set");
     }
 
-    fn requestedLayout(self: *StaticDataBuilder, checked_type: CheckedModule.CheckedTypeId) lir.Program.RequestedLayout {
+    fn requestedLayout(self: *StaticDataBuilder, data: CheckedModule.ProvidedDataExport) lir.Program.RequestedLayout {
+        var type_only: ?lir.Program.RequestedLayout = null;
+        var saw_value_specific = false;
         for (self.lowered.lir_result.requested_layouts.items) |request| {
-            if (request.checked_type == checked_type) return request;
+            if (request.checked_type != data.checked_type) continue;
+            if (request.const_ref) |const_ref| {
+                saw_value_specific = true;
+                if (std.meta.eql(const_ref, data.const_ref) and request.node == null) return request;
+                continue;
+            }
+            if (type_only == null) type_only = request;
         }
-        staticDataInvariant("provided data export had no LIR layout request");
+        if (saw_value_specific) staticDataInvariant("provided data export had no matching value-specific LIR layout request");
+        return type_only orelse staticDataInvariant("provided data export had no LIR layout request");
     }
 
     fn materializeValue(

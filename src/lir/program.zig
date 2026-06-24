@@ -19,6 +19,8 @@ const const_store = check.ConstStore;
 pub const RequestedLayout = struct {
     ty: names.TypeDigest,
     checked_type: checked.CheckedTypeId,
+    const_ref: ?checked.ConstId = null,
+    node: ?checked.ConstNodeId = null,
     layout_idx: layout.Idx,
     plan: ConstPlanId,
 };

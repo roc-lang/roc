@@ -376,9 +376,12 @@ const Lowerer = struct {
         }
 
         for (self.program.layout_requests.items) |request| {
+            const static_data = request.static_data;
             try self.result.requested_layouts.append(self.allocator, .{
                 .ty = self.program.types.typeDigest(&self.program.names, request.ty),
                 .checked_type = request.checked_type,
+                .const_ref = if (static_data) |data| data.const_ref else null,
+                .node = if (static_data) |data| data.node else null,
                 .layout_idx = try self.layoutOfType(request.ty),
                 .plan = try self.constPlanOfType(request.ty),
             });

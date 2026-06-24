@@ -231,6 +231,7 @@ const RootEntry = struct {
 const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
+    static_data: ?Common.StaticDataRequest = null,
 };
 
 const RuntimeSchemaRequest = struct {
@@ -431,6 +432,7 @@ const Lowerer = struct {
             try self.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
+                .static_data = request.static_data,
             });
         }
 
@@ -1046,9 +1048,12 @@ const Lowerer = struct {
         }
 
         for (self.layout_requests.items) |request| {
+            const static_data = request.static_data;
             try self.result.requested_layouts.append(self.allocator, .{
                 .ty = self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
+                .const_ref = if (static_data) |data| data.const_ref else null,
+                .node = if (static_data) |data| data.node else null,
                 .layout_idx = try self.layoutOfType(request.ty),
                 .plan = try self.constPlanOfType(request.ty),
             });
@@ -1519,7 +1524,10 @@ const Lowerer = struct {
             Common.invariant("debug Lambda Mono verifier saw a layout request count mismatch");
         }
         for (self.layout_requests.items, materialized.layout_requests.items) |direct, expected| {
-            if (direct.checked_type != expected.checked_type or !try type_equivalence.equivalent(direct.ty, expected.ty)) {
+            if (direct.checked_type != expected.checked_type or
+                !std.meta.eql(direct.static_data, expected.static_data) or
+                !try type_equivalence.equivalent(direct.ty, expected.ty))
+            {
                 Common.invariant("debug Lambda Mono verifier saw a layout request mismatch");
             }
         }

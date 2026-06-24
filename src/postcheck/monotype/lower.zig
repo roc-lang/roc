@@ -713,6 +713,7 @@ const Builder = struct {
         try self.program.layout_requests.append(self.allocator, .{
             .checked_type = checked_ty,
             .ty = ty,
+            .static_data = null,
         });
         try self.appendRuntimeSchemaRequestsForType(ty);
     }
@@ -734,6 +735,7 @@ const Builder = struct {
             .checked_type = request.checked_type,
             .ty = ret_ty,
             .def = def,
+            .static_data = request,
         });
         try self.appendRuntimeSchemaRequestsForType(ret_ty);
     }

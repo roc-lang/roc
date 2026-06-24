@@ -959,7 +959,7 @@ test "provided boxed erased callable captures static list data" {
     try std.testing.expect(countFunctionPointerRelocations(exports) >= 1);
 }
 
-test "provided finite callable zero and list-capture static data" {
+test "provided finite callable static data covers capture shapes" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -969,17 +969,41 @@ test "provided finite callable zero and list-capture static data" {
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "main.roc",
         .data =
-        \\app [main!, zero, callable] { pf: platform "./.roc_callable_platform/main.roc" }
+        \\app [main!, zero, scalar, callable, nested, multi] { pf: platform "./.roc_callable_platform/main.roc" }
         \\
         \\main! = || {}
         \\
         \\zero : { run : (I64 -> I64) }
         \\zero = { run: |value| value }
         \\
+        \\scalar : { run : (I64 -> I64) }
+        \\scalar = {
+        \\    bonus = 72623859790382856.I64
+        \\    { run: |_value| bonus }
+        \\}
+        \\
         \\callable : { run : (I64 -> List(I64)) }
         \\callable = {
         \\    items = [1.I64, 2.I64]
         \\    { run: |_value| items }
+        \\}
+        \\
+        \\nested : { run : (I64 -> I64) }
+        \\nested = {
+        \\    inner_bonus = 1230066625199609624.I64
+        \\    inner = |_value| inner_bonus
+        \\    { run: |value| inner(value) }
+        \\}
+        \\
+        \\multi : { run : (I64 -> I64) }
+        \\multi = {
+        \\    selected = 2387509390608836392.I64
+        \\    inactive = 3544952156018063160.I64
+        \\    { run: if 1.I64 == 1.I64 {
+        \\        |_value| selected
+        \\    } else {
+        \\        |_value| inactive
+        \\    } }
         \\}
         ,
     });
@@ -987,10 +1011,10 @@ test "provided finite callable zero and list-capture static data" {
         .sub_path = ".roc_callable_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : () => {}, zero : { run : (I64 -> I64) }, callable : { run : (I64 -> List(I64)) } }
+        \\    requires {} { main! : () => {}, zero : { run : (I64 -> I64) }, scalar : { run : (I64 -> I64) }, callable : { run : (I64 -> List(I64)) }, nested : { run : (I64 -> I64) }, multi : { run : (I64 -> I64) } }
         \\    exposes []
         \\    packages {}
-        \\    provides { "roc_main": main_for_host!, "roc_zero": zero_for_host, "roc_callable": callable_for_host }
+        \\    provides { "roc_main": main_for_host!, "roc_zero": zero_for_host, "roc_scalar": scalar_for_host, "roc_callable": callable_for_host, "roc_nested": nested_for_host, "roc_multi": multi_for_host }
         \\
         \\main_for_host! : () => {}
         \\main_for_host! = main!
@@ -998,8 +1022,17 @@ test "provided finite callable zero and list-capture static data" {
         \\zero_for_host : { run : (I64 -> I64) }
         \\zero_for_host = zero
         \\
+        \\scalar_for_host : { run : (I64 -> I64) }
+        \\scalar_for_host = scalar
+        \\
         \\callable_for_host : { run : (I64 -> List(I64)) }
         \\callable_for_host = callable
+        \\
+        \\nested_for_host : { run : (I64 -> I64) }
+        \\nested_for_host = nested
+        \\
+        \\multi_for_host : { run : (I64 -> I64) }
+        \\multi_for_host = multi
         ,
     });
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
@@ -1067,9 +1100,20 @@ test "provided finite callable zero and list-capture static data" {
         1, 0, 0, 0, 0, 0, 0, 0,
         2, 0, 0, 0, 0, 0, 0, 0,
     };
+    const scalar_capture_payload = [_]u8{ 8, 7, 6, 5, 4, 3, 2, 1 };
+    const nested_capture_payload = [_]u8{ 24, 23, 22, 21, 20, 19, 18, 17 };
+    const selected_multi_payload = [_]u8{ 40, 39, 38, 37, 36, 35, 34, 33 };
+    const inactive_multi_payload = [_]u8{ 56, 55, 54, 53, 52, 51, 50, 49 };
     const shared_payload = findExportContainingSequence(exports, &captured_list_payload) orelse return error.FiniteCallableCapturedListPayloadNotFound;
     _ = findStaticDataExportBySymbol(exports, "roc_zero") orelse return error.ZeroCaptureFiniteCallableExportNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_scalar") orelse return error.ScalarCaptureFiniteCallableExportNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_nested") orelse return error.NestedFiniteCallableExportNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_multi") orelse return error.MultiVariantFiniteCallableExportNotFound;
     try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &captured_list_payload));
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &scalar_capture_payload));
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &nested_capture_payload));
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &selected_multi_payload));
+    try std.testing.expectEqual(@as(usize, 0), countExportsContainingSequence(exports, &inactive_multi_payload));
     try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
 }
 

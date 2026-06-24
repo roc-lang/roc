@@ -232,6 +232,7 @@ const Lowerer = struct {
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
+                .static_data = request.static_data,
             });
         }
 
