@@ -154,3 +154,6 @@ test/glue/*/roc_platform_abi.zig
 # Debug files written by builtin_doc_tests when a block fails
 test/echo/builtin_doc_*.roc
 tmp/
+
+# Scratch planning docs (CI forbids tracking these)
+plan.md

@@ -6,6 +6,7 @@
 pub const std = @import("std");
 pub const platform = @import("platform.zig");
 pub const coordination = @import("coordination.zig");
+pub const hot_reload = @import("hot_reload.zig");
 
 pub const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
 pub const Handle = platform.Handle;
@@ -15,6 +16,7 @@ pub const CoordinationError = coordination.CoordinationError;
 test "ipc tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("coordination.zig"));
+    std.testing.refAllDecls(@import("hot_reload.zig"));
     std.testing.refAllDecls(@import("platform.zig"));
     std.testing.refAllDecls(@import("SharedMemoryAllocator.zig"));
 }

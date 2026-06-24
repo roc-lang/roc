@@ -4245,7 +4245,11 @@ const DefExpectation = union(enum) {
     def: []const u8,
 };
 
-fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usize) anyerror!void {
+const TypeCheckingIntegrationError = TestEnv.TestEnvError || error{
+    TestUnexpectedResult,
+};
+
+fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usize) TypeCheckingIntegrationError!void {
     try testing.expect(!test_env.parse_ast.hasErrors());
 
     const diagnostics = try test_env.module_env.getDiagnostics();
@@ -4275,7 +4279,7 @@ fn checkTypesModule(
     comptime source_expr: []const u8,
     comptime expectation: ModuleExpectation,
     comptime expected: []const u8,
-) anyerror!void {
+) TypeCheckingIntegrationError!void {
     var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
 
@@ -4324,7 +4328,7 @@ const DefAndExpectation = struct {
 fn checkTypesModuleDefs(
     comptime source_expr: []const u8,
     comptime expectations: []const DefAndExpectation,
-) anyerror!void {
+) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
 
@@ -4351,7 +4355,7 @@ fn checkTypesExpr(
     comptime source_expr: []const u8,
     comptime expectation: ExprExpectation,
     comptime expected: []const u8,
-) anyerror!void {
+) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.initExpr("Test", source_expr);
     defer test_env.deinit();
 

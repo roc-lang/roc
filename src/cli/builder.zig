@@ -748,7 +748,7 @@ fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
     ) catch {};
 }
 
-fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: anyerror) Allocator.Error!void {
+fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: std.Io.Dir.AccessError) Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "File Not Accessible", "Input bitcode file does not exist or is not accessible.", .fatal);
     defer report.deinit();
 

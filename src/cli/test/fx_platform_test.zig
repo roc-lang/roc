@@ -18,6 +18,20 @@ const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
 
+const FxPlatformTestError = util.RocRunError || util.ChildTimeoutError || util.ResultCheckError || std.mem.Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError || std.Io.Dir.ReadFileAllocError || error{
+    DevBackendBuildFailed,
+    DivisionByZeroNotHandled,
+    StackOverflowNotHandled,
+    StaticDataHostBinaryContainsComptimeOnlyString,
+    StaticDataHostBinaryMissingString,
+    StaticDataHostTestFailed,
+    TestExpectedEqual,
+    TestExpectedStartsWith,
+    TestUnexpectedResult,
+    UnexpectedExitCode,
+    UnexpectedTermination,
+};
+
 // Wire up tests from fx_test_specs module
 comptime {
     std.testing.refAllDecls(fx_test_specs);
@@ -27,7 +41,7 @@ fn runDevBackendHostSelfTest(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
     self_test_flag: []const u8,
-) anyerror!std.process.RunResult {
+) FxPlatformTestError!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -102,8 +116,8 @@ fn buildAndRunDevBackendApp(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
     output_basename: []const u8,
-    inspect_output: ?*const fn (std.mem.Allocator, []const u8) anyerror!void,
-) anyerror!std.process.RunResult {
+    inspect_output: ?*const fn (std.mem.Allocator, []const u8) FxPlatformTestError!void,
+) FxPlatformTestError!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -175,7 +189,7 @@ fn buildAndRunDevBackendApp(
     });
 }
 
-fn expectInterpreterRuntimeStackOverflow() anyerror!void {
+fn expectInterpreterRuntimeStackOverflow() FxPlatformTestError!void {
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{"--opt=interpreter"}, "test/fx/stack_overflow_runtime.roc");
@@ -201,7 +215,7 @@ fn expectInterpreterRuntimeStackOverflow() anyerror!void {
     }
 }
 
-fn expectDevRuntimeStackOverflow() anyerror!void {
+fn expectDevRuntimeStackOverflow() FxPlatformTestError!void {
     const allocator = testing.allocator;
 
     const run_result = try runDevBackendHostSelfTest(
@@ -236,7 +250,7 @@ fn expectDevRuntimeStackOverflow() anyerror!void {
     }
 }
 
-fn expectInterpreterRuntimeDivisionByZero() anyerror!void {
+fn expectInterpreterRuntimeDivisionByZero() FxPlatformTestError!void {
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{"--opt=interpreter"}, "test/fx/division_by_zero.roc");
@@ -262,7 +276,7 @@ fn expectInterpreterRuntimeDivisionByZero() anyerror!void {
     }
 }
 
-fn expectDevRuntimeDivisionByZero() anyerror!void {
+fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
     const allocator = testing.allocator;
 
     const run_result = try buildAndRunDevBackendApp(
@@ -301,7 +315,7 @@ fn expectDevRuntimeDivisionByZero() anyerror!void {
 
 // IO spec helper for narrow fx-only Zig tests. The broad shared IO-spec matrix
 // runs through the parallel CLI platform runner.
-fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) anyerror!void {
+fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) FxPlatformTestError!void {
     const allocator = testing.allocator;
 
     const result = util.runRocCommand(std.testing.io, allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
@@ -361,7 +375,7 @@ test "provided static data exports are host-linkable readonly constants" {
     try testing.expectEqualStrings("static data host constants ok\n", run_result.stderr);
 }
 
-fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) anyerror!void {
+fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) FxPlatformTestError!void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, allocator, .limited(256 * 1024 * 1024));
     defer allocator.free(bytes);
 
@@ -396,7 +410,7 @@ fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []cons
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.
-fn testRocTestSinglePass(opt: []const u8, roc_file: []const u8) anyerror!void {
+fn testRocTestSinglePass(opt: []const u8, roc_file: []const u8) FxPlatformTestError!void {
     const allocator = testing.allocator;
     const run_result = try util.runRoc(std.testing.io, allocator, &.{ "test", opt }, roc_file);
     defer allocator.free(run_result.stdout);

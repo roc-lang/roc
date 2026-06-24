@@ -191,7 +191,7 @@ fn appendTemporaryNewline(str: *RocStr) ?[]u8 {
 
 /// Handle stdout write errors: exit cleanly on broken pipe (standard
 /// Unix behavior), crash on other errors.
-fn handleStdoutError(err: anyerror) noreturn {
+fn handleStdoutError(err: std.Io.File.Writer.Error) noreturn {
     if (comptime is_wasm) {
         @trap();
     } else {

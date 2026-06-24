@@ -8,7 +8,7 @@ const CompletionItem = completion_handler.CompletionItem;
 const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
 
-fn platformPath(allocator: std.mem.Allocator) anyerror![]u8 {
+fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
     // Resolve from repo root to ensure absolute path
     const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(repo_root);
@@ -34,7 +34,7 @@ const TestHarness = struct {
     file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
 
-    fn init() anyerror!TestHarness {
+    fn init() integration_spec.SpecError!TestHarness {
         const allocator = test_env.allocator;
         var tmp = test_env.tmpDir(.{});
         errdefer tmp.cleanup();
@@ -59,12 +59,12 @@ const TestHarness = struct {
     }
 
     /// Format a Roc source template, substituting the platform path for `{s}`.
-    fn formatSource(self: *TestHarness, comptime fmt: []const u8) anyerror![]u8 {
+    fn formatSource(self: *TestHarness, comptime fmt: []const u8) std.mem.Allocator.Error![]u8 {
         return std.fmt.allocPrint(self.allocator, fmt, .{self.platform_path});
     }
 
     /// Write a file to the tmp directory and register its path and URI.
-    fn writeFile(self: *TestHarness, filename: []const u8, data: []const u8) anyerror!void {
+    fn writeFile(self: *TestHarness, filename: []const u8, data: []const u8) integration_spec.SpecError!void {
         try self.tmp.dir.writeFile(test_env.io, .{ .sub_path = filename, .data = data });
         if (self.file_path) |f| self.allocator.free(f);
         if (self.uri) |u| self.allocator.free(u);
@@ -74,7 +74,7 @@ const TestHarness = struct {
     }
 
     /// Build the file to populate the snapshot env. Discards diagnostics.
-    fn check(self: *TestHarness, override_text: ?[]const u8) anyerror!void {
+    fn check(self: *TestHarness, override_text: ?[]const u8) integration_spec.SpecError!void {
         const publish_sets = try self.checker.check(self.uri.?, override_text, null);
         for (publish_sets) |*set| set.deinit(self.allocator);
         self.allocator.free(publish_sets);
@@ -82,14 +82,14 @@ const TestHarness = struct {
 
     /// Get completion items at a line/character position.
     /// Fails the test if no completions are returned.
-    fn getCompletions(self: *TestHarness, source: []const u8, line: u32, character: u32) anyerror![]const CompletionItem {
+    fn getCompletions(self: *TestHarness, source: []const u8, line: u32, character: u32) integration_spec.SpecError![]const CompletionItem {
         const result = try self.checker.getCompletionsAtPosition(self.uri.?, source, line, character);
         if (result) |r| return r.items;
         return error.TestUnexpectedResult;
     }
 
     /// Get hover information at a line/character position.
-    fn getHover(self: *TestHarness, source: []const u8, line: u32, character: u32) anyerror!?[]const u8 {
+    fn getHover(self: *TestHarness, source: []const u8, line: u32, character: u32) integration_spec.SpecError!?[]const u8 {
         const result = try self.checker.getTypeAtPosition(self.uri.?, source, line, character);
         if (result) |r| return r.type_str;
         return null;
@@ -108,7 +108,7 @@ const TestHarness = struct {
     }
 
     /// Assert that every label in `expected` appears in `items`.
-    fn expectHasLabels(items: []const CompletionItem, expected: []const []const u8) anyerror!void {
+    fn expectHasLabels(items: []const CompletionItem, expected: []const []const u8) integration_spec.SpecError!void {
         for (expected) |label| {
             var found = false;
             for (items) |item| {
@@ -156,7 +156,7 @@ pub const specs = [_]integration_spec.Spec{
 // Syntax Checker Tests
 
 /// Verifies unchanged source content reuses the existing syntax-check result.
-pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() anyerror!void {
+pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -193,7 +193,7 @@ pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() anyerror!void {
 }
 
 /// Verifies changed source content updates the syntax checker content hash.
-pub fn syntaxCheckerRebuildsWhenContentChanges() anyerror!void {
+pub fn syntaxCheckerRebuildsWhenContentChanges() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -236,7 +236,7 @@ pub fn syntaxCheckerRebuildsWhenContentChanges() anyerror!void {
 }
 
 /// Verifies invalid source produces one or more LSP diagnostics.
-pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() anyerror!void {
+pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -265,7 +265,7 @@ pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() anyerror!void {
 }
 
 /// Verifies document symbols are returned for a valid app file.
-pub fn getDocumentSymbolsReturnsSymbolsForValidAppFile() anyerror!void {
+pub fn getDocumentSymbolsReturnsSymbolsForValidAppFile() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -303,7 +303,7 @@ pub fn getDocumentSymbolsReturnsSymbolsForValidAppFile() anyerror!void {
 // Completion Tests
 
 /// Verifies basic expression completions return at least one item.
-pub fn getCompletionsAtPositionReturnsBasicCompletions() anyerror!void {
+pub fn getCompletionsAtPositionReturnsBasicCompletions() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -326,7 +326,7 @@ pub fn getCompletionsAtPositionReturnsBasicCompletions() anyerror!void {
 }
 
 /// Verifies record fields complete for values with nominal record types.
-pub fn recordFieldCompletionWorksForModules() anyerror!void {
+pub fn recordFieldCompletionWorksForModules() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -366,7 +366,7 @@ pub fn recordFieldCompletionWorksForModules() anyerror!void {
 }
 
 /// Verifies record fields complete through a nominal submodule value.
-pub fn recordFieldCompletionInSubModule() anyerror!void {
+pub fn recordFieldCompletionInSubModule() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -404,7 +404,7 @@ pub fn recordFieldCompletionInSubModule() anyerror!void {
 }
 
 /// Verifies nested nominal submodule members complete after a dot.
-pub fn recordFieldCompletionWorksForNestedNominalSubmodule() anyerror!void {
+pub fn recordFieldCompletionWorksForNestedNominalSubmodule() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -451,7 +451,7 @@ pub fn recordFieldCompletionWorksForNestedNominalSubmodule() anyerror!void {
 }
 
 /// Verifies record fields complete for inferred record values.
-pub fn recordFieldCompletionWorks() anyerror!void {
+pub fn recordFieldCompletionWorks() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -484,7 +484,7 @@ pub fn recordFieldCompletionWorks() anyerror!void {
 }
 
 /// Verifies tuple index completions appear after a tuple dot.
-pub fn tupleIndexCompletionWorks() anyerror!void {
+pub fn tupleIndexCompletionWorks() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -519,7 +519,7 @@ pub fn tupleIndexCompletionWorks() anyerror!void {
 }
 
 /// Verifies partial field names still expose record field completions.
-pub fn recordFieldCompletionWithPartialFieldName() anyerror!void {
+pub fn recordFieldCompletionWithPartialFieldName() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -559,7 +559,7 @@ pub fn recordFieldCompletionWithPartialFieldName() anyerror!void {
 }
 
 /// Verifies static-dispatch methods complete for nominal values.
-pub fn staticDispatchCompletionForNominalTypeMethods() anyerror!void {
+pub fn staticDispatchCompletionForNominalTypeMethods() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -608,7 +608,7 @@ pub fn staticDispatchCompletionForNominalTypeMethods() anyerror!void {
 }
 
 /// Verifies static-dispatch methods complete after chained method calls.
-pub fn staticDispatchCompletionForChainedCall() anyerror!void {
+pub fn staticDispatchCompletionForChainedCall() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -659,7 +659,7 @@ pub fn staticDispatchCompletionForChainedCall() anyerror!void {
 // Doc Comment Tests
 
 /// Verifies completion items include doc comments from Roc source.
-pub fn completionIncludesDocCommentsFromSource() anyerror!void {
+pub fn completionIncludesDocCommentsFromSource() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -724,7 +724,7 @@ pub fn completionIncludesDocCommentsFromSource() anyerror!void {
 // Hover Documentation Tests
 
 /// Verifies hovering a function definition includes documentation and type text.
-pub fn hoverShowsDocumentationForFunctionDefinition() anyerror!void {
+pub fn hoverShowsDocumentationForFunctionDefinition() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -759,7 +759,7 @@ pub fn hoverShowsDocumentationForFunctionDefinition() anyerror!void {
 }
 
 /// Verifies hovering a local function call shows documentation from its definition.
-pub fn hoverShowsDocumentationForLocalFunctionCall() anyerror!void {
+pub fn hoverShowsDocumentationForLocalFunctionCall() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -793,7 +793,7 @@ pub fn hoverShowsDocumentationForLocalFunctionCall() anyerror!void {
 }
 
 /// Verifies hovering a builtin function call returns type information.
-pub fn hoverShowsDocumentationForExternalFunctionCall() anyerror!void {
+pub fn hoverShowsDocumentationForExternalFunctionCall() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -824,7 +824,7 @@ pub fn hoverShowsDocumentationForExternalFunctionCall() anyerror!void {
 }
 
 /// Verifies hovering an unannotated function still shows its documentation.
-pub fn hoverShowsDocumentationForFunctionWithoutTypeAnnotation() anyerror!void {
+pub fn hoverShowsDocumentationForFunctionWithoutTypeAnnotation() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -854,7 +854,7 @@ pub fn hoverShowsDocumentationForFunctionWithoutTypeAnnotation() anyerror!void {
 }
 
 /// Verifies hovering a local value shows its source documentation.
-pub fn hoverShowsDocumentationForLocalVariable() anyerror!void {
+pub fn hoverShowsDocumentationForLocalVariable() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -885,7 +885,7 @@ pub fn hoverShowsDocumentationForLocalVariable() anyerror!void {
 }
 
 /// Verifies hovering a static-dispatch method call shows method documentation.
-pub fn hoverShowsDocumentationForMethodCallViaStaticDispatch() anyerror!void {
+pub fn hoverShowsDocumentationForMethodCallViaStaticDispatch() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -920,7 +920,7 @@ pub fn hoverShowsDocumentationForMethodCallViaStaticDispatch() anyerror!void {
 }
 
 /// Verifies hover text without documentation contains only type information.
-pub fn hoverWithoutDocumentationShowsOnlyType() anyerror!void {
+pub fn hoverWithoutDocumentationShowsOnlyType() integration_spec.SpecError!void {
     var h = try TestHarness.init();
     defer h.deinit();
 

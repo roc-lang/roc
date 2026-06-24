@@ -4,6 +4,47 @@ const std = @import("std");
 const builtin = @import("builtin");
 const util = @import("util.zig");
 
+/// Explicit (superset) error set for this file's test helpers, composed from the portable
+/// named std/util error sets they use plus the custom errors they return. Declaring a
+/// broader set than any single helper needs is fine and keeps every helper explicit.
+const TestError = util.RocRunError ||
+    std.Io.File.ReadStreamingError ||
+    std.Io.File.Reader.Error ||
+    std.Io.File.Writer.Error ||
+    std.fmt.ParseIntError ||
+    error{
+        TestExpectedEqual,
+        TestUnexpectedResult,
+        EndOfStream,
+        StreamTooLong,
+        ReadFailed,
+        WriteFailed,
+        Unexpected,
+        SkipZigTest,
+        ServerTimedOut,
+        ServerFailed,
+        ServerExitedBeforePort,
+        ResponseTooLarge,
+        StderrTooLarge,
+        RocBuildFailed,
+        BinaryContainsOriginalFieldName,
+        EmptyPortLine,
+        InvalidPortLine,
+        PortLineTooLong,
+        // net.IpAddress.connect (sendHttpRequest)
+        AddressFamilyUnsupported,
+        AddressUnavailable,
+        ConnectionPending,
+        ConnectionRefused,
+        HostUnreachable,
+        NetworkDown,
+        NetworkUnreachable,
+        OptionUnsupported,
+        ProtocolUnsupportedByAddressFamily,
+        ProtocolUnsupportedBySystem,
+        SocketModeUnsupported,
+    };
+
 const testing = std.testing;
 const io = std.testing.io;
 
@@ -208,7 +249,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
     try runServerAndCheckRequestFailure(allocator, output_path, too_large_content_length_request, "RequestTooLarge");
 }
 
-fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
+fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -247,14 +288,14 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
-fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) anyerror!?[]u8 {
+fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) TestError!?[]u8 {
     const key_z = try allocator.dupeZ(u8, key);
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return null;
     return try allocator.dupe(u8, value[0..std.mem.len(value)]);
 }
 
-fn buildKnownHeadersRecordOrderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildKnownHeadersRecordOrderRequest(allocator: std.mem.Allocator) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -274,7 +315,7 @@ fn buildKnownHeadersRecordOrderRequest(allocator: std.mem.Allocator) anyerror![]
     return request.toOwnedSlice(allocator);
 }
 
-fn buildKnownHeadersReverseOrderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildKnownHeadersReverseOrderRequest(allocator: std.mem.Allocator) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -294,7 +335,7 @@ fn buildKnownHeadersReverseOrderRequest(allocator: std.mem.Allocator) anyerror![
     return request.toOwnedSlice(allocator);
 }
 
-fn buildKnownHeadersScrambledOrderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildKnownHeadersScrambledOrderRequest(allocator: std.mem.Allocator) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -318,7 +359,7 @@ fn buildKnownHeadersScrambledOrderRequest(allocator: std.mem.Allocator) anyerror
     return request.toOwnedSlice(allocator);
 }
 
-fn buildCacheControlCaseRequest(allocator: std.mem.Allocator, cache_control_name: []const u8) anyerror![]u8 {
+fn buildCacheControlCaseRequest(allocator: std.mem.Allocator, cache_control_name: []const u8) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -334,7 +375,7 @@ fn buildCacheControlCaseRequest(allocator: std.mem.Allocator, cache_control_name
     return request.toOwnedSlice(allocator);
 }
 
-fn buildLargeBodyRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildLargeBodyRequest(allocator: std.mem.Allocator) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -350,7 +391,7 @@ fn buildLargeBodyRequest(allocator: std.mem.Allocator) anyerror![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
-fn buildDuplicateKnownRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildDuplicateKnownRequest(allocator: std.mem.Allocator) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -369,14 +410,14 @@ fn buildDuplicateKnownRequest(allocator: std.mem.Allocator) anyerror![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
-fn appendHeader(request: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: []const u8) anyerror!void {
+fn appendHeader(request: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: []const u8) TestError!void {
     try request.appendSlice(allocator, name);
     try request.appendSlice(allocator, ": ");
     try request.appendSlice(allocator, value);
     try request.appendSlice(allocator, "\r\n");
 }
 
-fn buildMissingRequiredRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildMissingRequiredRequest(allocator: std.mem.Allocator) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -390,7 +431,7 @@ fn buildMissingRequiredRequest(allocator: std.mem.Allocator) anyerror![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
-fn buildBadHeaderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildBadHeaderRequest(allocator: std.mem.Allocator) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -408,7 +449,7 @@ fn buildBadHeaderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
-fn buildInvalidRequestCountRequest(allocator: std.mem.Allocator, value: []const u8) anyerror![]u8 {
+fn buildInvalidRequestCountRequest(allocator: std.mem.Allocator, value: []const u8) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -423,7 +464,7 @@ fn buildInvalidRequestCountRequest(allocator: std.mem.Allocator, value: []const 
     return request.toOwnedSlice(allocator);
 }
 
-fn buildInvalidContentLengthRequest(allocator: std.mem.Allocator, value: []const u8) anyerror![]u8 {
+fn buildInvalidContentLengthRequest(allocator: std.mem.Allocator, value: []const u8) TestError![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -449,7 +490,7 @@ fn expectedHeaderLength(optional_mask: u8) u64 {
     return total;
 }
 
-fn buildExpectedResponse(allocator: std.mem.Allocator, value: u64) anyerror![]u8 {
+fn buildExpectedResponse(allocator: std.mem.Allocator, value: u64) TestError![]u8 {
     return std.fmt.allocPrint(
         allocator,
         "HTTP/1.1 200 OK\r\n" ++
@@ -483,7 +524,7 @@ fn nativeRunnableTargetName() ?[]const u8 {
     };
 }
 
-fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_response: []const u8) anyerror!void {
+fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_response: []const u8) TestError!void {
     var child = try std.process.spawn(io, .{
         .argv = &.{exe_path},
         .stdin = .ignore,
@@ -544,11 +585,11 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8,
     try expectNoRuntimeAllocation(stderr);
 }
 
-fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) anyerror!void {
+fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) TestError!void {
     try runServerAndCheckRequestFailure(allocator, exe_path, invalid_utf8_request, "InvalidUtf8");
 }
 
-fn runServerAndCheckRequestFailure(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_error: []const u8) anyerror!void {
+fn runServerAndCheckRequestFailure(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_error: []const u8) TestError!void {
     var child = try std.process.spawn(io, .{
         .argv = &.{exe_path},
         .stdin = .ignore,
@@ -608,13 +649,13 @@ fn runServerAndCheckRequestFailure(allocator: std.mem.Allocator, exe_path: []con
     try expectNoRuntimeAllocation(stderr);
 }
 
-fn expectNoRuntimeAllocation(stderr: []const u8) anyerror!void {
+fn expectNoRuntimeAllocation(stderr: []const u8) TestError!void {
     try testing.expect(std.mem.find(u8, stderr, "roc_alloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_realloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_dealloc called") == null);
 }
 
-fn expectBinaryOmits(allocator: std.mem.Allocator, exe_path: []const u8, needles: []const []const u8) anyerror!void {
+fn expectBinaryOmits(allocator: std.mem.Allocator, exe_path: []const u8, needles: []const []const u8) TestError!void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .limited(256 * 1024 * 1024));
     defer allocator.free(bytes);
 
@@ -626,7 +667,7 @@ fn expectBinaryOmits(allocator: std.mem.Allocator, exe_path: []const u8, needles
     }
 }
 
-fn readPortLine(stdout: std.Io.File) anyerror!u16 {
+fn readPortLine(stdout: std.Io.File) TestError!u16 {
     var line: [32]u8 = undefined;
     var line_len: usize = 0;
 
@@ -658,7 +699,7 @@ fn readPortLine(stdout: std.Io.File) anyerror!u16 {
     return @intCast(port);
 }
 
-fn sendHttpRequest(allocator: std.mem.Allocator, port: u16, bytes: []const u8) anyerror![]u8 {
+fn sendHttpRequest(allocator: std.mem.Allocator, port: u16, bytes: []const u8) TestError![]u8 {
     const net = std.Io.net;
     var address: net.IpAddress = .{ .ip4 = net.Ip4Address.loopback(port) };
     const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
@@ -690,7 +731,7 @@ fn sendHttpRequest(allocator: std.mem.Allocator, port: u16, bytes: []const u8) a
     return response.toOwnedSlice(allocator);
 }
 
-fn sendHttpRequestWithoutReading(port: u16, bytes: []const u8) anyerror!void {
+fn sendHttpRequestWithoutReading(port: u16, bytes: []const u8) TestError!void {
     const net = std.Io.net;
     var address: net.IpAddress = .{ .ip4 = net.Ip4Address.loopback(port) };
     const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
@@ -702,7 +743,7 @@ fn sendHttpRequestWithoutReading(port: u16, bytes: []const u8) anyerror!void {
     try writer.interface.flush();
 }
 
-fn readRemaining(allocator: std.mem.Allocator, file: std.Io.File) anyerror![]u8 {
+fn readRemaining(allocator: std.mem.Allocator, file: std.Io.File) TestError![]u8 {
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 

@@ -54,7 +54,15 @@ pub const ElfDynLib = struct {
     /// `resolver` binds undefined symbols (compiler-rt libcalls that native
     /// codegen emits but the loaded image does not define) to host
     /// implementations; pass null to leave them unresolved.
-    pub fn open(path: [:0]const u8, resolver: ?self_relocate.UndefinedSymbolResolver) anyerror!ElfDynLib {
+    pub const OpenError = std.Io.File.OpenError || std.Io.File.StatError || posix.MMapError || error{
+        NotElfFile,
+        NotDynamicLibrary,
+        MissingDynamicLinkingInformation,
+        ElfStringSectionNotFound,
+        ElfSymSectionNotFound,
+    };
+
+    pub fn open(path: [:0]const u8, resolver: ?self_relocate.UndefinedSymbolResolver) OpenError!ElfDynLib {
         const io = std.Options.debug_io;
         const file = try std.Io.Dir.cwd().openFile(io, path, .{});
         defer file.close(io);

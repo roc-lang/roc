@@ -41,6 +41,11 @@ const ShimError = error{
     OutOfMemory,
 };
 
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError || error{
+    SysctlFailed,
+    UnsupportedPlatform,
+};
+
 var runtime_state_initialized: bool = false;
 var runtime_state: RuntimeState = undefined;
 var runtime_state_mutex: std.Io.Mutex = .init;
@@ -54,7 +59,7 @@ fn allocator() Allocator {
     return std.heap.page_allocator;
 }
 
-fn openRuntimeState(gpa: Allocator) anyerror!RuntimeState {
+fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
     errdefer shm.deinit(gpa);
