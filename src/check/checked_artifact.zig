@@ -23710,7 +23710,7 @@ pub const CheckedTypeProjector = struct {
         active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error!CheckedTypeId {
         const index: usize = @intFromEnum(ty);
-        if (index >= source.roots.len or index >= source.payloads.len) {
+        if (index >= source.roots.len or index >= source.payloadCount()) {
             checkedArtifactInvariant("checked type view projection referenced a missing source root", .{});
         }
 
@@ -26171,6 +26171,82 @@ test "artifact views are read-only projections" {
     try std.testing.expect(lowering.roots == &artifact.root_requests);
 }
 
+test "checked type projection preserves function effect kind" {
+    const gpa = std.testing.allocator;
+
+    var source_store = CheckedTypeStore{};
+    defer source_store.deinit(gpa);
+
+    const value_ty: CheckedTypeId = @enumFromInt(@as(u32, @intCast(source_store.payloads.items.len)));
+    try source_store.roots.append(gpa, .{ .id = value_ty, .key = .{ .bytes = [_]u8{0x10} ** 32 } });
+    try source_store.payloads.append(gpa, .empty_record);
+
+    const function_ty: CheckedTypeId = @enumFromInt(@as(u32, @intCast(source_store.payloads.items.len)));
+    const function_args = try gpa.dupe(CheckedTypeId, &.{value_ty});
+    const function_payload = try source_store.commitPayload(gpa, .{ .function = .{
+        .kind = .effectful,
+        .args = function_args,
+        .ret = value_ty,
+        .needs_instantiation = false,
+    } });
+    try source_store.roots.append(gpa, .{ .id = function_ty, .key = .{ .bytes = [_]u8{0x20} ** 32 } });
+    try source_store.payloads.append(gpa, function_payload);
+
+    var names = canonical.CanonicalNameStore.init(gpa);
+    const test_module = try names.internModuleName("Target");
+
+    var module_env = try ModuleEnv.init(gpa, "");
+    defer module_env.deinit();
+
+    var target = CheckedModuleArtifact{
+        .key = .{},
+        .canonical_names = names,
+        .module_identity = .{
+            .module_idx = 0,
+            .module_name = test_module,
+            .display_module_name = test_module,
+            .qualified_module_name = test_module,
+            .kind = .package,
+        },
+        .checking_context_identity = .{},
+        .module_env = .{ .checked_source = &module_env },
+        .exports = .{},
+        .provides_requires = .{},
+        .method_registry = .{},
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .checked_procedure_templates = .{},
+        .intrinsic_wrappers = .{},
+        .top_level_procedure_bindings = .{},
+        .root_requests = .{},
+        .hosted_procs = .{},
+        .platform_required_declarations = .{},
+        .platform_required_bindings = .{},
+        .interface_capabilities = .{},
+        .compile_time_roots = .{},
+        .top_level_values = .{},
+        .hoisted_constants = .{},
+        .const_templates = .{},
+        .const_store = ConstStore.init(gpa),
+    };
+    defer {
+        target.checked_types.deinit(gpa);
+        target.const_templates.deinit(gpa);
+        target.const_store.deinit();
+        target.canonical_names.deinit();
+    }
+
+    var projector = CheckedTypeProjector.init(gpa, &target, &.{});
+    defer projector.deinit();
+
+    const projected_function_ty = try projector.projectCheckedTypeViewRoot(source_store.view(), function_ty);
+    const projected_function = target.checked_types.payload(projected_function_ty).function;
+    try std.testing.expectEqual(CheckedFunctionKind.effectful, projected_function.kind);
+    try std.testing.expectEqual(@as(usize, 1), projected_function.args.len);
+    try std.testing.expectEqual(projected_function.args[0], projected_function.ret);
+    try std.testing.expectEqual(CheckedTypePayload.empty_record, target.checked_types.payload(projected_function.ret));
+}
+
 // Round-trip tests for transform-A sub-stores (POD-element slices). Each store
 // keeps its `[]T` representation; only `Serialized`/`deserialize` are added.
 // Tests fill elements with deterministic bytes (including padding) and assert
@@ -26285,11 +26361,13 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     var store = CheckedTypeStore{};
     defer store.deinit(gpa);
 
-    // Two type-id-pool entries used as tag args / scheme generalized vars / decl
-    // formal args / tuple elems. `a`/`b` are the next two payload ids, derived from
+    // Type-id-pool entries used as tag args / function args / scheme generalized
+    // vars / decl formal args / tuple elems. These are the next payload ids, derived from
     // the (empty) pool rather than hardcoded placeholder indices.
     const a: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
     const b: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)) + 1);
+    const c: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)) + 2);
+    const d: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)) + 3);
 
     // Build via the commit path so the pools are populated correctly.
     // 0: a flex with a name + a constraint.
@@ -26315,6 +26393,28 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const tu_stored = try store.commitPayload(gpa, .{ .tag_union = .{ .tags = tags, .ext = a } });
     try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = [_]u8{2} ** 32 } });
     try store.payloads.append(gpa, tu_stored);
+
+    // 2: a pure function and 3: an effectful function. The function kind is the
+    // checked module's explicit effect summary for imported/exported function types.
+    const pure_args = try gpa.dupe(CheckedTypeId, &.{a});
+    const pure_fn_stored = try store.commitPayload(gpa, .{ .function = .{
+        .kind = .pure,
+        .args = pure_args,
+        .ret = b,
+        .needs_instantiation = false,
+    } });
+    try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 32 } });
+    try store.payloads.append(gpa, pure_fn_stored);
+
+    const effectful_args = try gpa.dupe(CheckedTypeId, &.{b});
+    const effectful_fn_stored = try store.commitPayload(gpa, .{ .function = .{
+        .kind = .effectful,
+        .args = effectful_args,
+        .ret = a,
+        .needs_instantiation = true,
+    } });
+    try store.roots.append(gpa, .{ .id = d, .key = .{ .bytes = [_]u8{5} ** 32 } });
+    try store.payloads.append(gpa, effectful_fn_stored);
 
     // A scheme with generalized vars [a, b].
     const gv = try store.appendTypeIds(gpa, &.{ a, b });
@@ -26365,6 +26465,19 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqual(@as(usize, 1), tu.tags.len);
     try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, tu.tags[0].argsSlice(&loaded));
     try std.testing.expectEqual(a, tu.ext);
+
+    // Function effect kind and argument ranges survive.
+    const pure_fn = loaded.payload(c).function;
+    try std.testing.expectEqual(CheckedFunctionKind.pure, pure_fn.kind);
+    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, pure_fn.args);
+    try std.testing.expectEqual(b, pure_fn.ret);
+    try std.testing.expect(!pure_fn.needs_instantiation);
+
+    const effectful_fn = loaded.payload(d).function;
+    try std.testing.expectEqual(CheckedFunctionKind.effectful, effectful_fn.kind);
+    try std.testing.expectEqualSlices(CheckedTypeId, &.{b}, effectful_fn.args);
+    try std.testing.expectEqual(a, effectful_fn.ret);
+    try std.testing.expect(effectful_fn.needs_instantiation);
 
     // Scheme generalized vars + decl formal args.
     try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items[0].generalizedVars(&loaded));

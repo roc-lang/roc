@@ -798,7 +798,7 @@ wc -c rocci-bird.wasm
 - [x] Recursive effect groups solve with directed SCC propagation.
 - [x] Top-level effect errors use finalized effect slots.
 - [x] `expect` effect errors use finalized effect slots.
-- [ ] Checked modules export/import explicit effect summaries.
+- [x] Checked modules export/import explicit effect summaries.
 
 ### Root Selection
 
