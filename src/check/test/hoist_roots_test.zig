@@ -1361,6 +1361,24 @@ test "hoist roots preserve independent children around effectful static dispatch
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_record));
 }
 
+test "hoist roots preserve independent children around direct effectful calls" {
+    var test_env = try TestEnv.init("Test",
+        \\consume! : List(U8) => U64
+        \\consume! = |_bytes| 1
+        \\
+        \\main! = |_| {
+        \\    result = consume!([1.U8, 2.U8])
+        \\    _ = result
+        \\    {}
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
+}
+
 test "hoist roots preserve children when delayed where-clause dispatch resolves effectful" {
     var test_env = try TestEnv.init("Test",
         \\uses_tick! : a => { value: U64, bytes: List(U8) } where [a.tick! : a => U64]

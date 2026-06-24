@@ -317,7 +317,7 @@ Tests:
 - [ ] `dbg` in selected compile-time branch reports at compile time
 - [ ] failed `expect` in selected compile-time branch reports at compile time
 - [x] effectful parent preserves independent static child root
-- [ ] direct effectful call blocks containing parent root
+- [x] direct effectful call blocks containing parent root
 - [x] delayed parent resolving pure replaces children
 - [x] delayed parent resolving effectful preserves children
 - [x] nested delayed parents finalize in stable order
