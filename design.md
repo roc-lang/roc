@@ -242,6 +242,13 @@ root while preserving the original diagnostic ownership, so a bad child reports
 once instead of being hidden by hoisting or reported again by a parent root.
 Static-dispatch failures, type errors, and other checker-owned problems must
 feed this poison result explicitly through the same expression summary path.
+Poison is local to the expression or dependency region that owns the checking
+problem; it must not disable hoisting for unrelated expressions in the same
+module or program.
+Compiler implementation gaps are not poison. Once checking has accepted an
+eligible expression, failure to evaluate, store, restore, or emit it correctly
+is a compiler bug with a regression test, not a reason to demote the expression
+from compile-time evaluation.
 
 Root selection keeps maximal eligible expressions. Each expression frame
 records the root-candidate stack length at entry. If the expression finishes as
@@ -383,9 +390,11 @@ directly; it must not scan checked CIR or generated code to rediscover root
 eligibility.
 
 If a reachable evaluated value cannot yet be represented as target static data,
-that limitation must be explicit in the checked output or the static-data
-builder. No backend may rediscover or guess root eligibility by scanning source
-syntax, function bodies, object symbols, or generated code.
+the missing representation is a compiler bug. The checked output or static-data
+builder must make the missing explicit data assertable and testable; it must
+not silently demote the value from compile-time evaluation. No backend may
+rediscover or guess root eligibility by scanning source syntax, function
+bodies, object symbols, or generated code.
 
 ## Backend Builtins
 

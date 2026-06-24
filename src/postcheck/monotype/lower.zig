@@ -276,6 +276,14 @@ const LambdaArgLet = struct {
     value: Ast.ExprId,
 };
 
+const RestoredConstCapture = struct {
+    binder: checked.PatternBinderId,
+    previous: ?Ast.LocalId,
+    local: Ast.LocalId,
+    value: Ast.ExprId,
+    pat: Ast.PatId,
+};
+
 const MergeBinder = struct {
     binder: checked.PatternBinderId,
     before: Ast.LocalId,
@@ -2379,7 +2387,7 @@ const Builder = struct {
         if (fn_value.fn_def == .encode_to_runtime) {
             return try self.restoreConstEncodeToRuntimeFnExpr(store_view, fn_value, ty);
         }
-        const template = try self.constFnTemplateToMono(fn_value, ty);
+        var template = try self.constFnTemplateToMono(fn_value, ty);
         if (fn_value.captures.len == 0) {
             const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(fn_view, template);
@@ -2399,17 +2407,11 @@ const Builder = struct {
         defer fn_ctx.deinit();
         try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
         try fn_ctx.seedStoredLocalProcContexts(template.local_proc_contexts);
-        try fn_ctx.seedRestoredLocalProcContext(template.fn_def);
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
         const lambda_expr = fn_view.bodies.expr(lambda_expr_id);
 
-        const captures = try self.allocator.alloc(struct {
-            binder: checked.PatternBinderId,
-            previous: ?Ast.LocalId,
-            value: Ast.ExprId,
-            pat: Ast.PatId,
-        }, fn_value.captures.len);
+        const captures = try self.allocator.alloc(RestoredConstCapture, fn_value.captures.len);
         var initialized: usize = 0;
         errdefer {
             while (initialized > 0) {
@@ -2439,6 +2441,7 @@ const Builder = struct {
             captures[index] = .{
                 .binder = binder,
                 .previous = previous,
+                .local = local,
                 .value = value_expr,
                 .pat = pat,
             };
@@ -2457,6 +2460,12 @@ const Builder = struct {
                 }
             }
         }
+
+        // Restored captures get fresh Monotype locals, so nested function context
+        // keys that reference them must be specialized to those locals.
+        template = restoredConstFnTemplateWithCaptureContext(template, captures);
+        fn_ctx.restoreLocalProcContextsForCaptures(captures);
+        try fn_ctx.seedRestoredLocalProcContext(template.fn_def);
 
         var expr = try self.program.addExpr(.{
             .ty = ty,
@@ -14645,6 +14654,16 @@ const BodyContext = struct {
         }
     }
 
+    fn restoreLocalProcContextsForCaptures(
+        self: *BodyContext,
+        captures: []const RestoredConstCapture,
+    ) void {
+        var iter = self.local_proc_contexts.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.* = restoredConstLocalProcContextKey(entry.value_ptr.*, captures);
+        }
+    }
+
     fn putLocalProcContext(
         self: *BodyContext,
         binder: checked.PatternBinderId,
@@ -15553,6 +15572,65 @@ fn generatedEncodeToRuntimeKey(
     hasher.update(&current_fn_key.bytes);
     var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
     hasher.update(std.mem.asBytes(&source_expr_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn restoredConstFnTemplateWithCaptureContext(
+    template: Ast.FnTemplate,
+    captures: []const RestoredConstCapture,
+) Ast.FnTemplate {
+    var restored = template;
+    switch (restored.fn_def) {
+        .nested => |*nested| {
+            nested.context_fn_key = restoredConstFnContextKey(nested.*, template.source_fn_key, captures);
+        },
+        else => Common.invariant("capturing stored function must reference a checked nested function"),
+    }
+    return restored;
+}
+
+fn restoredConstFnContextKey(
+    nested: Ast.NestedFn,
+    source_fn_key: names.TypeDigest,
+    captures: []const RestoredConstCapture,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.restored_const_fn_context");
+    hasher.update(&names.procTemplateModuleDigest(nested.owner).bytes);
+    var owner_proc_base = std.mem.nativeToLittle(u32, @intFromEnum(nested.owner.proc_base));
+    hasher.update(std.mem.asBytes(&owner_proc_base));
+    var owner_template = std.mem.nativeToLittle(u32, @intFromEnum(nested.owner.template));
+    hasher.update(std.mem.asBytes(&owner_template));
+    var site = std.mem.nativeToLittle(u32, @intFromEnum(nested.site));
+    hasher.update(std.mem.asBytes(&site));
+    hasher.update(&nested.context_fn_key.bytes);
+    hasher.update(&source_fn_key.bytes);
+    var capture_count = std.mem.nativeToLittle(u32, @intCast(captures.len));
+    hasher.update(std.mem.asBytes(&capture_count));
+    for (captures) |capture| {
+        var binder = std.mem.nativeToLittle(u32, @intFromEnum(capture.binder));
+        hasher.update(std.mem.asBytes(&binder));
+        var local = std.mem.nativeToLittle(u32, @intFromEnum(capture.local));
+        hasher.update(std.mem.asBytes(&local));
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn restoredConstLocalProcContextKey(
+    context_fn_key: names.TypeDigest,
+    captures: []const RestoredConstCapture,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.restored_const_local_proc_context");
+    hasher.update(&context_fn_key.bytes);
+    var capture_count = std.mem.nativeToLittle(u32, @intCast(captures.len));
+    hasher.update(std.mem.asBytes(&capture_count));
+    for (captures) |capture| {
+        var binder = std.mem.nativeToLittle(u32, @intFromEnum(capture.binder));
+        hasher.update(std.mem.asBytes(&binder));
+        var local = std.mem.nativeToLittle(u32, @intFromEnum(capture.local));
+        hasher.update(std.mem.asBytes(&local));
+    }
     return .{ .bytes = hasher.finalResult() };
 }
 

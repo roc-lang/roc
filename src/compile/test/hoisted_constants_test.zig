@@ -158,12 +158,6 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    if (coord.hasUserErrors()) {
-        var debug_reports = coord.iterReports();
-        while (debug_reports.next()) |entry| {
-            std.debug.print("pre-finalize report: {s} in {s}\n", .{ entry.report.title, entry.module_name });
-        }
-    }
     try std.testing.expect(!coord.hasUserErrors());
 
     try coord.finalizeExecutableArtifacts();
@@ -862,11 +856,7 @@ test "reachable local List.iter hoist stores iterator const data" {
         \\main! = |args| {
         \\    base = [{ x: 1.I64, y: 2.I64 }, { x: 3.I64, y: 4.I64 }].iter()
         \\    total = Iter.fold(base, 0.I64, |acc, point| acc + point.x + point.y + List.len(args).to_i64_wrap())
-        \\    if total == -1 {
-        \\        Ok({})
-        \\    } else {
-        \\        Ok({})
-        \\    }
+        \\    Err(Exit(total.to_i8_wrap()))
         \\}
         ,
     });
@@ -924,9 +914,17 @@ test "reachable local List.iter hoist stores iterator const data" {
         countStoredHoistedFnContext(root_const_view) +
         countStoredHoistedFnContextInModules(root_view.relation_modules) +
         countStoredHoistedFnContextInModules(imports);
+    const stored_iter_root_count =
+        countStoredHoistedListLengthAndFnValue(app_view, 2) +
+        countStoredHoistedListLengthAndFnValue(root_const_view, 2) +
+        countStoredHoistedListLengthAndFnValueInModules(root_view.relation_modules, 2) +
+        countStoredHoistedListLengthAndFnValueInModules(imports, 2);
     try std.testing.expect(stored_list_count >= 1);
     try std.testing.expect(stored_fn_count >= 1);
     try std.testing.expect(stored_fn_context_count >= 1);
+    try std.testing.expect(stored_iter_root_count >= 1);
+    try std.testing.expect(countSelectedHoistedConstResolvedRefs(app_view) >= 1);
+    try std.testing.expect(countSelectedHoistedConstResolvedRefsWithListAndFn(app_view, 2) >= 1);
 }
 
 test "inline sub_or_crash cells inside runtime record become shared static data" {
@@ -3815,6 +3813,75 @@ fn countStoredHoistedFnContextInModules(artifacts: anytype) usize {
     var count: usize = 0;
     for (artifacts) |artifact| {
         count += countStoredHoistedFnContext(artifact);
+    }
+    return count;
+}
+
+fn countStoredHoistedListLengthAndFnValue(artifact: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        const module = StaticConstModule{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        };
+        if (constNodeContainsListLength(module, node, len) and
+            constNodeContainsFnValue(module, node))
+        {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn countStoredHoistedListLengthAndFnValueInModules(artifacts: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedListLengthAndFnValue(artifact, len);
+    }
+    return count;
+}
+
+fn countSelectedHoistedConstResolvedRefs(artifact: anytype) usize {
+    var count: usize = 0;
+    for (artifact.resolved_value_refs.records) |record| {
+        switch (record.ref) {
+            .selected_hoisted_const => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countSelectedHoistedConstResolvedRefsWithListAndFn(artifact: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifact.resolved_value_refs.records) |record| {
+        const selected = switch (record.ref) {
+            .selected_hoisted_const => |selected| selected,
+            else => continue,
+        };
+        const template = artifact.const_templates.get(selected.const_use.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        const module = StaticConstModule{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        };
+        if (constNodeContainsListLength(module, node, len) and
+            constNodeContainsFnValue(module, node))
+        {
+            count += 1;
+        }
     }
     return count;
 }
