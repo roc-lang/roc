@@ -68,7 +68,7 @@ const max_article_bytes = 8 * 1024 * 1024;
 /// returns the resulting `LangRef`. The caller owns the result and must call
 /// `deinit`. Returns an error if the directory cannot be opened or is empty.
 pub fn load(gpa: Allocator, io: std.Io, dir_path: []const u8) anyerror!LangRef {
-    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{});
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
 
     // Collect the articles in filesystem (non-deterministic) order first.
