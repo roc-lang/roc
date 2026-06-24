@@ -8,10 +8,10 @@ type=snippet
 x = 0.()
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - fuzz_crash_081.md:1:5:1:9
+UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: nominal value/tuple construction
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **fuzz_crash_081.md:1:5:1:9:**
 ```roc
@@ -19,8 +19,7 @@ x = 0.()
 ```
     ^^^^
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -46,7 +45,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "not_implemented"))))
+		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
