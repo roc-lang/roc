@@ -470,11 +470,39 @@ const ExprCheckResult = struct {
     }
 
     fn include(self: *ExprCheckResult, other: ExprCheckResult) void {
+        if (other.runtime_dep) |other_dep| {
+            switch (other_dep) {
+                .poisoned => self.runtime_dep = .poisoned,
+                .runtime_dependent => if (self.runtime_dep != .poisoned) {
+                    self.runtime_dep = .runtime_dependent;
+                },
+                .compile_time_known => if (self.runtime_dep == null) {
+                    self.runtime_dep = .compile_time_known;
+                },
+            }
+        }
+
         if (other.isKnownEffectful()) {
             self.markEffectful();
         } else if (self.root_effect == null) {
             self.root_effect = other.root_effect;
         }
+    }
+
+    fn markCompileTimeKnown(self: *ExprCheckResult) void {
+        if (self.runtime_dep == null) {
+            self.runtime_dep = .compile_time_known;
+        }
+    }
+
+    fn markRuntimeDependent(self: *ExprCheckResult) void {
+        if (self.runtime_dep != .poisoned) {
+            self.runtime_dep = .runtime_dependent;
+        }
+    }
+
+    fn markPoisoned(self: *ExprCheckResult) void {
+        self.runtime_dep = .poisoned;
     }
 
     fn markEffectful(self: *ExprCheckResult) void {
@@ -10221,6 +10249,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 break :blk;
             }
 
+            var lookup_has_runtime_dependency = false;
             const compile_time_known_binding = known: {
                 if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
                 if (self.hoist_selection_suppressed_depth != 0) {
@@ -10241,10 +10270,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     break :known true;
                 }
                 if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
-                break :known self.markHoistContextualDependencyForLookup(lookup.pattern_idx);
+                if (self.markHoistContextualDependencyForLookup(lookup.pattern_idx)) {
+                    lookup_has_runtime_dependency = true;
+                    break :known true;
+                }
+                break :known false;
             };
             if (!compile_time_known_binding) {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
+            } else if (lookup_has_runtime_dependency) {
+                check_result.markRuntimeDependent();
+            } else {
+                check_result.markCompileTimeKnown();
             }
 
             // Instantiate if generalized, otherwise just use the pattern var
@@ -10260,6 +10298,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // With WaitingForDependencies phase, dependencies are guaranteed to be Done
             // before canonicalization, so target_node_idx is always valid.
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                check_result.markCompileTimeKnown();
                 const ext_instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
@@ -10267,11 +10306,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 );
                 _ = try self.unify(expr_var, ext_instantiated_var, env);
             } else {
+                check_result.markPoisoned();
                 try self.unifyWith(expr_var, .err, env);
             }
         },
         .e_lookup_required => |req| {
             self.markCurrentHoistRuntimeDependency();
+            check_result.markRuntimeDependent();
             // Look up the type from the platform's requires clause
             const requires_items = self.cir.requires_types.items.items;
             const idx = req.requires_idx.toU32();
@@ -10285,6 +10326,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 );
                 _ = try self.unify(expr_var, instantiated_var, env);
             } else {
+                check_result.markPoisoned();
                 try self.unifyWith(expr_var, .err, env);
             }
         },
@@ -12192,6 +12234,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
 
                 // Check the pattern
@@ -12232,6 +12275,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var_uninitialized => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
@@ -12256,6 +12300,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_reassign => |reassign| {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 // Reassignment patterns can mix existing mutable binders with
                 // fresh local binders, e.g. `(word, $index) = pair`.
                 // The pattern occurrence itself must therefore always be
