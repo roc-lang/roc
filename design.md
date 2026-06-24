@@ -244,7 +244,9 @@ Static-dispatch failures, type errors, and other checker-owned problems must
 feed this poison result explicitly through the same expression summary path.
 Poison is local to the expression or dependency region that owns the checking
 problem; it must not disable hoisting for unrelated expressions in the same
-module or program.
+module or program. A checked module or checked program may contain user-facing
+diagnostics and still produce hoisted roots for every independent expression
+whose own dependency region is resolved and otherwise eligible.
 Compiler implementation gaps are not poison. Once checking has accepted an
 eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression

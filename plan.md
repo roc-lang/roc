@@ -45,7 +45,9 @@ true:
 Unresolved or erroneous expressions are not eligible for hoisting, and that
 poison is local to the expression or dependency region that owns the checking
 error. A separate eligible expression elsewhere in the same module or program
-must still be hoisted. This is not a general "unsupported shape" escape hatch:
+must still be hoisted. A module or program that contains diagnostics is not
+globally disqualified from compile-time evaluation; only the affected
+expression/dependency region is. This is not a general "unsupported shape" escape hatch:
 if a well-checked eligible expression cannot be evaluated, stored, restored, or
 emitted correctly, that is a compiler bug to fix with a regression test.
 
