@@ -306,7 +306,8 @@ Tests:
 - [x] nested closed block selects the block root
 - [x] runtime-dependent block preserves independent closed child roots
 - [x] closed `return` payload can be selected, but `return` is not a root
-- [ ] closed `break` payload can be selected, but `break` is not a root
+- [x] closed values in functions containing `break` can be selected, but
+  `break` is not a root
 - [x] closed `for` expression can be covered by a parent root
 - [x] runtime-condition `if` does not publish independent branch-body roots
 - [x] runtime-scrutinee `match` does not publish independent branch-body roots

@@ -1122,6 +1122,23 @@ test "hoist roots selected across return statements" {
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
 }
 
+test "hoist roots selected across break statements" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    before = 1.I64 + 2.I64
+        \\    while True {
+        \\        break
+        \\    }
+        \\    before + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_break));
+}
+
 test "hoist roots selected for closed for expressions" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
