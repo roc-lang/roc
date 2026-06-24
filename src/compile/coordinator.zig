@@ -1351,7 +1351,7 @@ pub const Coordinator = struct {
         views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
         visited_public_api: std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
         visited_templates: std.AutoHashMap(canonical.ProcedureTemplateRef, void),
-        visited_consts: std.AutoHashMap(CheckedArtifact.ConstRef, void),
+        visited_consts: std.AutoHashMap(CheckedArtifact.ConstId, void),
         visited_callable_eval_templates: std.AutoHashMap(CheckedArtifact.ArtifactCallableEvalTemplateRef, void),
 
         fn init(
@@ -1371,7 +1371,7 @@ pub const Coordinator = struct {
                 .views = views,
                 .visited_public_api = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator),
                 .visited_templates = std.AutoHashMap(canonical.ProcedureTemplateRef, void).init(allocator),
-                .visited_consts = std.AutoHashMap(CheckedArtifact.ConstRef, void).init(allocator),
+                .visited_consts = std.AutoHashMap(CheckedArtifact.ConstId, void).init(allocator),
                 .visited_callable_eval_templates = std.AutoHashMap(CheckedArtifact.ArtifactCallableEvalTemplateRef, void).init(allocator),
             };
         }
@@ -1494,7 +1494,7 @@ pub const Coordinator = struct {
 
         fn appendConstRef(
             self: *RelationLoweringDependencyCollector,
-            const_ref: CheckedArtifact.ConstRef,
+            const_ref: CheckedArtifact.ConstId,
         ) Allocator.Error!void {
             try self.appendArtifactKey(const_ref.artifact);
 

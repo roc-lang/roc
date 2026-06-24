@@ -1890,7 +1890,7 @@ fn countInternalStaticValueExports(exports: []const @import("backend").StaticDat
     return count;
 }
 
-fn expectInternalStaticValueExportsAreLinkableOnly(exports: []const @import("backend").StaticDataExport) !void {
+fn expectInternalStaticValueExportsAreLinkableOnly(exports: []const @import("backend").StaticDataExport) anyerror!void {
     var found = false;
     for (exports) |static_export| {
         if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) continue;
@@ -1909,7 +1909,7 @@ fn exportsContainSequence(exports: []const @import("backend").StaticDataExport, 
 fn countExportsContainingSequence(exports: []const @import("backend").StaticDataExport, sequence: []const u8) usize {
     var count: usize = 0;
     for (exports) |static_export| {
-        if (std.mem.indexOf(u8, static_export.bytes, sequence) != null) count += 1;
+        if (std.mem.find(u8, static_export.bytes, sequence) != null) count += 1;
     }
     return count;
 }

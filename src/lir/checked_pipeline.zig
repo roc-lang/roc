@@ -255,7 +255,7 @@ pub fn lowerCheckedModulesToLir(
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try BoxReuse.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
-    try StrAppend.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try StrAppend.run(&lowered.lir_result.store);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }

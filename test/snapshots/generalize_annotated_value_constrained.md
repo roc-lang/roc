@@ -58,7 +58,7 @@ EndOfFile,
 				(ty (name "List"))
 				(ty-var (raw "a")))
 			(where
-				(method (module-of "a") (name "to_str")
+				(method (module-of "a") (name "to_str") (effectful false)
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))
@@ -86,7 +86,7 @@ NO CHANGE
 			(ty-apply (name "List") (builtin)
 				(ty-rigid-var (name "a")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(ty-lookup (name "Str") (builtin))))))

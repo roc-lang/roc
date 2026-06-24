@@ -546,7 +546,7 @@ pub const ProvidedDataExport = struct {
     pattern: CheckedPatternId,
     checked_type: CheckedTypeId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
-    const_ref: ConstRef,
+    const_ref: ConstId,
 };
 
 /// Public `ProvidedExport` declaration.
@@ -1222,7 +1222,7 @@ const CompileTimeRequestScheduler = struct {
 
     fn rootForConstRef(
         self: *CompileTimeRequestScheduler,
-        const_ref: ConstRef,
+        const_ref: ConstId,
     ) ?ComptimeRootId {
         if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return null;
         return switch (const_ref.owner) {
@@ -10870,7 +10870,7 @@ pub const RequiredAppProcedureRef = struct {
 
 /// Public `ConstUseTemplate` declaration.
 pub const ConstUseTemplate = struct {
-    const_ref: ConstRef,
+    const_ref: ConstId,
     requested_source_ty_template: canonical.CanonicalTypeKey,
     requested_source_ty_payload: ?CheckedTypeId = null,
 };
@@ -12119,7 +12119,7 @@ fn sealConstEvalTemplatesForRoots(
                 };
                 break :blk switch (top_level.value) {
                     .const_ref => |ref| ref,
-                    .procedure_binding => checkedArtifactInvariant("constant root top-level value is not a ConstRef", .{}),
+                    .procedure_binding => checkedArtifactInvariant("constant root top-level value is not a ConstId", .{}),
                 };
             },
             .hoisted_constant => blk: {
@@ -17518,11 +17518,11 @@ fn exportedProcedureTemplateClosureForRef(
 fn exportedConstTemplateClosureForAppValue(
     app_artifact: *const CheckedModuleArtifact,
     app_value: TopLevelValueRef,
-    const_ref: ConstRef,
+    const_ref: ConstId,
 ) ImportedTemplateClosureView {
     for (app_artifact.exported_const_templates.templates) |template| {
         if (template.pattern != app_value.pattern) continue;
-        if (!constRefEql(template.const_ref, const_ref)) {
+        if (!constIdEql(template.const_ref, const_ref)) {
             checkedArtifactInvariant("platform-required app const export disagreed with top-level const ref", .{});
         }
         return app_artifact.exported_const_templates.rowClosure(template);
@@ -19446,8 +19446,8 @@ fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: C
     };
 }
 
-/// Public `ConstRef` declaration.
-pub const ConstRef = struct {
+/// Public `ConstId` declaration.
+pub const ConstId = struct {
     artifact: CheckedModuleArtifactKey,
     owner: ConstOwner,
     template: ConstTemplateId,
@@ -19455,7 +19455,7 @@ pub const ConstRef = struct {
 };
 
 /// Return the checked module id that owns a compile-time constant.
-pub fn constModuleId(ref: ConstRef) ModuleId {
+pub fn constModuleId(ref: ConstId) ModuleId {
     return ref.artifact;
 }
 
@@ -19479,7 +19479,7 @@ pub const ConstHoistedOwner = struct {
 
 /// Public `TopLevelValueKind` declaration.
 pub const TopLevelValueKind = union(enum) {
-    const_ref: ConstRef,
+    const_ref: ConstId,
     procedure_binding: TopLevelProcedureBindingRef,
 };
 
@@ -19679,7 +19679,7 @@ pub const HoistedConstEntry = struct {
     pattern: ?CheckedPatternId,
     checked_type: CheckedTypeId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
-    const_ref: ConstRef,
+    const_ref: ConstId,
 };
 
 const HoistedConstByExprEntry = struct {
@@ -20010,7 +20010,7 @@ pub const ImportedTemplateClosureView = struct {
     checked_const_bodies: []const ArtifactCheckedConstBodyRef = &.{},
     checked_procedure_templates: []const ArtifactProcedureTemplateRef = &.{},
     callable_eval_templates: []const ArtifactCallableEvalTemplateRef = &.{},
-    const_templates: []const ConstRef = &.{},
+    const_templates: []const ConstId = &.{},
     nested_proc_sites: []const ArtifactNestedProcSiteTableRef = &.{},
     resolved_value_refs: []const ArtifactResolvedValueRefTableRef = &.{},
     static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = &.{},
@@ -20054,7 +20054,7 @@ pub const ClosurePool = struct {
     checked_const_bodies: std.ArrayList(ArtifactCheckedConstBodyRef),
     checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef),
     callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef),
-    const_templates: std.ArrayList(ConstRef),
+    const_templates: std.ArrayList(ConstId),
     nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef),
     resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef),
     static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef),
@@ -20109,7 +20109,7 @@ pub const ClosurePool = struct {
             .checked_const_bodies = try appendPool(ArtifactCheckedConstBodyRef, &self.checked_const_bodies, allocator, closure.checked_const_bodies),
             .checked_procedure_templates = try appendPool(ArtifactProcedureTemplateRef, &self.checked_procedure_templates, allocator, closure.checked_procedure_templates),
             .callable_eval_templates = try appendPool(ArtifactCallableEvalTemplateRef, &self.callable_eval_templates, allocator, closure.callable_eval_templates),
-            .const_templates = try appendPool(ConstRef, &self.const_templates, allocator, closure.const_templates),
+            .const_templates = try appendPool(ConstId, &self.const_templates, allocator, closure.const_templates),
             .nested_proc_sites = try appendPool(ArtifactNestedProcSiteTableRef, &self.nested_proc_sites, allocator, closure.nested_proc_sites),
             .resolved_value_refs = try appendPool(ArtifactResolvedValueRefTableRef, &self.resolved_value_refs, allocator, closure.resolved_value_refs),
             .static_dispatch_plans = try appendPool(ArtifactStaticDispatchPlanTableRef, &self.static_dispatch_plans, allocator, closure.static_dispatch_plans),
@@ -20128,7 +20128,7 @@ pub const ClosurePool = struct {
             .checked_const_bodies = poolSlice(ArtifactCheckedConstBodyRef, &self.checked_const_bodies, stored.checked_const_bodies),
             .checked_procedure_templates = poolSlice(ArtifactProcedureTemplateRef, &self.checked_procedure_templates, stored.checked_procedure_templates),
             .callable_eval_templates = poolSlice(ArtifactCallableEvalTemplateRef, &self.callable_eval_templates, stored.callable_eval_templates),
-            .const_templates = poolSlice(ConstRef, &self.const_templates, stored.const_templates),
+            .const_templates = poolSlice(ConstId, &self.const_templates, stored.const_templates),
             .nested_proc_sites = poolSlice(ArtifactNestedProcSiteTableRef, &self.nested_proc_sites, stored.nested_proc_sites),
             .resolved_value_refs = poolSlice(ArtifactResolvedValueRefTableRef, &self.resolved_value_refs, stored.resolved_value_refs),
             .static_dispatch_plans = poolSlice(ArtifactStaticDispatchPlanTableRef, &self.static_dispatch_plans, stored.static_dispatch_plans),
@@ -20166,7 +20166,7 @@ pub const ClosurePool = struct {
         checked_const_bodies: SerializedSlice(ArtifactCheckedConstBodyRef) = .{},
         checked_procedure_templates: SerializedSlice(ArtifactProcedureTemplateRef) = .{},
         callable_eval_templates: SerializedSlice(ArtifactCallableEvalTemplateRef) = .{},
-        const_templates: SerializedSlice(ConstRef) = .{},
+        const_templates: SerializedSlice(ConstId) = .{},
         nested_proc_sites: SerializedSlice(ArtifactNestedProcSiteTableRef) = .{},
         resolved_value_refs: SerializedSlice(ArtifactResolvedValueRefTableRef) = .{},
         static_dispatch_plans: SerializedSlice(ArtifactStaticDispatchPlanTableRef) = .{},
@@ -20349,7 +20349,7 @@ fn appendRelationArtifactExportedValueClosureKeysFromView(
             var found = false;
             for (relation_artifact.exported_const_templates.templates) |template| {
                 if (template.pattern != binding.app_value.pattern) continue;
-                if (!constRefEql(template.const_ref, const_use.const_use.const_ref)) continue;
+                if (!constIdEql(template.const_ref, const_use.const_use.const_ref)) continue;
                 found = true;
                 try appendImportedTemplateClosureArtifactKeys(allocator, keys, relation_artifact.exported_const_templates.rowClosure(template));
             }
@@ -20786,7 +20786,7 @@ const PublicApiClosureDependencyCollector = struct {
     platform_required_bindings: *const PlatformRequiredBindingTable,
     keys: *ArtifactKeyAccumulator,
     visited_templates: std.AutoHashMap(canonical.ProcedureTemplateRef, void),
-    visited_consts: std.AutoHashMap(ConstRef, void),
+    visited_consts: std.AutoHashMap(ConstId, void),
     visited_callable_eval_templates: std.AutoHashMap(ArtifactCallableEvalTemplateRef, void),
 
     fn init(
@@ -20817,7 +20817,7 @@ const PublicApiClosureDependencyCollector = struct {
             .platform_required_bindings = platform_required_bindings,
             .keys = keys,
             .visited_templates = std.AutoHashMap(canonical.ProcedureTemplateRef, void).init(allocator),
-            .visited_consts = std.AutoHashMap(ConstRef, void).init(allocator),
+            .visited_consts = std.AutoHashMap(ConstId, void).init(allocator),
             .visited_callable_eval_templates = std.AutoHashMap(ArtifactCallableEvalTemplateRef, void).init(allocator),
         };
     }
@@ -20914,7 +20914,7 @@ const PublicApiClosureDependencyCollector = struct {
 
     fn appendConstRef(
         self: *PublicApiClosureDependencyCollector,
-        const_ref: ConstRef,
+        const_ref: ConstId,
     ) Allocator.Error!void {
         try self.appendArtifactKey(const_ref.artifact);
         if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return;
@@ -21286,7 +21286,7 @@ const ImportedTemplateClosureBuilder = struct {
     checked_const_bodies: UniqueList(ArtifactCheckedConstBodyRef),
     checked_procedure_templates: UniqueList(ArtifactProcedureTemplateRef),
     callable_eval_templates: UniqueList(ArtifactCallableEvalTemplateRef),
-    const_templates: UniqueList(ConstRef),
+    const_templates: UniqueList(ConstId),
     nested_proc_sites: UniqueList(ArtifactNestedProcSiteTableRef),
     resolved_value_refs: UniqueList(ArtifactResolvedValueRefTableRef),
     static_dispatch_plans: UniqueList(ArtifactStaticDispatchPlanTableRef),
@@ -21469,7 +21469,7 @@ const ImportedTemplateClosureBuilder = struct {
             if (self.templateForResolvedValueRef(resolved)) |dependency_ref| {
                 _ = try self.checked_procedure_templates.append(self.allocator, dependency_ref);
             }
-            if (self.constRefForResolvedValueRef(resolved)) |dependency_ref| {
+            if (self.constIdForResolvedValueRef(resolved)) |dependency_ref| {
                 _ = try self.const_templates.append(self.allocator, dependency_ref);
             }
         }
@@ -21601,7 +21601,7 @@ const ImportedTemplateClosureBuilder = struct {
 
     fn appendConstTemplate(
         self: *ImportedTemplateClosureBuilder,
-        const_ref: ConstRef,
+        const_ref: ConstId,
     ) Allocator.Error!void {
         if (!try self.const_templates.append(self.allocator, const_ref)) return;
 
@@ -21719,10 +21719,10 @@ const ImportedTemplateClosureBuilder = struct {
         });
     }
 
-    fn constRefForResolvedValueRef(
+    fn constIdForResolvedValueRef(
         _: *ImportedTemplateClosureBuilder,
         ref: ResolvedValueRef,
-    ) ?ConstRef {
+    ) ?ConstId {
         return switch (ref) {
             .top_level_const => |const_use| const_use.const_ref,
             .selected_hoisted_const => |selected| selected.const_use.const_ref,
@@ -21780,7 +21780,7 @@ fn buildImportedConstTemplateClosure(
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
-    const_ref: ConstRef,
+    const_ref: ConstId,
 ) Allocator.Error!ImportedTemplateClosureView {
     var builder = ImportedTemplateClosureBuilder.init(
         allocator,
@@ -21856,7 +21856,7 @@ pub fn cloneImportedTemplateClosure(
     out.checked_const_bodies = try cloneConstSlice(allocator, ArtifactCheckedConstBodyRef, closure.checked_const_bodies);
     out.checked_procedure_templates = try cloneConstSlice(allocator, ArtifactProcedureTemplateRef, closure.checked_procedure_templates);
     out.callable_eval_templates = try cloneConstSlice(allocator, ArtifactCallableEvalTemplateRef, closure.callable_eval_templates);
-    out.const_templates = try cloneConstSlice(allocator, ConstRef, closure.const_templates);
+    out.const_templates = try cloneConstSlice(allocator, ConstId, closure.const_templates);
     out.nested_proc_sites = try cloneConstSlice(allocator, ArtifactNestedProcSiteTableRef, closure.nested_proc_sites);
     out.resolved_value_refs = try cloneConstSlice(allocator, ArtifactResolvedValueRefTableRef, closure.resolved_value_refs);
     out.static_dispatch_plans = try cloneConstSlice(allocator, ArtifactStaticDispatchPlanTableRef, closure.static_dispatch_plans);
@@ -22167,7 +22167,7 @@ pub const ConstTemplateTable = struct {
         module_idx: u32,
         pattern: CheckedPatternId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
-    ) Allocator.Error!ConstRef {
+    ) Allocator.Error!ConstId {
         const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
         const owner: ConstOwner = .{ .top_level_binding = .{
             .module_idx = module_idx,
@@ -22194,7 +22194,7 @@ pub const ConstTemplateTable = struct {
         module_idx: u32,
         expr: CheckedExprId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
-    ) Allocator.Error!ConstRef {
+    ) Allocator.Error!ConstId {
         const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
         const owner: ConstOwner = .{ .hoisted_expr = .{
             .module_idx = module_idx,
@@ -22216,12 +22216,12 @@ pub const ConstTemplateTable = struct {
 
     pub fn fillEval(
         self: *ConstTemplateTable,
-        ref: ConstRef,
+        ref: ConstId,
         template: ConstEvalTemplate,
     ) void {
         const record = self.recordForRef(ref);
         if (!std.meta.eql(record.source_scheme.bytes, template.source_scheme.bytes)) {
-            checkedArtifactInvariant("constant eval template source scheme does not match reserved ConstRef", .{});
+            checkedArtifactInvariant("constant eval template source scheme does not match reserved ConstId", .{});
         }
         switch (record.state) {
             .reserved => record.state = .{ .eval_template = template },
@@ -22231,7 +22231,7 @@ pub const ConstTemplateTable = struct {
 
     pub fn fillStoredConst(
         self: *ConstTemplateTable,
-        ref: ConstRef,
+        ref: ConstId,
         template: StoredConstTemplate,
     ) void {
         const record = self.recordForRef(ref);
@@ -22241,16 +22241,16 @@ pub const ConstTemplateTable = struct {
         }
     }
 
-    pub fn get(self: *const ConstTemplateTable, ref: ConstRef) ConstTemplate {
+    pub fn get(self: *const ConstTemplateTable, ref: ConstId) ConstTemplate {
         const idx = @intFromEnum(ref.template);
         if (idx >= self.templates.items.len) {
-            checkedArtifactInvariant("ConstRef template id is out of range", .{});
+            checkedArtifactInvariant("ConstId template id is out of range", .{});
         }
         const template = self.templates.items[idx];
         if (!constOwnerEql(template.owner, ref.owner) or
             !std.meta.eql(template.source_scheme.bytes, ref.source_scheme.bytes))
         {
-            checkedArtifactInvariant("ConstRef does not match constant template row", .{});
+            checkedArtifactInvariant("ConstId does not match constant template row", .{});
         }
         return template;
     }
@@ -22270,16 +22270,16 @@ pub const ConstTemplateTable = struct {
         }
     }
 
-    fn recordForRef(self: *ConstTemplateTable, ref: ConstRef) *ConstTemplate {
+    fn recordForRef(self: *ConstTemplateTable, ref: ConstId) *ConstTemplate {
         const idx = @intFromEnum(ref.template);
         if (idx >= self.templates.items.len) {
-            checkedArtifactInvariant("ConstRef template id is out of range", .{});
+            checkedArtifactInvariant("ConstId template id is out of range", .{});
         }
         const record = &self.templates.items[idx];
         if (!constOwnerEql(record.owner, ref.owner) or
             !std.meta.eql(record.source_scheme.bytes, ref.source_scheme.bytes))
         {
-            checkedArtifactInvariant("ConstRef does not match constant template row", .{});
+            checkedArtifactInvariant("ConstId does not match constant template row", .{});
         }
         return record;
     }
@@ -22295,7 +22295,7 @@ pub const ImportedConstTemplateView = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
     pattern: CheckedPatternId,
-    const_ref: ConstRef,
+    const_ref: ConstId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     template: ConstTemplate,
     template_closure: StoredImportedTemplateClosure = .{},
@@ -22408,11 +22408,11 @@ pub const ExportedConstTemplateTable = struct {
 
     pub fn fillStoredConst(
         self: *ExportedConstTemplateTable,
-        ref: ConstRef,
+        ref: ConstId,
         template: StoredConstTemplate,
     ) void {
         for (self.templates) |*entry| {
-            if (!constRefEql(entry.const_ref, ref)) continue;
+            if (!constIdEql(entry.const_ref, ref)) continue;
             entry.template.state = .{ .stored_const = template };
             return;
         }
@@ -22441,7 +22441,7 @@ fn closureArtifactRefIsLocal(
     return checkedArtifactKeyEql(referenced, artifact.key);
 }
 
-fn constRefEql(a: ConstRef, b: ConstRef) bool {
+fn constIdEql(a: ConstId, b: ConstId) bool {
     return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         constOwnerEql(a.owner, b.owner) and
         a.template == b.template and
@@ -22489,7 +22489,7 @@ fn constOwnerEql(a: ConstOwner, b: ConstOwner) bool {
     };
 }
 
-fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
+fn constIdTopLevelOwner(ref: ConstId) ?ConstTopLevelOwner {
     return switch (ref.owner) {
         .top_level_binding => |owner| owner,
         .hoisted_expr => null,
@@ -23351,8 +23351,8 @@ pub const CheckedModuleArtifact = struct {
             _ = self.canonical_names.exportNameText(entry.source_name);
             switch (entry.value) {
                 .const_ref => |const_ref| {
-                    const owner = constRefTopLevelOwner(const_ref) orelse {
-                        std.debug.panic("checked artifact invariant violated: top-level value table referenced a non-top-level ConstRef", .{});
+                    const owner = constIdTopLevelOwner(const_ref) orelse {
+                        std.debug.panic("checked artifact invariant violated: top-level value table referenced a non-top-level ConstId", .{});
                     };
                     std.debug.assert(owner.module_idx == self.module_identity.module_idx);
                     std.debug.assert(owner.pattern == entry.pattern);
@@ -23425,7 +23425,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(top_level.source_name == data.source_name);
                     std.debug.assert(std.meta.eql(top_level.source_scheme.bytes, data.source_scheme.bytes));
                     switch (top_level.value) {
-                        .const_ref => |const_ref| std.debug.assert(constRefEql(const_ref, data.const_ref)),
+                        .const_ref => |const_ref| std.debug.assert(constIdEql(const_ref, data.const_ref)),
                         .procedure_binding => std.debug.panic("checked artifact invariant violated: provided data export references procedure top-level value", .{}),
                     }
                 },
@@ -23474,8 +23474,8 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
     switch (binding.value_use) {
         .const_value => |const_use| {
             std.debug.assert(std.meta.eql(const_use.const_use.const_ref.artifact.bytes, binding.app_value.artifact.bytes));
-            const owner = constRefTopLevelOwner(const_use.const_use.const_ref) orelse {
-                std.debug.panic("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
+            const owner = constIdTopLevelOwner(const_use.const_use.const_ref) orelse {
+                std.debug.panic("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstId", .{});
             };
             std.debug.assert(owner.pattern == binding.app_value.pattern);
         },

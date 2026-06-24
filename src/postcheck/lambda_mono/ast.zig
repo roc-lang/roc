@@ -397,6 +397,7 @@ pub const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
+/// Request to make a Lambda Mono value available as static data.
 pub const StaticDataValue = Common.StaticDataRequest;
 
 /// Complete Lambda Mono program plus side arrays.

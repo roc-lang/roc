@@ -580,6 +580,7 @@ pub const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
+/// Request to make a Monotype value available as static data.
 pub const StaticDataValue = Common.StaticDataRequest;
 
 /// Complete Monotype program plus side arrays.

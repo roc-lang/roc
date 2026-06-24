@@ -76,6 +76,7 @@ pub const OutputKind = enum {
     shared_lib,
 };
 
+/// Binaryen optimization mode requested for WebAssembly output.
 pub const WasmOptimizeMode = enum {
     none,
     size,

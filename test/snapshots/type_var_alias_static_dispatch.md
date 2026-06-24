@@ -123,7 +123,7 @@ EndOfFile,
 				(ty-record)
 				(ty-var (raw "thing")))
 			(where
-				(method (module-of "thing") (name "default")
+				(method (module-of "thing") (name "default") (effectful false)
 					(args)
 					(ty-var (raw "thing")))))
 		(s-decl
@@ -145,7 +145,7 @@ EndOfFile,
 				(ty-var (raw "b"))
 				(ty-var (raw "a")))
 			(where
-				(method (module-of "a") (name "from_b")
+				(method (module-of "a") (name "from_b") (effectful false)
 					(args
 						(ty-var (raw "b")))
 					(ty-var (raw "a")))))
@@ -169,11 +169,11 @@ EndOfFile,
 				(ty-var (raw "val"))
 				(ty-var (raw "val")))
 			(where
-				(method (module-of "val") (name "transform")
+				(method (module-of "val") (name "transform") (effectful false)
 					(args
 						(ty-var (raw "val")))
 					(ty-var (raw "val")))
-				(method (module-of "val") (name "validate")
+				(method (module-of "val") (name "validate") (effectful false)
 					(args
 						(ty-var (raw "val")))
 					(ty (name "Bool")))))
@@ -205,11 +205,11 @@ EndOfFile,
 				(ty-var (raw "x"))
 				(ty-var (raw "x")))
 			(where
-				(method (module-of "x") (name "second")
+				(method (module-of "x") (name "second") (effectful false)
 					(args
 						(ty-var (raw "x")))
 					(ty-var (raw "x")))
-				(method (module-of "x") (name "first")
+				(method (module-of "x") (name "first") (effectful false)
 					(args)
 					(ty-var (raw "x")))))
 		(s-decl
@@ -238,11 +238,11 @@ EndOfFile,
 					(ty-var (raw "a"))
 					(ty-var (raw "b"))))
 			(where
-				(method (module-of "a") (name "convert")
+				(method (module-of "a") (name "convert") (effectful false)
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "a")))
-				(method (module-of "b") (name "convert")
+				(method (module-of "b") (name "convert") (effectful false)
 					(args
 						(ty-var (raw "b")))
 					(ty-var (raw "b")))))
@@ -275,7 +275,7 @@ EndOfFile,
 				(ty (name "Str"))
 				(ty-var (raw "t")))
 			(where
-				(method (module-of "t") (name "create")
+				(method (module-of "t") (name "create") (effectful false)
 					(args
 						(ty (name "Str"))
 						(ty (name "U64")))
@@ -301,7 +301,7 @@ EndOfFile,
 				(ty (name "Str"))
 				(ty-var (raw "thing")))
 			(where
-				(method (module-of "thing") (name "from_str")
+				(method (module-of "thing") (name "from_str") (effectful false)
 					(args
 						(ty (name "Str")))
 					(ty-var (raw "thing")))))
@@ -399,7 +399,7 @@ from_str = |str| {
 				(ty-record)
 				(ty-rigid-var (name "thing")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "thing"))) (name "default")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "thing"))) (name "default") (effectful false)
 					(args)
 					(ty-rigid-var-lookup (ty-rigid-var (name "thing")))))))
 	(d-let
@@ -421,7 +421,7 @@ from_str = |str| {
 				(ty-rigid-var (name "b"))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "from_b")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "from_b") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
@@ -454,11 +454,11 @@ from_str = |str| {
 				(ty-rigid-var (name "val"))
 				(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "val"))) (name "transform")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "val"))) (name "transform") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "val"))) (name "validate")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "val"))) (name "validate") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
 					(ty-lookup (name "Bool") (builtin))))))
@@ -483,11 +483,11 @@ from_str = |str| {
 				(ty-rigid-var (name "x"))
 				(ty-rigid-var-lookup (ty-rigid-var (name "x"))))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "x"))) (name "second")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "x"))) (name "second") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "x"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "x"))))
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "x"))) (name "first")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "x"))) (name "first") (effectful false)
 					(args)
 					(ty-rigid-var-lookup (ty-rigid-var (name "x")))))))
 	(d-let
@@ -519,11 +519,11 @@ from_str = |str| {
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "convert")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "convert") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
@@ -547,7 +547,7 @@ from_str = |str| {
 				(ty-lookup (name "Str") (builtin))
 				(ty-rigid-var-lookup (ty-rigid-var (name "t"))))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "t"))) (name "create")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "t"))) (name "create") (effectful false)
 					(args
 						(ty-lookup (name "Str") (builtin))
 						(ty-lookup (name "U64") (builtin)))
@@ -569,7 +569,7 @@ from_str = |str| {
 				(ty-lookup (name "Str") (builtin))
 				(ty-rigid-var (name "thing")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "thing"))) (name "from_str")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "thing"))) (name "from_str") (effectful false)
 					(args
 						(ty-lookup (name "Str") (builtin)))
 					(ty-rigid-var-lookup (ty-rigid-var (name "thing"))))))))

@@ -24,7 +24,7 @@
 //!
 //! The pass deliberately does not chase aliases, branch tails, erased calls, or
 //! non-adjacent statements. Broader destination-passing rewrites should consume
-//! explicit data from earlier analysis rather than recover it here.
+//! explicit data from earlier analysis rather than derive it here.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -37,8 +37,10 @@ const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
 const LowLevelOp = LIR.LowLevel;
 
+/// Allocation failure raised while rewriting box update statements.
 pub const ResourceError = Allocator.Error;
 
+/// Rewrite eligible box unwrap/update pairs to direct box reuse helper calls.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     const proc_count = store.proc_specs.items.len;
     var proc_index: usize = 0;
@@ -282,11 +284,11 @@ const Transform = struct {
     }
 };
 
-fn testLocal(store: *LirStore, layout_idx: layout_mod.Idx) !LocalId {
+fn testLocal(store: *LirStore, layout_idx: layout_mod.Idx) ResourceError!LocalId {
     return try store.addLocal(.{ .layout_idx = layout_idx });
 }
 
-fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const LocalId, next: CFStmtId) !CFStmtId {
+fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const LocalId, next: CFStmtId) ResourceError!CFStmtId {
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,

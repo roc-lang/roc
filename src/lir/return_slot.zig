@@ -33,8 +33,10 @@ const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 const LowLevelOp = LIR.LowLevel;
 
+/// Allocation failure raised while rewriting returned aggregate statements.
 pub const ResourceError = Allocator.Error;
 
+/// Rewrite eligible aggregate returns to destination-slot helper calls.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     var pass = ReturnSlotPass{
         .store = store,
@@ -667,11 +669,11 @@ fn uniqueSortedLocals(items: []LocalId) usize {
     return unique_len;
 }
 
-fn testLocal(store: *LirStore, layout_idx: layout_mod.Idx) !LocalId {
+fn testLocal(store: *LirStore, layout_idx: layout_mod.Idx) ResourceError!LocalId {
     return try store.addLocal(.{ .layout_idx = layout_idx });
 }
 
-fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const LocalId, next: CFStmtId) !CFStmtId {
+fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const LocalId, next: CFStmtId) ResourceError!CFStmtId {
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
@@ -681,14 +683,14 @@ fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const
     } });
 }
 
-fn testStructLayout(layouts: *layout_mod.Store) !layout_mod.Idx {
+fn testStructLayout(layouts: *layout_mod.Store) ResourceError!layout_mod.Idx {
     return try layouts.putStructFields(&.{
         .{ .index = 0, .layout = .u64 },
         .{ .index = 1, .layout = .u64 },
     });
 }
 
-fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) !LIR.LirProcSpecId {
+fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) ResourceError!LIR.LirProcSpecId {
     const arg = try testLocal(store, .u64);
     const result = try testLocal(store, result_layout);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
@@ -706,11 +708,11 @@ fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) !LIR.Lir
     });
 }
 
-fn testTagLayout(layouts: *layout_mod.Store) !layout_mod.Idx {
+fn testTagLayout(layouts: *layout_mod.Store) ResourceError!layout_mod.Idx {
     return try layouts.putTagUnion(&.{.u64});
 }
 
-fn testTagCallee(store: *LirStore, result_layout: layout_mod.Idx) !LIR.LirProcSpecId {
+fn testTagCallee(store: *LirStore, result_layout: layout_mod.Idx) ResourceError!LIR.LirProcSpecId {
     const arg = try testLocal(store, .u64);
     const result = try testLocal(store, result_layout);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });

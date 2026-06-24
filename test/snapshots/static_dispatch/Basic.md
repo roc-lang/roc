@@ -90,7 +90,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty-var (raw "b")))
 			(where
-				(method (module-of "a") (name "to_str")
+				(method (module-of "a") (name "to_str") (effectful false)
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "b")))))
@@ -108,7 +108,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty-var (raw "b")))
 			(where
-				(method (module-of "a") (name "to_str2")
+				(method (module-of "a") (name "to_str2") (effectful false)
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "b")))))
@@ -209,7 +209,7 @@ main = (helper1(val), helper2(val))
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
@@ -228,7 +228,7 @@ main = (helper1(val), helper2(val))
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str2")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str2") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))

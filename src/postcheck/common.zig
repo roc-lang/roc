@@ -27,7 +27,7 @@ pub const RootRequests = struct {
 
 /// Checked const data that must produce a runtime layout and callable entries.
 pub const StaticDataRequest = struct {
-    const_ref: checked.ConstRef,
+    const_ref: checked.ConstId,
     checked_type: checked.CheckedTypeId,
 };
 

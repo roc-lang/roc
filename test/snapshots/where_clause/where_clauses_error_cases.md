@@ -189,7 +189,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty-var (raw "b")))
 			(where
-				(method (module-of "c") (name "method")
+				(method (module-of "c") (name "method") (effectful false)
 					(args
 						(ty-var (raw "c")))
 					(ty-var (raw "d")))))))
@@ -239,7 +239,7 @@ broken_fn3 : a -> b
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b")))
 			(where
-				(method (ty-rigid-var (name "c")) (name "method")
+				(method (ty-rigid-var (name "c")) (name "method") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "c"))))
 					(ty-rigid-var (name "d")))))))

@@ -102,6 +102,7 @@ const ComptimeCoverage = struct {
 const ComptimeDiagnosticDeduper = struct {
     allocator: Allocator,
     entries: std.ArrayList(Entry),
+    messages: base.StringLiteral.Store = .{},
 
     const Kind = enum {
         dbg,
@@ -112,7 +113,7 @@ const ComptimeDiagnosticDeduper = struct {
     const Entry = struct {
         kind: Kind,
         region: base.Region,
-        message: []u8,
+        message: base.StringLiteral.Idx,
     };
 
     fn init(allocator: Allocator) ComptimeDiagnosticDeduper {
@@ -123,9 +124,7 @@ const ComptimeDiagnosticDeduper = struct {
     }
 
     fn deinit(self: *ComptimeDiagnosticDeduper) void {
-        for (self.entries.items) |entry| {
-            self.allocator.free(entry.message);
-        }
+        self.messages.deinit(self.allocator);
         self.entries.deinit(self.allocator);
     }
 
@@ -135,18 +134,17 @@ const ComptimeDiagnosticDeduper = struct {
         region: base.Region,
         message: []const u8,
     ) Allocator.Error!bool {
+        const message_id = try self.messages.insert(self.allocator, message);
         for (self.entries.items) |entry| {
             if (entry.kind != kind) continue;
             if (!regionsEqual(entry.region, region)) continue;
-            if (std.mem.eql(u8, entry.message, message)) return true;
+            if (entry.message == message_id) return true;
         }
 
-        const owned = try self.allocator.dupe(u8, message);
-        errdefer self.allocator.free(owned);
         try self.entries.append(self.allocator, .{
             .kind = kind,
             .region = region,
-            .message = owned,
+            .message = message_id,
         });
         return false;
     }
@@ -416,7 +414,7 @@ const RootCompletionState = struct {
 
     fn rootForConstRef(
         self: *RootCompletionState,
-        const_ref: checked.ConstRef,
+        const_ref: checked.ConstId,
     ) ?checked.ComptimeRootId {
         if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
         return switch (const_ref.owner) {

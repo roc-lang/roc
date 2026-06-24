@@ -105,6 +105,7 @@ pub fn deinitStaticDataExports(allocator: Allocator, exports: []StaticDataExport
     allocator.free(exports);
 }
 
+/// Build static data exports for provided data roots that have stored values.
 pub fn buildProvidedDataExports(
     allocator: Allocator,
     modules: ModuleViews,
@@ -240,7 +241,7 @@ const StaticDataBuilder = struct {
         self.allocator.free(value.relocations);
     }
 
-    fn constNode(self: *StaticDataBuilder, ref: CheckedModule.ConstRef) ConstNode {
+    fn constNode(self: *StaticDataBuilder, ref: CheckedModule.ConstId) ConstNode {
         const module = self.moduleForConst(ref);
         const template = module.templates.get(ref);
         return switch (template.state) {
@@ -258,7 +259,7 @@ const StaticDataBuilder = struct {
         };
     }
 
-    fn moduleForConst(self: *StaticDataBuilder, ref: CheckedModule.ConstRef) ConstModule {
+    fn moduleForConst(self: *StaticDataBuilder, ref: CheckedModule.ConstId) ConstModule {
         if (moduleBytesEqual(self.root.module.key.bytes, ref.artifact.bytes)) return .{
             .key = self.root.module.key,
             .names = &self.root.module.canonical_names,

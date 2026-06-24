@@ -34,10 +34,11 @@ const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 const LowLevelOp = LIR.LowLevel;
 
+/// Allocation failure raised while rewriting string append statements.
 pub const ResourceError = Allocator.Error;
 
-pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
-    _ = layouts;
+/// Rewrite string append statements to direct helper procedure calls.
+pub fn run(store: *LirStore) ResourceError!void {
     var pass = StrAppendPass{
         .store = store,
         .variants = std.AutoHashMap(VariantKey, LIR.LirProcSpecId).init(store.allocator),
@@ -84,7 +85,7 @@ const StrAppendPass = struct {
             else => return false,
         };
 
-        if (!self.isStrLayout(self.store.getLocal(call_stmt.target).layout_idx)) return false;
+        if (!isStrLayout(self.store.getLocal(call_stmt.target).layout_idx)) return false;
 
         const callee = self.store.getProcSpec(call_stmt.proc);
         if (callee.body == null or callee.hosted != null or callee.abi != .roc) return false;
@@ -96,9 +97,9 @@ const StrAppendPass = struct {
             .assign_low_level => |s| s,
             else => return false,
         };
-        if (!self.isStrLayout(self.store.getLocal(concat_stmt.target).layout_idx)) return false;
+        if (!isStrLayout(self.store.getLocal(concat_stmt.target).layout_idx)) return false;
 
-        if (!self.isStrLayout(self.store.getLocal(concat.accumulator).layout_idx)) return false;
+        if (!isStrLayout(self.store.getLocal(concat.accumulator).layout_idx)) return false;
 
         const variant = try self.appendVariant(call_stmt.proc);
 
@@ -286,8 +287,7 @@ const StrAppendPass = struct {
         }
     }
 
-    fn isStrLayout(self: *const StrAppendPass, layout_idx: layout_mod.Idx) bool {
-        _ = self;
+    fn isStrLayout(layout_idx: layout_mod.Idx) bool {
         return layout_idx == .str;
     }
 

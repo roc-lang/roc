@@ -53,10 +53,12 @@ pub fn ops(self: *CompilerHost) *RocOps {
     return &self.roc_ops.?;
 }
 
+/// Return `dbg` messages captured during the current interpreter evaluation.
 pub fn debugMessages(self: *const CompilerHost) []const []const u8 {
     return self.debug_messages.items;
 }
 
+/// Free and clear all captured `dbg` messages.
 pub fn clearDebugMessages(self: *CompilerHost) void {
     for (self.debug_messages.items) |msg| {
         self.allocator.free(msg);

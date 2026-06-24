@@ -440,10 +440,7 @@ const all_syntax_expected_stdout =
     \\
 ;
 
-const all_syntax_expected_stderr =
-    \\[dbg] 42.0
-    \\
-;
+const all_syntax_expected_stderr = "";
 
 const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: hello (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/hello.roc", .stdout_exact = "Hello, World!\n" } } },
@@ -690,8 +687,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test with nested list chunks does not panic on layout upgrade (dev)", .backend = .dev, .skip = .{ .always = "TODO: dev backend compilation fails for test/cli/issue8699.roc" }, .body = .{ .custom = .noop } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test failure output contains source snippet (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "\u{2502}" }, .{ .stream = .stderr, .text = "add(1, 1) == 3" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test failure output contains source snippet (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "\u{2502}" }, .{ .stream = .stderr, .text = "add(1, 1) == 3" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test failure output contains doc comment (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter" }, .roc_file = "test/cli/FailWithDocComment.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "## This test should fail" }, .{ .stream = .stderr, .text = "add(1, 1) == 3" }, .{ .stream = .stderr, .text = "\u{2502}" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test failure output contains doc comment (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev" }, .roc_file = "test/cli/FailWithDocComment.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "## This test should fail" }, .{ .stream = .stderr, .text = "add(1, 1) == 3" }, .{ .stream = .stderr, .text = "\u{2502}" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test compile-time expect failure output contains source snippet (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter" }, .roc_file = "test/cli/FailWithDocComment.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "COMPTIME EXPECT FAILED" }, .{ .stream = .stderr, .text = "add(1, 1) == 3" }, .{ .stream = .stderr, .text = "\u{2502}" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test compile-time expect failure output contains source snippet (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev" }, .roc_file = "test/cli/FailWithDocComment.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "COMPTIME EXPECT FAILED" }, .{ .stream = .stderr, .text = "add(1, 1) == 3" }, .{ .stream = .stderr, .text = "\u{2502}" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test verbose and non-verbose failure format match (interpreter)", .backend = .interpreter, .body = .{ .custom = .verbose_and_non_verbose_failure_format_match } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test verbose and non-verbose failure format match (dev)", .backend = .dev, .body = .{ .custom = .verbose_and_non_verbose_failure_format_match } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check returns exit code 2 for warnings", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/run_warning_only.roc", .exit = .{ .code = 2 }, .contains = &.{.{ .stream = .stderr, .text = "0 error" }}, .contains_any = &.{.{ .needles = &warning_needles }} } } },
@@ -1913,13 +1910,17 @@ const DefaultPlatformDiagnosticKind = enum {
 };
 
 const default_platform_crash_debug_app =
-    \\trigger! : {} => {}
-    \\trigger! = |_| {
-    \\    crash "default platform crash contract"
+    \\trigger! : Str => {}
+    \\trigger! = |message| {
+    \\    if message == "" {
+    \\        {}
+    \\    } else {
+    \\        crash "default platform crash contract"
+    \\    }
     \\}
     \\
     \\main! = |_| {
-    \\    trigger!({})
+    \\    trigger!("default platform crash contract")
     \\    Ok({})
     \\}
     \\
@@ -2654,7 +2655,7 @@ fn customCacheFailingResults(io: std.Io, allocator: Allocator, env: *const CaseE
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 } })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "(cached)" }} })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "COMPTIME EXPECT FAILED" }}, .not_contains = &.{.{ .stream = .stderr, .text = "(cached)" }} })) |failure| return failure;
     return null;
 }
 
@@ -2696,16 +2697,16 @@ fn customVerboseWorksFromCache(io: std.Io, allocator: Allocator, env: *const Cas
 fn customVerboseCachesFailureReports(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "FAIL" }} })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "(cached)" }, .{ .stream = .stderr, .text = "FAIL" } } })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "COMPTIME EXPECT FAILED" }} })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "COMPTIME EXPECT FAILED" }}, .not_contains = &.{.{ .stream = .stderr, .text = "(cached)" }} })) |failure| return failure;
     return null;
 }
 
 fn customNonVerboseCachesVerboseReports(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .not_contains = &.{.{ .stream = .stderr, .text = "expect failed" }} })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "(cached)" }, .{ .stream = .stderr, .text = "expect" }, .{ .stream = .stderr, .text = "TEST FAILURE" } } })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "COMPTIME EXPECT FAILED" }} })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "COMPTIME EXPECT FAILED" }}, .not_contains = &.{.{ .stream = .stderr, .text = "(cached)" }} })) |failure| return failure;
     return null;
 }
 

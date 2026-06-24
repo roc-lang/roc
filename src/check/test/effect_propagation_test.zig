@@ -2,21 +2,21 @@
 
 const TestEnv = @import("./TestEnv.zig");
 
-fn expectNoErrors(comptime source: []const u8) !void {
+fn expectNoErrors(comptime source: []const u8) anyerror!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
 }
 
-fn expectOneTypeError(comptime source: []const u8, comptime title: []const u8) !void {
+fn expectOneTypeError(comptime source: []const u8, comptime title: []const u8) anyerror!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
     try test_env.assertOneTypeError(title);
 }
 
-fn expectFirstTypeError(comptime source: []const u8, comptime title: []const u8) !void {
+fn expectFirstTypeError(comptime source: []const u8, comptime title: []const u8) anyerror!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 

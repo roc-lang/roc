@@ -98,13 +98,34 @@ checker must not perform a later whole-module expression walk merely to decide
 which expressions are roots, and later stages must not recreate those answers.
 
 The question "can this expression be evaluated at compile time?" depends only
-on checked data dependency and effectfulness. It does not depend on whether a
-call was direct or static-dispatch syntax, whether an expression is a leaf,
-whether a value was written inline or named at the top level, or whether the
-expression contains `crash`, `dbg`, or `expect`. Those constructs are
-compile-time observable, and evaluating them at compile time is required when
-the surrounding expression has no runtime data dependency and no effectful
-call.
+on checked data dependency, checked control reachability, and effectfulness. It
+does not depend on whether a call was direct or static-dispatch syntax, whether
+an expression is a leaf, whether a value was written inline or named at the top
+level, or whether the expression contains `crash`, `dbg`, or `expect`. Those
+constructs are compile-time observable, and evaluating them at compile time is
+required when the surrounding expression has no runtime data dependency, no
+runtime control dependency, and no effectful call.
+
+Control reachability is checked data, not source-shape guessing. An expression
+can be a standalone compile-time root only when the source meaning evaluates it
+unconditionally whenever the root is needed. Branch bodies, match
+guards, and match branch values are control-dependent on the enclosing
+conditional or match. They may contribute summaries to an enclosing `if` or
+`match` root, but they must not add independent selected roots while their
+enclosing control decision can be made at runtime. Otherwise an untaken branch
+containing `crash`, `dbg`, or `expect` would run during `roc check`, which
+would change the program's observable behavior. If the whole enclosing control
+expression is compile-time-known and effect-free, the enclosing expression may
+be selected as the root and the evaluator follows the same branch choices as
+the source program.
+
+Non-local control-transfer expressions such as `return` and `break` are not
+standalone value roots and cannot cover child candidates by themselves. Their
+payloads may still contribute to an enclosing eligible root or be selected as
+ordinary child expressions when they are reached through checked control data.
+Making the control-transfer expression itself a root would require an explicit
+checked continuation representation; until that exists, selecting it as a
+stored constant is a compiler bug, not an optimization choice.
 
 An effectful call is one of:
 
@@ -187,6 +208,7 @@ transient summary to its parent:
 
 ```text
 runtime dependency status
+control reachability status
 effect slot or delayed-effect status when needed
 candidate stack interval owned by this expression frame
 ```
@@ -212,15 +234,22 @@ slot that can still be marked by delayed dispatch or callee propagation.
 
 Root selection keeps maximal eligible expressions. Each expression frame
 records the root-candidate stack length at entry. If the expression finishes as
-compile-time-known and effect-free, it removes child candidates added inside
-the frame and adds itself. If the expression is not eligible, its eligible child
-candidates remain. If the expression has delayed effect sources, the checker
-stores a tentative parent over its child candidates; effect finalization later
-keeps the parent and drops the children when the parent resolves effect-free,
-or drops the parent and keeps the children when the parent resolves effectful.
-This is the only parent-child replacement rule. There are no special cases for
-leaves, strings, numbers, empty lists, records, `return`, `break`, loop syntax,
-or other expression shapes.
+compile-time-known, unconditionally reachable, and effect-free, it removes
+child candidates added inside the frame and adds itself. If the expression is
+not eligible because of runtime data dependency or effectfulness, its eligible
+unconditionally reached child candidates remain. If the expression is not
+eligible because it is control-dependent on a runtime branch or match decision,
+children inside that conditional region do not add standalone selected roots;
+they are evaluated only if an enclosing eligible control expression is
+selected. If the expression has delayed effect sources, the checker stores a
+tentative parent over its child candidates; effect finalization later keeps the
+parent and drops the children when the parent resolves effect-free, or drops
+the parent and keeps the children when the parent resolves effectful. This is
+the only parent-child replacement rule. There are no special cases for leaves,
+strings, numbers, empty lists, records, loops, or other data-expression shapes.
+Control-transfer expressions and conditionally evaluated branch regions are
+handled by explicit checked control reachability, not by pruning arbitrary
+source shapes.
 
 Delayed parents form intervals over the candidate stack, not source-tree
 queries. Nested delayed parents finalize from explicit interval ownership: when
@@ -231,10 +260,14 @@ the maximal-root rule without a second walk and without special pruning rules.
 
 Root selection must be independent of how the source was arranged. A named
 top-level value, a closed immutable local value, and an equivalent inline
-expression must produce equivalent selected roots once checked dependencies and
-effects are the same. Selecting a parent root is the only reason to discard an
-already selected child root; rejecting a parent for runtime dependency or
-effectfulness must preserve any eligible children.
+expression must produce equivalent selected roots once checked dependencies,
+checked control reachability, and effects are the same. Selecting a parent root
+is the only reason to discard an already selected child root from an
+unconditionally evaluated region; rejecting a parent for runtime data
+dependency or effectfulness must preserve those eligible children. A
+runtime-controlled branch body is different: its contents are not
+unconditionally evaluated, so they cannot be selected independently without
+explicit checked proof that doing so preserves compile-time observables.
 
 ### Compile-Time Evaluation And Static Storage
 
@@ -925,12 +958,13 @@ or canonicalization guesses. Allowed dependencies include literals, already
 known compile-time constants, selected hoisted constants, imported constants
 whose checked modules have stored values, and pure checked callables whose
 captures are themselves compile-time-known. Rejected dependencies include
-function arguments, runtime pattern binders, mutable locals, effectful calls,
-host calls, platform requirements whose values are not available during checking
-finalization, and any static dispatch whose checked plan does not identify a
-pure compile-time-evaluable operation. Low-level operations may participate only
-through explicit checked purity and totality metadata; they must never be
-allowed by whitelist, name, or backend knowledge.
+function arguments, runtime pattern binders, mutable locals, runtime control
+decisions, effectful calls, host calls, platform requirements whose values are
+not available during checking finalization, and any static dispatch whose
+checked plan does not identify a pure compile-time-evaluable operation.
+Low-level operations may participate only through explicit checked purity and
+totality metadata; they must never be allowed by whitelist, name, or backend
+knowledge.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,

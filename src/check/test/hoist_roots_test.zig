@@ -496,7 +496,7 @@ test "hoist roots are not selected for runtime-dependent multi-branch match" {
     try std.testing.expectEqual(@as(usize, 0), countMatchExprRoots(&test_env));
 }
 
-test "hoist roots selected for closed child inside runtime-controlled match branch" {
+test "hoist roots are not selected for closed child inside runtime-controlled match branch" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    input : Try(I64, I64)
@@ -514,7 +514,7 @@ test "hoist roots selected for closed child inside runtime-controlled match bran
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_dispatch_call));
 }
 
 test "hoist roots preserve children for local values depending on function arguments" {
@@ -670,6 +670,19 @@ fn countExprRootsByTag(test_env: *const TestEnv, tag: std.meta.Tag(CIR.Expr)) us
     return count;
 }
 
+fn countBlockRootsEndingInCrash(test_env: *const TestEnv) usize {
+    var count: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        switch (test_env.checker.cir.store.getExpr(root.expr)) {
+            .e_block => |block| {
+                if (std.meta.activeTag(test_env.checker.cir.store.getExpr(block.final_expr)) == .e_crash) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
 test "hoist roots preserve children for local values indirectly depending on function arguments" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
@@ -683,6 +696,23 @@ test "hoist roots preserve children for local values indirectly depending on fun
     try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_dispatch_call));
     try std.testing.expect(test_env.checker.selectedHoistedRoots().len > 0);
+}
+
+test "hoist roots do not select early return control-flow fragments" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |flag| {
+        \\    if flag {
+        \\        return True
+        \\    }
+        \\
+        \\    False
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_return));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_block));
 }
 
 test "hoist roots are not selected for branch-local binding dependencies" {
@@ -786,6 +816,24 @@ test "hoist roots selected for conditional crash expressions" {
 
     try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_if));
+}
+
+test "hoist roots do not select unreachable crashing match branch body" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    input : Try(I64, I64)
+        \\    input = Ok(1.I64)
+        \\    match input {
+        \\        Ok(_) => 1.I64
+        \\        Err(_) => { crash "bad" }
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countBlockRootsEndingInCrash(&test_env));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_crash));
 }
 
 test "hoist roots selected across return statements" {
@@ -955,7 +1003,7 @@ test "hoist roots are not selected inside ordinary top-level constants" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots selected for closed child inside runtime-controlled branch body" {
+test "hoist roots are not selected for closed child inside runtime-controlled branch body" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    if arg == 0.I64 {
@@ -968,7 +1016,7 @@ test "hoist roots selected for closed child inside runtime-controlled branch bod
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_block));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_block));
 }
 
 test "hoist roots preserve children for branch body call with runtime argument" {

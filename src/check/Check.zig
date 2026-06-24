@@ -3116,28 +3116,20 @@ test "local check summaries are scoped to lexical blocks" {
     try std.testing.expectEqual(@as(usize, 0), state.checker.local_check_summary_scope_patterns.items.len);
 }
 
-fn testDefByName(checker: *Self, name: []const u8) !CIR.Def.Idx {
-    const idents = checker.cir.getIdentStoreConst();
-    for (checker.cir.store.sliceDefs(checker.cir.all_defs)) |def_idx| {
-        const def = checker.cir.store.getDef(def_idx);
-        switch (checker.cir.store.getPattern(def.pattern)) {
-            .assign => |assign| {
-                if (std.mem.eql(u8, name, idents.getText(assign.ident))) return def_idx;
-            },
-            else => {},
-        }
-    }
+fn testDefByOrdinal(checker: *Self, ordinal: usize) anyerror!CIR.Def.Idx {
+    const defs = checker.cir.store.sliceDefs(checker.cir.all_defs);
+    if (ordinal < defs.len) return defs[ordinal];
     return error.ExpectedDef;
 }
 
-fn expectTopLevelRuntimeDep(checker: *Self, name: []const u8, expected: RuntimeDep) !void {
-    const def_idx = try testDefByName(checker, name);
+fn expectTopLevelRuntimeDep(checker: *Self, ordinal: usize, expected: RuntimeDep) anyerror!void {
+    const def_idx = try testDefByOrdinal(checker, ordinal);
     const def = checker.cir.store.getDef(def_idx);
     const summary = checker.top_level_check_summaries.get(def.pattern) orelse return error.ExpectedTopLevelCheckSummary;
     try std.testing.expectEqual(expected, summary.runtime_dep.?);
 }
 
-fn expectFirstFunctionBodyRuntimeDep(checker: *Self, expected: RuntimeDep) !void {
+fn expectFirstFunctionBodyRuntimeDep(checker: *Self, expected: RuntimeDep) anyerror!void {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
@@ -3167,7 +3159,7 @@ test "runtime dependency summaries classify compile-time-known lookups" {
         var test_env = try TestEnv.init("SummaryTopLevel", source);
         defer test_env.deinit();
         try test_env.assertNoErrors();
-        try expectTopLevelRuntimeDep(&test_env.checker, "main", .compile_time_known);
+        try expectTopLevelRuntimeDep(&test_env.checker, 1, .compile_time_known);
     }
 
     {
@@ -3179,7 +3171,7 @@ test "runtime dependency summaries classify compile-time-known lookups" {
         var test_env = try TestEnv.init("SummaryClosedMatch", source);
         defer test_env.deinit();
         try test_env.assertNoErrors();
-        try expectTopLevelRuntimeDep(&test_env.checker, "main", .compile_time_known);
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .compile_time_known);
     }
 
     {
@@ -3192,7 +3184,7 @@ test "runtime dependency summaries classify compile-time-known lookups" {
         var test_env = try TestEnv.init("SummaryLocal", source);
         defer test_env.deinit();
         try test_env.assertNoErrors();
-        try expectTopLevelRuntimeDep(&test_env.checker, "main", .compile_time_known);
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .compile_time_known);
     }
 
     {
@@ -3212,7 +3204,7 @@ test "runtime dependency summaries classify compile-time-known lookups" {
         var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
         defer test_env_b.deinit();
         try test_env_b.assertNoErrors();
-        try expectTopLevelRuntimeDep(&test_env_b.checker, "main", .compile_time_known);
+        try expectTopLevelRuntimeDep(&test_env_b.checker, 0, .compile_time_known);
     }
 }
 
@@ -3265,7 +3257,7 @@ test "runtime dependency summaries classify runtime-bound lookups" {
         var test_env = try TestEnv.init("SummaryLoop", source);
         defer test_env.deinit();
         try test_env.assertNoErrors();
-        try expectTopLevelRuntimeDep(&test_env.checker, "main", .runtime_dependent);
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .runtime_dependent);
     }
 
     {
@@ -3279,7 +3271,7 @@ test "runtime dependency summaries classify runtime-bound lookups" {
         var test_env = try TestEnv.init("SummaryMutable", source);
         defer test_env.deinit();
         try test_env.assertNoErrors();
-        try expectTopLevelRuntimeDep(&test_env.checker, "main", .runtime_dependent);
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .runtime_dependent);
     }
 }
 
@@ -3379,10 +3371,11 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_expect_err,
         .e_expect,
         .e_for,
-        .e_return,
-        .e_break,
         .e_run_low_level,
         => true,
+        .e_return,
+        .e_break,
+        => false,
     };
 }
 
@@ -3448,9 +3441,10 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_dispatch_call,
         .e_tuple_access,
         .e_for,
+        => true,
         .e_return,
         .e_break,
-        => true,
+        => false,
     };
 }
 
@@ -3511,9 +3505,10 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_method_call,
         .e_type_dispatch_call,
         .e_tuple_access,
+        => true,
         .e_return,
         .e_break,
-        => true,
+        => false,
     };
 }
 /// In debug builds, verifies that region and type arrays have matching lengths.
@@ -7913,6 +7908,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
 // defs //
 
+fn defIsGlobalValueDef(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |global_def_idx| {
+        if (global_def_idx == def_idx) return true;
+    }
+    return false;
+}
+
 /// Check the types for a single definition
 fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -7978,8 +7980,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Ordinary top-level constants are already compile-time roots, so nested
     // hoisted roots inside them would duplicate compile-time work. Top-level
     // functions are not evaluated as data constants, so their bodies may still
-    // contain top-level-equivalent local values.
-    const suppress_nested_hoists = !isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr));
+    // contain top-level-equivalent local values. Non-global defs are checked for
+    // diagnostics and types, but only canonical global value defs may publish
+    // sparse hoisted constants.
+    const is_global_value_def = self.defIsGlobalValueDef(def_idx);
+    const suppress_nested_hoists = !is_global_value_def or
+        !isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr));
     if (suppress_nested_hoists) self.hoist_suppressed_depth += 1;
     defer {
         if (suppress_nested_hoists) self.hoist_suppressed_depth -= 1;
@@ -11779,6 +11785,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_return => |ret| {
+            self.markCurrentHoistRuntimeDependency();
+            check_result.markRuntimeDependent();
             check_result.include(try self.checkExpr(ret.expr, env, Expected.none()));
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
@@ -11802,6 +11810,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // This is so this expr can unify with anything (like {} in the an implicit `else` branch)
         },
         .e_break => {
+            self.markCurrentHoistRuntimeDependency();
+            check_result.markRuntimeDependent();
             // Nothing to do. `break` diverges, so this expression can unify with
             // any surrounding expected type.
         },
@@ -13052,6 +13062,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 diverges = true;
             },
             .s_return => |ret| {
+                self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 // Type check the return expression
                 check_result.include(try self.checkExpr(ret.expr, env, Expected.none()));
                 const ret_var = ModuleEnv.varFrom(ret.expr);
@@ -13090,6 +13102,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .err, env);
             },
             .s_break => {
+                self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 diverges = true;
             },
         }
@@ -13203,8 +13217,11 @@ fn checkIfElseExpr(
     const bool_var = try self.freshBool(env, expr_region);
     _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
 
-    // Then we check the 1st branch's body
-    check_result.include(try self.checkExpr(first_branch.body, env, expected.forBranchBody()));
+    // Branch bodies are control-dependent on the enclosing conditional. They
+    // still contribute summaries to the enclosing if root, but cannot become
+    // independent roots; otherwise an untaken branch with a crash/dbg/expect
+    // would run during checking.
+    check_result.include(try self.checkExprWithHoistSelectionSuppressed(first_branch.body, env, expected.forBranchBody()));
 
     if (expected_branch_ret) |expected_ret| {
         const branch_ctx = problem.Context{ .if_branch = .{
@@ -13234,7 +13251,7 @@ fn checkIfElseExpr(
         _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
 
         // Check the branch body
-        check_result.include(try self.checkExpr(branch.body, env, expected.forBranchBody()));
+        check_result.include(try self.checkExprWithHoistSelectionSuppressed(branch.body, env, expected.forBranchBody()));
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
@@ -13267,7 +13284,7 @@ fn checkIfElseExpr(
                     const fresh_bool = try self.freshBool(env, expr_region);
                     _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
-                    check_result.include(try self.checkExpr(remaining_branch.body, env, expected.forBranchBody()));
+                    check_result.include(try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()));
                     try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
                 }
 
@@ -13280,7 +13297,7 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    check_result.include(try self.checkExpr(if_.final_else, env, expected.forBranchBody()));
+    check_result.include(try self.checkExprWithHoistSelectionSuppressed(if_.final_else, env, expected.forBranchBody()));
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
@@ -13433,7 +13450,7 @@ fn checkMatchExpr(
         }
 
         // Check the first branch's value, then use that at the branch_var
-        check_result.include(try self.checkExpr(first_branch.value, env, expected.forBranchBody()));
+        check_result.include(try self.checkExprWithHoistSelectionSuppressed(first_branch.value, env, expected.forBranchBody()));
         val_var = ModuleEnv.varFrom(first_branch.value);
 
         // Check first branch body against expected return type
@@ -13489,7 +13506,7 @@ fn checkMatchExpr(
         }
 
         // Then, check the body
-        check_result.include(try self.checkExpr(branch.value, env, expected.forBranchBody()));
+        check_result.include(try self.checkExprWithHoistSelectionSuppressed(branch.value, env, expected.forBranchBody()));
 
         // Check branch body against expected return type BEFORE pairwise unification.
         // Pairwise unification poisons ALL connected vars via union-find on failure,

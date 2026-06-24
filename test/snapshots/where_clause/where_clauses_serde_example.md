@@ -37,7 +37,7 @@ EndOfFile,
 						(tags
 							(ty (name "DecodeErr"))))))
 			(where
-				(method (module-of "a") (name "decode")
+				(method (module-of "a") (name "decode") (effectful false)
 					(args
 						(ty-apply
 							(ty (name "List"))
@@ -77,7 +77,7 @@ NO CHANGE
 					(ty-tag-union
 						(ty-tag-name (name "DecodeErr")))))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "decode")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "decode") (effectful false)
 					(args
 						(ty-apply (name "List") (builtin)
 							(ty-lookup (name "U8") (builtin))))

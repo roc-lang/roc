@@ -343,7 +343,7 @@ const GeneratedHelperDefEntry = union(enum) {
 };
 
 const StaticDataUse = struct {
-    const_ref: checked.ConstRef,
+    const_ref: checked.ConstId,
     checked_type: checked.CheckedTypeId,
     ty: Type.TypeId,
 };
@@ -1879,7 +1879,7 @@ const Builder = struct {
         return try self.program.types.addDeclaredFields(entries);
     }
 
-    fn constNode(self: *Builder, const_ref: checked.ConstRef) ConstNode {
+    fn constNode(self: *Builder, const_ref: checked.ConstId) ConstNode {
         const view = self.moduleForId(checked.constModuleId(const_ref));
         const template = view.const_templates.get(const_ref);
         return switch (template.state) {
@@ -1892,7 +1892,7 @@ const Builder = struct {
 
     fn staticDataValue(
         self: *Builder,
-        const_ref: checked.ConstRef,
+        const_ref: checked.ConstId,
         checked_type: checked.CheckedTypeId,
         ty: Type.TypeId,
     ) Allocator.Error!Common.StaticDataId {
