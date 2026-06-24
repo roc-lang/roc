@@ -534,10 +534,7 @@ fn maxEnd(base_ptr: [*]align(1) const u8, slices: []const []const u8) usize {
 }
 
 test "writeToSharedMemory serializes only executable image sections" {
-    const page_size = std.heap.page_size_min;
-    var image_bytes: [16384]u8 align(std.heap.page_size_min) = undefined;
-    var image_buffer = std.heap.FixedBufferAllocator.init(&image_bytes);
-    const image_allocator = image_buffer.allocator();
+    const page_size = @max(std.heap.page_size_min, 16 * 1024);
     const scratch = std.testing.allocator;
 
     const code = [_]u8{ 0x48, 0x31, 0xc0, 0xc3 };
@@ -559,11 +556,16 @@ test "writeToSharedMemory serializes only executable image sections" {
         },
     };
     const capacity = try requiredCapacity(page_size, &code, &entrypoint_inputs, &relocations, &data_exports);
+    const image_bytes = try scratch.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(page_size), capacity);
+    defer scratch.free(image_bytes);
+
+    var image_buffer = std.heap.FixedBufferAllocator.init(image_bytes);
+    const image_allocator = image_buffer.allocator();
 
     const header = try writeToSharedMemory(
         scratch,
         image_allocator,
-        &image_bytes,
+        image_bytes.ptr,
         page_size,
         &code,
         &entrypoint_inputs,
@@ -577,7 +579,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expect(header.image_size <= image_bytes.len);
     try std.testing.expect(header.image_size <= capacity);
 
-    const view = try viewMappedImage(header, &image_bytes, @intCast(header.image_size));
+    const view = try viewMappedImage(header, image_bytes.ptr, @intCast(header.image_size));
 
     try std.testing.expectEqual(page_size, view.page_size);
     try std.testing.expectEqual(@as(usize, 2 * max_jump_stub_size), view.function_stubs.len);
