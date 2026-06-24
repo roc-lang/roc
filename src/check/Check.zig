@@ -15814,6 +15814,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // If this constraint is already an error, the skip this pass
                         continue;
                     }
+                    if (try self.literalConstraintSatisfiedByNominalBacking(
+                        deferred_constraint.var_,
+                        constraint,
+                        nominal_type,
+                        env,
+                        is_numeric_default_pass,
+                    )) {
+                        continue;
+                    }
                     if (!try self.validateFromNumeralLiteralForBuiltinNominal(
                         deferred_constraint.var_,
                         constraint,
@@ -17237,6 +17246,62 @@ fn validateResolvedOpenNumeralLiterals(
             continue;
         }
         _ = try self.reportInvalidBuiltinFromNumeralInfo(resolved.var_, num_kind, entry.info, env);
+    }
+}
+
+fn literalConstraintSatisfiedByNominalBacking(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    nominal_type: types_mod.NominalType,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) Allocator.Error!bool {
+    const literal_kind = constraint.origin.literalKind() orelse return false;
+    if (!nominal_type.canLiftInner(self.cir.qualified_module_ident)) return false;
+
+    const visited_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(visited_top);
+
+    var current = nominal_type;
+    while (true) {
+        const backing_var = self.types.getNominalBackingVar(current);
+        const backing_resolved = self.types.resolveVar(backing_var);
+        if (backing_resolved.desc.content != .structure) return false;
+        const backing_flat = backing_resolved.desc.content.structure;
+        if (backing_flat != .nominal_type) return false;
+
+        const backing_nominal = backing_flat.nominal_type;
+        switch (literal_kind) {
+            .numeral => {
+                if (self.builtinNumKindFromNominalType(backing_nominal) != null) {
+                    _ = try self.validateFromNumeralLiteralForBuiltinNominal(
+                        dispatcher_var,
+                        constraint,
+                        backing_nominal,
+                        env,
+                        is_numeric_default_pass,
+                    );
+                    return true;
+                }
+            },
+            .quote => {
+                if (self.nominalIsBuiltinStrType(backing_nominal)) return true;
+            },
+            .interpolation => {
+                if (self.nominalIsBuiltinStrType(backing_nominal)) {
+                    _ = try self.satisfyBuiltinStrInterpolation(dispatcher_var, constraint, env);
+                    return true;
+                }
+            },
+        }
+
+        for (self.scratch_vars.sliceFromStart(visited_top)) |visited_var| {
+            const visited_resolved = self.types.resolveVar(visited_var);
+            if (visited_resolved.desc_idx == backing_resolved.desc_idx) return false;
+        }
+        try self.scratch_vars.append(backing_var);
+        current = backing_nominal;
     }
 }
 

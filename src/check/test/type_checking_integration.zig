@@ -4799,6 +4799,30 @@ test "check type - nested same-module mutually recursive nominal types" {
     try checkTypesModule(source, .{ .pass = .{ .def = "mk" } }, "{} -> Tree");
 }
 
+test "check type - primitive-backed nominal lifts numeric literal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\d : Distance
+        \\d = 0
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Distance");
+}
+
+test "check type - primitive-backed nominal lifts string literal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Token := Str
+        \\
+        \\token : Token
+        \\token = "abc"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Token");
+}
+
 // early return //
 
 test "check type - early return - pass" {
