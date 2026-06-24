@@ -594,7 +594,7 @@ test "tuple and tag static data share named and inline list payloads" {
     try std.testing.expect(!exportsContainSequence(exports, &.{ 211, 212, 213, 214 }));
 }
 
-test "inline record-list cells inside runtime record become shared static data" {
+test "inline sub_or_crash cells inside runtime record become shared static data" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -610,7 +610,7 @@ test "inline record-list cells inside runtime record become shared static data" 
         \\
         \\Sprite : {
         \\    data : List(U8),
-        \\    region : { x : U64, y : U64, width : U64, height : U64 },
+        \\    region : { src_x : U64, src_y : U64, width : U64, height : U64 },
         \\}
         \\
         \\Cell : { frames : U64, sprite : Sprite }
@@ -618,24 +618,33 @@ test "inline record-list cells inside runtime record become shared static data" 
         \\sheet : Sprite
         \\sheet = {
         \\    data: [17.U8, 34.U8, 51.U8, 68.U8],
-        \\    region: { x: 0, y: 0, width: 2, height: 2 },
+        \\    region: { src_x: 0, src_y: 0, width: 2, height: 2 },
         \\}
         \\
-        \\sub_sprite : Sprite, U64 -> Sprite
-        \\sub_sprite = |sprite, x| { ..sprite, region: { x, y: 0, width: 1, height: 1 } }
+        \\sub : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Try(Sprite, {})
+        \\sub = |sprite, region| Ok({ ..sprite, region })
+        \\
+        \\sub_or_crash : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Sprite
+        \\sub_or_crash = |sprite, region|
+        \\    match sub(sprite, region) {
+        \\        Ok(sub_sprite) => sub_sprite
+        \\        Err(_) => {
+        \\            crash "bad sprite"
+        \\        }
+        \\    }
         \\
         \\make_anim = |frame_count| {
         \\    last_updated: frame_count,
         \\    cells: [
-        \\        { frames: 5.U64, sprite: sub_sprite(sheet, 0) },
-        \\        { frames: 6.U64, sprite: sub_sprite(sheet, 1) },
+        \\        { frames: 5.U64, sprite: sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 6.U64, sprite: sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
         \\    ],
         \\}
         \\
         \\main! = |args| {
         \\    anim = make_anim(List.len(args))
         \\    first_x = match List.get(anim.cells, 0) {
-        \\        Ok(cell) => cell.sprite.region.x.to_i64_wrap()
+        \\        Ok(cell) => cell.sprite.region.src_x.to_i64_wrap()
         \\        Err(_) => 0
         \\    }
         \\    _ = first_x + anim.last_updated.to_i64_wrap()

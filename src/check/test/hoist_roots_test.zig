@@ -196,6 +196,53 @@ test "hoist roots select rocci-shaped cell child inside runtime record" {
     try std.testing.expect(countExprRootsByTag(&test_env, .e_list) >= 2);
 }
 
+test "hoist roots select rocci-shaped sub_or_crash cells inside runtime record" {
+    var test_env = try TestEnv.init("Test",
+        \\Region : { src_x : U64, src_y : U64, width : U64, height : U64 }
+        \\Sprite : { data : List(U8), region : Region }
+        \\Cell : { frames : U64, sprite : Sprite }
+        \\
+        \\sprite_sheet : Sprite
+        \\sprite_sheet = {
+        \\    data: [1.U8, 2.U8, 3.U8, 4.U8],
+        \\    region: { src_x: 0, src_y: 0, width: 16, height: 16 },
+        \\}
+        \\
+        \\sub : Sprite, Region -> Try(Sprite, {})
+        \\sub = |sprite, region| Ok({ ..sprite, region })
+        \\
+        \\sub_or_crash : Sprite, Region -> Sprite
+        \\sub_or_crash = |sprite, region|
+        \\    match sub(sprite, region) {
+        \\        Ok(sub_sprite) => sub_sprite
+        \\        Err(_) => {
+        \\            crash "bad sprite"
+        \\        }
+        \\    }
+        \\
+        \\main = |frame_count| {
+        \\    anim = {
+        \\        last_updated: frame_count,
+        \\        cells: [
+        \\            {
+        \\                frames: 5.U64,
+        \\                sprite: sub_or_crash(sprite_sheet, { src_x: 0, src_y: 0, width: 16, height: 16 }),
+        \\            },
+        \\            {
+        \\                frames: 6.U64,
+        \\                sprite: sub_or_crash(sprite_sheet, { src_x: 16, src_y: 0, width: 16, height: 16 }),
+        \\            },
+        \\        ],
+        \\    }
+        \\    anim.last_updated
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countListRootsByLength(&test_env, 2));
+}
+
 test "hoist roots selected for closed pure static dispatch call binding RHS" {
     var test_env = try TestEnv.init("Test",
         \\DispatchBox := [Val(I64)].{
@@ -666,6 +713,19 @@ fn countExprRootsByTag(test_env: *const TestEnv, tag: std.meta.Tag(CIR.Expr)) us
     var count: usize = 0;
     for (test_env.checker.selectedHoistedRoots()) |root| {
         if (std.meta.activeTag(test_env.checker.cir.store.getExpr(root.expr)) == tag) count += 1;
+    }
+    return count;
+}
+
+fn countListRootsByLength(test_env: *const TestEnv, len: u32) usize {
+    var count: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        switch (test_env.checker.cir.store.getExpr(root.expr)) {
+            .e_list => |list| {
+                if (list.elems.span.len == len) count += 1;
+            },
+            else => {},
+        }
     }
     return count;
 }

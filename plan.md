@@ -309,6 +309,8 @@ Tests:
   equivalent roots
 - [ ] closed local constant and equivalent inline expression select equivalent
   roots
+- [x] inline `sub_or_crash` animation cells inside a runtime-dependent record
+  select the cells list as a compile-time root
 - [ ] record destructure extracts necessary compile-time root
 - [ ] tuple destructure extracts necessary compile-time root
 - [ ] tag payload destructure extracts necessary compile-time root
@@ -373,6 +375,7 @@ Tests:
   output
 - [ ] repeated sprite sheets share bytes
 - [ ] sub-sprite records point at sprite sheet bytes
+- [x] inline `sub_or_crash` animation cells point at shared sprite sheet bytes
 - [ ] inline animation cells and named animation cells emit equivalent data
 - [ ] child roots removed by parent root do not emit duplicate data
 - [ ] effectful parent does not prevent independent static child data
