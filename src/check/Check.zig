@@ -241,6 +241,12 @@ erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Scoped summaries for immutable local bindings. These are the only expression
+/// summaries kept after a child expression finishes, because later local lookups
+/// can consume them while the binding remains in scope.
+local_check_summaries: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, ExprCheckResult),
+/// Lexical scope stack for `local_check_summaries`.
+local_check_summary_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
 /// Stack of expressions currently being checked for top-level-equivalent
 /// compile-time hoisting. This is temporary checker state only.
 hoist_frames: std.ArrayListUnmanaged(HoistFrame),
@@ -1207,6 +1213,8 @@ fn initAssumePrepared(
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
+        .local_check_summaries = .{},
+        .local_check_summary_scope_patterns = .empty,
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
         .hoist_deferred_binding_dependencies = .empty,
@@ -1296,6 +1304,8 @@ pub fn deinit(self: *Self) void {
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.local_check_summaries.deinit(self.gpa);
+    self.local_check_summary_scope_patterns.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
     self.hoist_deferred_binding_dependencies.deinit(self.gpa);
@@ -2147,6 +2157,7 @@ fn currentHoistFrameIndexForExpr(self: *const Self, expr: CIR.Expr.Idx) usize {
 }
 
 const HoistLexicalScope = struct {
+    local_summary_start: usize,
     binding_candidate_start: usize,
     known_value_start: usize,
     contextual_binding_start: usize,
@@ -2154,6 +2165,7 @@ const HoistLexicalScope = struct {
 
 fn beginHoistLexicalScope(self: *const Self) HoistLexicalScope {
     return .{
+        .local_summary_start = self.local_check_summary_scope_patterns.items.len,
         .binding_candidate_start = self.hoist_binding_scope_patterns.items.len,
         .known_value_start = self.hoist_known_value_scope_patterns.items.len,
         .contextual_binding_start = self.hoist_contextual_binding_scope_patterns.items.len,
@@ -2164,6 +2176,31 @@ fn endHoistLexicalScope(self: *Self, scope: HoistLexicalScope) void {
     self.popHoistContextualBindingScope(scope.contextual_binding_start);
     self.popHoistKnownValueScope(scope.known_value_start);
     self.popHoistBindingCandidateScope(scope.binding_candidate_start);
+    self.popLocalCheckSummaryScope(scope.local_summary_start);
+}
+
+fn recordLocalCheckSummary(self: *Self, pattern: CIR.Pattern.Idx, summary: ExprCheckResult) Allocator.Error!void {
+    var bindings: std.ArrayList(PatternBinding) = .empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(pattern, &bindings);
+
+    for (bindings.items) |binding| {
+        const entry = try self.local_check_summaries.getOrPut(self.gpa, binding.pattern_idx);
+        if (!entry.found_existing) {
+            self.local_check_summary_scope_patterns.append(self.gpa, binding.pattern_idx) catch |err| {
+                _ = self.local_check_summaries.remove(binding.pattern_idx);
+                return err;
+            };
+        }
+        entry.value_ptr.* = summary;
+    }
+}
+
+fn popLocalCheckSummaryScope(self: *Self, start: usize) void {
+    for (self.local_check_summary_scope_patterns.items[start..]) |pattern| {
+        _ = self.local_check_summaries.remove(pattern);
+    }
+    self.local_check_summary_scope_patterns.shrinkRetainingCapacity(start);
 }
 
 fn deinitHoistKnownValue(_: *Self, value: HoistKnownValue) void {
@@ -2306,6 +2343,8 @@ const HoistSelectionTestState = struct {
         checker.hoist_frames = .empty;
         checker.hoist_expr_candidates = .empty;
         checker.hoist_deferred_binding_dependencies = .empty;
+        checker.local_check_summaries = .{};
+        checker.local_check_summary_scope_patterns = .empty;
         checker.hoist_binding_candidates = .{};
         checker.hoist_binding_scope_patterns = .empty;
         checker.hoist_known_values = .{};
@@ -2328,6 +2367,8 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_frames.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
         self.checker.hoist_deferred_binding_dependencies.deinit(self.allocator);
+        self.checker.local_check_summaries.deinit(self.allocator);
+        self.checker.local_check_summary_scope_patterns.deinit(self.allocator);
         self.checker.hoist_binding_candidates.deinit(self.allocator);
         self.checker.hoist_binding_scope_patterns.deinit(self.allocator);
         var known_value_iter = self.checker.hoist_known_values.iterator();
@@ -2620,6 +2661,34 @@ test "hoist lexical scope removes branch-local candidates and known values" {
     try std.testing.expect(!state.checker.hoist_known_values.contains(pattern));
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_binding_scope_patterns.items.len);
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_known_value_scope_patterns.items.len);
+}
+
+test "local check summaries are scoped to lexical blocks" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("LocalSummary", "main = 1.I64");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const def_idx = test_env.module_env.store.defAt(test_env.module_env.all_defs, 0);
+    const pattern = test_env.module_env.store.getDef(def_idx).pattern;
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    _ = try state.borrowCheckedContext(&test_env.checker);
+
+    const scope = state.checker.beginHoistLexicalScope();
+    var summary = ExprCheckResult{};
+    summary.markCompileTimeKnown();
+    try state.checker.recordLocalCheckSummary(pattern, summary);
+
+    const stored = state.checker.local_check_summaries.get(pattern) orelse return error.ExpectedLocalCheckSummary;
+    try std.testing.expectEqual(RuntimeDep.compile_time_known, stored.runtime_dep.?);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.local_check_summary_scope_patterns.items.len);
+
+    state.checker.endHoistLexicalScope(scope);
+
+    try std.testing.expect(!state.checker.local_check_summaries.contains(pattern));
+    try std.testing.expectEqual(@as(usize, 0), state.checker.local_check_summary_scope_patterns.items.len);
 }
 
 test "hoist known value insertion leaves no state when map allocation fails" {
@@ -10249,6 +10318,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 break :blk;
             }
 
+            if (self.local_check_summaries.get(lookup.pattern_idx)) |summary| {
+                check_result.include(summary);
+            }
+
             var lookup_has_runtime_dependency = false;
             const compile_time_known_binding = known: {
                 if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
@@ -12204,6 +12277,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
                 const decl_expr_result = try self.checkExpr(decl_stmt.expr, env, expectation);
                 check_result.include(decl_expr_result);
+                try self.recordLocalCheckSummary(decl_stmt.pattern, decl_expr_result);
                 try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
