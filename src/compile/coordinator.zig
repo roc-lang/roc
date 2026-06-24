@@ -50,6 +50,7 @@ const channel = @import("channel.zig");
 const compile_package = @import("compile_package.zig");
 const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
+const cir_cache = @import("cir_cache.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const package_source = @import("package_source.zig");
 const watch_inputs = @import("watch_inputs.zig");
@@ -3607,6 +3608,71 @@ pub const Coordinator = struct {
         manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
     }
 
+    /// Store a module's source-pure CIR keyed on its source hash, so a later warm
+    /// build can skip parse + canonicalization. Called once the env is final (post
+    /// canon transforms) and has no parse/canon diagnostics. Failures are recorded
+    /// and swallowed — the cache is always optional.
+    fn storeCirInCache(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled) return;
+
+        const env = mod.moduleEnv() orelse return;
+
+        var write_timer = startStageTimer(self.roc_ctx.std_io);
+        defer self.total_cache_write_ns += readStageTimer(self.roc_ctx.std_io, &write_timer);
+
+        const entries_dir = manager.config.getCirCacheDir(manager.allocator) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(entries_dir);
+
+        // Reconstruct the parser's discovered-import scheduling lists from the
+        // module's recorded imports so a cache hit schedules dependencies exactly
+        // as the cold parse did. Local imports recover name+path from the child
+        // module; external imports were duped onto the module verbatim.
+        var locals: std.ArrayList(cir_cache.TailLocalImport) = .empty;
+        defer locals.deinit(manager.allocator);
+        for (mod.imports.items) |child_id| {
+            const child = pkg.getModule(child_id) orelse continue;
+            locals.append(manager.allocator, .{ .module_name = child.name, .path = child.path }) catch {
+                manager.stats.recordStoreFailure();
+                return;
+            };
+        }
+
+        const tail = cir_cache.encodeTail(manager.allocator, locals.items, mod.external_imports.items) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(tail);
+
+        var arena = base.SingleThreadArena.init(manager.allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var env_writer = CompactWriter.init();
+        serializeForCache(ModuleEnv, env, &env_writer, arena_alloc) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+
+        const env_len = env_writer.total_bytes;
+        const key = cir_cache.CirCacheKey.compute(env.getSourceAll());
+
+        const entry = manager.allocator.alloc(u8, cir_cache.header_len + env_len + tail.len) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(entry);
+
+        cir_cache.writeHeader(entry[0..cir_cache.header_len], key, env_len, tail.len);
+        _ = env_writer.writeToBuffer(entry[cir_cache.header_len..][0..env_len]) catch unreachable;
+        @memcpy(entry[cir_cache.header_len + env_len ..][0..tail.len], tail);
+
+        manager.storeRawBytes(key.bytes, entry, entries_dir);
+    }
+
     fn tryLoadCachedCheckedModule(
         self: *Coordinator,
         pkg: *PackageState,
@@ -4051,6 +4117,13 @@ pub const Coordinator = struct {
         self.total_canonicalize_ns += result.canonicalize_ns;
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
         mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
+
+        // Store the source-pure CIR before the type-info lookup, so a CIR hit
+        // survives even if type-checking later fails. Only cache a clean module:
+        // a module with parse/canon diagnostics has malformed CIR we must not reuse.
+        if (mod.reports.items.len == 0) {
+            self.storeCirInCache(pkg, mod);
+        }
 
         const task_payload_alloc = self.getWorkerAllocator();
         const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);

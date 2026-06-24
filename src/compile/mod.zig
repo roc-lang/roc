@@ -27,6 +27,7 @@ pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
 pub const reporting = @import("cache_reporting.zig");
 pub const manager = @import("cache_manager.zig");
+pub const cir_cache = @import("cir_cache.zig");
 pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.zig") else struct {
     pub const CleanupStats = struct {
         temp_dirs_deleted: u32 = 0,
@@ -83,6 +84,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_reporting.zig"));
+    std.testing.refAllDecls(@import("cir_cache.zig"));
     std.testing.refAllDecls(@import("compile_build.zig"));
     std.testing.refAllDecls(@import("targets_config.zig"));
     std.testing.refAllDecls(@import("compile_module.zig"));

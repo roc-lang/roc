@@ -126,6 +126,17 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
+    /// Get the CIR cache directory.
+    ///
+    /// Holds source-pure canonicalized modules keyed on the source hash, looked
+    /// up before parsing so a warm build can skip parse + canonicalization.
+    pub fn getCirCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "cir" });
+    }
+
     /// Get the module source cache directory for tooling-owned materialized sources.
     pub fn getModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
