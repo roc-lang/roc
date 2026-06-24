@@ -215,10 +215,43 @@ pub fn lookupExposedNode(
     // fallback, matching canon's `lookupImportedExposed{Value,Type}Node`.
     var scratch: std.ArrayList(u8) = .empty;
     defer scratch.deinit(gpa);
-    return switch (kind) {
-        .value => lookupExposedValueNode(gpa, imported_env, name_text, &scratch),
-        .type, .nominal_type => lookupExposedTypeNode(gpa, imported_env, name_text, &scratch),
-    };
+    switch (kind) {
+        .value => return lookupExposedValueNode(gpa, imported_env, name_text, &scratch),
+        .type, .nominal_type => {
+            if (try lookupExposedTypeNode(gpa, imported_env, name_text, &scratch)) |node| return node;
+            // Strategy 3: a nested associated type can be referenced by name even
+            // when it is not in the exposed-items table; scan type declarations,
+            // matching canon's `lookupImportedTypeDeclNode`.
+            return lookupTypeDeclNode(gpa, imported_env, name_text, &scratch);
+        },
+    }
+}
+
+/// Find a nominal/alias type declaration by name (qualified or bare), returning
+/// the statement node index. Mirrors canon's `lookupImportedTypeDeclNode` for
+/// nested associated types that are not surfaced through the exposed-items table.
+fn lookupTypeDeclNode(
+    gpa: Allocator,
+    imported_env: *const ModuleEnv,
+    item_text: []const u8,
+    scratch: *std.ArrayList(u8),
+) Allocator.Error!?u32 {
+    const module_qualified = try qualifiedText(gpa, scratch, imported_env.module_name, item_text);
+    const qualified_ident = imported_env.common.findIdent(module_qualified) orelse
+        imported_env.common.findIdent(item_text) orelse
+        return null;
+
+    for (imported_env.store.sliceStatements(imported_env.all_statements)) |stmt_idx| {
+        const header_idx = switch (imported_env.store.getStatement(stmt_idx)) {
+            .s_nominal_decl => |decl| decl.header,
+            .s_alias_decl => |alias| alias.header,
+            else => continue,
+        };
+        const header = imported_env.store.getTypeHeader(header_idx);
+        if (header.name.eql(qualified_ident)) return @intFromEnum(stmt_idx);
+    }
+
+    return null;
 }
 
 test "qualifiedText builds Module.item" {
