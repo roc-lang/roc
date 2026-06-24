@@ -127,8 +127,8 @@ const WasmSink = struct {
         appendBoolFieldCommand(field, toU32(elem_id), false);
     }
 
-    pub fn bindEventKind(_: WasmSink, elem_id: u64, kind: RenderEventKind, event_id: u64) void {
-        appendCommand(kind.bindOp(), toU32(elem_id), toU32(event_id), 0, 0, 0);
+    pub fn bindEventKind(_: WasmSink, elem_id: u64, kind: RenderEventKind, event_id: u64, payload_accessor: engine.EventPayloadAccessor) void {
+        appendCommand(kind.bindOp(), toU32(elem_id), toU32(event_id), toU32(@intFromEnum(payload_accessor)), 0, 0);
     }
 
     pub fn clearEvent(_: WasmSink, elem_id: u64, kind: RenderEventKind) void {

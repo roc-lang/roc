@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { Op, PayloadKind, SignalsRuntime } from "./runtime.mjs";
+import { Op, PayloadAccessor, PayloadKind, SignalsRuntime } from "./runtime.mjs";
 import {
   installDomDouble,
   findByText,
@@ -176,14 +176,14 @@ test("event payloads round-trip through the wasm memory boundary", () => {
     { op: Op.resetDom },
     { op: Op.createElement, a: 1, s: "button" },
     { op: Op.setText, a: 1, s: "click" },
-    { op: Op.bindClick, a: 1, b: 10 },
+    { op: Op.bindClick, a: 1, b: 10, c: PayloadAccessor.none },
     { op: Op.appendChild, a: 0, b: 1 },
     { op: Op.createElement, a: 2, s: "input" },
-    { op: Op.bindInput, a: 2, b: 11 },
+    { op: Op.bindInput, a: 2, b: 11, c: PayloadAccessor.targetValue },
     { op: Op.appendChild, a: 0, b: 2 },
     { op: Op.createElement, a: 3, s: "input" },
     { op: Op.setRole, a: 3, s: "checkbox" },
-    { op: Op.bindCheck, a: 3, b: 12 },
+    { op: Op.bindCheck, a: 3, b: 12, c: PayloadAccessor.targetChecked },
     { op: Op.appendChild, a: 0, b: 3 },
   ]);
 
@@ -207,7 +207,7 @@ test("clear_event and remove_node release DOM listeners", () => {
     { op: Op.resetDom },
     { op: Op.createElement, a: 1, s: "button" },
     { op: Op.setText, a: 1, s: "click" },
-    { op: Op.bindClick, a: 1, b: 1 },
+    { op: Op.bindClick, a: 1, b: 1, c: PayloadAccessor.none },
     { op: Op.appendChild, a: 0, b: 1 },
   ]);
 
@@ -216,7 +216,14 @@ test("clear_event and remove_node release DOM listeners", () => {
   fireEvent(button, "click");
   assert.deepEqual(host.dispatches, []);
 
-  runtime.applyCommand({ op: Op.bindClick, a: 1, b: 2, c: 0, d: 0, e: 0 });
+  runtime.applyCommand({
+    op: Op.bindClick,
+    a: 1,
+    b: 2,
+    c: PayloadAccessor.none,
+    d: 0,
+    e: 0,
+  });
   runtime.applyCommand({ op: Op.removeNode, a: 1, b: 0, c: 0, d: 0, e: 0 });
   fireEvent(button, "click");
   assert.deepEqual(host.dispatches, []);
@@ -227,7 +234,7 @@ test("memory growth during dispatch keeps the response command stream readable",
     [
       { op: Op.resetDom },
       { op: Op.createElement, a: 1, s: "input" },
-      { op: Op.bindInput, a: 1, b: 2 },
+      { op: Op.bindInput, a: 1, b: 2, c: PayloadAccessor.targetValue },
       { op: Op.appendChild, a: 0, b: 1 },
       { op: Op.createText, a: 2, s: "start" },
       { op: Op.appendChild, a: 0, b: 2 },

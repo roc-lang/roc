@@ -40,6 +40,12 @@ export const PayloadKind = Object.freeze({
   bool: 3,
 });
 
+export const PayloadAccessor = Object.freeze({
+  none: 1,
+  targetValue: 2,
+  targetChecked: 3,
+});
+
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
@@ -247,19 +253,15 @@ export class SignalsRuntime {
         return;
 
       case Op.bindClick:
-        this.bindEvent(record.a, "click", record.b, () => this.dispatchUnit(record.b));
+        this.bindEvent(record.a, "click", record.b, record.c);
         return;
 
       case Op.bindInput:
-        this.bindEvent(record.a, "input", record.b, (event) => {
-          this.dispatchString(record.b, event.currentTarget.value);
-        });
+        this.bindEvent(record.a, "input", record.b, record.c);
         return;
 
       case Op.bindCheck:
-        this.bindEvent(record.a, "change", record.b, (event) => {
-          this.dispatchBool(record.b, event.currentTarget.checked);
-        });
+        this.bindEvent(record.a, "change", record.b, record.c);
         return;
 
       case Op.clearEvent: {
@@ -296,13 +298,33 @@ export class SignalsRuntime {
     }
   }
 
-  bindEvent(elemId, domEvent, eventId, listener) {
+  bindEvent(elemId, domEvent, eventId, payloadAccessor) {
     const key = `${elemId}:${domEvent}`;
     this.eventCleanups.get(key)?.();
     const elem = this.node(elemId);
+    const listener = (event) => this.dispatchEventPayload(eventId, payloadAccessor, event);
     elem.addEventListener(domEvent, listener);
     this.eventCleanups.set(key, () => elem.removeEventListener(domEvent, listener));
     elem.dataset.rocEventId = String(eventId);
+  }
+
+  dispatchEventPayload(eventId, payloadAccessor, event) {
+    switch (payloadAccessor) {
+      case PayloadAccessor.none:
+        this.dispatchUnit(eventId);
+        return;
+
+      case PayloadAccessor.targetValue:
+        this.dispatchString(eventId, event.currentTarget.value);
+        return;
+
+      case PayloadAccessor.targetChecked:
+        this.dispatchBool(eventId, event.currentTarget.checked);
+        return;
+
+      default:
+        throw new Error(`unknown event payload accessor ${payloadAccessor}`);
+    }
   }
 
   clearEvent(elemId, domEvent) {

@@ -26,6 +26,7 @@ Node := [].{
 		payload_bool_tag : Box(HostValue.TypeTag(Bool)),
 		payload_str_tag : Box(HostValue.TypeTag(Str)),
 		payload_unit_tag : Box(HostValue.TypeTag({})),
+		payload_accessor : U64,
 		payload_kind : U64,
 		payload_drop : Box((HostValue -> {})),
 		transform : Box((HostValue, HostValue -> HostValue)),
@@ -125,6 +126,15 @@ Node := [].{
 
 	bool_payload_kind : U64
 	bool_payload_kind = 3
+
+	payload_accessor_none : U64
+	payload_accessor_none = 1
+
+	payload_accessor_target_value : U64
+	payload_accessor_target_value = 2
+
+	payload_accessor_target_checked : U64
+	payload_accessor_target_checked = 3
 
 	## Static attribute on a markup element. Dynamic (signal-backed) attrs carry a
 	## `SignalExpr`; event handlers carry a `Msg`.

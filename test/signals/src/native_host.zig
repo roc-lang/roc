@@ -48,6 +48,7 @@ test "NoMetrics is a zero-size no-op metrics sink" {
 }
 
 const EventPayloadKind = engine.EventPayloadKind;
+const EventPayloadAccessor = engine.EventPayloadAccessor;
 const SignalKind = engine.SignalKind;
 const HostActiveEventDesc = engine.HostActiveEventDesc(HostValueTypeTag);
 const HostPendingTask = engine.HostPendingTask;
@@ -713,7 +714,7 @@ const HostEnv = struct {
         bindNodeEvent(self, desc, event_id);
     }
 
-    pub fn sinkBindEventKind(self: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64) void {
+    pub fn sinkBindEventKind(self: *HostEnv, elem_id: u64, kind: RenderEventKind, event_id: u64, _: engine.EventPayloadAccessor) void {
         bindNodeEventKind(self, elem_id, kind, event_id);
     }
 
@@ -3107,6 +3108,7 @@ test "signals host dirty plan deduplicates diamond join by rank" {
     try host.engine.event_descriptors.append(allocator, .{
         .event_id = 1,
         .payload_kind = .unit,
+        .payload_accessor = .none,
     });
     try appendTestSignalDescriptor(&host, 0, .source, &.{1}, &.{});
     try appendTestSignalDescriptor(&host, 1, .map, &.{}, &.{0});
@@ -5081,6 +5083,14 @@ fn testNodeSignalBoolAttr(roc_host: *abi.RocHost, field: RenderBoolField, signal
     };
 }
 
+fn testPayloadAccessorForKind(payload_kind: EventPayloadKind) EventPayloadAccessor {
+    return switch (payload_kind) {
+        .unit => .none,
+        .str => .target_value,
+        .bool => .target_checked,
+    };
+}
+
 fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token: HostBinderToken, payload_kind: EventPayloadKind) abi.NodeAttr {
     const transform = writeTestErasedCallable(
         TestErasedI64Capture,
@@ -5097,6 +5107,7 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
                     .payload_bool_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_accessor = @intFromEnum(testPayloadAccessorForKind(payload_kind)),
                     .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(payload_kind),
                     .payload_str_tag = newTestHostValueTypeTag(roc_host),
@@ -5125,6 +5136,7 @@ fn testNodeUnitIncrementEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind,
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
                     .payload_bool_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_accessor = @intFromEnum(EventPayloadAccessor.none),
                     .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(EventPayloadKind.unit),
                     .payload_str_tag = newTestHostValueTypeTag(roc_host),

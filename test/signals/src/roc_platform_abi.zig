@@ -718,17 +718,18 @@ pub const __AnonStruct57 = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct57) != 64) @compileError("__AnonStruct57 size mismatch");
+        if (@sizeOf(__AnonStruct57) != 72) @compileError("__AnonStruct57 size mismatch");
         if (@alignOf(__AnonStruct57) != 8) @compileError("__AnonStruct57 alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(__AnonStruct57) != 40) @compileError("__AnonStruct57 size mismatch");
+        if (@sizeOf(__AnonStruct57) != 48) @compileError("__AnonStruct57 size mismatch");
         if (@alignOf(__AnonStruct57) != 8) @compileError("__AnonStruct57 alignment mismatch");
     }
 }
 
 /// Element type for __AnonStruct58
 pub const __AnonStruct58 = if (@sizeOf(usize) == 4) extern struct {
+    payload_accessor: u64,
     payload_kind: u64,
     binder: *u64,
     payload_bool_tag: *u64,
@@ -738,6 +739,7 @@ pub const __AnonStruct58 = if (@sizeOf(usize) == 4) extern struct {
     transform: RocErasedCallable,
 } else extern struct {
     binder: *u64,
+    payload_accessor: u64,
     payload_bool_tag: *u64,
     payload_drop: RocErasedCallable,
     payload_kind: u64,
@@ -748,11 +750,11 @@ pub const __AnonStruct58 = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct58) != 56) @compileError("__AnonStruct58 size mismatch");
+        if (@sizeOf(__AnonStruct58) != 64) @compileError("__AnonStruct58 size mismatch");
         if (@alignOf(__AnonStruct58) != 8) @compileError("__AnonStruct58 alignment mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(__AnonStruct58) != 32) @compileError("__AnonStruct58 size mismatch");
+        if (@sizeOf(__AnonStruct58) != 40) @compileError("__AnonStruct58 size mismatch");
         if (@alignOf(__AnonStruct58) != 8) @compileError("__AnonStruct58 alignment mismatch");
     }
 }
@@ -1217,7 +1219,7 @@ pub const NodeAttrPayload = extern union {
 
 /// Tag union: Node.Attr
 pub const NodeAttr = if (@sizeOf(usize) == 4) extern struct {
-    payload: [40]u8 align(8),
+    payload: [48]u8 align(8),
     tag: NodeAttrTag,
     pub fn payload_on_event(self: *const @This()) __AnonStruct57 {
         const ptr: *const __AnonStruct57 = @ptrCast(@alignCast(&self.payload));
@@ -1261,14 +1263,14 @@ pub const NodeAttr = if (@sizeOf(usize) == 4) extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(NodeAttr) != 72) @compileError("NodeAttr size mismatch");
+        if (@sizeOf(NodeAttr) != 80) @compileError("NodeAttr size mismatch");
         if (@alignOf(NodeAttr) != 8) @compileError("NodeAttr alignment mismatch");
-        if (@offsetOf(NodeAttr, "tag") != 64) @compileError("NodeAttr tag offset mismatch");
+        if (@offsetOf(NodeAttr, "tag") != 72) @compileError("NodeAttr tag offset mismatch");
     }
     if (@sizeOf(usize) == 4) {
-        if (@sizeOf(NodeAttr) != 48) @compileError("NodeAttr size mismatch");
+        if (@sizeOf(NodeAttr) != 56) @compileError("NodeAttr size mismatch");
         if (@alignOf(NodeAttr) != 8) @compileError("NodeAttr alignment mismatch");
-        if (@offsetOf(NodeAttr, "tag") != 40) @compileError("NodeAttr tag offset mismatch");
+        if (@offsetOf(NodeAttr, "tag") != 48) @compileError("NodeAttr tag offset mismatch");
     }
 }
 

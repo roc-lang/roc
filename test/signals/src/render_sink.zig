@@ -60,8 +60,8 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkBindEvent(desc, event_id);
         }
 
-        pub fn bindEventKind(self: @This(), elem_id: u64, kind: EventKind, event_id: u64) void {
-            self.host.sinkBindEventKind(elem_id, kind, event_id);
+        pub fn bindEventKind(self: @This(), elem_id: u64, kind: EventKind, event_id: u64, payload_accessor: anytype) void {
+            self.host.sinkBindEventKind(elem_id, kind, event_id, payload_accessor);
         }
 
         pub fn clearEvent(self: @This(), elem_id: u64, kind: EventKind) void {

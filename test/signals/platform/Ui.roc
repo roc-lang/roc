@@ -53,7 +53,7 @@ Ui := [].{
 				_ = boxed
 				{}
 			}
-			{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
+			{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_accessor: Node.payload_accessor_none, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
 		}
 
 		on_str : State(a), (a, Str -> a) -> Node.Msg
@@ -82,7 +82,7 @@ Ui := [].{
 				_ = boxed
 				{}
 			}
-			{ binder: st.ref, payload_kind: Node.str_payload_kind, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
+			{ binder: st.ref, payload_kind: Node.str_payload_kind, payload_accessor: Node.payload_accessor_target_value, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
 		}
 
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
@@ -111,7 +111,7 @@ Ui := [].{
 				_ = boxed
 				{}
 			}
-			{ binder: st.ref, payload_kind: Node.bool_payload_kind, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
+			{ binder: st.ref, payload_kind: Node.bool_payload_kind, payload_accessor: Node.payload_accessor_target_checked, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
 		}
 	}
 

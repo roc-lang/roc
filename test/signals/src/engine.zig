@@ -36,8 +36,11 @@ const RenderScalarNodeCache = struct {
     parent_id: ?u64 = null,
     children: std.ArrayListUnmanaged(u64) = .empty,
     bound_click_event: ?u64 = null,
+    bound_click_accessor: ?EventPayloadAccessor = null,
     bound_input_event: ?u64 = null,
+    bound_input_accessor: ?EventPayloadAccessor = null,
     bound_check_event: ?u64 = null,
+    bound_check_accessor: ?EventPayloadAccessor = null,
     text: ?[]const u8 = null,
     role: ?[]const u8 = null,
     label: ?[]const u8 = null,
@@ -86,6 +89,14 @@ const RenderScalarNodeCache = struct {
             .click => &self.bound_click_event,
             .input => &self.bound_input_event,
             .check => &self.bound_check_event,
+        };
+    }
+
+    fn eventAccessorSlot(self: *RenderScalarNodeCache, kind: RenderEventKind) *?EventPayloadAccessor {
+        return switch (kind) {
+            .click => &self.bound_click_accessor,
+            .input => &self.bound_input_accessor,
+            .check => &self.bound_check_accessor,
         };
     }
 };
@@ -639,6 +650,12 @@ pub const EventPayloadKind = enum(u64) {
     bool = 3,
 };
 
+pub const EventPayloadAccessor = enum(u64) {
+    none = 1,
+    target_value = 2,
+    target_checked = 3,
+};
+
 pub const SignalKind = enum(u64) {
     source = 1,
     map = 2,
@@ -648,12 +665,14 @@ pub const SignalKind = enum(u64) {
 pub const HostEventDescriptor = struct {
     event_id: u64,
     payload_kind: EventPayloadKind,
+    payload_accessor: EventPayloadAccessor,
 };
 
 pub fn HostActiveEventDesc(comptime TypeTag: type) type {
     return struct {
         target_node_id: u64,
         payload_kind: EventPayloadKind,
+        payload_accessor: EventPayloadAccessor,
         payload_tag: TypeTag,
         payload_drop: abi.RocErasedCallable,
         transform: abi.RocErasedCallable,
@@ -821,13 +840,18 @@ pub const HostEachRowRenderMove = struct {
     len: usize,
 };
 
-pub const HostRequiredEventBindings = struct {
-    click: ?u64 = null,
-    input: ?u64 = null,
-    check: ?u64 = null,
+pub const HostRequiredEventBinding = struct {
+    event_id: u64,
+    payload_accessor: EventPayloadAccessor,
 };
 
-pub fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: RenderEventKind) *?u64 {
+pub const HostRequiredEventBindings = struct {
+    click: ?HostRequiredEventBinding = null,
+    input: ?HostRequiredEventBinding = null,
+    check: ?HostRequiredEventBinding = null,
+};
+
+pub fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: RenderEventKind) *?HostRequiredEventBinding {
     return switch (kind) {
         .click => &bindings.click,
         .input => &bindings.input,
@@ -942,6 +966,7 @@ pub const HostNodeEventDesc = struct {
     binder_token: HostBinderToken,
     target_node_id: u64,
     payload_kind: EventPayloadKind,
+    payload_accessor: EventPayloadAccessor,
     payload_tag: HostValueTypeTag,
     payload_drop: abi.RocErasedCallable,
     transform: abi.RocErasedCallable,
@@ -1534,7 +1559,7 @@ pub const HostNodeDescriptorStream = struct {
         };
     }
 
-    pub fn appendEventWithOwnedPayloadTag(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
+    pub fn appendEventWithOwnedPayloadTag(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
         abi.increfErasedCallable(payload_drop, 1);
         abi.increfErasedCallable(transform, 1);
         metrics.bump(.closure_retains, 2);
@@ -1545,6 +1570,7 @@ pub const HostNodeDescriptorStream = struct {
             .binder_token = binder_token,
             .target_node_id = target_node_id,
             .payload_kind = payload_kind,
+            .payload_accessor = payload_accessor,
             .payload_tag = payload_tag,
             .payload_drop = payload_drop,
             .transform = transform,
@@ -1597,13 +1623,13 @@ pub const HostNodeDescriptorStream = struct {
         };
     }
 
-    pub fn appendEventWithBorrowedPayloadTag(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
+    pub fn appendEventWithBorrowedPayloadTag(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
         abi.increfBox(@ptrCast(payload_tag), 1);
-        self.appendEventWithOwnedPayloadTag(allocator, roc_host, metrics, elem_id, kind, binder_token, target_node_id, payload_kind, payload_tag, payload_drop, transform);
+        self.appendEventWithOwnedPayloadTag(allocator, roc_host, metrics, elem_id, kind, binder_token, target_node_id, payload_kind, payload_accessor, payload_tag, payload_drop, transform);
     }
 
-    pub fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
-        self.appendEventWithBorrowedPayloadTag(allocator, roc_host, metrics, elem_id, kind, binder_token, target_node_id, payload_kind, payload_tag, payload_drop, transform);
+    pub fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor, payload_tag: HostValueTypeTag, payload_drop: abi.RocErasedCallable, transform: abi.RocErasedCallable) void {
+        self.appendEventWithBorrowedPayloadTag(allocator, roc_host, metrics, elem_id, kind, binder_token, target_node_id, payload_kind, payload_accessor, payload_tag, payload_drop, transform);
     }
 
     pub fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, condition: HostSignalBinding, read: abi.RocErasedCallable, when_false: abi.Elem, when_true: abi.Elem) void {
@@ -1915,6 +1941,15 @@ pub fn eventPayloadKindFromAbi(payload_kind: u64) EventPayloadKind {
     };
 }
 
+pub fn eventPayloadAccessorFromAbi(payload_accessor: u64) EventPayloadAccessor {
+    return switch (payload_accessor) {
+        @intFromEnum(EventPayloadAccessor.none) => .none,
+        @intFromEnum(EventPayloadAccessor.target_value) => .target_value,
+        @intFromEnum(EventPayloadAccessor.target_checked) => .target_checked,
+        else => @panic("Roc event descriptor used an unknown payload accessor"),
+    };
+}
+
 pub fn validateExistingSignalRecord(record: *HostSignalRecord, expected_tag: std.meta.Tag(HostSignalRecordPayload)) void {
     if (std.meta.activeTag(record.payload) != expected_tag) {
         @panic("signal token was reused for a different signal expression kind");
@@ -2195,13 +2230,18 @@ pub fn Engine(comptime Ctx: type) type {
             Ctx.sink(ctx).replaceChildrenForMoves(parent_elem_id, next_child_ids);
         }
 
-        pub fn applyRenderEventBinding(self: *Self, ctx: anytype, elem_id: u64, kind: RenderEventKind, event_id: ?u64, counts: *render.Counts) void {
-            const slot = self.activeRenderScalarNode(elem_id).eventSlot(kind);
-            if (slot.* == event_id) return;
+        pub fn applyRenderEventBinding(self: *Self, ctx: anytype, elem_id: u64, kind: RenderEventKind, binding: ?HostRequiredEventBinding, counts: *render.Counts) void {
+            const node = self.activeRenderScalarNode(elem_id);
+            const event_slot = node.eventSlot(kind);
+            const accessor_slot = node.eventAccessorSlot(kind);
+            const event_id = if (binding) |payload| payload.event_id else null;
+            const payload_accessor = if (binding) |payload| payload.payload_accessor else null;
+            if (event_slot.* == event_id and accessor_slot.* == payload_accessor) return;
 
-            slot.* = event_id;
+            event_slot.* = event_id;
+            accessor_slot.* = payload_accessor;
             if (event_id) |id| {
-                Ctx.sink(ctx).bindEventKind(elem_id, kind, id);
+                Ctx.sink(ctx).bindEventKind(elem_id, kind, id, payload_accessor orelse @panic("event binding was missing payload accessor"));
             } else {
                 Ctx.sink(ctx).clearEvent(elem_id, kind);
             }
@@ -3056,7 +3096,7 @@ pub fn Engine(comptime Ctx: type) type {
                 const payload_drop = if (desc.owns_payload_drop) desc.payload_drop else self.activeEventPayloadDropByIndex(event_index) catch @panic("active event table is missing a retained payload drop");
                 const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index) catch @panic("active event table is missing a retained transform");
                 const payload_tag: HostValueTypeTag = if (desc.owns_payload_tag) desc.payload_tag else @ptrCast(self.activeEventPayloadTagByIndex(event_index) catch @panic("active event table is missing a retained payload tag"));
-                stream.appendEventWithBorrowedPayloadTag(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, payload_tag, payload_drop, transform);
+                stream.appendEventWithBorrowedPayloadTag(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, desc.payload_accessor, payload_tag, payload_drop, transform);
             }
 
             for (previous.scope_sites.items) |desc| {
@@ -3334,13 +3374,14 @@ pub fn Engine(comptime Ctx: type) type {
                     const msg = payload.msg;
                     const kind = renderEventKindFromAbi(payload.kind);
                     const payload_kind = eventPayloadKindFromAbi(msg.payload_kind);
+                    const payload_accessor = eventPayloadAccessorFromAbi(msg.payload_accessor);
                     const target_node_id = resolveNodeBinderRef(binder_stack, msg.binder);
                     const payload_tag: HostValueTypeTag = switch (payload_kind) {
                         .unit => @ptrCast(msg.payload_unit_tag),
                         .str => @ptrCast(msg.payload_str_tag),
                         .bool => @ptrCast(msg.payload_bool_tag),
                     };
-                    stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_tag, msg.payload_drop, msg.transform);
+                    stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_accessor, payload_tag, msg.payload_drop, msg.transform);
                 },
             }
         }
@@ -4430,6 +4471,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_events.append(allocator, .{
                     .target_node_id = desc.target_node_id,
                     .payload_kind = desc.payload_kind,
+                    .payload_accessor = desc.payload_accessor,
                     .payload_tag = @ptrCast(@alignCast(desc.payload_tag)),
                     .payload_drop = desc.payload_drop,
                     .transform = desc.transform,
@@ -5350,7 +5392,7 @@ pub fn Engine(comptime Ctx: type) type {
                 const event_id: u64 = @intCast(index + 1);
                 const slot = requiredEventBindingSlot(&required[@intCast(desc.elem_id)], desc.kind);
                 if (slot.* != null) @panic("element has duplicate event descriptors for one event kind");
-                slot.* = event_id;
+                slot.* = .{ .event_id = event_id, .payload_accessor = desc.payload_accessor };
             }
 
             const kinds = [_]RenderEventKind{ .click, .input, .check };
@@ -5358,8 +5400,8 @@ pub fn Engine(comptime Ctx: type) type {
                 if (index == 0 or !is_seen) continue;
 
                 for (kinds) |kind| {
-                    const next_event_id = requiredEventBindingSlot(&required[index], kind).*;
-                    self.applyRenderEventBinding(ctx, @intCast(index), kind, next_event_id, counts);
+                    const next_binding = requiredEventBindingSlot(&required[index], kind).*;
+                    self.applyRenderEventBinding(ctx, @intCast(index), kind, next_binding, counts);
                 }
             }
         }
@@ -5376,7 +5418,7 @@ pub fn Engine(comptime Ctx: type) type {
                 const event_id: u64 = @intCast(index + 1);
                 const slot = requiredEventBindingSlot(&required[@intCast(desc.elem_id)], desc.kind);
                 if (slot.* != null) @panic("element has duplicate event descriptors for one event kind");
-                slot.* = event_id;
+                slot.* = .{ .event_id = event_id, .payload_accessor = desc.payload_accessor };
             }
 
             const kinds = [_]RenderEventKind{ .click, .input, .check };
@@ -5384,26 +5426,26 @@ pub fn Engine(comptime Ctx: type) type {
                 if (index == 0 or !is_seen) continue;
 
                 for (kinds) |kind| {
-                    const next_event_id = requiredEventBindingSlot(&required[index], kind).*;
-                    self.applyRenderEventBinding(ctx, @intCast(index), kind, next_event_id, counts);
+                    const next_binding = requiredEventBindingSlot(&required[index], kind).*;
+                    self.applyRenderEventBinding(ctx, @intCast(index), kind, next_binding, counts);
                 }
             }
         }
 
-        pub fn activeEventIdForElemKind(self: *Self, elem_id: u64, kind: RenderEventKind) ?u64 {
+        pub fn activeEventBindingForElemKind(self: *Self, elem_id: u64, kind: RenderEventKind) ?HostRequiredEventBinding {
             const descriptor_index = self.active_stream.elemDescriptorIndex(elem_id) orelse return null;
             const event_index = descriptor_index.events.get(kind) orelse return null;
             if (event_index >= self.active_stream.events.items.len) @panic("active event descriptor index exceeded descriptor table");
             const desc = self.active_stream.events.items[event_index];
             if (desc.elem_id != elem_id or desc.kind != kind) @panic("active event descriptor index pointed at the wrong event");
-            return @intCast(event_index + 1);
+            return .{ .event_id = @intCast(event_index + 1), .payload_accessor = desc.payload_accessor };
         }
 
         pub fn applyStructuralEventBindingsForElem(self: *Self, ctx: anytype, elem_id: u64, counts: *render.Counts) void {
             const kinds = [_]RenderEventKind{ .click, .input, .check };
             for (kinds) |kind| {
-                const next_event_id = self.activeEventIdForElemKind(elem_id, kind);
-                self.applyRenderEventBinding(ctx, elem_id, kind, next_event_id, counts);
+                const next_binding = self.activeEventBindingForElemKind(elem_id, kind);
+                self.applyRenderEventBinding(ctx, elem_id, kind, next_binding, counts);
             }
         }
 
@@ -5661,7 +5703,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.evalOnChangeInitial(ctx, roc_host, desc);
             }
             for (stream.events.items, 0..) |desc, index| {
-                self.applyRenderEventBinding(ctx, desc.elem_id, desc.kind, @intCast(index + 1), &counts);
+                self.applyRenderEventBinding(ctx, desc.elem_id, desc.kind, .{ .event_id = @intCast(index + 1), .payload_accessor = desc.payload_accessor }, &counts);
             }
 
             self.debugAssertRenderCacheMatchesStream(ctx, stream);
@@ -6046,6 +6088,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.active_events.append(allocator, .{
                     .target_node_id = desc.target_node_id,
                     .payload_kind = desc.payload_kind,
+                    .payload_accessor = desc.payload_accessor,
                     .payload_tag = @ptrCast(@alignCast(desc.payload_tag)),
                     .payload_drop = desc.payload_drop,
                     .transform = desc.transform,
