@@ -435,18 +435,42 @@ Tests:
 
 Tasks:
 
-- [ ] Define checked output for selected root requests.
-- [ ] Define checked output for evaluated root values.
-- [ ] Define checked output for top-level values evaluated only for diagnostics.
-- [ ] Schedule eligible top-level values in every checked module.
-- [ ] Schedule unreachable eligible top-level values for diagnostics.
-- [ ] Schedule selected roots exactly once.
-- [ ] Avoid scheduling child roots removed by parent selection.
-- [ ] Run `crash`, `dbg`, and `expect` during compile-time evaluation.
-- [ ] Reject effectful calls before evaluation can execute them.
-- [ ] Report evaluation diagnostics through `roc check`.
-- [ ] Deduplicate diagnostics shared by a top-level value and selected root.
-- [ ] Keep successful unreachable evaluated values out of target static data.
+- [x] Define checked output for selected root requests.
+- [x] Define checked output for evaluated root values.
+- [x] Define checked output for top-level values evaluated only for diagnostics.
+- [x] Schedule eligible top-level values in every checked module.
+- [x] Schedule unreachable eligible top-level values for diagnostics.
+- [x] Schedule selected roots exactly once.
+- [x] Avoid scheduling child roots removed by parent selection.
+- [x] Run `crash`, `dbg`, and `expect` during compile-time evaluation.
+- [x] Reject effectful calls before evaluation can execute them.
+- [x] Report evaluation diagnostics through `roc check`.
+- [x] Deduplicate diagnostics shared by a top-level value and selected root.
+- [x] Keep successful unreachable evaluated values out of target static data.
+
+Implementation evidence:
+
+- `CompileTimeRootTable.fromModule` publishes ordinary top-level constants,
+  callable bindings, selected hoisted constants, literal conversions, and
+  `expect` roots as durable checked roots.
+- `RootRequestTable.fromModule` adds concrete eligible compile-time roots to
+  `compile_time_requests`; `CompileTimeRequestScheduler` sorts same-module
+  stored-constant dependencies using temporary edges and discards those edges
+  before checked output.
+- `verifyCompileTimeRequestsScheduled`, `RootCompletionState.init`, and the
+  finalizer assert that a compile-time root is requested at most once.
+- `CompileTimeFinalizer.finalize` batches sorted requests, lowers them through
+  the checking-finalization target, evaluates them with the interpreter, stores
+  results through `ConstStoreWriter`, fills `CompileTimeRoot.payload`, and
+  verifies `const_store.verifyComplete()`.
+- `ComptimeDiagnosticDeduper` deduplicates `dbg`, `expect`, and `crash`
+  diagnostics by kind, source region, and message.
+- Effectful top-level values and effectful `expect` bodies are rejected by
+  effect checking before finalization can execute them.
+- Target static data is not emitted from all successful compile-time roots.
+  Runtime lowering emits internal static literals only from reachable stored
+  const uses when `static_data_literals` is enabled, and provided data exports
+  are requested explicitly.
 
 Tests:
 
@@ -465,19 +489,42 @@ Tests:
 
 Tasks:
 
-- [ ] Define explicit static-storable categories for scalars, strings, lists,
+- [x] Define explicit static-storable categories for scalars, strings, lists,
   records, tuples, tags, and allowed opaque values.
-- [ ] Define explicit non-storable categories.
-- [ ] Store reachable evaluated values only.
-- [ ] Share repeated static list bytes.
-- [ ] Store records that point at shared static list bytes.
-- [ ] Store tuples and tag payloads that point at shared static list bytes.
+- [x] Define explicit non-storable categories.
+- [x] Store reachable evaluated values only.
+- [x] Share repeated static list bytes.
+- [x] Store records that point at shared static list bytes.
+- [x] Store tuples and tag payloads that point at shared static list bytes.
 - [x] Ensure opaque static data uses checked backing values only when allowed.
 - [x] Ensure removed child roots do not emit duplicate static data.
-- [ ] Ensure target static-data emission consumes evaluated checked values, not
+- [x] Ensure target static-data emission consumes evaluated checked values, not
   source/CIR shape.
-- [ ] Ensure lowering knows exactly when it is lowering a root's own entry
+- [x] Ensure lowering knows exactly when it is lowering a root's own entry
   wrapper so it does not recursively restore that root from static data.
+
+Implementation evidence:
+
+- `lir.Program.ConstPlan` is the explicit target-independent storage plan for
+  checked constants. It has concrete cases for `zst`, `scalar`, `str`, `list`,
+  `box`, `tuple`, `record`, `tag_union`, `named`, `fn_value`, and `erased_fn`.
+- Monotype lowering restores non-static stored constants from `ConstStore` and
+  emits `.static_data` literals only when `static_data_literals` is enabled and
+  `constValueNeedsStaticData` proves the stored node needs target backing.
+- `staticDataValue` interns reachable static-data requests by checked module,
+  stored const node, and checked type, so repeated reachable uses share one LIR
+  static-data value.
+- `static_data_exports.zig` materializes bytes only from `.stored_const`
+  templates and `ConstStore` nodes. It writes scalars, strings, lists, boxes,
+  tuples, records, tags, named backing values, and erased callable values from
+  explicit `ConstPlan` data. It raises a compiler invariant for unsupported
+  finite function static materialization instead of guessing.
+- `staticStrAllocation`, `list_allocations`, and `findStaticAllocation` share
+  identical backing bytes and relocations; records, tuples, and tag payloads
+  write relocations to those shared backing allocations.
+- Entry-wrapper lowering records `lowering_entry_wrapper_root`, and
+  `loweringOwnHoistedConstRoot` prevents restoring the root currently being
+  evaluated while still allowing other completed roots to restore normally.
 
 Tests:
 

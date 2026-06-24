@@ -235,6 +235,14 @@ owner of effectfulness. The expression summary only says whether the expression
 is already known effect-free, already known effectful, or waiting on an effect
 slot that can still be marked by delayed dispatch or callee propagation.
 
+An expression that already produced a checking problem is poisoned for
+compile-time root selection. Poison is not runtime dependency and it is not an
+effect. It only prevents an erroneous parent value from becoming a selected
+root while preserving the original diagnostic ownership, so a bad child reports
+once instead of being hidden by hoisting or reported again by a parent root.
+Static-dispatch failures, type errors, and other checker-owned problems must
+feed this poison result explicitly through the same expression summary path.
+
 Root selection keeps maximal eligible expressions. Each expression frame
 records the root-candidate stack length at entry. If the expression finishes as
 compile-time-known, unconditionally reachable, and effect-free, it removes
