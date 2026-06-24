@@ -90,6 +90,13 @@ effect kinds, top-level effect errors, effectful `expect` errors, compile-time
 diagnostics, and selected compile-time roots. Later stages consume those
 outputs directly.
 
+The pre-check CIR producer outputs CIR and checked identity inputs; it does not
+own compile-time root selection. Root selection happens during checking because
+checking already walks every expression, resolves local identity, computes
+types, validates function effects, and receives static-dispatch results. The
+checker must not perform a later whole-module expression walk merely to decide
+which expressions are roots, and later stages must not recreate those answers.
+
 The question "can this expression be evaluated at compile time?" depends only
 on checked data dependency and effectfulness. It does not depend on whether a
 call was direct or static-dispatch syntax, whether an expression is a leaf,
@@ -98,6 +105,18 @@ expression contains `crash`, `dbg`, or `expect`. Those constructs are
 compile-time observable, and evaluating them at compile time is required when
 the surrounding expression has no runtime data dependency and no effectful
 call.
+
+An effectful call is one of:
+
+- a direct call to a checked effectful function
+- a call through a function-typed value whose checked function type is effectful
+- a static-dispatch call whose selected implementation is checked effectful
+
+Creating a function value is not an effectful call, even when that function's
+body is effectful. The effect propagates only when the function value is called.
+Negative effect answers are not durable until the relevant slot has finalized;
+static dispatch can still turn an apparently pure call site into an effectful
+call before checked output is produced.
 
 ### Effect Slots
 
@@ -143,17 +162,24 @@ annotations, to report effectful top-level values, and to report effectful
 `expect` bodies. Checked module output must not contain unresolved effect
 kinds.
 
+The effect solver may cache positive effectfulness immediately. It must not
+treat an unresolved negative answer as final while dispatch watchers or callee
+slots can still change. Recursive groups are solved by directed propagation:
+strongly connected groups can be condensed, marked effectful if any member is
+effectful, and then propagated to callers. Ordinary caller-to-callee edges must
+remain one-way.
+
 ### Root Selection During Checking
 
 Compile-time root selection uses the same checker traversal that already walks
 checked CIR expressions. There is no separate root-selection walk over every
-expression. While checking an expression, the checker returns a small transient
-summary to its parent:
+expression. While checking an expression, the checker returns a small
+transient summary to its parent:
 
 ```text
 runtime dependency status
-effect slot or delayed-effect status
-selected child root candidates
+effect slot or delayed-effect status when needed
+candidate stack interval owned by this expression frame
 ```
 
 The summary is stack-local for ordinary nested expressions. The checker stores
@@ -182,6 +208,13 @@ This is the only parent-child replacement rule. There are no special cases for
 leaves, strings, numbers, empty lists, records, `return`, `break`, loop syntax,
 or other expression shapes.
 
+Root selection must be independent of how the source was arranged. A named
+top-level value, a closed immutable local value, and an equivalent inline
+expression must produce equivalent selected roots once checked dependencies and
+effects are the same. Selecting a parent root is the only reason to discard an
+already selected child root; rejecting a parent for runtime dependency or
+effectfulness must preserve any eligible children.
+
 ### Compile-Time Evaluation And Static Storage
 
 Compile-time evaluation must evaluate every checked top-level expression and
@@ -197,6 +230,13 @@ evaluated values that have a static representation should be stored once and
 shared. Records that contain static lists should point at shared static list
 bytes; equivalent named and inline constants should produce equivalent static
 data.
+
+Compile-time evaluation is allowed to fail with user diagnostics only during
+checking. After checking, stored constant data is ordinary checked output. A
+target static-data builder may decide which reachable evaluated values have a
+target representation, but it consumes the checked roots and evaluated values
+directly; it must not scan checked CIR or generated code to rediscover root
+eligibility.
 
 If a reachable evaluated value cannot yet be represented as target static data,
 that limitation must be explicit in the checked output or the static-data
