@@ -1213,7 +1213,7 @@ test "hoist roots selected for closed for expressions" {
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_block));
 }
 
-test "hoist roots with non-concrete compile-time types are pruned" {
+test "hoist roots with non-concrete compile-time types are filtered from const storage" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    x = []
@@ -1227,7 +1227,7 @@ test "hoist roots with non-concrete compile-time types are pruned" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist arbitrary block roots with non-concrete internal locals are pruned" {
+test "hoist arbitrary block roots with non-concrete internal locals are filtered from const storage" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1246,7 +1246,7 @@ test "hoist arbitrary block roots with non-concrete internal locals are pruned" 
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist exact non-concrete internal local repro roots are pruned" {
+test "hoist exact non-concrete internal local repro roots are filtered from const storage" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1265,7 +1265,7 @@ test "hoist exact non-concrete internal local repro roots are pruned" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist nested block roots with non-concrete destructured internal binders are pruned" {
+test "hoist nested block roots with non-concrete destructured internal binders are filtered from const storage" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1284,7 +1284,7 @@ test "hoist nested block roots with non-concrete destructured internal binders a
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist match roots with non-concrete contextual binders are pruned" {
+test "hoist match roots with non-concrete contextual binders are filtered from const storage" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1302,7 +1302,7 @@ test "hoist match roots with non-concrete contextual binders are pruned" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots depending on pruned non-concrete roots are pruned" {
+test "hoist roots depending on filtered non-concrete roots are filtered from const storage" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
         \\    x = []

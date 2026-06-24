@@ -5592,10 +5592,10 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveLambdaParams(&env);
 
     try self.finalizeDelayedHoistedRoots();
-    try self.finalizeSelectedHoistedRootsAfterSolving();
+    try self.filterSelectedHoistedRootsForConstStorage();
 }
 
-fn finalizeSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
+fn filterSelectedHoistedRootsForConstStorage(self: *Self) Allocator.Error!void {
     const root_count = self.selected_hoisted_roots.items.len;
     const keep_roots = try self.gpa.alloc(bool, root_count);
     defer self.gpa.free(keep_roots);
@@ -5606,7 +5606,7 @@ fn finalizeSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_pattern_count: u32 = 0;
     root_loop: for (self.selected_hoisted_roots.items, 0..) |root, i| {
         if (root.has_runtime_source) continue;
-        if (!try self.hoistedRootIsIntrinsicallyKept(root)) continue;
+        if (!try self.hoistedRootHasConcreteStoredConstType(root)) continue;
         for (root.required_concrete_patterns) |pattern| {
             if (!try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) continue :root_loop;
         }
@@ -5662,7 +5662,7 @@ fn finalizeSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     self.debugAssertHoistSelectionConsistent();
 }
 
-fn hoistedRootIsIntrinsicallyKept(
+fn hoistedRootHasConcreteStoredConstType(
     self: *Self,
     root: hoist_roots.SelectedHoistedRoot,
 ) Allocator.Error!bool {

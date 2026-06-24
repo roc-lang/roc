@@ -191,12 +191,13 @@ Current implementation map:
   the root helpers and tested semantically. `expect_err` is still treated
   specially in child-covering policy, so Phase 6 must keep auditing it while
   deleting old source-shape filters.
-- Later root repair/pruning currently lives in
-  `finalizeDelayedHoistedRoots`, `finalizeSelectedHoistedRootsAfterSolving`,
-  `stageExprDependenciesInternal`, and dependency/concreteness checks on
-  selected roots. Phase 4 owns checked output/evaluation scheduling, Phase 5
-  owns static-data output, and Phase 6 owns deleting any duplicate selection
-  logic that can disagree with root frames.
+- Later root finalization currently lives in `finalizeDelayedHoistedRoots`,
+  `filterSelectedHoistedRootsForConstStorage`, `stageExprDependenciesInternal`,
+  and dependency/concreteness checks on selected roots. Delayed roots are part
+  of root-frame finalization. The const-storage filter is not root selection;
+  it removes roots whose checked type cannot become a stored const. Phase 6
+  owns deleting or replacing the remaining dependency metadata walk so it
+  cannot become a second selection analysis.
 
 ## Phase 1: Effect Soundness
 
@@ -556,7 +557,7 @@ Tasks:
 - [x] Delete leaf/root pruning rules.
 - [x] Delete loop/data-shape root blockers.
 - [ ] Delete duplicate dependency verification walks used to repair selection.
-- [ ] Delete comments that describe old behavior as intended.
+- [x] Delete comments that describe old behavior as intended.
 - [x] Add static searches that prevent reintroducing forbidden blockers where
   practical.
 
