@@ -31,7 +31,8 @@ pub const Constants = struct {
     /// 6: merge with typed node/static-dispatch payload layout changes.
     /// 7: field-order layout metadata moved from nominal-only to general field-order.
     /// 8: checked hoisted-root selection now includes leaf/custom literal roots.
-    pub const CACHE_VERSION = 8;
+    /// 9: ModuleEnv stores checked runtime-dependency summaries for imports.
+    pub const CACHE_VERSION = 9;
 };
 
 /// Configuration for the Roc cache system.

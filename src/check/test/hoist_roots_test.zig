@@ -1160,7 +1160,7 @@ test "hoist roots preserve children when delayed where-clause dispatch resolves 
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_list));
 }
 
-test "hoist roots are not selected for dict pseudo-seed dependent values" {
+test "hoist roots reject dict pseudo-seed dependent parents" {
     var test_env = try TestEnv.init("Test",
         \\main! = || {
         \\    dict = Dict.single("a", "b")
@@ -1171,5 +1171,16 @@ test "hoist roots are not selected for dict pseudo-seed dependent values" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        try std.testing.expect(!root.has_runtime_source);
+        switch (test_env.checker.cir.store.getExpr(root.expr)) {
+            .e_block,
+            .e_call,
+            .e_run_low_level,
+            => return error.DictRuntimeSourceRootSurvived,
+            else => {},
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), countExprRootsByTag(&test_env, .e_str));
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_empty_record));
 }

@@ -45,6 +45,16 @@ pub const SelectedHoistedRoot = struct {
     /// The root body shape. Pattern extraction roots are sparse selected-root
     /// metadata; no per-expression hoistability summary is stored.
     body: Body = .expr,
+    /// Earlier selected roots this root depends on. These are produced while
+    /// checking stages the root, and let final type-concreteness filtering use
+    /// checked metadata rather than walking CIR again.
+    dependencies: []const u32 = &.{},
+    /// Local or contextual binders introduced inside this root whose checked
+    /// types must be concrete for the root to be a stored compile-time constant.
+    required_concrete_patterns: []const CIR.Pattern.Idx = &.{},
+    /// True when the root body contains an intrinsic runtime source such as a
+    /// host-provided pseudo seed. Such roots must not become static constants.
+    has_runtime_source: bool = false,
 };
 
 /// Clones a hoisted-root body into the caller's allocator when needed.
@@ -65,17 +75,37 @@ pub fn deinitBody(_: Allocator, body: Body) void {
 
 /// Clones a selected hoisted root into the caller's allocator.
 pub fn cloneSelectedRoot(allocator: Allocator, root: SelectedHoistedRoot) Allocator.Error!SelectedHoistedRoot {
+    const dependencies = if (root.dependencies.len == 0)
+        &.{}
+    else
+        try allocator.dupe(u32, root.dependencies);
+    errdefer if (dependencies.len != 0) allocator.free(dependencies);
+
+    const required_concrete_patterns = if (root.required_concrete_patterns.len == 0)
+        &.{}
+    else
+        try allocator.dupe(CIR.Pattern.Idx, root.required_concrete_patterns);
+    errdefer if (required_concrete_patterns.len != 0) allocator.free(required_concrete_patterns);
+
     return .{
         .expr = root.expr,
         .pattern = root.pattern,
         .body = try cloneBody(allocator, root.body),
+        .dependencies = dependencies,
+        .required_concrete_patterns = required_concrete_patterns,
+        .has_runtime_source = root.has_runtime_source,
     };
 }
 
 /// Releases allocator-owned data inside a selected hoisted root.
 pub fn deinitSelectedRoot(allocator: Allocator, root: *SelectedHoistedRoot) void {
     deinitBody(allocator, root.body);
+    if (root.dependencies.len != 0) allocator.free(root.dependencies);
+    if (root.required_concrete_patterns.len != 0) allocator.free(root.required_concrete_patterns);
     root.body = .expr;
+    root.dependencies = &.{};
+    root.required_concrete_patterns = &.{};
+    root.has_runtime_source = false;
 }
 
 /// Releases allocator-owned bodies for a slice of selected hoisted roots.
