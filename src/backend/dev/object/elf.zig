@@ -42,6 +42,10 @@ const ELF = struct {
     const STB_LOCAL = 0;
     const STB_GLOBAL = 1;
 
+    // Symbol visibility
+    const STV_DEFAULT = 0;
+    const STV_HIDDEN = 2;
+
     // Symbol type
     const STT_NOTYPE = 0;
     const STT_OBJECT = 1;
@@ -127,12 +131,18 @@ pub const Architecture = enum {
 
 /// Symbol definition for the object file
 pub const Symbol = struct {
+    pub const Visibility = enum {
+        default,
+        hidden,
+    };
+
     name: []const u8,
     section: Section,
     offset: u64,
     size: u64,
     is_global: bool,
     is_function: bool,
+    visibility: Visibility = .default,
 };
 
 /// Section types
@@ -458,7 +468,10 @@ pub const ElfWriter = struct {
             const elf_sym = Elf64_Sym{
                 .st_name = name_offset,
                 .st_info = st_info,
-                .st_other = 0,
+                .st_other = switch (sym.visibility) {
+                    .default => ELF.STV_DEFAULT,
+                    .hidden => ELF.STV_HIDDEN,
+                },
                 .st_shndx = st_shndx,
                 .st_value = sym.offset,
                 .st_size = sym.size,

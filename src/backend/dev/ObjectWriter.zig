@@ -75,6 +75,10 @@ pub fn generateObjectFileWithDebug(
                     .size = sym.size,
                     .is_global = sym.is_global or sym.is_external,
                     .is_function = sym.is_function,
+                    .visibility = switch (sym.visibility) {
+                        .default => .default,
+                        .hidden => .hidden,
+                    },
                 });
 
                 // Add relocations for this symbol
@@ -122,6 +126,7 @@ pub fn generateObjectFileWithDebug(
                     .section = if (sym.is_external) 0 else machoSectionNumber(sym.section),
                     .offset = sym.offset,
                     .is_external = is_macho_external,
+                    .is_private_external = sym.visibility == .hidden,
                 });
 
                 // Add relocations for this symbol
@@ -216,6 +221,11 @@ pub fn generateObjectFileWithDebug(
 
 /// Symbol information for object file generation
 pub const Symbol = struct {
+    pub const Visibility = enum {
+        default,
+        hidden,
+    };
+
     name: []const u8,
     section: Section = .text,
     offset: u64,
@@ -223,6 +233,7 @@ pub const Symbol = struct {
     is_global: bool,
     is_function: bool,
     is_external: bool,
+    visibility: Visibility = .default,
     // Unwind metadata for Windows object files.
     prologue_size: u32 = 0,
     stack_alloc: u32 = 0,

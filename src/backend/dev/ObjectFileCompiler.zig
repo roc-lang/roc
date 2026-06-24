@@ -481,6 +481,7 @@ fn appendStaticDataExport(
         .is_global = data_export.is_global,
         .is_function = false,
         .is_external = false,
+        .visibility = if (data_export.is_global and !data_export.is_exported) .hidden else .default,
         .section = .rodata,
     }) catch {
         return CompilationError.OutOfMemory;

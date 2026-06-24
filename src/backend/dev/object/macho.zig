@@ -43,6 +43,7 @@ const MachO = struct {
 
     // Symbol types
     const N_EXT = 0x01;
+    const N_PEXT = 0x10;
     const N_UNDF = 0x0;
     const N_SECT = 0xe;
 
@@ -205,6 +206,7 @@ pub const Symbol = struct {
     section: u8, // 0 = undefined, 1 = __text, etc.
     offset: u64,
     is_external: bool,
+    is_private_external: bool = false,
 };
 
 /// Mach-O object file writer
@@ -760,10 +762,11 @@ pub const MachOWriter = struct {
         var str_offset: u32 = 2; // Skip initial " \0"
         for (symbol_order.items) |original_idx| {
             const sym = self.symbols.items[@as(usize, @intCast(original_idx))];
+            const private_external: u8 = if (sym.is_private_external) MachO.N_PEXT else 0;
             const n_type: u8 = if (sym.section == 0)
                 MachO.N_UNDF | MachO.N_EXT
             else if (sym.is_external)
-                MachO.N_SECT | MachO.N_EXT
+                MachO.N_SECT | MachO.N_EXT | private_external
             else
                 MachO.N_SECT;
             const section_addr: u64 = switch (sym.section) {

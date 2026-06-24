@@ -729,6 +729,7 @@ pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) Symbol
     return self.linking.symbol_table.items[symbol.raw()].index;
 }
 
+/// Find a symbol by exact name and kind, returning its symbol-table index.
 pub fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
     for (self.linking.symbol_table.items, 0..) |sym, i| {
         if (sym.kind != kind) continue;

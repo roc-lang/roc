@@ -580,6 +580,7 @@ pub const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
+/// Static data value requested during monotype lowering.
 pub const StaticDataValue = Common.StaticDataRequest;
 
 /// Complete Monotype program plus side arrays.

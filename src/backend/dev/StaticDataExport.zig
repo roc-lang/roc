@@ -13,8 +13,10 @@ pub const StaticDataExport = struct {
     symbol_offset: u32 = 0,
     /// Required alignment of the symbol inside the readonly section.
     alignment: u32,
-    /// Whether the symbol should be visible to the host linker.
+    /// Whether the symbol must be visible across object files during linking.
     is_global: bool = true,
+    /// Whether the symbol is part of the final public ABI/export roots.
+    is_exported: bool = true,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
 };

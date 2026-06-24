@@ -82,6 +82,7 @@ pub fn buildStaticDataExports(
     return try builder.build();
 }
 
+/// Release static data export slices returned by static data materialization.
 pub fn deinitStaticDataExports(allocator: Allocator, exports: []StaticDataExport) void {
     for (exports) |static_export| {
         allocator.free(static_export.symbol_name);
@@ -92,6 +93,7 @@ pub fn deinitStaticDataExports(allocator: Allocator, exports: []StaticDataExport
     allocator.free(exports);
 }
 
+/// Compatibility wrapper for callers still named around provided data exports.
 pub fn buildProvidedDataExports(
     allocator: Allocator,
     modules: ModuleViews,
@@ -101,6 +103,7 @@ pub fn buildProvidedDataExports(
     return buildStaticDataExports(allocator, modules, lowered, target);
 }
 
+/// Release export slices returned by buildProvidedDataExports.
 pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExport) void {
     deinitStaticDataExports(allocator, exports);
 }
@@ -179,6 +182,7 @@ const StaticDataBuilder = struct {
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
                 .is_global = true,
+                .is_exported = true,
                 .relocations = materialized.relocations,
             });
         }
@@ -195,7 +199,8 @@ const StaticDataBuilder = struct {
                 .symbol_name = symbol_name,
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
-                .is_global = false,
+                .is_global = true,
+                .is_exported = false,
                 .relocations = materialized.relocations,
             });
         }
@@ -888,6 +893,7 @@ const StaticDataBuilder = struct {
             .bytes = bytes,
             .alignment = @max(payload_alignment, self.word_size),
             .is_global = false,
+            .is_exported = false,
             .relocations = relocations,
         });
 
