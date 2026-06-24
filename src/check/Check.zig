@@ -993,8 +993,8 @@ const HoistFrameGuard = struct {
     expr: CIR.Expr.Idx,
     active: bool = true,
 
-    fn finish(self: *HoistFrameGuard, is_effectful: bool) Allocator.Error!void {
-        try self.checker.finishHoistFrame(self.expr, is_effectful);
+    fn finish(self: *HoistFrameGuard, check_result: ExprCheckResult) Allocator.Error!void {
+        try self.checker.finishHoistFrame(self.expr, check_result);
         self.active = false;
     }
 
@@ -1710,14 +1710,22 @@ fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
     self.last_hoist_result = null;
 }
 
-fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, is_effectful: bool) Allocator.Error!void {
+fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, check_result: ExprCheckResult) Allocator.Error!void {
     if (self.hoist_frames.items.len == 0) {
         std.debug.panic("check invariant violated: missing hoist frame", .{});
     }
     const frame_index = self.hoist_frames.items.len - 1;
     var frame = self.hoist_frames.items[frame_index];
     std.debug.assert(frame.expr == expr);
-    if (is_effectful) frame.has_effectful_call = true;
+    if (check_result.isKnownEffectful()) frame.has_effectful_call = true;
+    if (check_result.runtime_dep) |runtime_dep| {
+        switch (runtime_dep) {
+            .compile_time_known => {},
+            .runtime_dependent,
+            .poisoned,
+            => frame.has_runtime_dependency = true,
+        }
+    }
 
     const semantically_eligible = frame.eligible();
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
@@ -1971,14 +1979,14 @@ fn recordHoistMatchBranchContextualBindings(
     }
 }
 
-fn recordMatchBranchRuntimeSummaries(
+fn recordMatchBranchSummaries(
     self: *Self,
     branch_patterns: []const CIR.Expr.Match.BranchPattern.Idx,
+    summary: ExprCheckResult,
 ) Allocator.Error!void {
-    const runtime_summary = ExprCheckResult.runtimeDependent();
     for (branch_patterns) |branch_pattern_idx| {
         const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
-        try self.recordLocalCheckSummary(branch_pattern.pattern, runtime_summary);
+        try self.recordLocalCheckSummary(branch_pattern.pattern, summary);
     }
 }
 
@@ -2516,7 +2524,7 @@ test "hoist frame finish leaves child candidates unchanged when selection alloca
     });
     state.checker.gpa = failing_allocator.allocator();
 
-    try std.testing.expectError(error.OutOfMemory, guard.finish(false));
+    try std.testing.expectError(error.OutOfMemory, guard.finish(ExprCheckResult.compileTimeKnown()));
     try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_frames.items.len);
     try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_expr_candidates.items.len);
     try std.testing.expectEqual(child_expr, state.checker.hoist_expr_candidates.items[0]);
@@ -2524,7 +2532,7 @@ test "hoist frame finish leaves child candidates unchanged when selection alloca
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_exprs.count());
 
     state.checker.gpa = std.testing.allocator;
-    try guard.finish(false);
+    try guard.finish(ExprCheckResult.compileTimeKnown());
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_frames.items.len);
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_expr_candidates.items.len);
     try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
@@ -2559,7 +2567,7 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
         });
         state.checker.gpa = failing_allocator.allocator();
 
-        guard.finish(false) catch |err| switch (err) {
+        guard.finish(ExprCheckResult.compileTimeKnown()) catch |err| switch (err) {
             error.OutOfMemory => {
                 if (fail_index > 0) saw_late_oom = true;
                 try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_frames.items.len);
@@ -2776,6 +2784,18 @@ test "runtime dependency summaries classify compile-time-known lookups" {
 
     {
         const source =
+            \\main = match 1 {
+            \\  x => x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryClosedMatch", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, "main", .compile_time_known);
+    }
+
+    {
+        const source =
             \\main = {
             \\  x = 1.I64
             \\  x
@@ -2836,14 +2856,14 @@ test "runtime dependency summaries classify runtime-bound lookups" {
 
     {
         const source =
-            \\main = match 1 {
+            \\main = |arg| match arg {
             \\  x => x
             \\}
         ;
         var test_env = try TestEnv.init("SummaryMatch", source);
         defer test_env.deinit();
         try test_env.assertNoErrors();
-        try expectTopLevelRuntimeDep(&test_env.checker, "main", .runtime_dependent);
+        try expectFirstFunctionBodyRuntimeDep(&test_env.checker, .runtime_dependent);
     }
 
     {
@@ -10541,6 +10561,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
                 if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
                 if (self.markHoistContextualDependencyForLookup(lookup.pattern_idx)) {
+                    if (summary_says_compile_time_known) break :known true;
                     lookup_has_runtime_dependency = true;
                     break :known true;
                 }
@@ -11597,7 +11618,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     check_result.markCompileTimeKnown();
-    try hoist_frame.finish(check_result.isKnownEffectful());
+    try hoist_frame.finish(check_result);
     return check_result;
 }
 
@@ -12993,7 +13014,8 @@ fn checkMatchExpr(
     const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
 
     // Check the match's condition
-    var check_result = try self.checkExpr(match.cond, env, Expected.none());
+    const cond_check_result = try self.checkExpr(match.cond, env, Expected.none());
+    var check_result = cond_check_result;
     const cond_var = ModuleEnv.varFrom(match.cond);
     const cond_always_crashes = self.exprAlwaysCrashes(match.cond);
     if (!match.is_try_suffix) {
@@ -13073,7 +13095,7 @@ fn checkMatchExpr(
             try self.recordHoistSingleBranchMatchPatternProvenance(match, first_branch, first_branch_ptrn_idxs);
         }
         try self.recordHoistMatchBranchContextualBindings(first_branch_ptrn_idxs, match_hoist_owner);
-        try self.recordMatchBranchRuntimeSummaries(first_branch_ptrn_idxs);
+        try self.recordMatchBranchSummaries(first_branch_ptrn_idxs, cond_check_result);
 
         // Check guard if present
         if (first_branch.guard) |guard_idx| {
@@ -13129,7 +13151,7 @@ fn checkMatchExpr(
             had_type_error = true;
         }
         try self.recordHoistMatchBranchContextualBindings(branch_ptrn_idxs, match_hoist_owner);
-        try self.recordMatchBranchRuntimeSummaries(branch_ptrn_idxs);
+        try self.recordMatchBranchSummaries(branch_ptrn_idxs, cond_check_result);
 
         // Check guard if present
         if (branch.guard) |guard_idx| {
@@ -13187,7 +13209,7 @@ fn checkMatchExpr(
                         }
                     }
                     try self.recordHoistMatchBranchContextualBindings(other_branch_ptrn_idxs, match_hoist_owner);
-                    try self.recordMatchBranchRuntimeSummaries(other_branch_ptrn_idxs);
+                    try self.recordMatchBranchSummaries(other_branch_ptrn_idxs, cond_check_result);
 
                     // Then check the other branch's exprs
                     check_result.include(try self.checkExprWithHoistSelectionSuppressed(other_branch.value, env, expected.forBranchBody()));
