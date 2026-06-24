@@ -17303,11 +17303,14 @@ fn literalConstraintSatisfiedByNominalBacking(
         // is transparent.
         if (!backing_nominal.canLiftInner(self.cir.qualified_module_ident)) return false;
 
+        // Cycle guard: store and compare already-resolved representative vars so
+        // we never re-resolve a visited entry. A representative var is 1:1 with
+        // its descriptor, so this is equivalent to the previous desc_idx compare
+        // but avoids the per-iteration resolveVar (no O(depth) work per step).
         for (self.scratch_vars.sliceFromStart(visited_top)) |visited_var| {
-            const visited_resolved = self.types.resolveVar(visited_var);
-            if (visited_resolved.desc_idx == backing_resolved.desc_idx) return false;
+            if (visited_var == backing_resolved.var_) return false;
         }
-        try self.scratch_vars.append(backing_var);
+        try self.scratch_vars.append(backing_resolved.var_);
         current = backing_nominal;
     }
 }
