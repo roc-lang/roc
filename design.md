@@ -169,6 +169,15 @@ strongly connected groups can be condensed, marked effectful if any member is
 effectful, and then propagated to callers. Ordinary caller-to-callee edges must
 remain one-way.
 
+Every static-dispatch call that is not resolved when the expression frame
+finishes is represented by explicit checked state. The active effect slot owns
+the watcher for that dispatch function variable. If the same expression is also
+a compile-time root candidate, the root candidate records that it is waiting on
+the same slot. When the dispatch result arrives, effect finalization updates the
+slot once, and both the function-effect answer and the root-selection answer
+consume that finalized slot. Root selection must not infer delayed dispatch by
+re-reading syntax or by searching for unresolved method names.
+
 ### Root Selection During Checking
 
 Compile-time root selection uses the same checker traversal that already walks
@@ -196,6 +205,11 @@ summary. Top-level checked values and imported checked values are
 compile-time-known unless their own checked summaries say otherwise. Parent
 expressions combine child summaries directly.
 
+The expression summary is not a second effect system. Effect slots remain the
+owner of effectfulness. The expression summary only says whether the expression
+is already known effect-free, already known effectful, or waiting on an effect
+slot that can still be marked by delayed dispatch or callee propagation.
+
 Root selection keeps maximal eligible expressions. Each expression frame
 records the root-candidate stack length at entry. If the expression finishes as
 compile-time-known and effect-free, it removes child candidates added inside
@@ -207,6 +221,13 @@ or drops the parent and keeps the children when the parent resolves effectful.
 This is the only parent-child replacement rule. There are no special cases for
 leaves, strings, numbers, empty lists, records, `return`, `break`, loop syntax,
 or other expression shapes.
+
+Delayed parents form intervals over the candidate stack, not source-tree
+queries. Nested delayed parents finalize from explicit interval ownership: when
+an outer delayed parent is kept, every child candidate in its interval is
+removed, including delayed children. When an outer delayed parent is discarded,
+the candidates in its interval keep their own finalized results. This preserves
+the maximal-root rule without a second walk and without special pruning rules.
 
 Root selection must be independent of how the source was arranged. A named
 top-level value, a closed immutable local value, and an equivalent inline
