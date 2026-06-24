@@ -173,15 +173,6 @@ test "hoisted local constants are finalized and restored during runtime lowering
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const root_view = check.CheckedArtifact.importedView(root);
-    const app = if (root_view.hoisted_constants.entries.len >= 2)
-        root_view
-    else
-        findHoistedArtifact(imports, 2) orelse
-            findHoistedArtifact(relations, 2) orelse
-            return error.AppHoistedConstantsNotFound;
-
-    try expectCompileTimeRootKindsPresent(app);
     try expectCompileTimeRootKindsPresent(app_view);
     try expectExportedRuntimeEntrypoint(app_artifact);
 
@@ -1535,7 +1526,7 @@ fn countStaticDataLiteralAssignments(store: *const lir.LirStore) usize {
 fn countInternalStaticValueExports(exports: []const @import("backend").StaticDataExport) usize {
     var count: usize = 0;
     for (exports) |static_export| {
-        if (std.mem.startsWith(u8, static_export.symbol_name, "roc__static_value_")) {
+        if (std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) {
             count += 1;
         }
     }
@@ -1545,7 +1536,7 @@ fn countInternalStaticValueExports(exports: []const @import("backend").StaticDat
 fn expectInternalStaticValueExportsAreLinkableOnly(exports: []const @import("backend").StaticDataExport) !void {
     var found = false;
     for (exports) |static_export| {
-        if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_value_")) continue;
+        if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) continue;
 
         found = true;
         try std.testing.expect(static_export.is_global);

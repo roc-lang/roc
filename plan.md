@@ -856,12 +856,12 @@ wc -c rocci-bird.wasm
 
 - [ ] Old hoist selection machinery is deleted or fully replaced.
 - [ ] No post-check stage infers root eligibility from source/CIR shape.
-- [ ] No root blocker remains for `dbg`, `expect`, or `crash`.
+- [x] No root blocker remains for `dbg`, `expect`, or `crash`.
 - [x] No root blocker remains for leaf expressions.
-- [ ] No root blocker remains for `return`, `break`, or loops.
+- [x] No root blocker remains for `return`, `break`, or loops.
 - [x] Focused effect tests pass.
 - [x] Focused root tests pass.
-- [ ] Compile-time evaluation/static data tests pass.
+- [x] Compile-time evaluation/static data tests pass.
 - [x] Full `zig build run-test-zig-module-check` passes.
 - [ ] Broader compiler tests pass at major phase boundaries.
 

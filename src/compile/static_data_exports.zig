@@ -215,7 +215,7 @@ const StaticDataBuilder = struct {
                 .symbol_name = symbol_name,
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
-                .is_global = false,
+                .is_global = true,
                 .is_exported = false,
                 .relocations = materialized.relocations,
             });
