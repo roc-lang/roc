@@ -19,7 +19,7 @@
     </main>
 
     <script type="module">
-      import { mountSignalsApp } from "./runtime.mjs";
+      import { mountSignalsApp, opsApiTextTaskHandler } from "./runtime.mjs";
 
       const params = new URLSearchParams(window.location.search);
       const wasmUrl = params.get("wasm") || "./counter.wasm";
@@ -34,6 +34,7 @@
         await mountSignalsApp({
           wasmUrl,
           root: document.getElementById("app"),
+          taskHandler: opsApiTextTaskHandler,
         });
       } catch (err) {
         error.hidden = false;

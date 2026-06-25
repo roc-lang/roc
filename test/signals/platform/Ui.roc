@@ -167,6 +167,9 @@ Ui := [].{
 		Elem.OnChange({ signal: Signal.to_expr(signal), to_cmd: Box.box(wrapped) })
 	}
 
+	on_mount : ({} -> Node.Cmd) -> Elem
+	on_mount = |to_cmd| Elem.OnMount({ to_cmd: Box.box(to_cmd) })
+
 	on_cleanup : Node.Cleanup -> Elem
 	on_cleanup = |cleanup| Elem.Cleanup({ cleanup: cleanup })
 

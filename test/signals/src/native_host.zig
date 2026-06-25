@@ -2150,6 +2150,9 @@ fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source
     host.rebuildActiveEventsFromStream(&next_stream);
     host.engine.active_stream.deinit(host.gpa.allocator(), roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = next_stream;
+    const mount_counts = host.engine.runActiveMountCommands(host, roc_host);
+    host.engine.render_metrics.addCommandCounts(mount_counts);
+    if (command_counts) |total| total.addAll(mount_counts);
     finishHostMetrics(host);
 }
 

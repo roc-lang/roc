@@ -500,6 +500,7 @@ pub const HostSignalTaskSourceRecord = struct {
     failed: abi.RocErasedCallable,
     eq: abi.RocErasedCallable,
     drop: abi.RocErasedCallable,
+    reset_on_start: bool,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -804,12 +805,14 @@ pub const HostStructuralSplice = struct {
     touched_parent_ids: []u64,
     replacement_elem_ids: []u64,
     replacement_on_change_indices: []usize,
+    replacement_mount_indices: []usize,
 
     pub fn deinit(self: HostStructuralSplice, allocator: std.mem.Allocator) void {
         allocator.free(self.removed_elem_ids);
         allocator.free(self.touched_parent_ids);
         allocator.free(self.replacement_elem_ids);
         allocator.free(self.replacement_on_change_indices);
+        allocator.free(self.replacement_mount_indices);
     }
 };
 
@@ -825,6 +828,7 @@ pub const RecomputeApplyOutcome = struct {
 pub const HostKeyedRowDiffResult = struct {
     scope_ids: []u64,
     row_items_changed: []bool,
+    scope_created: []bool,
     removed_scope_ids: []u64,
     rows_reused: u64,
     rows_created: u64,
@@ -835,6 +839,7 @@ pub const HostKeyedRowDiffResult = struct {
     pub fn deinit(self: HostKeyedRowDiffResult, allocator: std.mem.Allocator) void {
         allocator.free(self.scope_ids);
         allocator.free(self.row_items_changed);
+        allocator.free(self.scope_created);
         allocator.free(self.removed_scope_ids);
     }
 };
@@ -972,6 +977,12 @@ pub const HostNodeOnChangeDesc = struct {
     signal: HostSignalBinding,
     to_cmd: abi.RocErasedCallable,
     cached_value: HostSignalCacheSlot = .absent,
+};
+
+pub const HostNodeMountDesc = struct {
+    scope_id: u64,
+    to_cmd: abi.RocErasedCallable,
+    run_on_mount: bool,
 };
 
 pub const HostNodeCleanupDesc = struct {
@@ -1128,6 +1139,7 @@ pub const HostNodeDescriptorStream = struct {
     static_bool_attrs: std.ArrayListUnmanaged(HostNodeStaticBoolAttrDesc) = .empty,
     signal_bool_attrs: std.ArrayListUnmanaged(HostNodeSignalBoolAttrDesc) = .empty,
     on_changes: std.ArrayListUnmanaged(HostNodeOnChangeDesc) = .empty,
+    mounts: std.ArrayListUnmanaged(HostNodeMountDesc) = .empty,
     cleanups: std.ArrayListUnmanaged(HostNodeCleanupDesc) = .empty,
     events: std.ArrayListUnmanaged(HostNodeEventDesc) = .empty,
     scope_sites: std.ArrayListUnmanaged(HostNodeScopeSiteDesc) = .empty,
@@ -1314,6 +1326,12 @@ pub const HostNodeDescriptorStream = struct {
             abi.decrefErasedCallable(desc.to_cmd, roc_host);
         }
         self.on_changes.deinit(allocator);
+
+        for (self.mounts.items) |desc| {
+            metrics.bump(.closure_releases, 1);
+            abi.decrefErasedCallable(desc.to_cmd, roc_host);
+        }
+        self.mounts.deinit(allocator);
 
         for (self.cleanups.items) |desc| {
             allocator.free(desc.name);
@@ -1564,6 +1582,20 @@ pub const HostNodeDescriptorStream = struct {
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, roc_host, metrics);
+            metrics.bump(.closure_releases, 1);
+            abi.decrefErasedCallable(to_cmd, roc_host);
+            @panic("out of memory");
+        };
+    }
+
+    pub fn appendMount(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, scope_id: u64, to_cmd: abi.RocErasedCallable, run_on_mount: bool) void {
+        abi.increfErasedCallable(to_cmd, 1);
+        metrics.bump(.closure_retains, 1);
+        self.mounts.append(allocator, .{
+            .scope_id = scope_id,
+            .to_cmd = to_cmd,
+            .run_on_mount = run_on_mount,
+        }) catch {
             metrics.bump(.closure_releases, 1);
             abi.decrefErasedCallable(to_cmd, roc_host);
             @panic("out of memory");
@@ -2965,6 +2997,7 @@ pub fn Engine(comptime Ctx: type) type {
                         .failed = retainHostCallable(payload.failed, &self.pending_roc_metrics),
                         .eq = retainHostCallable(payload.eq, &self.pending_roc_metrics),
                         .drop = retainHostCallable(payload.drop, &self.pending_roc_metrics),
+                        .reset_on_start = payload.reset_on_start,
                     } });
                     stream.rememberSignalRecord(allocator, record);
                     break :blk record;
@@ -3110,6 +3143,10 @@ pub fn Engine(comptime Ctx: type) type {
                 stream.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, desc.scope_id, signal, desc.to_cmd);
                 stream.on_changes.items[stream.on_changes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
             }
+            for (previous.mounts.items) |desc| {
+                if (!(self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"))) continue;
+                stream.appendMount(allocator, roc_host, &self.pending_roc_metrics, desc.scope_id, desc.to_cmd, false);
+            }
             for (previous.cleanups.items) |desc| {
                 if (!(self.scopeIsDescendantOrSelf(desc.scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"))) continue;
                 stream.appendCleanup(allocator, desc.scope_id, desc.name);
@@ -3168,6 +3205,19 @@ pub fn Engine(comptime Ctx: type) type {
                 self.cancelPendingTask(ctx, task);
             }
             self.pending_tasks.items.len = 0;
+        }
+
+        pub fn cancelPendingTasksByTaskToken(self: *Self, ctx: Ctx.Handle, task_token: HostSignalToken) void {
+            var index: usize = 0;
+            while (index < self.pending_tasks.items.len) {
+                if (!self.pending_tasks.items[index].active or self.pending_tasks.items[index].task_token != task_token) {
+                    index += 1;
+                    continue;
+                }
+
+                var task = self.removePendingTaskAt(index);
+                self.cancelPendingTask(ctx, &task);
+            }
         }
 
         pub fn cancelPendingTasksInScopeSubtree(self: *Self, ctx: Ctx.Handle, scope_id: u64) void {
@@ -3292,6 +3342,8 @@ pub fn Engine(comptime Ctx: type) type {
             errdefer allocator.free(next_scope_ids);
             var row_items_changed = allocator.alloc(bool, keys.len) catch @panic("out of memory");
             errdefer allocator.free(row_items_changed);
+            var scope_created = allocator.alloc(bool, keys.len) catch @panic("out of memory");
+            errdefer allocator.free(scope_created);
 
             var row_items_unchanged: u64 = 0;
             var row_items_updated: u64 = 0;
@@ -3301,6 +3353,7 @@ pub fn Engine(comptime Ctx: type) type {
                     .reuse => |reuse| {
                         const scope_id = reuse.scope_id;
                         next_scope_ids[key_index] = scope_id;
+                        scope_created[key_index] = false;
                         erased_calls.callErasedHostValueToUnit(roc_host, key_drop, key);
                         if (self.eachRowScopeItemEquals(roc_host, scope_id, item)) {
                             erased_calls.callErasedHostValueToUnit(roc_host, item_drop, item);
@@ -3315,6 +3368,7 @@ pub fn Engine(comptime Ctx: type) type {
                     .create => {
                         next_scope_ids[key_index] = self.createEachRowScope(ctx, parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
                         row_items_changed[key_index] = true;
+                        scope_created[key_index] = true;
                     },
                 }
             }
@@ -3332,6 +3386,7 @@ pub fn Engine(comptime Ctx: type) type {
             return .{
                 .scope_ids = next_scope_ids,
                 .row_items_changed = row_items_changed,
+                .scope_created = scope_created,
                 .removed_scope_ids = match_plan.removed_scope_ids,
                 .rows_reused = match_plan.rows_reused,
                 .rows_created = match_plan.rows_created,
@@ -3421,7 +3476,8 @@ pub fn Engine(comptime Ctx: type) type {
                 self.disposeScopeSubtree(ctx, roc_host, inactive_scope_id);
             }
 
-            const branch_scope_id = self.internWhenBranchScope(Ctx.allocator(ctx), site.scope_id, site.ordinal, active_branch) catch @panic("scope id has no host scope descriptor");
+            const branch_scope = self.internWhenBranchScope(Ctx.allocator(ctx), site.scope_id, site.ordinal, active_branch) catch @panic("scope id has no host scope descriptor");
+            const branch_scope_id = branch_scope.scope_id;
             const allocator = Ctx.allocator(ctx);
             var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
             defer binder_stack.deinit(allocator);
@@ -3433,7 +3489,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
             var ordinal: u64 = 0;
             var dom_ordinal: u64 = 0;
-            self.collectActiveElemDescriptors(ctx, roc_host, stream, branch_elem, branch_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
+            self.collectActiveElemDescriptors(ctx, roc_host, stream, branch_elem, branch_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, branch_scope.created, dirty_source_node_ids);
             return branch_scope_id;
         }
 
@@ -3450,7 +3506,7 @@ pub fn Engine(comptime Ctx: type) type {
             defer binder_stack.deinit(allocator);
             binder_stack.appendSlice(allocator, site.binder_bindings) catch @panic("out of memory");
 
-            for (diff.scope_ids, diff.row_items_changed) |row_scope_id, row_item_changed| {
+            for (diff.scope_ids, diff.row_items_changed, diff.scope_created) |row_scope_id, row_item_changed, row_created| {
                 if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, row_scope_id, dirty_source_node_ids)) {
                     self.copyActiveScopeSubtreeDescriptors(ctx, roc_host, stream, row_scope_id);
                     continue;
@@ -3462,11 +3518,11 @@ pub fn Engine(comptime Ctx: type) type {
 
                 var ordinal: u64 = 0;
                 var dom_ordinal: u64 = 0;
-                self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
+                self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, row_created, dirty_source_node_ids);
             }
         }
 
-        pub fn collectActiveEachSingleRowDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, dirty_source_node_ids: []const u64) void {
+        pub fn collectActiveEachSingleRowDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, site: HostNodeScopeSiteDesc, each: HostNodeEachDesc, row_scope_id: u64, row_created: bool, dirty_source_node_ids: []const u64) void {
             const allocator = Ctx.allocator(ctx);
             var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
             defer binder_stack.deinit(allocator);
@@ -3478,10 +3534,10 @@ pub fn Engine(comptime Ctx: type) type {
 
             var ordinal: u64 = 0;
             var dom_ordinal: u64 = 0;
-            self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
+            self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, site.parent_elem_id, &ordinal, &dom_ordinal, &binder_stack, row_created, dirty_source_node_ids);
         }
 
-        pub fn collectActiveElemDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), dirty_source_node_ids: []const u64) void {
+        pub fn collectActiveElemDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem: abi.Elem, scope_id: u64, parent_elem_id: u64, ordinal: *u64, dom_ordinal: *u64, binder_stack: *std.ArrayListUnmanaged(HostBinderBinding), scope_created: bool, dirty_source_node_ids: []const u64) void {
             self.validateScopeId(scope_id) catch @panic("scope id has no host scope descriptor");
 
             const allocator = Ctx.allocator(ctx);
@@ -3495,7 +3551,7 @@ pub fn Engine(comptime Ctx: type) type {
                         self.collectNodeAttrDescriptor(ctx, roc_host, stream, elem_id, attr, binder_stack.items);
                     }
                     for (payload.children.items()) |child| {
-                        self.collectActiveElemDescriptors(ctx, roc_host, stream, child, scope_id, elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
+                        self.collectActiveElemDescriptors(ctx, roc_host, stream, child, scope_id, elem_id, ordinal, dom_ordinal, binder_stack, scope_created, dirty_source_node_ids);
                     }
                 },
                 .Text => {
@@ -3518,6 +3574,10 @@ pub fn Engine(comptime Ctx: type) type {
                     const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack.items);
                     stream.appendOnChange(allocator, roc_host, &self.pending_roc_metrics, scope_id, signal, payload.to_cmd);
                 },
+                .OnMount => {
+                    const payload = elem.payload_on_mount();
+                    stream.appendMount(allocator, roc_host, &self.pending_roc_metrics, scope_id, payload.to_cmd, scope_created);
+                },
                 .State => {
                     const site_ordinal = ordinal.*;
                     const node_id = self.internNodeIdentity(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
@@ -3527,7 +3587,7 @@ pub fn Engine(comptime Ctx: type) type {
                     stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, state.initial, state.eq, state.drop);
                     self.ensureStateFromDesc(ctx, roc_host, stream.states.items[stream.states.items.len - 1]);
                     binder_stack.append(allocator, .{ .token = state.binder, .node_id = node_id }) catch @panic("out of memory");
-                    self.collectActiveElemDescriptors(ctx, roc_host, stream, state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, dirty_source_node_ids);
+                    self.collectActiveElemDescriptors(ctx, roc_host, stream, state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, scope_created, dirty_source_node_ids);
                     _ = binder_stack.pop() orelse unreachable;
                 },
                 .Component => {
@@ -3535,10 +3595,11 @@ pub fn Engine(comptime Ctx: type) type {
                     const node_id = self.internNodeIdentity(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
                     ordinal.* += 1;
                     stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .component, binder_stack.items);
-                    const component_scope_id = self.internComponentScope(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
+                    const component_scope = self.internComponentScope(Ctx.allocator(ctx), scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
+                    const component_scope_id = component_scope.scope_id;
                     var component_ordinal: u64 = 0;
                     var component_dom_ordinal: u64 = 0;
-                    self.collectActiveElemDescriptors(ctx, roc_host, stream, elem.payload_component().child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack, dirty_source_node_ids);
+                    self.collectActiveElemDescriptors(ctx, roc_host, stream, elem.payload_component().child.*, component_scope_id, parent_elem_id, &component_ordinal, &component_dom_ordinal, binder_stack, component_scope.created, dirty_source_node_ids);
                 },
                 .When => {
                     const site_ordinal = ordinal.*;
@@ -3557,14 +3618,15 @@ pub fn Engine(comptime Ctx: type) type {
                     if (self.activeWhenBranchScopeId(scope_id, site_ordinal, active_branch.opposite()) catch @panic("scope id has no host scope descriptor")) |inactive_scope_id| {
                         self.disposeScopeSubtree(ctx, roc_host, inactive_scope_id);
                     }
-                    const branch_scope_id = self.internWhenBranchScope(Ctx.allocator(ctx), scope_id, site_ordinal, active_branch) catch @panic("scope id has no host scope descriptor");
+                    const branch_scope = self.internWhenBranchScope(Ctx.allocator(ctx), scope_id, site_ordinal, active_branch) catch @panic("scope id has no host scope descriptor");
+                    const branch_scope_id = branch_scope.scope_id;
                     var branch_ordinal: u64 = 0;
                     const branch_elem = switch (active_branch) {
                         .true_branch => when_payload.when_true.*,
                         .false_branch => when_payload.when_false.*,
                     };
                     var branch_dom_ordinal: u64 = 0;
-                    self.collectActiveElemDescriptors(ctx, roc_host, stream, branch_elem, branch_scope_id, parent_elem_id, &branch_ordinal, &branch_dom_ordinal, binder_stack, dirty_source_node_ids);
+                    self.collectActiveElemDescriptors(ctx, roc_host, stream, branch_elem, branch_scope_id, parent_elem_id, &branch_ordinal, &branch_dom_ordinal, binder_stack, branch_scope.created, dirty_source_node_ids);
                 },
                 .Each => {
                     const site_ordinal = ordinal.*;
@@ -3607,7 +3669,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const diff = self.syncEachRowScopes(ctx, roc_host, scope_id, site_ordinal, keys, item_values, each_desc.key_hash, each_desc.key_eq, each_desc.key_drop, each_desc.item_eq, each_desc.item_drop);
                     defer diff.deinit(allocator);
 
-                    for (diff.scope_ids, diff.row_items_changed) |row_scope_id, row_item_changed| {
+                    for (diff.scope_ids, diff.row_items_changed, diff.scope_created) |row_scope_id, row_item_changed, row_created| {
                         if (!row_item_changed and !self.scopeSubtreeHasDirtyStructuralSource(&self.active_stream, row_scope_id, dirty_source_node_ids)) {
                             self.copyActiveScopeSubtreeDescriptors(ctx, roc_host, stream, row_scope_id);
                             continue;
@@ -3619,20 +3681,21 @@ pub fn Engine(comptime Ctx: type) type {
 
                         var row_ordinal: u64 = 0;
                         var row_dom_ordinal: u64 = 0;
-                        self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, parent_elem_id, &row_ordinal, &row_dom_ordinal, binder_stack, dirty_source_node_ids);
+                        self.collectActiveElemDescriptors(ctx, roc_host, stream, row_elem, row_scope_id, parent_elem_id, &row_ordinal, &row_dom_ordinal, binder_stack, row_created, dirty_source_node_ids);
                     }
                 },
             }
         }
 
         pub fn collectActiveElemRootDescriptors(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, root: abi.Elem, dirty_source_node_ids: []const u64) void {
-            const root_scope_id = self.internRootScope(Ctx.allocator(ctx)) catch @panic("scope id has no host scope descriptor");
+            const root_scope = self.internRootScope(Ctx.allocator(ctx)) catch @panic("scope id has no host scope descriptor");
+            const root_scope_id = root_scope.scope_id;
             const allocator = Ctx.allocator(ctx);
             var binder_stack: std.ArrayListUnmanaged(HostBinderBinding) = .empty;
             defer binder_stack.deinit(allocator);
             var ordinal: u64 = 0;
             var dom_ordinal: u64 = 0;
-            self.collectActiveElemDescriptors(ctx, roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack, dirty_source_node_ids);
+            self.collectActiveElemDescriptors(ctx, roc_host, stream, root, root_scope_id, 0, &ordinal, &dom_ordinal, &binder_stack, root_scope.created, dirty_source_node_ids);
         }
 
         pub fn clearActiveSignalGraph(self: *Self, ctx: Ctx.Handle) void {
@@ -4172,6 +4235,11 @@ pub fn Engine(comptime Ctx: type) type {
             abi.decrefErasedCallable(desc.to_cmd, roc_host);
         }
 
+        fn deinitActiveMountDesc(self: *Self, roc_host: *abi.RocHost, desc: *HostNodeMountDesc) void {
+            self.pending_roc_metrics.bump(.closure_releases, 1);
+            abi.decrefErasedCallable(desc.to_cmd, roc_host);
+        }
+
         pub fn scopeIsInReplacementTarget(self: *Self, scope_id: u64, target: HostStructuralReplacementTarget) bool {
             return switch (target) {
                 .scope => |root_scope_id| self.scopeIsDescendantOrSelf(scope_id, root_scope_id) catch @panic("scope descriptor referenced an unknown parent scope"),
@@ -4332,6 +4400,21 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.on_changes.items.len = write_index;
         }
 
+        fn removeActiveMountDescriptorsInTarget(self: *Self, roc_host: *abi.RocHost, target: HostStructuralReplacementTarget) void {
+            var write_index: usize = 0;
+            self.recordStreamNodesScanned(self.active_stream.mounts.items.len);
+            for (self.active_stream.mounts.items) |desc| {
+                if (self.scopeIsInReplacementTarget(desc.scope_id, target)) {
+                    var removed = desc;
+                    self.deinitActiveMountDesc(roc_host, &removed);
+                    continue;
+                }
+                self.active_stream.mounts.items[write_index] = desc;
+                write_index += 1;
+            }
+            self.active_stream.mounts.items.len = write_index;
+        }
+
         fn removeActiveCleanupDescriptorsInTarget(self: *Self, ctx: Ctx.Handle, target: HostStructuralReplacementTarget) void {
             const allocator = Ctx.allocator(ctx);
             var write_index: usize = 0;
@@ -4462,6 +4545,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.removeActiveStaticBoolAttrDescriptorsInTarget(target);
             self.removeActiveSignalBoolAttrDescriptorsInTarget(ctx, roc_host, target);
             self.removeActiveOnChangeDescriptorsInTarget(ctx, roc_host, target);
+            self.removeActiveMountDescriptorsInTarget(roc_host, target);
             self.removeActiveCleanupDescriptorsInTarget(ctx, target);
             self.removeActiveEventDescriptorsInTarget(roc_host, target);
             self.removeActiveStateDescriptorsInTarget(roc_host, target);
@@ -4575,6 +4659,9 @@ pub fn Engine(comptime Ctx: type) type {
             self.active_stream.on_changes.appendSlice(allocator, replacement.on_changes.items) catch @panic("out of memory");
             replacement.on_changes.items.len = 0;
 
+            self.active_stream.mounts.appendSlice(allocator, replacement.mounts.items) catch @panic("out of memory");
+            replacement.mounts.items.len = 0;
+
             self.active_stream.cleanups.appendSlice(allocator, replacement.cleanups.items) catch @panic("out of memory");
             replacement.cleanups.items.len = 0;
 
@@ -4685,6 +4772,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             const replacement_render_count = replacement.render_nodes.items.len;
             const on_change_count = replacement.on_changes.items.len;
+            const mount_count = replacement.mounts.items.len;
             const replacement_elem_ids = allocator.alloc(u64, replacement_render_count) catch @panic("out of memory");
             errdefer allocator.free(replacement_elem_ids);
             for (replacement.render_nodes.items, 0..) |node, index| {
@@ -4698,6 +4786,12 @@ pub fn Engine(comptime Ctx: type) type {
             errdefer allocator.free(replacement_on_change_indices);
             for (replacement_on_change_indices, 0..) |*index, offset| {
                 index.* = on_change_start + offset;
+            }
+            const mount_start = self.active_stream.mounts.items.len;
+            const replacement_mount_indices = allocator.alloc(usize, mount_count) catch @panic("out of memory");
+            errdefer allocator.free(replacement_mount_indices);
+            for (replacement_mount_indices, 0..) |*index, offset| {
+                index.* = mount_start + offset;
             }
             self.appendReplacementNonRenderDescriptorsMoved(ctx, replacement, render_insert_index);
 
@@ -4713,6 +4807,7 @@ pub fn Engine(comptime Ctx: type) type {
                 .touched_parent_ids = touched_parent_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
                 .replacement_elem_ids = replacement_elem_ids,
                 .replacement_on_change_indices = replacement_on_change_indices,
+                .replacement_mount_indices = replacement_mount_indices,
             };
         }
 
@@ -5058,22 +5153,22 @@ pub fn Engine(comptime Ctx: type) type {
             return scope_tree.validate(HostEachRowScopeStep, self.scopes.items, scope_id);
         }
 
-        pub fn internRootScope(self: *Self, allocator: std.mem.Allocator) scope_tree.Error!u64 {
+        pub fn internRootScope(self: *Self, allocator: std.mem.Allocator) scope_tree.Error!scope_tree.InternResult {
             const result = try scope_tree.internRoot(HostEachRowScopeStep, allocator, &self.scopes);
             if (result.created) self.recordScopeCreated();
-            return result.scope_id;
+            return result;
         }
 
-        pub fn internComponentScope(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) scope_tree.Error!u64 {
+        pub fn internComponentScope(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64) scope_tree.Error!scope_tree.InternResult {
             const result = try scope_tree.internComponent(HostEachRowScopeStep, allocator, &self.scopes, parent_scope_id, site_ordinal);
             if (result.created) self.recordScopeCreated();
-            return result.scope_id;
+            return result;
         }
 
-        pub fn internWhenBranchScope(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) scope_tree.Error!u64 {
+        pub fn internWhenBranchScope(self: *Self, allocator: std.mem.Allocator, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) scope_tree.Error!scope_tree.InternResult {
             const result = try scope_tree.internWhenBranch(HostEachRowScopeStep, allocator, &self.scopes, parent_scope_id, site_ordinal, branch);
             if (result.created) self.recordScopeCreated();
-            return result.scope_id;
+            return result;
         }
 
         pub fn internNodeIdentity(self: *Self, allocator: std.mem.Allocator, scope_id: u64, ordinal: u64) IdentityInternError!u64 {
@@ -5335,6 +5430,8 @@ pub fn Engine(comptime Ctx: type) type {
             defer replacement_elem_ids.deinit(allocator);
             var replacement_on_change_indices: std.ArrayListUnmanaged(usize) = .empty;
             defer replacement_on_change_indices.deinit(allocator);
+            var replacement_mount_indices: std.ArrayListUnmanaged(usize) = .empty;
+            defer replacement_mount_indices.deinit(allocator);
             var spliced_any = false;
 
             for (diff.removed_scope_ids) |removed_scope_id| {
@@ -5349,6 +5446,7 @@ pub fn Engine(comptime Ctx: type) type {
                 }
                 replacement_elem_ids.appendSlice(allocator, splice.replacement_elem_ids) catch @panic("out of memory");
                 replacement_on_change_indices.appendSlice(allocator, splice.replacement_on_change_indices) catch @panic("out of memory");
+                replacement_mount_indices.appendSlice(allocator, splice.replacement_mount_indices) catch @panic("out of memory");
                 spliced_any = true;
             }
 
@@ -5359,7 +5457,7 @@ pub fn Engine(comptime Ctx: type) type {
 
                 var row_stream: HostNodeDescriptorStream = .{};
                 defer row_stream.deinit(allocator, roc_host, &self.pending_roc_metrics);
-                self.collectActiveEachSingleRowDescriptors(ctx, roc_host, &row_stream, site, each, row_scope_id, dirty_source_node_ids);
+                self.collectActiveEachSingleRowDescriptors(ctx, roc_host, &row_stream, site, each, row_scope_id, diff.scope_created[row_index], dirty_source_node_ids);
 
                 const render_insert_index = self.renderInsertIndexForEachRow(site, diff.scope_ids, row_index);
                 const splice = self.spliceActiveStreamReplacingScope(ctx, roc_host, row_scope_id, render_insert_index, &row_stream);
@@ -5371,6 +5469,7 @@ pub fn Engine(comptime Ctx: type) type {
                 }
                 replacement_elem_ids.appendSlice(allocator, splice.replacement_elem_ids) catch @panic("out of memory");
                 replacement_on_change_indices.appendSlice(allocator, splice.replacement_on_change_indices) catch @panic("out of memory");
+                replacement_mount_indices.appendSlice(allocator, splice.replacement_mount_indices) catch @panic("out of memory");
                 spliced_any = true;
             }
 
@@ -5381,6 +5480,7 @@ pub fn Engine(comptime Ctx: type) type {
                 .touched_parent_ids = touched_parent_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
                 .replacement_elem_ids = replacement_elem_ids.toOwnedSlice(allocator) catch @panic("out of memory"),
                 .replacement_on_change_indices = replacement_on_change_indices.toOwnedSlice(allocator) catch @panic("out of memory"),
+                .replacement_mount_indices = replacement_mount_indices.toOwnedSlice(allocator) catch @panic("out of memory"),
             };
             defer merged_splice.deinit(allocator);
             const target = HostStructuralReplacementTarget{ .each_site = .{ .parent_scope_id = site.scope_id, .site_ordinal = site.ordinal } };
@@ -5399,6 +5499,34 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn evalOnChangeInitial(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
             const value = self.evalHostSignalBinding(ctx, roc_host, &desc.signal);
             desc.cached_value.replace(roc_host, &self.pending_roc_metrics, value, self.hostSignalBindingEqCallable(ctx, &desc.signal), self.hostSignalBindingDropCallable(ctx, &desc.signal));
+        }
+
+        pub fn evalMountCommand(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeMountDesc) render.Counts {
+            if (!desc.run_on_mount) return .{};
+            desc.run_on_mount = false;
+
+            const cmd = erased_calls.callUnitToStartTaskCmd(roc_host, desc.to_cmd);
+            defer abi.decref__AnonStruct76(cmd, roc_host);
+            return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
+        }
+
+        pub fn runActiveMountCommandIndices(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, indices: []const usize) render.Counts {
+            var counts: render.Counts = .{};
+            self.recordStreamNodesScanned(indices.len);
+            for (indices) |mount_index| {
+                if (mount_index >= self.active_stream.mounts.items.len) @panic("mount descriptor index exceeded active descriptor stream");
+                counts.addAll(self.evalMountCommand(ctx, roc_host, &self.active_stream.mounts.items[mount_index]));
+            }
+            return counts;
+        }
+
+        pub fn runActiveMountCommands(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost) render.Counts {
+            var counts: render.Counts = .{};
+            self.recordStreamNodesScanned(self.active_stream.mounts.items.len);
+            for (self.active_stream.mounts.items) |*desc| {
+                counts.addAll(self.evalMountCommand(ctx, roc_host, desc));
+            }
+            return counts;
         }
 
         pub fn applyStructuralEventBindings(self: *Self, ctx: Ctx.Handle, stream: *const HostNodeDescriptorStream, seen: []const bool, counts: *render.Counts) void {
@@ -5801,6 +5929,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             self.debugAssertRenderCacheMatchesStream(ctx, &self.active_stream);
             self.debugAssertRenderCacheMatchesSink(ctx);
+            counts.addAll(self.runActiveMountCommandIndices(ctx, roc_host, splice.replacement_mount_indices));
             self.render_metrics.addCommandCounts(counts);
             return counts;
         }
@@ -6195,11 +6324,16 @@ pub fn Engine(comptime Ctx: type) type {
             const request = erased_calls.callErasedHostValueToStr(roc_host, cmd.request_read, request_value);
             defer request.decref(roc_host);
 
+            self.cancelPendingTasksByTaskToken(ctx, cmd.task_token);
             const request_id = self.appendPendingTask(ctx, owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
             Ctx.sink(ctx).startTask(request_id, cmd.task_name.asSlice(), request.asSlice());
 
-            const loading = erased_calls.callValueInitThunk(roc_host, task_payload.initial);
-            return self.dispatchEffectSourceValue(ctx, roc_host, record, loading);
+            if (task_payload.reset_on_start) {
+                const loading = erased_calls.callValueInitThunk(roc_host, task_payload.initial);
+                return self.dispatchEffectSourceValue(ctx, roc_host, record, loading);
+            }
+
+            return .{};
         }
 
         pub fn tickIntervalSource(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, period_ms: u64) render.Counts {

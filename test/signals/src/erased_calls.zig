@@ -70,6 +70,19 @@ pub fn callErasedHostValueToStartTaskCmd(roc_host: *abi.RocHost, callable: abi.R
     return result;
 }
 
+pub fn callUnitToStartTaskCmd(roc_host: *abi.RocHost, callable: abi.RocErasedCallable) abi.__AnonStruct76 {
+    const payload = erasedCallablePayload(callable);
+    var call_args = ErasedUnitArgs{};
+    var result: abi.__AnonStruct76 = undefined;
+    payload.callable_fn_ptr(
+        roc_host,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        abi.rocErasedCallableCapturePtr(callable),
+    );
+    return result;
+}
+
 pub fn callErasedHostValueHostValueToHostValue(roc_host: *abi.RocHost, callable: abi.RocErasedCallable, arg0: HostValue, arg1: HostValue) HostValue {
     const payload = erasedCallablePayload(callable);
     var call_args = ErasedHostValueBinaryArgs{ .arg0 = arg0, .arg1 = arg1 };

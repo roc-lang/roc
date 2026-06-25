@@ -2,7 +2,7 @@ platform ""
 	requires {
 		main : {} -> Elem
 	}
-	exposes [Elem, Signal, Html, Ui]
+	exposes [Elem, Signal, Html, Ui, Http]
 	packages {}
 	provides { "roc_ui_init": ui_init }
 	hosted {
@@ -26,6 +26,7 @@ import HostValue
 import Signal
 import Html
 import Ui
+import Http
 
 ui_init : {} -> Box(Elem)
 ui_init = |_| {

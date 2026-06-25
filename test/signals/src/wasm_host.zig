@@ -326,6 +326,8 @@ fn renderActiveRoot(dirty_source_node_ids: []const u64) void {
     shared_engine.rebuildActiveEventsFromStream(ctx, &next_stream);
     shared_engine.active_stream.deinit(allocator(), &roc_host, &shared_engine.pending_roc_metrics);
     shared_engine.active_stream = next_stream;
+    const mount_counts = shared_engine.runActiveMountCommands(ctx, &roc_host);
+    shared_engine.render_metrics.addCommandCounts(mount_counts);
 }
 
 fn hostEventById(event_id: u32) HostActiveEventDesc {

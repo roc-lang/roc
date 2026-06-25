@@ -47,8 +47,41 @@ export const PayloadAccessor = Object.freeze({
   targetChecked: 3,
 });
 
+export const HttpTextTask = Object.freeze({
+  namePrefix: "http:get-text:",
+  opsApiPaths: Object.freeze([
+    "/api/ops/dashboard",
+    "/api/ops/summary",
+    "/api/ops/traffic",
+    "/api/ops/jobs",
+    "/api/ops/alerts",
+    "/api/ops/health",
+  ]),
+});
+
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
+
+const opsApiTextPathSet = new Set(HttpTextTask.opsApiPaths);
+
+export function opsApiTextTaskHandler({ name, request, signal }) {
+  if (!name.startsWith(HttpTextTask.namePrefix)) {
+    return null;
+  }
+  if (!opsApiTextPathSet.has(request)) {
+    throw new Error(`unsupported ops API text endpoint: ${request}`);
+  }
+
+  return fetch(request, {
+    signal,
+    headers: { Accept: "text/plain" },
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`GET ${request} failed: ${response.status}`);
+    }
+    return response.text();
+  });
+}
 
 export async function instantiateSignalsWasm(url) {
   const response = await fetch(url);
@@ -379,7 +412,17 @@ export class SignalsRuntime {
       return;
     }
 
-    Promise.resolve(this.taskHandler({ requestId, name, request, signal: controller.signal }))
+    let handled;
+    try {
+      handled = this.taskHandler({ requestId, name, request, signal: controller.signal });
+    } catch (err) {
+      handled = Promise.reject(err);
+    }
+    if (handled === null || handled === undefined) {
+      return;
+    }
+
+    Promise.resolve(handled)
       .then((value) => {
         if (!controller.signal.aborted && this.tasks.has(requestId)) {
           this.resolveTask(requestId, String(value), false);

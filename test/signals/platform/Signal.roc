@@ -45,7 +45,18 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 				a.is_eq : a, a -> Bool,
 				err.is_eq : err, err -> Bool,
 			]
-	fake_task = |name, to_done, to_failed| {
+	fake_task = |name, to_done, to_failed| Signal.task_source(name, to_done, to_failed, True)
+
+	## Low-level host task source constructor. `reset_on_start` controls whether
+	## starting a new request publishes `Loading` or keeps the last cached value
+	## while the runtime request is pending.
+	task_source :
+		Str, (Str -> a), (Str -> err), Bool -> Task(a, err)
+			where [
+				a.is_eq : a, a -> Bool,
+				err.is_eq : err, err -> Bool,
+			]
+	task_source = |name, to_done, to_failed, reset_on_start| {
 		token = Box.box(0)
 		status_tag = HostValue.new_tag({})
 		payload_tag = HostValue.new_str_payload_tag({})
@@ -123,6 +134,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 				failed: Box.box(failed),
 				eq: Box.box(eq),
 				drop: Box.box(drop),
+				reset_on_start,
 			},
 			tag: status_tag,
 		}

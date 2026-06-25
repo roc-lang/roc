@@ -4,8 +4,9 @@ These apps are the maintained signals research fixtures. They are standalone Roc
 applications that use `../platform/main.roc` and are run by
 `zig build run-test-signals`.
 
-- `ops_dashboard.roc` stresses scalar signal chains, fanout, dynamic incident
-  branches, keyed alert rows, form input state, and per-row local state.
+- `ops_dashboard.roc` stresses browser task-backed server data, a typed
+  fixed-order line protocol decoder, interval/manual refresh, traffic trends,
+  active jobs, alerts, and service-health sections.
 - `checkout_wizard.roc` stresses keyed dynamic wizard steps, form input state,
   checkbox state, disabled actions, cart list replacement, and keyed line-item
   local state.

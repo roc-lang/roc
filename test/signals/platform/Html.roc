@@ -95,6 +95,24 @@ Html := [].{
 		Elem.TextSignal({ signal: Signal.to_expr(signal), read: Box.box(read) })
 	}
 
+	## Signal-backed preformatted text block.
+	pre_s_c : Signal(Str), Str -> Elem
+	pre_s_c = |signal, classes| {
+		tag = signal.tag
+		read : HostValue -> Str
+		read = |value| Box.unbox(HostValue.get_tagged(value, tag))
+		Elem.Element(
+			{
+				tag: "pre",
+				attrs: [
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(signal), read: Box.box(read) }),
+					class_attr(classes),
+				],
+				children: [],
+			},
+		)
+	}
+
 	## A button whose label is static text and whose click fires `msg`.
 	button : Str, Node.Msg -> Elem
 	button = |label, msg| button_attrs(label, [], msg)

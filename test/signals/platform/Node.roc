@@ -50,6 +50,7 @@ Node := [].{
 		failed : Box((HostValue -> HostValue)),
 		eq : Box((HostValue, HostValue -> Bool)),
 		drop : Box((HostValue -> {})),
+		reset_on_start : Bool,
 	}
 
 	IntervalSource : {

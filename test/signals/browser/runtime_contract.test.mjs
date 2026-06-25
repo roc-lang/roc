@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { Op, PayloadAccessor, PayloadKind, SignalsRuntime } from "./runtime.mjs";
+import { Op, PayloadAccessor, PayloadKind, SignalsRuntime, opsApiTextTaskHandler } from "./runtime.mjs";
 import {
   installDomDouble,
   findByText,
@@ -122,11 +122,12 @@ class MockHost {
   }
 }
 
-function mountWith(mountScript, options) {
-  const host = new MockHost(options);
+function mountWith(mountScript, options = {}) {
+  const { taskHandler, ...hostOptions } = options;
+  const host = new MockHost(hostOptions);
   host.mountScript = mountScript;
   const root = installDomDouble();
-  const runtime = new SignalsRuntime(host.exports, root);
+  const runtime = new SignalsRuntime(host.exports, root, { taskHandler });
   runtime.mount();
   return { host, root, runtime };
 }
@@ -304,4 +305,46 @@ test("task commands marshal request and resolve payloads by request id", () => {
   runtime.applyCommand({ op: Op.startTask, a: 6, b: 0, c: 6, d: 6, e: 3 });
   runtime.applyCommand({ op: Op.cancelTask, a: 6, b: 0, c: 0, d: 0, e: 0 });
   assert.equal(runtime.tasks.has(6), false);
+});
+
+test("ops API text task handler fetches only documented endpoints", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, accept: options.headers.Accept, aborted: options.signal.aborted });
+    return {
+      ok: true,
+      text: async () => "summary rows",
+    };
+  };
+
+  try {
+    const signal = new AbortController().signal;
+    assert.equal(
+      opsApiTextTaskHandler({ name: "lookup", request: "roc", signal }),
+      null,
+    );
+
+    const value = await opsApiTextTaskHandler({
+      name: "http:get-text:summary",
+      request: "/api/ops/summary",
+      signal,
+    });
+    assert.equal(value, "summary rows");
+    assert.deepEqual(calls, [
+      { url: "/api/ops/summary", accept: "text/plain", aborted: false },
+    ]);
+
+    assert.throws(
+      () =>
+        opsApiTextTaskHandler({
+          name: "http:get-text:private",
+          request: "/api/private",
+          signal,
+        }),
+      /unsupported ops API text endpoint/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
