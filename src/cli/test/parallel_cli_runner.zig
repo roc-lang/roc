@@ -4003,17 +4003,26 @@ fn customDefaultAppAllSyntaxCheckedCache(io: std.Io, allocator: Allocator, env: 
     const command = CommandCase{
         .args = &.{"--opt=interpreter"},
         .roc_file = "test/echo/all_syntax_test.roc",
+        .stdout_exact = all_syntax_expected_stdout,
+        .stderr_exact = all_syntax_expected_stderr,
     };
 
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, command)) |failure| return failure;
 
-    const cached_module_count = countModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
+    const cached_module_count_after_first_run = countModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to count module cache files: {}", .{err});
-    if (cached_module_count == 0) {
+    if (cached_module_count_after_first_run == 0) {
         return customFailure(allocator, timer, "expected default app run to populate checked module cache entries before the second run, found 0", .{});
     }
 
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, command)) |failure| return failure;
+
+    const cached_module_count_after_second_run = countModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to count module cache files after second run: {}", .{err});
+    if (cached_module_count_after_second_run != cached_module_count_after_first_run) {
+        return customFailure(allocator, timer, "expected second default app run to reuse {d} checked module cache entries, found {d}", .{ cached_module_count_after_first_run, cached_module_count_after_second_run });
+    }
+
     return null;
 }
 

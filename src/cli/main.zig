@@ -2305,6 +2305,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 args.max_threads,
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
+                &cache_manager,
                 &reporter,
             );
             const result = if (lowered_result) |*value| value else unreachable;
@@ -2322,6 +2323,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 args.max_threads,
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
+                &cache_manager,
                 &reporter,
             );
             shm_handle_opt = shm_result.handle;
@@ -2940,10 +2942,16 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &cache_manager, &reporter);
     defer closeSharedMemoryHandle(shm_result.handle);
 
     if (shm_result.error_count > 0) {
@@ -3061,6 +3069,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         args.max_threads,
         debugEffectsForOpt(args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
+        &cache_manager,
         &reporter,
     );
     defer lowered_result.deinit();
@@ -5108,6 +5117,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         debugEffectsForOpt(.dev),
         resolutionConfigFromLimits(args.resolve_limits),
         null,
+        null,
     );
     defer lowered_result.deinit();
 
@@ -5410,6 +5420,7 @@ fn lowerLirWithCoordinator(
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
+    cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
 ) CliMainError!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
@@ -5447,6 +5458,18 @@ fn lowerLirWithCoordinator(
         try ctx.arena.dupe(u8, roc_file_path);
     var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
     defer resolved.deinit();
+    const resolved_packages = resolved.packages;
+
+    const package_names = try ctx.gpa.alloc([]const u8, resolved_packages.len);
+    defer ctx.gpa.free(package_names);
+    for (package_names, resolved_packages, 0..) |*package_name, package, i| {
+        package_name.* = if (i == compile.package_resolution.Resolved.root_index) "app" else package.identity;
+    }
+    for (resolved_packages[compile.package_resolution.Resolved.root_index].deps) |dep| {
+        if (dep.is_platform) {
+            package_names[dep.target] = "pf";
+        }
+    }
     if (reporter) |r| r.end();
 
     const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
@@ -5459,7 +5482,7 @@ fn lowerLirWithCoordinator(
         RocTarget.detectNative(),
         &builtin_modules,
         build_options.compiler_version,
-        null, // no cache for IPC
+        cache_manager,
         ctx.coreCtx(),
     );
     defer coord.deinit();
@@ -5469,7 +5492,7 @@ fn lowerLirWithCoordinator(
     try coord.start();
 
     const app_pkg = try coord.ensurePackage("app", app_dir);
-    const root_package = resolved.packages[compile.package_resolution.Resolved.root_index];
+    const root_package = resolved_packages[compile.package_resolution.Resolved.root_index];
     try app_pkg.setRootInput(ctx.gpa, root_package.root_file, try currentCompilerWatchInputState(ctx, root_package.root_file));
     const app_module_name = base.module_path.getModuleName(roc_file_path);
     const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
@@ -5481,15 +5504,17 @@ fn lowerLirWithCoordinator(
     app_pkg.remaining_modules += 1;
     coord.total_remaining += 1;
 
-    // Register every resolved package (named by its unique identity), then
-    // wire each package's shorthand aliases and enqueue the platform root.
-    const resolved_packages = resolved.packages;
-    for (resolved_packages[1..]) |package| {
+    // Register resolved packages under the coordinator package names that
+    // participate in checked module identity. Non-platform packages keep their
+    // resolved identities; the root platform package uses the stable "pf" name,
+    // matching Coordinator.discoverAppFromPath.
+    for (resolved_packages[1..], 1..) |package, package_idx| {
+        const package_name = package_names[package_idx];
         const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
             .url = url.url,
             .url_id = url.url_id,
         } else null;
-        const pkg = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
+        const pkg = try coord.ensurePackageWithUrl(package_name, package.root_dir, url_view);
         const root_file_state: compile.watch_inputs.State = if (url_view == null)
             try currentCompilerWatchInputState(ctx, package.root_file)
         else
@@ -5518,14 +5543,11 @@ fn lowerLirWithCoordinator(
         const from_pkg = if (i == compile.package_resolution.Resolved.root_index)
             app_pkg
         else
-            coord.packages.get(package.identity) orelse return error.CliError;
+            coord.packages.get(package_names[i]) orelse return error.CliError;
 
         for (package.deps) |dep| {
             const target = resolved_packages[dep.target];
-            const target_name = if (dep.target == compile.package_resolution.Resolved.root_index)
-                "app"
-            else
-                target.identity;
+            const target_name = package_names[dep.target];
             try from_pkg.shorthands.put(
                 try ctx.gpa.dupe(u8, dep.alias),
                 try ctx.gpa.dupe(u8, target_name),
@@ -5534,14 +5556,14 @@ fn lowerLirWithCoordinator(
             // The app's platform root module is parsed eagerly so its
             // provides/hosted declarations are available to the build.
             if (i == compile.package_resolution.Resolved.root_index and dep.is_platform) {
-                const pf_pkg = coord.packages.get(target.identity) orelse return error.CliError;
+                const pf_pkg = coord.packages.get(target_name) orelse return error.CliError;
                 if (pf_pkg.root_module_id == null) {
                     const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", target.root_file);
                     pf_pkg.root_module_id = pf_module_id;
                     pf_pkg.modules.items[pf_module_id].depth = 1;
                     pf_pkg.remaining_modules += 1;
                     coord.total_remaining += 1;
-                    try coord.enqueueParseTask(target.identity, pf_module_id);
+                    try coord.enqueueParseTask(target_name, pf_module_id);
                 }
             }
         }
@@ -5663,6 +5685,7 @@ pub fn buildLirImageWithCoordinator(
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
+    cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
 ) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
@@ -5682,6 +5705,7 @@ pub fn buildLirImageWithCoordinator(
         max_threads,
         debug_effects,
         resolution_config,
+        cache_manager,
         reporter,
     );
     defer lowered_result.deinitWatchInputs();
@@ -5720,7 +5744,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, null);
 }
 
 /// Platform resolution result containing the platform source path
