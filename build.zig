@@ -3573,6 +3573,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
 
+        const build_wasm_boxed_model_update_app = b.addRunArtifact(roc_exe);
+        build_wasm_boxed_model_update_app.addArgs(&.{
+            "build",
+            "test/wasm/boxed_model_update_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/boxed_model_update_static_lib_app.wasm",
+        });
+        build_wasm_boxed_model_update_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -3673,6 +3684,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
+
+            const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_boxed_model_update_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/boxed_model_update_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_boxed_model_update_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);

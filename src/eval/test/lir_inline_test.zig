@@ -937,6 +937,7 @@ fn markReachableLiftedExpr(
         .uninitialized,
         .uninitialized_payload,
         => {},
+        .static_data_candidate => |candidate| markReachableLiftedExpr(program, candidate.fallback, reachable),
         .list,
         .tuple,
         => |items| for (program.exprSpan(items)) |child| markReachableLiftedExpr(program, child, reachable),

@@ -4347,8 +4347,13 @@ const BodyContext = struct {
         const template = self.view.const_templates.get(entry.const_ref);
         return switch (template.state) {
             .stored_const => |stored| blk: {
-                const fallback = try self.restoreConstNodeAtTypeWithStaticRoot(self.view, self.view, stored.node, ty, entry.const_ref);
-                if (self.builder.static_data_literals and
+                const can_restore_stored = try self.constNodeCanRestoreAtType(self.view, stored.node, ty);
+                const fallback = if (can_restore_stored)
+                    try self.restoreConstNodeAtTypeWithStaticRoot(self.view, self.view, stored.node, ty, entry.const_ref)
+                else
+                    try self.lowerHoistedExprFallbackAtType(entry, ty);
+                if (can_restore_stored and
+                    self.builder.static_data_literals and
                     self.builder.constNodeMayUseStaticDataCandidate(self.view, stored.node, .disallow))
                 {
                     const id = try self.builder.staticDataValue(entry.const_ref, null, entry.checked_type);
@@ -4359,6 +4364,17 @@ const BodyContext = struct {
             .eval_template => |eval| try self.lowerConstEvalTemplateUse(self.view, eval, ty, self.hoistedConstSourceRegion(entry)),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
         };
+    }
+
+    fn lowerHoistedExprFallbackAtType(
+        self: *BodyContext,
+        entry: checked.HoistedConstEntry,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const saved_root = self.lowering_entry_wrapper_root;
+        self.setLoweringEntryWrapperRoot(entry.root);
+        defer self.lowering_entry_wrapper_root = saved_root;
+        return try self.lowerExprWithType(entry.expr, ty);
     }
 
     fn hoistedConstSourceRegion(self: *const BodyContext, entry: checked.HoistedConstEntry) base.Region {
@@ -9464,6 +9480,98 @@ const BodyContext = struct {
         return try self.builder.program.addExprSpan(lowered);
     }
 
+    fn constNodeCanRestoreAtType(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        return try self.constValueCanRestoreAtType(store_view, store_view.const_store.get(node), ty);
+    }
+
+    fn constValueCanRestoreAtType(
+        self: *BodyContext,
+        store_view: ModuleView,
+        value: checked.ConstValue,
+        ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        return switch (value) {
+            .pending => Common.invariant("pending ConstStore node reached restore compatibility"),
+            .zst => self.builder.shapeContent(ty) == .zst,
+            .scalar => |scalar| if (self.numericPrimitive(ty)) |primitive|
+                primitive == constScalarPrimitive(scalar)
+            else
+                false,
+            .str => self.numericPrimitive(ty) == .str,
+            .crash => true,
+            .box => |payload| switch (self.builder.shapeContent(ty)) {
+                .box => |payload_ty| try self.constNodeCanRestoreAtType(store_view, payload, payload_ty),
+                else => false,
+            },
+            .list => |items| switch (self.builder.shapeContent(ty)) {
+                .list => |elem_ty| blk: {
+                    for (items) |item| {
+                        if (!try self.constNodeCanRestoreAtType(store_view, item, elem_ty)) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            .tuple => |items| switch (self.builder.shapeContent(ty)) {
+                .tuple => |item_span| blk: {
+                    const item_tys = self.builder.program.types.span(item_span);
+                    if (item_tys.len != items.len) break :blk false;
+                    for (items, item_tys) |item, item_ty| {
+                        if (!try self.constNodeCanRestoreAtType(store_view, item, item_ty)) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            .record => |items| switch (self.builder.shapeContent(ty)) {
+                .record => |field_span| blk: {
+                    const fields = self.builder.program.types.fieldSpan(field_span);
+                    if (fields.len != items.len) break :blk false;
+                    for (items, fields) |item, field| {
+                        if (!try self.constNodeCanRestoreAtType(store_view, item, field.ty)) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            .tag => |tag| switch (self.builder.shapeContent(ty)) {
+                .tag_union => {
+                    const mono_tag_name = try self.builder.program.names.internTagLabel(tag.tag_name);
+                    const payload_span = self.tagPayloadSpanIfPresent(ty, mono_tag_name) orelse return false;
+                    const payload_tys = self.builder.program.types.span(payload_span);
+                    if (payload_tys.len != tag.payloads.len) return false;
+                    for (tag.payloads, payload_tys) |payload, payload_ty| {
+                        if (!try self.constNodeCanRestoreAtType(store_view, payload, payload_ty)) return false;
+                    }
+                    return true;
+                },
+                else => false,
+            },
+            .nominal => |nominal| if (self.builder.namedBackingType(ty)) |backing_ty|
+                try self.constNodeCanRestoreAtType(store_view, nominal.backing, backing_ty)
+            else
+                false,
+            .fn_value => true,
+        };
+    }
+
+    fn tagPayloadSpanIfPresent(self: *BodyContext, ty: Type.TypeId, name: names.TagNameId) ?Type.Span {
+        return switch (self.builder.shapeContent(ty)) {
+            .tag_union => |tags| {
+                for (self.builder.program.types.tagSpan(tags)) |tag| {
+                    if (self.builder.program.names.tagLabelTextEql(tag.name, name)) return tag.payloads;
+                }
+                return null;
+            },
+            else => null,
+        };
+    }
+
     fn constListElemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
         return switch (self.builder.shapeContent(ty)) {
             .list => |elem| elem,
@@ -10324,6 +10432,8 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!?Ast.ExprId {
+        if (self.numericPrimitive(ty) != null) return null;
+
         const root = self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse return null;
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
@@ -10353,10 +10463,8 @@ const BodyContext = struct {
         // numeric type carries a user-defined `from_numeral` body that lowers to
         // an ordinary call the backends handle, so it must keep going through the
         // real dispatch rather than being folded.
-        const primitive = switch (self.builder.shapeContent(target_ty)) {
-            .primitive => |p| p,
-            else => return try self.lowerNumeralCall(checked_ret_ty, maybe_plan, target_ty),
-        };
+        const primitive = self.numericPrimitive(target_ty) orelse
+            return try self.lowerNumeralCall(checked_ret_ty, maybe_plan, target_ty);
 
         const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
@@ -10543,6 +10651,33 @@ const BodyContext = struct {
             .builtin => |actual| actual == owner,
             .source_decl => false,
             .nominal => false,
+        };
+    }
+
+    fn numericPrimitive(self: *BodyContext, ty: Type.TypeId) ?Type.Primitive {
+        switch (self.builder.shapeContent(ty)) {
+            .primitive => |primitive| return primitive,
+            else => {},
+        }
+        return switch (methodOwnerFromType(&self.builder.program.types, ty) orelse return null) {
+            .builtin => |owner| switch (owner) {
+                .u8 => .u8,
+                .i8 => .i8,
+                .u16 => .u16,
+                .i16 => .i16,
+                .u32 => .u32,
+                .i32 => .i32,
+                .u64 => .u64,
+                .i64 => .i64,
+                .u128 => .u128,
+                .i128 => .i128,
+                .f32 => .f32,
+                .f64 => .f64,
+                .dec => .dec,
+                else => null,
+            },
+            .source_decl => null,
+            .nominal => null,
         };
     }
 
@@ -15665,6 +15800,24 @@ fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
         .f32_bits => |bits| .{ .frac_f32_lit = @bitCast(bits) },
         .f64_bits => |bits| .{ .frac_f64_lit = @bitCast(bits) },
         .dec_bits => |bits| .{ .dec_lit = .{ .num = bits } },
+    };
+}
+
+fn constScalarPrimitive(scalar: checked.ConstScalar) Type.Primitive {
+    return switch (scalar) {
+        .i8 => .i8,
+        .i16 => .i16,
+        .i32 => .i32,
+        .i64 => .i64,
+        .i128 => .i128,
+        .u8 => .u8,
+        .u16 => .u16,
+        .u32 => .u32,
+        .u64 => .u64,
+        .u128 => .u128,
+        .f32_bits => .f32,
+        .f64_bits => .f64,
+        .dec_bits => .dec,
     };
 }
 
