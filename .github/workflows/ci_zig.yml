@@ -89,6 +89,9 @@ jobs:
       - name: Run Playground Tests
         run: zig build run-test-playground -Doptimize=ReleaseSmall -- --verbose
 
+      - name: Run echo.wasm integration test
+        run: zig build run-test-echo-wasm
+
       # We run zig check with tracy enabled.
       # This ensure it compiles and doesn't go stale.
       - name: Checkout Tracy
@@ -347,10 +350,15 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: |
           otool_out="$(otool -L ./zig-out/bin/roc)"
-          num_lines=$(echo "$otool_out" | wc -l)
-          if [ "$num_lines" -ne 2 ]; then
-            echo "$otool_out"
-            echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so libSystem should be the only dynamic dependency."
+          echo "$otool_out"
+          # Roc must only depend on libraries that ship with every macOS install, so it
+          # stays trivial to install. FSEvents-based file watching links CoreFoundation
+          # and CoreServices (which pull in libobjc); all of these are part of the OS.
+          unexpected="$(echo "$otool_out" | tail -n +2 | grep -vE '^[[:space:]]+(/usr/lib/libSystem\.B\.dylib|/usr/lib/libobjc\.A\.dylib|/System/Library/Frameworks/CoreFoundation\.framework/|/System/Library/Frameworks/CoreServices\.framework/)' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so it should only depend on libraries that ship with macOS."
+            echo "Unexpected dependencies:"
+            echo "$unexpected"
             exit 1
           fi
 
