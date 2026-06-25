@@ -113,6 +113,9 @@ Current branch status:
   producer-plan flag.
 - `Iter.prepended` can emit a `Concat(Single(item), rest)` plan behind the
   producer-plan flag.
+- `Iter.custom` can emit a `Custom` plan behind the producer-plan flag, with
+  direct `Known(n)` length hints preserved as known plan length and `Unknown`
+  length hints preserved as unknown.
 - finite numeric range syntax and `Iter.exclusive_range`/`Iter.inclusive_range`
   can emit `Range` plans behind the producer-plan flag; length is currently
   recorded as unknown until checked output exposes the corresponding
@@ -545,7 +548,7 @@ Tasks:
 - [x] `Iter.concat` produces `Concat`.
 - [x] `Iter.map` produces `Map`.
 - [x] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
-- [ ] `Iter.custom` produces `Custom`.
+- [x] `Iter.custom` produces `Custom`.
 - [x] `Public(iter_value)` exists for unknown iterator values.
 - [ ] Iterator normalization consumes common plans privately before ordinary
   lowering.

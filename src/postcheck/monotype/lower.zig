@@ -14097,6 +14097,12 @@ const BodyContext = struct {
             return try self.lowerFilterIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized, .drop_if);
         }
 
+        if (self.methodNameIs(plan.method, "custom") and
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "custom"))
+        {
+            return try self.lowerCustomIteratorProducerPlanExpr(plan, lowered_call, materialized);
+        }
+
         if (!self.methodNameIs(plan.method, "iter")) return null;
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list) and
             self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "iter"))
@@ -14335,6 +14341,79 @@ const BodyContext = struct {
         });
     }
 
+    fn lowerCustomIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 3) {
+            Common.invariant("checked Iter.custom dispatch plan had an unexpected argument shape");
+        }
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter.custom call argument count differed from its dispatch plan");
+        }
+
+        return try self.customIteratorProducerPlanExpr(lowered_args, materialized);
+    }
+
+    fn customIteratorProducerPlanExpr(
+        self: *BodyContext,
+        lowered_args: []const Ast.ExprId,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        if (lowered_args.len != 3) {
+            Common.invariant("generated Iter.custom plan had an unexpected argument shape");
+        }
+
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+        const seed = lowered_args[0];
+        const len_if_known = lowered_args[1];
+        const step_fn = lowered_args[2];
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(materialized_expr.ty),
+            .length = self.lengthFromLenIfKnownExpr(len_if_known),
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .materialized = materialized,
+            .data = .{ .custom = .{
+                .state = seed,
+                .step_fn = step_fn,
+            } },
+        });
+
+        return try self.builder.program.addExpr(.{
+            .ty = materialized_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lengthFromLenIfKnownExpr(self: *BodyContext, len_if_known: Ast.ExprId) iter_plan.Length(Ast.ExprId) {
+        const expr = self.builder.program.exprs.items[@intFromEnum(len_if_known)];
+        const tag = switch (expr.data) {
+            .tag => |tag| tag,
+            else => return .unknown,
+        };
+
+        const tag_text = self.builder.program.names.tagLabelText(tag.name);
+        if (Ident.textEql(tag_text, "Known")) {
+            const payloads = self.builder.program.exprSpan(tag.payloads);
+            if (payloads.len != 1) Common.invariant("Iter length Known tag had an unexpected payload shape");
+            return .{ .known = payloads[0] };
+        }
+        if (Ident.textEql(tag_text, "Unknown")) {
+            const payloads = self.builder.program.exprSpan(tag.payloads);
+            if (payloads.len != 0) Common.invariant("Iter length Unknown tag had an unexpected payload shape");
+            return .unknown;
+        }
+
+        Common.invariant("checked Iter length hint had an unexpected tag");
+    }
+
     fn lowerPrependedIteratorProducerPlanExpr(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -14557,6 +14636,10 @@ const BodyContext = struct {
 
         if (self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "inclusive_range")) {
             return try self.rangeIteratorProducerPlanExpr(lowered_args, materialized, .inclusive);
+        }
+
+        if (self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "custom")) {
+            return try self.customIteratorProducerPlanExpr(lowered_args, materialized);
         }
 
         if (!self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "single")) return null;

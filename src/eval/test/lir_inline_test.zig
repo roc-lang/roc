@@ -1738,6 +1738,123 @@ test "inclusive range producer lowers to a materialized range plan" {
     try std.testing.expect(found);
 }
 
+test "Iter.custom producer lowers Known length to a materialized custom plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 3 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : Iter(I64)
+        \\main = Iter.custom(0.I64, Known(3), advance)
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .custom => |custom| {
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                switch (plan.length) {
+                    .known => |len| switch (mono_source.mono.exprs.items[@intFromEnum(len)].data) {
+                        .int_lit => found = true,
+                        else => return error.TestUnexpectedResult,
+                    },
+                    .unknown => continue,
+                }
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.done);
+                switch (mono_source.mono.exprs.items[@intFromEnum(custom.state)].data) {
+                    .int_lit => {},
+                    else => return error.TestUnexpectedResult,
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "Iter.custom producer lowers Unknown length to a materialized custom plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 3 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : Iter(I64)
+        \\main = Iter.custom(0.I64, Unknown, advance)
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .custom => {
+                found = true;
+                switch (plan.length) {
+                    .known => return error.TestUnexpectedResult,
+                    .unknown => {},
+                }
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.done);
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "user custom producer is not lowered as builtin Iter.custom plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    custom : Bag, I64 -> Iter(I64)
+        \\    custom = |_, item| [item].iter()
+        \\}
+        \\
+        \\main : Iter(I64)
+        \\main = Bag.custom(Bag.Bag, 1.I64)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .custom => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 test "Iter.prepended producer lowers to concat of single and receiver plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
@@ -2235,6 +2352,27 @@ test "inclusive range producer materializes before Lambda when returned publicly
         \\
         \\main : Iter(I64)
         \\main = 1.I64..=5.I64
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "Iter.custom producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 3 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : Iter(I64)
+        \\main = Iter.custom(0.I64, Unknown, advance)
     );
     defer lifted_source.deinit(allocator);
 
