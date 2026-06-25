@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signals App</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.45;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: Canvas;
+        color: CanvasText;
+      }
+
+      main {
+        box-sizing: border-box;
+        width: min(100%, 860px);
+        padding: 28px;
+      }
+
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        align-items: baseline;
+        margin: 0 0 18px;
+      }
+
+      a {
+        color: LinkText;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.4rem;
+        font-weight: 650;
+      }
+
+      h2 {
+        flex-basis: 100%;
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 650;
+      }
+
+      button,
+      input {
+        min-width: 112px;
+        padding: 7px 10px;
+        border: 1px solid color-mix(in srgb, CanvasText 32%, transparent);
+        border-radius: 6px;
+        background: ButtonFace;
+        color: ButtonText;
+        font: inherit;
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      #app {
+        display: grid;
+        gap: 14px;
+        align-items: start;
+      }
+
+      #app div,
+      #app section {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      #error {
+        color: MarkText;
+        background: Mark;
+        padding: 10px 12px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1 id="title">Signals App</h1>
+        <a href="./">All apps</a>
+      </header>
+      <div id="error" hidden></div>
+      <div id="app"></div>
+    </main>
+
+    <script type="module">
+      import { mountSignalsApp } from "./runtime.mjs";
+
+      const params = new URLSearchParams(window.location.search);
+      const wasmUrl = params.get("wasm") || "./counter.wasm";
+      const appName = params.get("app") || "Signals App";
+      const title = document.getElementById("title");
+      const error = document.getElementById("error");
+
+      document.title = appName;
+      title.textContent = appName;
+
+      try {
+        await mountSignalsApp({
+          wasmUrl,
+          root: document.getElementById("app"),
+        });
+      } catch (err) {
+        error.hidden = false;
+        error.textContent = String(err?.message || err);
+      }
+    </script>
+  </body>
+</html>

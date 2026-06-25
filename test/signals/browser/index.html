@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signals Apps</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.45;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: Canvas;
+        color: CanvasText;
+      }
+
+      main {
+        box-sizing: border-box;
+        width: min(100%, 760px);
+        padding: 28px;
+      }
+
+      h1 {
+        margin: 0 0 18px;
+        font-size: 1.4rem;
+        font-weight: 650;
+      }
+
+      nav {
+        display: grid;
+        gap: 8px;
+      }
+
+      a {
+        display: block;
+        width: fit-content;
+        color: LinkText;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Signals Apps</h1>
+      <nav>
+        <a href="./app.html?wasm=.%2Fops_dashboard.wasm&amp;app=Ops+Dashboard">Ops Dashboard</a>
+        <a href="./app.html?wasm=.%2Fcheckout_wizard.wasm&amp;app=Checkout+Wizard">Checkout Wizard</a>
+        <a href="./app.html?wasm=.%2Fkanban_board.wasm&amp;app=Kanban+Board">Kanban Board</a>
+        <a href="./app.html?wasm=.%2Fidentity_stress.wasm&amp;app=Identity+Stress">Identity Stress</a>
+        <a href="./app.html?wasm=.%2Fcomponent_composition.wasm&amp;app=Component+Composition">Component Composition</a>
+        <a href="./app.html?wasm=.%2Fasync_effects.wasm&amp;app=Async+Effects">Async Effects</a>
+      </nav>
+    </main>
+  </body>
+</html>

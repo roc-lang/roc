@@ -15,7 +15,6 @@ SCRIPT_PATH = pathlib.Path(__file__).resolve()
 SIGNALS_DIR = SCRIPT_PATH.parent
 REPO_ROOT = SIGNALS_DIR.parent.parent
 BROWSER_DIR = SIGNALS_DIR / "browser"
-DEFAULT_APP = SIGNALS_DIR / "apps" / "counter.roc"
 DEFAULT_ROC_BIN = REPO_ROOT / "zig-out" / "bin" / "roc"
 APP_SUITE = (
     SIGNALS_DIR / "apps" / "ops_dashboard.roc",
@@ -25,6 +24,7 @@ APP_SUITE = (
     SIGNALS_DIR / "apps" / "component_composition.roc",
     SIGNALS_DIR / "apps" / "async_effects.roc",
 )
+SUITE_STEMS = tuple(app.stem for app in APP_SUITE)
 
 
 def parse_args():
@@ -39,8 +39,8 @@ def parse_args():
         nargs="?",
         default=None,
         help=(
-            "Roc app to build. Defaults to test/signals/apps/counter.roc when "
-            "serving, or the maintained six-app suite with --no-server."
+            "Roc app to build. Defaults to the maintained six-app suite; pass "
+            "one app path for targeted QA."
         ),
     )
     parser.add_argument(
@@ -144,19 +144,25 @@ def build_app(roc_bin, app, output, app_opt):
     )
 
 
-def default_apps(no_server):
-    if no_server:
-        return APP_SUITE
-    return (DEFAULT_APP,)
+def default_apps():
+    return APP_SUITE
 
 
-def serve(port, wasm_relative):
+def app_title(app):
+    return app.stem.replace("_", " ").title()
+
+
+def app_page_url(port, wasm_relative, title):
     wasm_url = f"./{wasm_relative.as_posix()}"
-    if wasm_relative.as_posix() == "counter.wasm":
-        page_url = f"http://localhost:{port}/counter.html"
+    query_value = urllib.parse.urlencode({"wasm": wasm_url, "app": title})
+    return f"http://localhost:{port}/app.html?{query_value}"
+
+
+def serve(port, pages):
+    if len(pages) == len(SUITE_STEMS) and tuple(page[0] for page in pages) == SUITE_STEMS:
+        page_url = f"http://localhost:{port}/"
     else:
-        query_value = urllib.parse.quote(wasm_url, safe="./")
-        page_url = f"http://localhost:{port}/counter.html?wasm={query_value}"
+        page_url = app_page_url(port, pages[0][1], pages[0][2])
 
     handler = functools.partial(
         http.server.SimpleHTTPRequestHandler,
@@ -165,6 +171,10 @@ def serve(port, wasm_relative):
     server = http.server.ThreadingHTTPServer(("", port), handler)
 
     print(f"\nServing {page_url}", flush=True)
+    if len(pages) > 1:
+        print("App URLs:", flush=True)
+        for stem, wasm_relative, title in pages:
+            print(f"  {stem}: {app_page_url(port, wasm_relative, title)}", flush=True)
     print("Press Ctrl-C to stop the server.\n", flush=True)
 
     try:
@@ -178,40 +188,47 @@ def serve(port, wasm_relative):
 def main():
     args = parse_args()
 
-    apps = [repo_path(args.app)] if args.app else list(default_apps(args.no_server))
+    apps = [repo_path(args.app)] if args.app else list(default_apps())
     for app in apps:
         if not app.is_file():
             raise SystemExit(f"missing app: {app}")
 
     if len(apps) > 1 and args.output:
         raise SystemExit("--output is only valid when building one app")
-    if len(apps) > 1 and not args.no_server:
-        raise SystemExit("serving requires a single app")
 
     if args.output:
         output = repo_path(args.output)
     else:
         output = BROWSER_DIR / f"{apps[0].stem}.wasm"
 
-    wasm_relative = browser_relative(output)
-    if not args.no_server and wasm_relative is None:
-        raise SystemExit(
-            f"when serving, --output must be under {BROWSER_DIR}: {output}"
-        )
+    if len(apps) == 1:
+        wasm_relative = browser_relative(output)
+        if not args.no_server and wasm_relative is None:
+            raise SystemExit(
+                f"when serving, --output must be under {BROWSER_DIR}: {output}"
+            )
 
     roc_bin = command_path(args.roc_bin)
     ensure_roc(roc_bin)
     build_host()
 
+    pages = []
     for app in apps:
         app_output = output if len(apps) == 1 else BROWSER_DIR / f"{app.stem}.wasm"
         app_output.parent.mkdir(parents=True, exist_ok=True)
         build_app(roc_bin, app, app_output, args.app_opt)
+        relative = browser_relative(app_output)
+        if not args.no_server and relative is None:
+            raise SystemExit(
+                f"when serving, app output must be under {BROWSER_DIR}: {app_output}"
+            )
+        if relative is not None:
+            pages.append((app.stem, relative, app_title(app)))
 
     if args.no_server:
         return
 
-    serve(args.port, wasm_relative)
+    serve(args.port, pages)
 
 
 if __name__ == "__main__":

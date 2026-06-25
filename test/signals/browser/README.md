@@ -85,23 +85,23 @@ test/signals/serve.py
 Open:
 
 ```text
-http://localhost:8000/counter.html
+http://localhost:8000/
 ```
 
 The helper builds `test/signals/src/wasm_host.zig` with `ReleaseSmall`, builds
-the app with `--target=wasm32 --opt=size`, writes
-`test/signals/browser/counter.wasm`, and serves only `test/signals/browser`.
+the maintained six-app suite with `--target=wasm32 --opt=size`, writes each
+artifact under `test/signals/browser`, and serves an app index from
+`test/signals/browser/index.html`.
 
-Build a different app or use the dev app optimization mode with:
+Build one targeted app or use the dev app optimization mode with:
 
 ```sh
 test/signals/serve.py test/signals/apps/ops_dashboard.roc --port 9001
 test/signals/serve.py --app-opt dev
 ```
 
-Use `--no-server` when you only want the build steps.
-With `--no-server` and no app argument, the helper builds the maintained
-six-app suite instead of the counter demo.
+Use `--no-server` when you only want the build steps. With no app argument, the
+helper builds the maintained six-app suite; pass one app path for targeted QA.
 
 `../src/signal_graph.zig` owns the active graph node shape, dependent-edge
 mutation, reachable-dependent traversal, and rank sorting. The native host
