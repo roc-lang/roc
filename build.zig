@@ -5179,8 +5179,9 @@ fn addAflFuzzExe(
     const fuzz_exe = run_afl_cc.addOutputFileArg(fuzz_obj.name);
     run_afl_cc.addFileArg(afl_kit.path("afl.c"));
     run_afl_cc.addFileArg(fuzz_obj.getEmittedLlvmBc());
-    // ELF linkers resolve libraries left-to-right, so libm must follow the bitcode.
+    // ELF linkers resolve libraries left-to-right, so math libraries must follow the bitcode.
     run_afl_cc.addArg("-lm");
+    run_afl_cc.addArg("-lquadmath");
 
     return fuzz_exe;
 }
