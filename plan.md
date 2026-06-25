@@ -9,7 +9,7 @@ The final state is:
 
 - builtin iterator producers lower to explicit post-check iterator plan values
 - those plan values are ordinary post-check values with the public `Iter(item)`
-  type until a later post-check elimination pass consumes or materializes them
+  type until a later post-check elimination rewrite consumes or materializes them
 - source evaluation order is preserved for producers, conditions, branch
   selection, appended items, `dbg`, `expect`, and `crash`
 - optimized consumers consume known plans directly without constructing public
@@ -188,10 +188,10 @@ types. A user method with the same spelling is never a builtin producer.
 
 ### Plan Elimination
 
-Add a post-check iterator-plan elimination pass before Lambda-to-LIR lowering.
-This pass owns every remaining `iter_plan` expression.
+Add a post-check iterator-plan elimination rewrite before Lambda-to-LIR lowering.
+This rewrite owns every remaining `iter_plan` expression.
 
-For every plan value it sees, the pass must choose exactly one outcome:
+For every plan value it sees, the rewrite must choose exactly one outcome:
 
 - consume it directly in a recognized optimized consumer
 - rewrite it into compiler-owned private plan state that a later consumer in
@@ -200,7 +200,7 @@ For every plan value it sees, the pass must choose exactly one outcome:
 - wrap an already-public value as `Public(iter_value)` when there is no more
   precise plan
 
-The pass may maintain environments from locals to already-lowered plan values or
+The rewrite may maintain environments from locals to already-lowered plan values or
 private plan-state values while traversing a body. It must not point an
 environment entry back to checked source. It must preserve ordinary evaluation
 order by rewriting producer sites, not by moving producer evaluation to consumer
@@ -223,14 +223,14 @@ for x in iter {
 }
 ```
 
-The condition and selected branch belong at the `iter = ...` site. The pass may
+The condition and selected branch belong at the `iter = ...` site. The rewrite may
 turn the `if` into private plan-state construction, but it must not delay or
 duplicate the condition, the `dbg`, or the `crash` by replaying branch source at
 the `for`.
 
 ### Private Plan State
 
-Optimized consumers need private mutable cursor state. The elimination pass may
+Optimized consumers need private mutable cursor state. The elimination rewrite may
 represent that state using ordinary post-check IR:
 
 - locals
@@ -331,9 +331,9 @@ Tests:
   Monotype tree
 - finite and unbounded ranges carry the right done reachability
 
-### Phase 3: Iterator-Plan Elimination Pass
+### Phase 3: Iterator-Plan Elimination Rewrite
 
-Add a pass before Lambda-to-LIR lowering that removes all raw plan expressions.
+Add a focused rewrite before Lambda-to-LIR lowering that removes all raw plan expressions.
 
 Tasks:
 
@@ -391,7 +391,7 @@ Tasks:
 
 - stop replaying checked expressions in `lowerIteratorFor`
 - introduce an internal representation for source `for` that can survive until
-  iterator-plan elimination, or otherwise ensure the elimination pass sees the
+  iterator-plan elimination, or otherwise ensure the elimination rewrite sees the
   consumer before public fallback lowering has erased it
 - lower `ListIter` with list/index/len state
 - lower `Single` with item/emitted state
@@ -502,7 +502,7 @@ Tasks:
 - [ ] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [ ] `Iter.custom` produces `Custom`.
 - [ ] `Public(iter_value)` exists for unknown iterator values.
-- [ ] Iterator-plan elimination pass exists before Lambda-to-LIR lowering.
+- [ ] Iterator-plan elimination rewrite exists before Lambda-to-LIR lowering.
 - [ ] Plan elimination preserves producer-site evaluation order.
 - [ ] Plan elimination never replays checked expressions.
 - [ ] Private plan state can cross locals.

@@ -1356,14 +1356,14 @@ declaration right-hand sides, mining the public record/closure representation,
 or asking a backend to recover iterator semantics from generated code.
 
 The implementation owner for this is a post-check iterator-plan elimination
-step, not LIR lowering and not a backend optimization. Monotype lowering may
+rewrite, not LIR lowering and not a backend optimization. Monotype lowering may
 produce `iter_plan` expressions with the public `Iter(item)` type, and later
 post-check passes may clone, specialize, inline, or scalarize around those
-values. Before Lambda-to-LIR lowering, the elimination step must prove every
-remaining plan value has either been consumed by an optimized builtin consumer
-or replaced by the ordinary public `Iter` value. No raw plan value may survive
-into LIR, because LIR has only ordinary values, control flow, calls, and
-explicit ARC statements.
+values. Before Lambda-to-LIR lowering, this rewrite must prove every remaining
+plan value has either been consumed by an optimized builtin consumer or replaced
+by the ordinary public `Iter` value. No raw plan value may survive into LIR,
+because LIR has only ordinary values, control flow, calls, and explicit ARC
+statements.
 
 Because plans are post-check values, source evaluation order is preserved by
 normal IR evaluation. For example, a declaration whose right-hand side is an
@@ -1374,16 +1374,16 @@ or any appended item expressions. This matters for `dbg`, `expect`, `crash`,
 and any other observable runtime behavior that is not modeled as an ordinary
 effectful function call.
 
-The plan representation is therefore not a binder side table. A compiler pass
-may keep temporary maps from locals to plan values while rewriting a body, but
-those maps are indexes into already-lowered IR values. They must not point back
-to checked expressions or source declarations that would need to be re-evaluated
-later. If an iterator value is produced by an `if` or `match`, the condition,
-scrutinee, pattern tests, selected branch, and branch-local observable behavior
-belong at that expression's source position. Optimized consumption must
-preserve that order, either by consuming the already-produced plan value or by
-rewriting the surrounding IR into explicit private plan state at that same
-point.
+The plan representation is therefore not a binder side table. The elimination
+rewrite may keep temporary maps from locals to plan values while rewriting a
+body, but those maps are indexes into already-lowered IR values. They must not
+point back to checked expressions or source declarations that would need to be
+re-evaluated later. If an iterator value is produced by an `if` or `match`, the
+condition, scrutinee, pattern tests, selected branch, and branch-local
+observable behavior belong at that expression's source position. Optimized
+consumption must preserve that order, either by consuming the already-produced
+plan value or by rewriting the surrounding IR into explicit private plan state
+at that same point.
 
 The reason for the split is purity. Source such as:
 
