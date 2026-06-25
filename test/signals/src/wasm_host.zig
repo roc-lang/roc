@@ -307,16 +307,20 @@ fn assertHostValueTypeTag(value: HostValue, expected_tag: HostValueTypeTag) void
     }) orelse failHostWith("HostValue read crossed erasure boundary without a type tag");
     if (host_value_registry.tagsMatch(HostValueTypeTag, actual_tag, expected_tag, registryOps())) return;
 
-    const actual_split = hv.hostValueTypeTagSplitFn(actual_tag);
-    const expected_split = hv.hostValueTypeTagSplitFn(expected_tag);
+    const actual_split = hv.hostValueTypeTagSplit(actual_tag);
+    const expected_split = hv.hostValueTypeTagSplit(expected_tag);
+    const actual_split_fn = hv.hostValueTypeTagSplitFn(actual_tag);
+    const expected_split_fn = hv.hostValueTypeTagSplitFn(expected_tag);
     failHostWithFmt(
-        "HostValue read crossed erasure boundary with the wrong type tag value={} actual_id={} expected_id={} actual_split=0x{x} expected_split=0x{x}",
+        "HostValue read crossed erasure boundary with the wrong type tag value={} actual_id={} expected_id={} actual_split=0x{x} expected_split=0x{x} actual_split_fn=0x{x} expected_split_fn=0x{x}",
         .{
             value,
             hv.hostValueTypeTagId(actual_tag),
             hv.hostValueTypeTagId(expected_tag),
             if (actual_split) |ptr| @intFromPtr(ptr) else 0,
             if (expected_split) |ptr| @intFromPtr(ptr) else 0,
+            if (actual_split_fn) |ptr| @intFromPtr(ptr) else 0,
+            if (expected_split_fn) |ptr| @intFromPtr(ptr) else 0,
         },
     );
 }

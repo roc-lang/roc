@@ -27,8 +27,8 @@ pub fn releaseU64Box(box: anytype, roc_host: *abi.RocHost) void {
 
 pub fn normalizeHostValueTypeTag(tag: anytype) HostValueTypeTag {
     return .{
-        .id = tag.@"id",
-        .split = tag.@"split",
+        .id = tag.id,
+        .split = tag.split,
     };
 }
 
@@ -42,11 +42,11 @@ pub fn releaseHostValueTypeTag(tag: HostValueTypeTag, roc_host: *abi.RocHost) vo
 }
 
 pub fn hostValueTypeTagId(tag: HostValueTypeTag) u64 {
-    return tag.@"id";
+    return tag.id;
 }
 
 pub fn hostValueTypeTagSplit(tag: HostValueTypeTag) abi.RocErasedCallable {
-    return tag.@"split";
+    return tag.split;
 }
 
 pub fn hostValueTypeTagSplitFn(tag: HostValueTypeTag) ?abi.RocErasedCallableFn {
@@ -75,8 +75,8 @@ pub fn RegistryOps(comptime TypeTag: type) type {
         pub fn tagsMatch(_: @This(), actual_tag: TypeTag, expected_tag: TypeTag) bool {
             const actual_id = hostValueTypeTagId(actual_tag);
             if (actual_id != 0 and actual_id == hostValueTypeTagId(expected_tag)) return true;
-            const actual_split = hostValueTypeTagSplitFn(actual_tag) orelse return false;
-            const expected_split = hostValueTypeTagSplitFn(expected_tag) orelse return false;
+            const actual_split = hostValueTypeTagSplit(actual_tag) orelse return false;
+            const expected_split = hostValueTypeTagSplit(expected_tag) orelse return false;
             return actual_split == expected_split;
         }
 

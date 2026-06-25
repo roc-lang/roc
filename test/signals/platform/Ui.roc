@@ -1,5 +1,6 @@
 import Elem exposing [Elem]
 import HostValue exposing [HostValue]
+import Capability exposing [Capability]
 import Node
 import Signal exposing [Signal]
 
@@ -23,15 +24,15 @@ Ui := [].{
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
-	State(a) := { ref : Node.BinderRef, tag : HostValue.TypeTag(a) }.{
+	State(a) := { ref : Node.BinderRef, cap : Capability(a) }.{
 		signal : State(a) -> Signal(a)
-		signal = |st| Signal.from_expr(Node.SignalExpr.Ref(st.ref), st.tag)
+		signal = |st| Signal.from_expr(Node.SignalExpr.Ref(st.ref), st.cap)
 
 		## Build a unit-triggered reducer message: `f` maps the current value to the
 		## next value, ignoring the unit payload.
 		on_unit : State(a), (a -> a) -> Node.Msg
-		on_unit = |st, f| {
-			current_tag = st.tag
+	on_unit = |st, f| {
+			current_cap = st.cap
 			payload_unit_tag : HostValue.TypeTag({})
 			payload_unit_tag = HostValue.new_unit_payload_tag({})
 			payload_str_tag : HostValue.TypeTag(Str)
@@ -41,15 +42,15 @@ Ui := [].{
 			wrapped : HostValue, HostValue -> HostValue
 			wrapped = |current_hv, _payload_hv| {
 				current : a
-				current = Box.unbox(HostValue.get_tagged(current_hv, current_tag))
+				current = Box.unbox(Capability.get(current_hv, current_cap))
 				next : a
 				next = f(current)
-				HostValue.store_tagged(Box.box(next), current_tag)
+				Capability.store(Box.box(next), current_cap)
 			}
 			payload_drop : HostValue -> {}
 			payload_drop = |payload_hv| {
 				boxed : Box({})
-				boxed = HostValue.take(payload_hv)
+				boxed = HostValue.take_tagged(payload_hv, payload_unit_tag)
 				_ = boxed
 				{}
 			}
@@ -57,8 +58,8 @@ Ui := [].{
 		}
 
 		on_str : State(a), (a, Str -> a) -> Node.Msg
-		on_str = |st, f| {
-			current_tag = st.tag
+	on_str = |st, f| {
+			current_cap = st.cap
 			payload_unit_tag : HostValue.TypeTag({})
 			payload_unit_tag = HostValue.new_unit_payload_tag({})
 			payload_str_tag : HostValue.TypeTag(Str)
@@ -68,17 +69,17 @@ Ui := [].{
 			wrapped : HostValue, HostValue -> HostValue
 			wrapped = |current_hv, payload_hv| {
 				current : a
-				current = Box.unbox(HostValue.get_tagged(current_hv, current_tag))
+				current = Box.unbox(Capability.get(current_hv, current_cap))
 				payload : Str
 				payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_str_tag))
 				next : a
 				next = f(current, payload)
-				HostValue.store_tagged(Box.box(next), current_tag)
+				Capability.store(Box.box(next), current_cap)
 			}
 			payload_drop : HostValue -> {}
 			payload_drop = |payload_hv| {
 				boxed : Box(Str)
-				boxed = HostValue.take(payload_hv)
+				boxed = HostValue.take_tagged(payload_hv, payload_str_tag)
 				_ = boxed
 				{}
 			}
@@ -86,8 +87,8 @@ Ui := [].{
 		}
 
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
-		on_bool = |st, f| {
-			current_tag = st.tag
+	on_bool = |st, f| {
+			current_cap = st.cap
 			payload_unit_tag : HostValue.TypeTag({})
 			payload_unit_tag = HostValue.new_unit_payload_tag({})
 			payload_str_tag : HostValue.TypeTag(Str)
@@ -97,17 +98,17 @@ Ui := [].{
 			wrapped : HostValue, HostValue -> HostValue
 			wrapped = |current_hv, payload_hv| {
 				current : a
-				current = Box.unbox(HostValue.get_tagged(current_hv, current_tag))
+				current = Box.unbox(Capability.get(current_hv, current_cap))
 				payload : Bool
 				payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_bool_tag))
 				next : a
 				next = f(current, payload)
-				HostValue.store_tagged(Box.box(next), current_tag)
+				Capability.store(Box.box(next), current_cap)
 			}
 			payload_drop : HostValue -> {}
 			payload_drop = |payload_hv| {
 				boxed : Box(Bool)
-				boxed = HostValue.take(payload_hv)
+				boxed = HostValue.take_tagged(payload_hv, payload_bool_tag)
 				_ = boxed
 				{}
 			}
@@ -124,29 +125,22 @@ Ui := [].{
 				a.is_eq : a, a -> Bool,
 			]
 	state = |init, body| {
-		tag = HostValue.new_tag({})
+		cap = Capability.new({})
 		initial : {} -> HostValue
-		initial = |_| HostValue.store_tagged(Box.box(init), tag)
-		eq : HostValue, HostValue -> Bool
-		eq = |left_hv, right_hv| {
-			left_v : a
-			left_v = Box.unbox(HostValue.get_tagged(left_hv, tag))
-			right_v : a
-			right_v = Box.unbox(HostValue.get_tagged(right_hv, tag))
-			left_v.is_eq(right_v)
-		}
-		drop : HostValue -> {}
-		drop = |host_value| {
-			boxed : Box(a)
-			boxed = HostValue.take(host_value)
-			_ = boxed
-			{}
-		}
+		initial = |_| Capability.store(Box.box(init), cap)
 		token = Box.box(0)
 		handle : State(a)
-		handle = { ref: Node.BinderRef.BinderRef(token), tag }
+		handle = { ref: Node.BinderRef.BinderRef(token), cap }
 		child = body(handle)
-		Elem.State({ binder: handle.ref, initial: Box.box(initial), eq: Box.box(eq), drop: Box.box(drop), child: Box.box(child) })
+		Elem.State(
+			{
+				binder: handle.ref,
+				initial: Box.box(initial),
+				eq: Capability.eq(cap),
+				drop: Capability.drop(cap),
+				child: Box.box(child),
+			},
+		)
 	}
 
 	## Introduce a reusable local scope. State/when/each ordinals inside the body
@@ -157,11 +151,11 @@ Ui := [].{
 
 	on_change : Signal(a), (a -> Node.Cmd) -> Elem
 	on_change = |signal, to_cmd| {
-		tag = signal.tag
+		cap = signal.cap
 		wrapped : HostValue -> Node.Cmd
 		wrapped = |value| {
 			typed : a
-			typed = Box.unbox(HostValue.get_tagged(value, tag))
+			typed = Box.unbox(Capability.get(value, cap))
 			to_cmd(typed)
 		}
 		Elem.OnChange({ signal: Signal.to_expr(signal), to_cmd: Box.box(wrapped) })
@@ -176,9 +170,9 @@ Ui := [].{
 	## Conditional. Each arm is its own scope; flipping disposes the losing arm.
 	when : Signal(Bool), ({} -> Elem), ({} -> Elem) -> Elem
 	when = |condition, when_true, when_false| {
-		condition_tag = condition.tag
+		condition_cap = condition.cap
 		read_condition : HostValue -> Bool
-		read_condition = |value| Box.unbox(HostValue.get_tagged(value, condition_tag))
+		read_condition = |value| Box.unbox(Capability.get(value, condition_cap))
 		Elem.When(
 			{
 				condition: Signal.to_expr(condition),
@@ -200,62 +194,32 @@ Ui := [].{
 				k.is_eq : k, k -> Bool,
 			]
 	each = |items, key_of, key_hash, row| {
-		items_tag = items.tag
-		item_tag = HostValue.new_tag({})
-		key_tag = HostValue.new_tag({})
+		items_cap = items.cap
+		item_cap = Capability.new({})
+		key_cap = Capability.new({})
 		items_to_values : HostValue -> List(HostValue)
 		items_to_values = |items_hv| {
 			typed_items : List(item)
-			typed_items = Box.unbox(HostValue.get_tagged(items_hv, items_tag))
-			List.map(typed_items, |item| HostValue.store_tagged(Box.box(item), item_tag))
+			typed_items = Box.unbox(Capability.get(items_hv, items_cap))
+			List.map(typed_items, |item| Capability.store(Box.box(item), item_cap))
 		}
 		key_of_hv : HostValue -> HostValue
 		key_of_hv = |item_hv| {
 			item : item
-			item = Box.unbox(HostValue.get_tagged(item_hv, item_tag))
+			item = Box.unbox(Capability.get(item_hv, item_cap))
 			key = key_of(item)
-			HostValue.store_tagged(Box.box(key), key_tag)
-		}
-		key_eq_hv : HostValue, HostValue -> Bool
-		key_eq_hv = |left_hv, right_hv| {
-			left_k : k
-			left_k = Box.unbox(HostValue.get_tagged(left_hv, key_tag))
-			right_k : k
-			right_k = Box.unbox(HostValue.get_tagged(right_hv, key_tag))
-			left_k.is_eq(right_k)
+			Capability.store(Box.box(key), key_cap)
 		}
 		key_hash_hv : HostValue -> U64
 		key_hash_hv = |key_hv| {
 			key : k
-			key = Box.unbox(HostValue.get_tagged(key_hv, key_tag))
+			key = Box.unbox(Capability.get(key_hv, key_cap))
 			key_hash(key)
-		}
-		key_drop_hv : HostValue -> {}
-		key_drop_hv = |key_hv| {
-			boxed : Box(k)
-			boxed = HostValue.take(key_hv)
-			_ = boxed
-			{}
-		}
-		item_eq_hv : HostValue, HostValue -> Bool
-		item_eq_hv = |left_hv, right_hv| {
-			left_item : item
-			left_item = Box.unbox(HostValue.get_tagged(left_hv, item_tag))
-			right_item : item
-			right_item = Box.unbox(HostValue.get_tagged(right_hv, item_tag))
-			left_item.is_eq(right_item)
-		}
-		item_drop_hv : HostValue -> {}
-		item_drop_hv = |item_hv| {
-			boxed : Box(item)
-			boxed = HostValue.take(item_hv)
-			_ = boxed
-			{}
 		}
 		row_hv : HostValue, HostValue -> Elem
 		row_hv = |key_hv, item_hv| {
 			key : k
-			key = Box.unbox(HostValue.get_tagged(key_hv, key_tag))
+			key = Box.unbox(Capability.get(key_hv, key_cap))
 			row_item : {} -> HostValue
 			row_item = |_| HostValue.clone(item_hv)
 			row_signal_token = Box.box(0)
@@ -265,10 +229,10 @@ Ui := [].{
 					Node.SignalExpr.ConstValue(
 						row_signal_token,
 						Box.box(row_item),
-						Box.box(item_eq_hv),
-						Box.box(item_drop_hv),
+						Capability.eq(item_cap),
+						Capability.drop(item_cap),
 					),
-					item_tag,
+					item_cap,
 				),
 			)
 		}
@@ -278,10 +242,10 @@ Ui := [].{
 				items_to_values: Box.box(items_to_values),
 				key_hash: Box.box(key_hash_hv),
 				key_of: Box.box(key_of_hv),
-				key_eq: Box.box(key_eq_hv),
-				key_drop: Box.box(key_drop_hv),
-				item_eq: Box.box(item_eq_hv),
-				item_drop: Box.box(item_drop_hv),
+				key_eq: Capability.eq(key_cap),
+				key_drop: Capability.drop(key_cap),
+				item_eq: Capability.eq(item_cap),
+				item_drop: Capability.drop(item_cap),
 				row: Box.box(row_hv),
 			},
 		)

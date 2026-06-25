@@ -1,5 +1,6 @@
 import Elem exposing [Elem]
 import HostValue exposing [HostValue]
+import Capability exposing [Capability]
 import Node
 import Signal exposing [Signal]
 
@@ -13,9 +14,9 @@ Html := [].{
 
 	class_attr_s : Signal(Str) -> Node.Attr
 	class_attr_s = |signal| {
-		tag = signal.tag
+		cap = signal.cap
 		read : HostValue -> Str
-		read = |value| Box.unbox(HostValue.get_tagged(value, tag))
+		read = |value| Box.unbox(Capability.get(value, cap))
 		Node.Attr.SignalText({ field: Node.field_class, signal: Signal.to_expr(signal), read: Box.box(read) })
 	}
 
@@ -103,18 +104,18 @@ Html := [].{
 	## Signal-backed text content.
 	text_s : Signal(Str) -> Elem
 	text_s = |signal| {
-		tag = signal.tag
+		cap = signal.cap
 		read : HostValue -> Str
-		read = |value| Box.unbox(HostValue.get_tagged(value, tag))
+		read = |value| Box.unbox(Capability.get(value, cap))
 		Elem.TextSignal({ signal: Signal.to_expr(signal), read: Box.box(read) })
 	}
 
 	## Signal-backed preformatted text block.
 	pre_s_c : Signal(Str), Str -> Elem
 	pre_s_c = |signal, classes| {
-		tag = signal.tag
+		cap = signal.cap
 		read : HostValue -> Str
-		read = |value| Box.unbox(HostValue.get_tagged(value, tag))
+		read = |value| Box.unbox(Capability.get(value, cap))
 		Elem.Element(
 			{
 				tag: "pre",
@@ -160,9 +161,9 @@ Html := [].{
 
 	button_s_attrs : Signal(Str), List(Node.Attr), Node.Msg -> Elem
 	button_s_attrs = |label, attrs, msg| {
-		label_tag = label.tag
+		label_cap = label.cap
 		read_label : HostValue -> Str
-		read_label = |value| Box.unbox(HostValue.get_tagged(value, label_tag))
+		read_label = |value| Box.unbox(Capability.get(value, label_cap))
 		Elem.Element(
 			{
 				tag: "button",
@@ -187,12 +188,12 @@ Html := [].{
 
 	action_button_attrs : Signal(Str), Signal(Bool), List(Node.Attr), Node.Msg -> Elem
 	action_button_attrs = |label, disabled, attrs, msg| {
-		label_tag = label.tag
-		disabled_tag = disabled.tag
+		label_cap = label.cap
+		disabled_cap = disabled.cap
 		read_label : HostValue -> Str
-		read_label = |value| Box.unbox(HostValue.get_tagged(value, label_tag))
+		read_label = |value| Box.unbox(Capability.get(value, label_cap))
 		read_disabled : HostValue -> Bool
-		read_disabled = |value| Box.unbox(HostValue.get_tagged(value, disabled_tag))
+		read_disabled = |value| Box.unbox(Capability.get(value, disabled_cap))
 		Elem.Element(
 			{
 				tag: "button",
@@ -219,9 +220,9 @@ Html := [].{
 
 	text_input_attrs : Str, Signal(Str), List(Node.Attr), Node.Msg -> Elem
 	text_input_attrs = |label, value, attrs, msg| {
-		value_tag = value.tag
+		value_cap = value.cap
 		read_value : HostValue -> Str
-		read_value = |host_value| Box.unbox(HostValue.get_tagged(host_value, value_tag))
+		read_value = |host_value| Box.unbox(Capability.get(host_value, value_cap))
 		Elem.Element(
 			{
 				tag: "input",
@@ -249,9 +250,9 @@ Html := [].{
 
 	checkbox_attrs : Str, Signal(Bool), List(Node.Attr), Node.Msg -> Elem
 	checkbox_attrs = |label, checked, attrs, msg| {
-		checked_tag = checked.tag
+		checked_cap = checked.cap
 		read_checked : HostValue -> Bool
-		read_checked = |value| Box.unbox(HostValue.get_tagged(value, checked_tag))
+		read_checked = |value| Box.unbox(Capability.get(value, checked_cap))
 		Elem.Element(
 			{
 				tag: "input",

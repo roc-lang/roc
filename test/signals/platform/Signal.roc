@@ -1,26 +1,27 @@
 import HostValue exposing [HostValue]
+import Capability exposing [Capability]
 import Node
 
 TaskStatus(a, err) := [Loading, Done(a), Failed(err)]
 
-Task(a, err) := { source : Node.TaskSource, tag : HostValue.TypeTag(TaskStatus(a, err)) }
+Task(a, err) := { source : Node.TaskSource, cap : Capability(TaskStatus(a, err)) }
 
 ## Opaque, typed signal. Wraps a boxed pure `Node.SignalExpr` descriptor
 ## referencing state/source binders. The `a` lives only in Roc's type system.
 ## Runtime values are opaque host-owned cells; each edge carries the exact typed
 ## thunks that can read, compare, transform, and release that cell.
-Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
+Signal(a) := { expr : Box(Node.SignalExpr), cap : Capability(a) }.{
 	clone_expr : Box(Node.SignalExpr) -> Box(Node.SignalExpr)
 	clone_expr = |expr| expr
 
 	to_expr : Signal(a) -> Box(Node.SignalExpr)
 	to_expr = |signal| signal.expr
 
-	from_expr : Node.SignalExpr, HostValue.TypeTag(a) -> Signal(a)
-	from_expr = |expr, tag| { expr: Box.box(expr), tag }
+	from_expr : Node.SignalExpr, Capability(a) -> Signal(a)
+	from_expr = |expr, cap| { expr: Box.box(expr), cap }
 
 	from_task : Task(a, err) -> Signal(TaskStatus(a, err))
-	from_task = |task| { expr: Box.box(Node.SignalExpr.TaskSource(task.source)), tag: task.tag }
+	from_task = |task| { expr: Box.box(Node.SignalExpr.TaskSource(task.source)), cap: task.cap }
 
 	fold_task :
 		Task(a, err), b, (a -> b), (err -> b) -> Signal(b)
@@ -58,14 +59,31 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 			]
 	task_source = |name, to_done, to_failed, reset_on_start| {
 		token = Box.box(0)
-		status_tag = HostValue.new_tag({})
+		status_cap =
+			Capability.new_with_eq(
+				|left, right|
+					match left {
+						TaskStatus.Loading => match right {
+							TaskStatus.Loading => True
+							_ => False
+						}
+						TaskStatus.Done(left_value) => match right {
+							TaskStatus.Done(right_value) => left_value.is_eq(right_value)
+							_ => False
+						}
+						TaskStatus.Failed(left_error) => match right {
+							TaskStatus.Failed(right_error) => left_error.is_eq(right_error)
+							_ => False
+						}
+					},
+			)
 		payload_tag = HostValue.new_str_payload_tag({})
 
 		loading : TaskStatus(a, err)
 		loading = TaskStatus.Loading
 
 		initial : {} -> HostValue
-		initial = |_| HostValue.store_tagged(Box.box(loading), status_tag)
+		initial = |_| Capability.store(Box.box(loading), status_cap)
 
 		done : HostValue -> HostValue
 		done = |payload_hv| {
@@ -73,7 +91,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 			payload = Box.unbox(HostValue.take_tagged(payload_hv, payload_tag))
 			status : TaskStatus(a, err)
 			status = TaskStatus.Done(to_done(payload))
-			HostValue.store_tagged(Box.box(status), status_tag)
+			Capability.store(Box.box(status), status_cap)
 		}
 
 		failed : HostValue -> HostValue
@@ -82,43 +100,13 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 			payload = Box.unbox(HostValue.take_tagged(payload_hv, payload_tag))
 			status : TaskStatus(a, err)
 			status = TaskStatus.Failed(to_failed(payload))
-			HostValue.store_tagged(Box.box(status), status_tag)
-		}
-
-		eq : HostValue, HostValue -> Bool
-		eq = |left_hv, right_hv| {
-			left : TaskStatus(a, err)
-			left = Box.unbox(HostValue.get_tagged(left_hv, status_tag))
-			right : TaskStatus(a, err)
-			right = Box.unbox(HostValue.get_tagged(right_hv, status_tag))
-			match left {
-				TaskStatus.Loading => match right {
-					TaskStatus.Loading => True
-					_ => False
-				}
-				TaskStatus.Done(left_value) => match right {
-					TaskStatus.Done(right_value) => left_value.is_eq(right_value)
-					_ => False
-				}
-				TaskStatus.Failed(left_error) => match right {
-					TaskStatus.Failed(right_error) => left_error.is_eq(right_error)
-					_ => False
-				}
-			}
-		}
-
-		drop : HostValue -> {}
-		drop = |host_value| {
-			boxed : Box(TaskStatus(a, err))
-			boxed = HostValue.take(host_value)
-			_ = boxed
-			{}
+			Capability.store(Box.box(status), status_cap)
 		}
 
 		payload_drop : HostValue -> {}
 		payload_drop = |host_value| {
 			boxed : Box(Str)
-			boxed = HostValue.take(host_value)
+			boxed = HostValue.take_tagged(host_value, payload_tag)
 			_ = boxed
 			{}
 		}
@@ -132,35 +120,28 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 				initial: Box.box(initial),
 				done: Box.box(done),
 				failed: Box.box(failed),
-				eq: Box.box(eq),
-				drop: Box.box(drop),
+				eq: Capability.eq(status_cap),
+				drop: Capability.drop(status_cap),
 				reset_on_start,
 			},
-			tag: status_tag,
+			cap: status_cap,
 		}
 	}
 
 	start_str : Task(a, err), Str -> Node.Cmd
 	start_str = |task, request| {
-		request_tag = HostValue.new_str_payload_tag({})
+		request_cap = Capability.new({})
 		request_init : {} -> HostValue
-		request_init = |_| HostValue.store_tagged(Box.box(request), request_tag)
+		request_init = |_| Capability.store(Box.box(request), request_cap)
 		request_read : HostValue -> Str
-		request_read = |value| Box.unbox(HostValue.get_tagged(value, request_tag))
-		request_drop : HostValue -> {}
-		request_drop = |value| {
-			boxed : Box(Str)
-			boxed = HostValue.take(value)
-			_ = boxed
-			{}
-		}
+		request_read = |value| Box.unbox(Capability.get(value, request_cap))
 		Node.Cmd.StartTask(
 			{
 				task_token: task.source.token,
 				task_name: task.source.name,
 				request_init: Box.box(request_init),
 				request_read: Box.box(request_read),
-				request_drop: Box.box(request_drop),
+				request_drop: Capability.drop(request_cap),
 			},
 		)
 	}
@@ -177,33 +158,16 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 				]
 		source_from_tick = |initial_value, next| {
 			token = Box.box(0)
-			tag = HostValue.new_tag({})
+			cap = Capability.new({})
 
 			initial : {} -> HostValue
-			initial = |_| HostValue.store_tagged(Box.box(initial_value), tag)
+			initial = |_| Capability.store(Box.box(initial_value), cap)
 
 			tick : HostValue -> HostValue
 			tick = |current_hv| {
 				current : a
-				current = Box.unbox(HostValue.get_tagged(current_hv, tag))
-				HostValue.store_tagged(Box.box(next(current)), tag)
-			}
-
-			eq : HostValue, HostValue -> Bool
-			eq = |left_hv, right_hv| {
-				left : a
-				left = Box.unbox(HostValue.get_tagged(left_hv, tag))
-				right : a
-				right = Box.unbox(HostValue.get_tagged(right_hv, tag))
-				left.is_eq(right)
-			}
-
-			drop : HostValue -> {}
-			drop = |host_value| {
-				boxed : Box(a)
-				boxed = HostValue.take(host_value)
-				_ = boxed
-				{}
+				current = Box.unbox(Capability.get(current_hv, cap))
+				Capability.store(Box.box(next(current)), cap)
 			}
 
 			{
@@ -214,12 +178,12 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 							period_ms,
 							initial: Box.box(initial),
 							tick: Box.box(tick),
-							eq: Box.box(eq),
-							drop: Box.box(drop),
+							eq: Capability.eq(cap),
+							drop: Capability.drop(cap),
 						},
 					),
 				),
-				tag,
+				cap,
 			}
 		}
 
@@ -233,34 +197,19 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 		]
 	const = |value| {
 		token = Box.box(0)
-		tag = HostValue.new_tag({})
+		cap = Capability.new({})
 		init : {} -> HostValue
-		init = |_| HostValue.store_tagged(Box.box(value), tag)
-		eq : HostValue, HostValue -> Bool
-		eq = |left_hv, right_hv| {
-			left : a
-			left = Box.unbox(HostValue.get_tagged(left_hv, tag))
-			right : a
-			right = Box.unbox(HostValue.get_tagged(right_hv, tag))
-			left.is_eq(right)
-		}
-		drop : HostValue -> {}
-		drop = |host_value| {
-			boxed : Box(a)
-			boxed = HostValue.take(host_value)
-			_ = boxed
-			{}
-		}
+		init = |_| Capability.store(Box.box(value), cap)
 		{
 			expr: Box.box(
 				Node.SignalExpr.ConstValue(
 					token,
 					Box.box(init),
-					Box.box(eq),
-					Box.box(drop),
+					Capability.eq(cap),
+					Capability.drop(cap),
 				),
 			),
-			tag,
+			cap,
 		}
 	}
 
@@ -274,29 +223,14 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 			]
 	map = |signal, f| {
 		token = Box.box(0)
-		output_tag = HostValue.new_tag({})
+		output_cap = Capability.new({})
 		wrapped : HostValue -> HostValue
 		wrapped = |input_hv| {
 			typed_input : a
-			typed_input = Box.unbox(HostValue.get_tagged(input_hv, signal.tag))
+			typed_input = Box.unbox(Capability.get(input_hv, signal.cap))
 			typed_output : b
 			typed_output = f(typed_input)
-			HostValue.store_tagged(Box.box(typed_output), output_tag)
-		}
-		eq : HostValue, HostValue -> Bool
-		eq = |left_hv, right_hv| {
-			left : b
-			left = Box.unbox(HostValue.get_tagged(left_hv, output_tag))
-			right : b
-			right = Box.unbox(HostValue.get_tagged(right_hv, output_tag))
-			left.is_eq(right)
-		}
-		drop : HostValue -> {}
-		drop = |host_value| {
-			boxed : Box(b)
-			boxed = HostValue.take(host_value)
-			_ = boxed
-			{}
+			Capability.store(Box.box(typed_output), output_cap)
 		}
 
 		{
@@ -305,11 +239,11 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 					token,
 					signal.expr,
 					Box.box(wrapped),
-					Box.box(eq),
-					Box.box(drop),
+					Capability.eq(output_cap),
+					Capability.drop(output_cap),
 				),
 			),
-			tag: output_tag,
+			cap: output_cap,
 		}
 	}
 
@@ -320,31 +254,16 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 			]
 	map2 = |left, right, f| {
 		token = Box.box(0)
-		output_tag = HostValue.new_tag({})
+		output_cap = Capability.new({})
 		wrapped : HostValue, HostValue -> HostValue
 		wrapped = |left_hv, right_hv| {
 			left_v : a
-			left_v = Box.unbox(HostValue.get_tagged(left_hv, left.tag))
+			left_v = Box.unbox(Capability.get(left_hv, left.cap))
 			right_v : b
-			right_v = Box.unbox(HostValue.get_tagged(right_hv, right.tag))
+			right_v = Box.unbox(Capability.get(right_hv, right.cap))
 			output : c
 			output = f(left_v, right_v)
-			HostValue.store_tagged(Box.box(output), output_tag)
-		}
-		eq : HostValue, HostValue -> Bool
-		eq = |left_hv, right_hv| {
-			left_v : c
-			left_v = Box.unbox(HostValue.get_tagged(left_hv, output_tag))
-			right_v : c
-			right_v = Box.unbox(HostValue.get_tagged(right_hv, output_tag))
-			left_v.is_eq(right_v)
-		}
-		drop : HostValue -> {}
-		drop = |host_value| {
-			boxed : Box(c)
-			boxed = HostValue.take(host_value)
-			_ = boxed
-			{}
+			Capability.store(Box.box(output), output_cap)
 		}
 
 		{
@@ -354,11 +273,11 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 					left.expr,
 					right.expr,
 					Box.box(wrapped),
-					Box.box(eq),
-					Box.box(drop),
+					Capability.eq(output_cap),
+					Capability.drop(output_cap),
 				),
 			),
-			tag: output_tag,
+			cap: output_cap,
 		}
 	}
 
@@ -370,34 +289,30 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 			]
 	combine = |signals| {
 		token = Box.box(0)
-		input_tag =
+		input_cap =
 			match List.first(signals) {
-				Ok(first) => first.tag
-				Err(_) => HostValue.new_tag({})
+				Ok(first) => first.cap
+				Err(_) => Capability.new({})
 			}
-		output_tag = HostValue.new_tag({})
+		output_cap = Capability.new({})
 		exprs = List.map(signals, |s| Box.unbox(Signal.clone_expr(s.expr)))
 		transform : List(HostValue) -> HostValue
 		transform = |items| {
 			values : List(a)
-			values = List.map(items, |host_value| Box.unbox(HostValue.get_tagged(host_value, input_tag)))
-			HostValue.store_tagged(Box.box(values), output_tag)
+			values = List.map(items, |host_value| Box.unbox(Capability.get(host_value, input_cap)))
+			Capability.store(Box.box(values), output_cap)
 		}
-		eq : HostValue, HostValue -> Bool
-		eq = |left_hv, right_hv| {
-			left_items : List(a)
-			left_items = Box.unbox(HostValue.get_tagged(left_hv, output_tag))
-			right_items : List(a)
-			right_items = Box.unbox(HostValue.get_tagged(right_hv, output_tag))
-			left_items.is_eq(right_items)
+		{
+			expr: Box.box(
+				Node.SignalExpr.Combine(
+					token,
+					exprs,
+					Box.box(transform),
+					Capability.eq(output_cap),
+					Capability.drop(output_cap),
+				),
+			),
+			cap: output_cap,
 		}
-		drop : HostValue -> {}
-		drop = |host_value| {
-			boxed : Box(List(a))
-			boxed = HostValue.take(host_value)
-			_ = boxed
-			{}
-		}
-		{ expr: Box.box(Node.SignalExpr.Combine(token, exprs, Box.box(transform), Box.box(eq), Box.box(drop))), tag: output_tag }
 	}
 }

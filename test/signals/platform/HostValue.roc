@@ -60,4 +60,5 @@ HostValue := [HostValue(U64)].{
 	take : HostValue -> Box(a)
 	take_tagged : HostValue, TypeTag(a) -> Box(a)
 	clone : HostValue -> HostValue
+
 }
