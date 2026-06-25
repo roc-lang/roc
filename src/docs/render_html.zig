@@ -117,6 +117,9 @@ const RenderContext = struct {
     /// page that actually documents it. Keys/values are slices into the
     /// PackageDocs and live for the duration of rendering.
     builtin_type_owners: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// Names of the modules promoted out of `Builtin` by `reshapeBuiltin`. These
+    /// use bare anchors (no `<module>.` prefix). Keys are slices into PackageDocs.
+    builtin_modules: std.StringHashMapUnmanaged(void) = .empty,
     /// Every `id="…"` value that will be emitted across all module pages,
     /// computed up front so `writeDocRefHref` can verify each `[Name]`
     /// shorthand resolves to a real anchor. Keys are slices into
@@ -157,6 +160,8 @@ const RenderContext = struct {
         var documenting_builtin = false;
         var builtin_type_owners = std.StringHashMapUnmanaged([]const u8){};
         errdefer builtin_type_owners.deinit(gpa);
+        var builtin_modules = std.StringHashMapUnmanaged(void){};
+        errdefer builtin_modules.deinit(gpa);
         for (package_docs.modules) |mod| {
             try known.put(gpa, mod.name, {});
             // A module literally named "Builtin" means we're rendering the
@@ -165,6 +170,7 @@ const RenderContext = struct {
             // documenting the builtins, so builtin type refs stay on-site.
             if (std.mem.eql(u8, mod.name, "Builtin") or mod.builtin_derived) documenting_builtin = true;
             if (mod.builtin_derived) {
+                try builtin_modules.put(gpa, mod.name, {});
                 for (mod.entries) |*entry| {
                     try collectBuiltinTypeOwners(&builtin_type_owners, gpa, entry, mod.name);
                 }
@@ -180,7 +186,7 @@ const RenderContext = struct {
             // same-module `[Foo]` writes `#Foo` and a cross-module `[Foo]`
             // navigates to the module page (no fragment).
             try addAnchor(&anchors, gpa, arena.allocator(), mod.name);
-            try collectAnchorsForEntries(&anchors, gpa, arena.allocator(), mod.name, mod.entries, "");
+            try collectAnchorsForEntries(&anchors, gpa, arena.allocator(), mod.name, mod.entries, "", mod.builtin_derived);
         }
 
         const active_doc = try arena.allocator().create(ActiveDoc);
@@ -195,6 +201,7 @@ const RenderContext = struct {
             .current_module_entries = null,
             .documenting_builtin = documenting_builtin,
             .builtin_type_owners = builtin_type_owners,
+            .builtin_modules = builtin_modules,
             .all_anchors = anchors,
             .anchor_arena = arena,
             .current_source_path = current_source_path,
@@ -206,6 +213,7 @@ const RenderContext = struct {
         self.current_module_anchors.deinit(gpa);
         self.known_modules.deinit(gpa);
         self.builtin_type_owners.deinit(gpa);
+        self.builtin_modules.deinit(gpa);
         self.all_anchors.deinit(gpa);
         self.anchor_arena.deinit();
     }
@@ -214,6 +222,12 @@ const RenderContext = struct {
     /// "U8"), or null when `head` is not a builtin type.
     fn builtinTypeOwner(self: *const RenderContext, head: []const u8) ?[]const u8 {
         return self.builtin_type_owners.get(head);
+    }
+
+    /// Whether `module_name` was promoted out of `Builtin` and therefore uses
+    /// bare anchors (no `<module>.` prefix).
+    fn isBuiltinDerived(self: *const RenderContext, module_name: []const u8) bool {
+        return self.builtin_modules.contains(module_name);
     }
 
     /// Record a broken `[Name]` reference. `bracket_offset` is the byte
@@ -397,6 +411,7 @@ fn collectAnchorsForEntries(
     module_name: []const u8,
     entries: []const DocModel.DocEntry,
     parent_path: []const u8,
+    builtin_derived: bool,
 ) Allocator.Error!void {
     for (entries) |entry| {
         const full_path = if (parent_path.len == 0) blk: {
@@ -406,19 +421,24 @@ fn collectAnchorsForEntries(
             break :blk try std.fmt.allocPrint(arena, "{s}.{s}", .{ module_name, entry.name });
         } else try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, entry.name });
 
-        // Add every dotted prefix of `full_path` as a valid anchor.
-        var i: usize = 0;
-        while (i <= full_path.len) : (i += 1) {
-            if (i == full_path.len or full_path[i] == '.') {
-                const result = try set.getOrPut(gpa, full_path[0..i]);
-                if (!result.found_existing) {
-                    // Key slice points into `full_path`, which lives in `arena`.
-                    result.key_ptr.* = full_path[0..i];
+        // Add every dotted prefix of `full_path` as a valid anchor. For promoted
+        // builtin modules, also add the prefix-stripped form, since their ids and
+        // links are bare (`U8` rather than `Num.U8`).
+        const variants = [_][]const u8{ full_path, if (builtin_derived) moduleRelativeEntryName(module_name, full_path) else full_path };
+        for (variants) |path| {
+            var i: usize = 0;
+            while (i <= path.len) : (i += 1) {
+                if (i == path.len or path[i] == '.') {
+                    const result = try set.getOrPut(gpa, path[0..i]);
+                    if (!result.found_existing) {
+                        // Key slice points into `path`, which lives in `arena`.
+                        result.key_ptr.* = path[0..i];
+                    }
                 }
             }
         }
 
-        try collectAnchorsForEntries(set, gpa, arena, module_name, entry.children, full_path);
+        try collectAnchorsForEntries(set, gpa, arena, module_name, entry.children, full_path, builtin_derived);
     }
 }
 
@@ -573,8 +593,13 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     var bw = file.writer(io, &buf);
     const w = &bw.interface;
 
+    // The builtins package's real name ("Builtin") is an implementation detail
+    // we keep out of the docs; the site is presented generically as
+    // "Documentation".
+    const display_name = if (ctx.documenting_builtin) "Documentation" else ctx.package_docs.name;
+
     var index_title_buf: [256]u8 = undefined;
-    const index_title = std.fmt.bufPrint(&index_title_buf, "{s} Docs", .{ctx.package_docs.name}) catch ctx.package_docs.name;
+    const index_title = std.fmt.bufPrint(&index_title_buf, "{s} Docs", .{display_name}) catch display_name;
     try writeHtmlHead(w, index_title, "");
     try writeBodyOpen(w);
     try renderSidebar(w, ctx, gpa, "");
@@ -582,7 +607,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     // Main content
     try writeMainOpen(w, ctx, gpa, "");
     try w.writeAll("        <h1 class=\"module-name\">");
-    try writeHtmlEscaped(w, ctx.package_docs.name);
+    try writeHtmlEscaped(w, display_name);
     try w.writeAll("</h1>\n");
 
     // Module list
@@ -641,7 +666,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, d
 
     // Build entry tree (automatically collapses redundant top-level node
     // matching the module name, e.g. Parser > Parser or Builtin > Builtin).
-    const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
+    const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
     defer entry_tree.deinit(gpa);
 
     // Show collapsed type definition at module level
@@ -783,7 +808,7 @@ const EntryTree = struct {
     }
 };
 
-fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_name: []const u8) Allocator.Error!EntryTree {
+fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_name: []const u8, builtin_derived: bool) Allocator.Error!EntryTree {
     const root = try SidebarNode.init(gpa, "", "", false);
 
     for (entries) |*entry| {
@@ -865,7 +890,33 @@ fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_nam
         collapsed.deinit(gpa);
     }
 
+    // Promoted builtin modules drop the redundant `<module>.` prefix from every
+    // anchor (id, sidebar, search, permalink all read `node.full_path`), so e.g.
+    // `Hasher.write_u8` renders as `write_u8`.
+    if (builtin_derived) {
+        for (root.children.items) |child| {
+            try stripModulePrefixFromTree(gpa, child, module_name);
+        }
+    }
+
     return .{ .root = root, .collapsed_entry = collapsed_entry };
+}
+
+/// Recursively rewrite each node's `full_path` to drop a leading `<module>.`.
+fn stripModulePrefixFromTree(gpa: Allocator, node: *SidebarNode, module_name: []const u8) Allocator.Error!void {
+    const fp = node.full_path;
+    if (fp.len > module_name.len and
+        std.mem.startsWith(u8, fp, module_name) and
+        fp[module_name.len] == '.')
+    {
+        const stripped = try gpa.dupe(u8, fp[module_name.len + 1 ..]);
+        if (node.owns_full_path) gpa.free(node.full_path);
+        node.full_path = stripped;
+        node.owns_full_path = true;
+    }
+    for (node.children.items) |child| {
+        try stripModulePrefixFromTree(gpa, child, module_name);
+    }
 }
 
 /// Add a child entry to the content tree, splitting its name on dots
@@ -1167,11 +1218,12 @@ fn renderSidebarEntries(
     module_name: []const u8,
     module_link_prefix: []const u8,
     entries: []const DocModel.DocEntry,
+    builtin_derived: bool,
     _depth: usize,
 ) (Allocator.Error || error{WriteFailed})!void {
     _ = _depth; // No longer needed
 
-    const entry_tree = try buildEntryTree(gpa, entries, module_name);
+    const entry_tree = try buildEntryTree(gpa, entries, module_name, builtin_derived);
     defer entry_tree.deinit(gpa);
 
     try renderSidebarTree(w, module_name, module_link_prefix, entry_tree.root, 0);
@@ -1265,7 +1317,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
 
         // Sub-entries - grouped hierarchically
         try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
-        try renderSidebarEntries(w, gpa, mod.name, module_link_prefix.items, mod.entries, 0);
+        try renderSidebarEntries(w, gpa, mod.name, module_link_prefix.items, mod.entries, mod.builtin_derived, 0);
         try w.writeAll("                    </ul>\n");
         try w.writeAll("                </li>\n");
     }
@@ -1322,7 +1374,7 @@ fn renderLangRefSidebar(
 
 fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     for (ctx.package_docs.modules) |mod| {
-        const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
+        const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
         defer entry_tree.deinit(gpa);
         try renderSearchTree(w, ctx, gpa, mod.name, entry_tree.root, base);
     }
@@ -1751,6 +1803,25 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
         else
             false;
 
+        // Promoted builtin modules use bare anchors, so the fragment drops the
+        // `<module>.` head: `[Str.reserve]` -> `#reserve`, `[List.first]` ->
+        // `../List/#first`, and `[Str]`/`[List]` land on the page itself.
+        if (ctx.isBuiltinDerived(head)) {
+            const frag = if (first_dot) |d| label[d + 1 ..] else "";
+            if (is_same_module) {
+                try w.writeAll("#");
+            } else {
+                if (ctx.current_module) |_| try w.writeAll("../");
+                try writeHtmlEscaped(w, head);
+                try w.writeAll("/");
+                if (frag.len > 0) try w.writeAll("#");
+            }
+            try writeHtmlEscaped(w, frag);
+            append(&anchor_buf, &anchor_len, &anchor_overflow, frag);
+            try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+            return;
+        }
+
         if (is_same_module) {
             // Same-page anchor. Entry ids are prefixed with the module name.
             try w.writeAll("#");
@@ -1785,6 +1856,8 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
     // (e.g. `[U8]` from `Str`, where `U8` is documented under `Num`). Its id is
     // `<owner>.<label>`, so link there directly.
     if (ctx.builtinTypeOwner(head)) |owner| {
+        // Bare anchors: the owning page's id for this type is `label` itself
+        // (e.g. `U8`, `U8.default`), with no `<owner>.` prefix.
         const is_same_module = if (ctx.current_module) |cur| std.mem.eql(u8, owner, cur) else false;
         if (is_same_module) {
             try w.writeAll("#");
@@ -1793,11 +1866,7 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
             try writeHtmlEscaped(w, owner);
             try w.writeAll("/#");
         }
-        try writeHtmlEscaped(w, owner);
-        try w.writeAll(".");
         try writeHtmlEscaped(w, label);
-        append(&anchor_buf, &anchor_len, &anchor_overflow, owner);
-        append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
         append(&anchor_buf, &anchor_len, &anchor_overflow, label);
         try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
         return;
@@ -1808,20 +1877,34 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
     // through the anchor map so a label like `U8` resolves to `Num.U8` and
     // `U8.default` resolves to `Num.U8.default`.
     const resolved_head = ctx.lookupAnchorHead(head) orelse head;
+
+    // Promoted builtin modules use bare anchors, so strip any current-module
+    // prefix the anchor map left on the resolved head (`Num.F32` -> `F32`).
+    if (if (ctx.current_module) |cur| ctx.isBuiltinDerived(cur) else false) {
+        const bare_head = if (ctx.current_module) |cur|
+            (if (std.mem.startsWith(u8, resolved_head, cur) and resolved_head.len > cur.len and resolved_head[cur.len] == '.')
+                resolved_head[cur.len + 1 ..]
+            else
+                resolved_head)
+        else
+            resolved_head;
+        try w.writeAll("#");
+        try writeHtmlEscaped(w, bare_head);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, bare_head);
+        if (first_dot) |d| {
+            try writeHtmlEscaped(w, label[d..]);
+            append(&anchor_buf, &anchor_len, &anchor_overflow, label[d..]);
+        }
+        try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+        return;
+    }
+
     try w.writeAll("#");
     if (ctx.current_module) |cur| {
-        // When the resolved path already begins with the module name — which
-        // happens for the promoted builtin modules, whose top node matches the
-        // module name and is collapsed into the anchor id — don't prepend it
-        // again (avoids `#Num.Num.F32`).
-        const already_qualified = std.mem.startsWith(u8, resolved_head, cur) and
-            resolved_head.len > cur.len and resolved_head[cur.len] == '.';
-        if (!already_qualified) {
-            try writeHtmlEscaped(w, cur);
-            try w.writeAll(".");
-            append(&anchor_buf, &anchor_len, &anchor_overflow, cur);
-            append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
-        }
+        try writeHtmlEscaped(w, cur);
+        try w.writeAll(".");
+        append(&anchor_buf, &anchor_len, &anchor_overflow, cur);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
     }
     try writeHtmlEscaped(w, resolved_head);
     append(&anchor_buf, &anchor_len, &anchor_overflow, resolved_head);
@@ -2091,6 +2174,15 @@ fn writeTypeLink(
         }
         try writeHtmlEscaped(w, target_module);
         try w.writeAll("/#");
+    }
+
+    // The promoted builtin modules use bare anchors (the `<module>.` prefix is
+    // stripped from their ids), so drop it from the fragment too.
+    if (ctx.isBuiltinDerived(target_module)) {
+        const bare_head = if (already_qualified) effective_head[target_module.len + 1 ..] else effective_head;
+        try writeHtmlEscaped(w, bare_head);
+        try writeHtmlEscaped(w, tail);
+        return;
     }
 
     if (!already_qualified) {
