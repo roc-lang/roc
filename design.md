@@ -1356,15 +1356,13 @@ declaration right-hand sides, mining the public record/closure representation,
 or asking a backend to recover iterator semantics from generated code.
 
 The implementation owner for this is the iterator-aware post-check lowering
-boundary that consumes or materializes plans before ordinary lowering
-continues, not LIR lowering and not a backend optimization. This boundary should
-be integrated into the existing body lowering traversal, not implemented as a
-separate whole-program cleanup pass. Monotype lowering may produce `iter_plan`
-expressions with the public `Iter(item)` type, and the iterator-aware lowering
-logic that understands those plans must replace each one with ordinary
-post-check IR before Lambda-to-LIR lowering. No raw plan value may survive into
-LIR, because LIR has only ordinary values, control flow, calls, and explicit ARC
-statements.
+logic that is already deciding how expressions become lower IR. This must not be
+a separate plan-elimination pass. Monotype lowering may produce `iter_plan`
+expressions with the public `Iter(item)` type, and the existing lowering paths
+that understand iterator plans must either consume those plans at optimized
+consumer sites or materialize them exactly where they cross a public boundary.
+No raw plan value may survive into LIR, because LIR has only ordinary values,
+control flow, calls, and explicit ARC statements.
 
 Passes that do not explicitly own iterator-plan semantics must treat
 `iter_plan` as opaque. In particular, general call-pattern specialization must
@@ -1464,8 +1462,11 @@ public step values with the same meaning as the Roc builtin implementation. A
 later consumer that receives only a public iterator value must treat it as a
 `Public` plan unless explicit specialization data proves a more concrete plan.
 
-Unmaterialized iterator plans must not reach LIR. Before LIR lowering, every
-post-check plan value must be in one of these states:
+Unmaterialized iterator plans must not reach LIR. That is an invariant checked
+by LIR lowering, not a request for a generic cleanup pass. By the time an
+ordinary value is handed to LIR lowering, every post-check plan value that could
+reach that point must already have been handled by the existing lowering
+decision that introduced or observed it:
 
 - consumed by an optimized post-check consumer such as source `for`,
   specialized `Iter.fold`, or specialized `List.from_iter`

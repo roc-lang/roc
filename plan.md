@@ -19,6 +19,9 @@ The final state is:
   Roc builtin implementation promises
 - no raw iterator plan reaches ordinary Lambda-to-LIR lowering, LIR, ARC, or
   any backend
+- there is no standalone plan-elimination pass; plan consumption and
+  materialization happen in the existing lowering paths at the semantic point
+  that observes the plan
 - Rocci Bird with and without a top-level `.iter()` in `on_screen_collided!`
   has the same optimized collision-loop shape and comparable `--opt=size` wasm
   size
@@ -94,8 +97,10 @@ Current branch status:
 - Monotype Lifted preserves plan expressions and plan stores.
 - Plan values carry the already-lowered public materialization expression needed
   when they cross a public observation boundary.
-- Lambda solving currently owns the fallback normalization boundary that
-  materializes remaining raw plans before ordinary Lambda-to-LIR lowering.
+- Lambda solving currently owns the conservative materialization boundary used
+  when an ordinary value path observes a plan. This is temporary scaffolding;
+  the long-term shape is not a separate whole-body cleanup pass, but explicit
+  consumption/materialization decisions inside the existing lowering paths.
 - `List.iter` can emit a `ListIter` plan behind an explicit producer-plan flag;
   recognition checks the resolved builtin method target, and the normal
   pipeline keeps that flag off until private consumers through locals and
@@ -125,6 +130,8 @@ Current branch status:
   optimized `for` shape tests.
 - direct finite numeric ranges are consumed by optimized `for` as private
   numeric cursor state, including inclusive end values at numeric maxima.
+- direct `Iter.custom` is consumed by optimized `for` as private custom state
+  while still calling the user's step function normally.
 - user-defined methods named `iter` or `single` are not recognized as builtins.
 
 That is only scaffolding. The full design still requires producer emission,
@@ -228,9 +235,12 @@ types. A user method with the same spelling is never a builtin producer.
 
 ### Iterator Normalization Boundary
 
-Before ordinary Lambda-to-LIR lowering, the iterator-aware post-check rewrite
-must remove every remaining `iter_plan` expression. This is the same owner that
-knows iterator plan semantics; it is not a second broad cleanup optimizer.
+Iterator plans are normalized by the existing lowering paths that already own
+the relevant semantic decision. A source `for` that receives a known plan
+consumes it directly. A public `.step` access, function return, aggregate
+storage, or unspecialized call argument materializes the plan at that boundary.
+This is not a standalone pass whose job is to walk around after the fact and
+clean up leftover plans.
 
 For every plan value it sees, the rewrite must choose exactly one outcome:
 
@@ -241,11 +251,11 @@ For every plan value it sees, the rewrite must choose exactly one outcome:
 - wrap an already-public value as `Public(iter_value)` when there is no more
   precise plan
 
-The rewrite may maintain environments from locals to already-lowered plan values
-or private plan-state values while traversing a body. It must not point an
-environment entry back to checked source. It must preserve ordinary evaluation
-order by rewriting producer sites, not by moving producer evaluation to consumer
-sites.
+The lowering traversal may maintain environments from locals to already-lowered
+plan values or private plan-state values while traversing a body. It must not
+point an environment entry back to checked source. It must preserve ordinary
+evaluation order by rewriting producer sites, not by moving producer evaluation
+to consumer sites.
 
 Example:
 
@@ -374,18 +384,19 @@ Tests:
 
 ### Phase 3: Iterator Normalization Boundary
 
-Extend the existing post-check lowering boundary that feeds Lambda-to-LIR so it
-removes all raw plan expressions as part of the body traversal it already has to
-perform. This is not a separate whole-program cleanup pass. The boundary owns
-iterator semantics: when ordinary lowering reaches a plan value, it must either
-consume that plan through a recognized optimized consumer or materialize it to
+Teach the existing post-check lowering decisions to handle plan values at the
+semantic boundary where each value is observed. This is not a new whole-body or
+whole-program pass. The code that lowers source `for`, public field access,
+returns, aggregate construction, and unspecialized calls already has to decide
+what representation it is producing; those are the places that must either
+consume a plan through a recognized optimized consumer or materialize it to
 ordinary public `Iter` IR before continuing. General post-check passes stay
-plan-opaque until this boundary has produced ordinary IR.
+plan-opaque until a semantics-owning lowering path has produced ordinary IR.
 
 Tasks:
 
 - handle definitions, nested definitions, statements, and expressions in the
-  existing lowering traversal
+  existing lowering traversal without adding a plan cleanup pass
 - treat general call-pattern specialization and unrelated post-check passes as
   plan-opaque until plans have been rewritten into ordinary IR
 - maintain a body-local environment from locals to plan/private-state values
@@ -577,6 +588,7 @@ Tasks:
 - [ ] Optimized `for` over `Append` and `Concat` uses explicit phase state.
 - [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
 - [x] Optimized `for` over ranges uses direct numeric state.
+- [x] Optimized `for` over direct `Iter.custom` uses private custom state.
 - [ ] Optimized `Iter.fold` consumes plan values directly.
 - [ ] Optimized `List.from_iter` consumes plan values directly.
 - [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public

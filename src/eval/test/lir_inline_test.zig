@@ -2605,6 +2605,30 @@ test "optimized for over inclusive range stops at max value without overflow" {
     , &.{"1"});
 }
 
+test "optimized for over direct Iter.custom uses private custom state" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 3 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in Iter.custom(0.I64, Unknown, advance) {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    , &.{"3"});
+}
+
 test "user single method is not recognized as builtin single iterator" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,

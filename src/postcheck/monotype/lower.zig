@@ -14719,6 +14719,10 @@ const BodyContext = struct {
         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
 
+        if (try self.customIteratorForPlan(for_, result_ty, carries, plan)) |custom_for| {
+            return custom_for;
+        }
+
         if (try self.rangeIteratorForPlan(for_, result_ty, carries, plan)) |range_for| {
             return range_for;
         }
@@ -15129,6 +15133,180 @@ const BodyContext = struct {
             method == wanted_id
         else
             false;
+    }
+
+    fn customIteratorForPlan(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.builder.iterator_producer_plans) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceCustomPlan(for_.expr, iterator_ty)) return null;
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked custom iterator expression did not lower to an iterator plan"),
+        };
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        const custom = switch (iter_plan_value.data) {
+            .custom => |custom| custom,
+            else => Common.invariant("checked custom iterator expression lowered to a non-custom iterator plan"),
+        };
+
+        return try self.lowerCustomIteratorFor(for_, result_ty, carries, custom, iter_plan_value.item_ty);
+    }
+
+    fn checkedExprCanProduceCustomPlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        switch (expr.data) {
+            .call => |call| {
+                const direct_target = call.direct_target orelse return false;
+                return self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "custom");
+            },
+            else => {},
+        }
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, "custom")) return false;
+        return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
+    }
+
+    fn lowerCustomIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        custom: Ast.IterPlan.CustomIter,
+        item_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprData {
+        const state_ty = self.builder.program.exprs.items[@intFromEnum(custom.state)].ty;
+        const step_fn_ty = self.builder.program.exprs.items[@intFromEnum(custom.step_fn)].ty;
+        const step_fn_shape = self.builder.functionShape(step_fn_ty, "Iter.custom step function had a non-function type");
+        const step_arg_tys = self.builder.program.types.span(step_fn_shape.args);
+        if (step_arg_tys.len != 1) Common.invariant("Iter.custom step function had an unexpected arity");
+        if (!self.sameType(step_arg_tys[0], state_ty)) {
+            Common.invariant("Iter.custom step function state argument differed from seed type");
+        }
+
+        const seed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const seed_expr = try self.builder.localExpr(seed_local, state_ty);
+        const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const state_expr = try self.builder.localExpr(state_local, state_ty);
+        const step_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), step_fn_ty);
+        const step_fn_expr = try self.builder.localExpr(step_fn_local, step_fn_ty);
+
+        const step_result = try self.builder.program.addExpr(.{
+            .ty = step_fn_shape.ret,
+            .data = .{ .call_value = .{
+                .callee = step_fn_expr,
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{state_expr}),
+            } },
+        });
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (carries) |carry| {
+            try self.saveBinder(carry.binder, &saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        defer self.restoreBinders(saved.items);
+
+        try self.pushLoopContext(result_ty, carries);
+        defer self.popLoopContext();
+
+        const body = try self.customIteratorStepMatch(for_, result_ty, carries, step_result, step_fn_shape.ret, item_ty, state_ty);
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = state_local, .ty = state_ty };
+        for (carries, 0..) |carry, i| params[i + 1] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(Ast.ExprId, 1 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = seed_expr;
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 1] = try self.builder.localExpr(carry.initial_local, carry.ty);
+        }
+
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(params),
+            .initial_values = try self.builder.program.addExprSpan(initial_values),
+            .body = body,
+        } } });
+
+        const step_fn_let = try self.wrapLet(step_fn_local, step_fn_ty, custom.step_fn, loop_expr, result_ty);
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(seed_local, state_ty),
+            .value = custom.state,
+            .rest = step_fn_let,
+        } };
+    }
+
+    fn customIteratorStepMatch(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        step_result: Ast.ExprId,
+        step_result_ty: Type.TypeId,
+        item_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const ok_tag = self.monoTagByText(step_result_ty, "Ok");
+        const err_tag = self.monoTagByText(step_result_ty, "Err");
+        const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
+        if (ok_payloads.len != 1) Common.invariant("Iter.custom step Ok payload had an unexpected shape");
+        const ok_tuple_tys = self.builder.tupleItemTypes(ok_payloads[0]);
+        if (ok_tuple_tys.len != 2) Common.invariant("Iter.custom step Ok tuple had an unexpected shape");
+        if (!self.sameType(ok_tuple_tys[0], item_ty) or !self.sameType(ok_tuple_tys[1], state_ty)) {
+            Common.invariant("Iter.custom step Ok tuple types differed from iterator plan types");
+        }
+
+        const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const next_state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const item_pat = try self.builder.bindPat(item_local, item_ty);
+        const next_state_pat = try self.builder.bindPat(next_state_local, state_ty);
+        const ok_tuple_pat = try self.builder.program.addPat(.{ .ty = ok_payloads[0], .data = .{ .tuple = try self.builder.program.addPatSpan(&[_]Ast.PatId{
+            item_pat,
+            next_state_pat,
+        }) } });
+        const ok_pat = try self.builder.program.addPat(.{ .ty = step_result_ty, .data = .{ .tag = .{
+            .name = ok_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{ok_tuple_pat}),
+        } } });
+
+        const err_payload_tys = self.builder.program.types.span(err_tag.payloads);
+        const err_payload_pats = try self.allocator.alloc(Ast.PatId, err_payload_tys.len);
+        defer self.allocator.free(err_payload_pats);
+        for (err_payload_tys, 0..) |err_payload_ty, i| {
+            err_payload_pats[i] = try self.builder.program.addPat(.{ .ty = err_payload_ty, .data = .wildcard });
+        }
+        const err_pat = try self.builder.program.addPat(.{ .ty = step_result_ty, .data = .{ .tag = .{
+            .name = err_tag.name,
+            .payloads = try self.builder.program.addPatSpan(err_payload_pats),
+        } } });
+
+        const item_expr = try self.builder.localExpr(item_local, item_ty);
+        const next_state_expr = try self.builder.localExpr(next_state_local, state_ty);
+        const ok_body = try self.lowerIteratorPlanItemThenContinue(for_, result_ty, item_expr, item_ty, &[_]Ast.ExprId{next_state_expr}, carries);
+        const err_body = try self.breakCurrentLoopExpr();
+        const branches = [_]Ast.Branch{
+            .{ .pat = ok_pat, .body = ok_body },
+            .{ .pat = err_pat, .body = err_body },
+        };
+        return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .match_ = .{
+            .scrutinee = step_result,
+            .branches = try self.builder.program.addBranchSpan(&branches),
+        } } });
     }
 
     fn rangeIteratorForPlan(
