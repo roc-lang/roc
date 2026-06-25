@@ -14670,6 +14670,15 @@ const BodyContext = struct {
         },
     };
 
+    const FoldItemAdapter = union(enum) {
+        none,
+        map: struct {
+            mapping_fn: ListIteratorMapFn,
+            mapping_fn_ty: Type.TypeId,
+            result_ty: Type.TypeId,
+        },
+    };
+
     fn iteratorProducerPlansEnabled(self: *BodyContext) bool {
         return self.builder.iterator_producer_plans and self.view.module_env.module_role != .builtin;
     }
@@ -14769,13 +14778,14 @@ const BodyContext = struct {
         const plan_id = try self.iteratorPlanForLoweredPublicExpr(iter_expr, iter_ty);
         if (try self.listAppendIteratorPlanFromPlan(plan_id)) |append_plan| {
             defer append_plan.deinit(self.allocator);
-            return try self.lowerListAppendIteratorPlanFold(append_plan, acc_expr, step_fn, step_expr_data.ty, acc_ty);
+            return try self.lowerListAppendIteratorPlanFold(append_plan, acc_expr, step_fn, step_expr_data.ty, acc_ty, append_plan.item_ty, .none);
         }
 
         const plan = self.builder.program.iterPlan(plan_id);
         switch (plan.data) {
-            .single => |single| return try self.lowerSingleIteratorPlanFold(single, plan.item_ty, acc_expr, step_fn, step_expr_data.ty, acc_ty),
-            .range => |range| return try self.lowerRangeIteratorPlanFold(range, plan.item_ty, acc_expr, step_fn, step_expr_data.ty, acc_ty),
+            .single => |single| return try self.lowerSingleIteratorPlanFold(single, plan.item_ty, acc_expr, step_fn, step_expr_data.ty, acc_ty, plan.item_ty, .none),
+            .range => |range| return try self.lowerRangeIteratorPlanFold(range, plan.item_ty, acc_expr, step_fn, step_expr_data.ty, acc_ty, plan.item_ty, .none),
+            .map => |map| return try self.lowerMapIteratorPlanFold(map, plan.item_ty, acc_expr, step_fn, step_expr_data.ty, acc_ty),
             else => return null,
         }
     }
@@ -16483,6 +16493,8 @@ const BodyContext = struct {
         step_fn: IteratorFoldFn,
         step_fn_ty: Type.TypeId,
         acc_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
     ) Allocator.Error!Ast.ExprId {
         const u64_ty = try self.builder.primitiveType(.u64);
         const bool_ty = try self.builder.primitiveType(.bool);
@@ -16549,6 +16561,8 @@ const BodyContext = struct {
             step_fn_ty,
             acc_ty,
             plan.item_ty,
+            body_item_ty,
+            adapter,
             append_exprs,
         );
         const body = try self.builder.ifExpr(done_cond, done_body, continue_body, acc_ty);
@@ -16583,6 +16597,58 @@ const BodyContext = struct {
         return try self.wrapLet(source_list_local, source_list_ty, plan.list.list, rest, acc_ty);
     }
 
+    fn lowerMapIteratorPlanFold(
+        self: *BodyContext,
+        map: Ast.IterPlan.MapIter,
+        result_item_ty: Type.TypeId,
+        initial_acc: Ast.ExprId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const mapping_fn_ty = self.builder.program.exprs.items[@intFromEnum(map.mapping_fn)].ty;
+        const mapping_fn = switch (self.builder.program.exprs.items[@intFromEnum(map.mapping_fn)].data) {
+            .fn_def => |fn_id| ListIteratorMapFn{ .direct = fn_id },
+            else => return null,
+        };
+        return try self.lowerMapSourceIteratorPlanFold(
+            map.source,
+            result_item_ty,
+            initial_acc,
+            step_fn,
+            step_fn_ty,
+            acc_ty,
+            .{ .map = .{
+                .mapping_fn = mapping_fn,
+                .mapping_fn_ty = mapping_fn_ty,
+                .result_ty = result_item_ty,
+            } },
+        );
+    }
+
+    fn lowerMapSourceIteratorPlanFold(
+        self: *BodyContext,
+        source_plan_id: Ast.IterPlanId,
+        result_item_ty: Type.TypeId,
+        initial_acc: Ast.ExprId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
+    ) Allocator.Error!?Ast.ExprId {
+        if (try self.listAppendIteratorPlanFromPlan(source_plan_id)) |append_plan| {
+            defer append_plan.deinit(self.allocator);
+            return try self.lowerListAppendIteratorPlanFold(append_plan, initial_acc, step_fn, step_fn_ty, acc_ty, result_item_ty, adapter);
+        }
+
+        const source = self.builder.program.iterPlan(source_plan_id);
+        switch (source.data) {
+            .single => |single| return try self.lowerSingleIteratorPlanFold(single, source.item_ty, initial_acc, step_fn, step_fn_ty, acc_ty, result_item_ty, adapter),
+            .range => |range| return try self.lowerRangeIteratorPlanFold(range, source.item_ty, initial_acc, step_fn, step_fn_ty, acc_ty, result_item_ty, adapter),
+            else => return null,
+        }
+    }
+
     fn lowerSingleIteratorPlanFold(
         self: *BodyContext,
         single: Ast.IterPlan.SingleIter,
@@ -16591,6 +16657,8 @@ const BodyContext = struct {
         step_fn: IteratorFoldFn,
         step_fn_ty: Type.TypeId,
         acc_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
     ) Allocator.Error!Ast.ExprId {
         const bool_ty = try self.builder.primitiveType(.bool);
 
@@ -16610,7 +16678,7 @@ const BodyContext = struct {
             .value => .{ .value = try self.builder.localExpr(fold_fn_local orelse Common.invariant("Iter.fold step local was missing"), step_fn_ty) },
         };
 
-        const folded = try self.foldStepExpr(initial_acc_expr, item_expr, local_step_fn, step_fn_ty, acc_ty, item_ty);
+        const folded = try self.foldAdaptedItemThenStep(initial_acc_expr, item_expr, item_ty, body_item_ty, local_step_fn, step_fn_ty, acc_ty, adapter);
         var rest = try self.builder.ifExpr(emitted_expr, initial_acc_expr, folded, acc_ty);
         if (fold_fn_local) |local| {
             const value = switch (step_fn) {
@@ -16632,6 +16700,8 @@ const BodyContext = struct {
         step_fn: IteratorFoldFn,
         step_fn_ty: Type.TypeId,
         acc_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
     ) Allocator.Error!?Ast.ExprId {
         const primitive = self.numericPrimitive(item_ty) orelse return null;
         switch (primitive) {
@@ -16675,7 +16745,7 @@ const BodyContext = struct {
             .data = .{ .break_ = acc_expr },
         });
         const prefix_values = [_]Ast.ExprId{ next_state.current, next_state.done };
-        const continue_body = try self.foldContinue(acc_expr, current_expr, loop_step_fn, step_fn_ty, acc_ty, item_ty, &prefix_values);
+        const continue_body = try self.foldContinue(acc_expr, current_expr, item_ty, body_item_ty, loop_step_fn, step_fn_ty, acc_ty, adapter, &prefix_values);
         const body = try self.builder.ifExpr(done_expr, done_body, continue_body, acc_ty);
 
         const params = [_]Ast.TypedLocal{
@@ -16714,19 +16784,21 @@ const BodyContext = struct {
         step_fn: IteratorFoldFn,
         step_fn_ty: Type.TypeId,
         acc_ty: Type.TypeId,
-        item_ty: Type.TypeId,
+        source_item_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
         append_exprs: []const Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
-        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ source_list_expr, index_expr }, item_ty);
+        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ source_list_expr, index_expr }, source_item_ty);
         const list_prefix_values = [_]Ast.ExprId{next_index};
-        const list_continue = try self.foldContinue(acc_expr, list_item, step_fn, step_fn_ty, acc_ty, item_ty, &list_prefix_values);
+        const list_continue = try self.foldContinue(acc_expr, list_item, source_item_ty, body_item_ty, step_fn, step_fn_ty, acc_ty, adapter, &list_prefix_values);
         if (append_exprs.len == 0) return list_continue;
 
         const bool_ty = try self.builder.primitiveType(.bool);
         const in_list = try self.builder.lowLevelExpr(.num_is_lt, &.{ index_expr, len_expr }, bool_ty);
-        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, item_ty, append_exprs);
+        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, source_item_ty, append_exprs);
         const tail_prefix_values = [_]Ast.ExprId{next_index};
-        const tail_continue = try self.foldContinue(acc_expr, tail_item, step_fn, step_fn_ty, acc_ty, item_ty, &tail_prefix_values);
+        const tail_continue = try self.foldContinue(acc_expr, tail_item, source_item_ty, body_item_ty, step_fn, step_fn_ty, acc_ty, adapter, &tail_prefix_values);
         return try self.builder.ifExpr(in_list, list_continue, tail_continue, acc_ty);
     }
 
@@ -16734,13 +16806,15 @@ const BodyContext = struct {
         self: *BodyContext,
         acc_expr: Ast.ExprId,
         item_expr: Ast.ExprId,
+        source_item_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
         step_fn: IteratorFoldFn,
         step_fn_ty: Type.TypeId,
         acc_ty: Type.TypeId,
-        item_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
         prefix_values: []const Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
-        const next_acc = try self.foldStepExpr(acc_expr, item_expr, step_fn, step_fn_ty, acc_ty, item_ty);
+        const next_acc = try self.foldAdaptedItemThenStep(acc_expr, item_expr, source_item_ty, body_item_ty, step_fn, step_fn_ty, acc_ty, adapter);
         const continue_values = try self.allocator.alloc(Ast.ExprId, prefix_values.len + 1);
         defer self.allocator.free(continue_values);
         @memcpy(continue_values[0..prefix_values.len], prefix_values);
@@ -16749,6 +16823,63 @@ const BodyContext = struct {
             .ty = acc_ty,
             .data = .{ .continue_ = .{ .values = try self.builder.program.addExprSpan(continue_values) } },
         });
+    }
+
+    fn foldAdaptedItemThenStep(
+        self: *BodyContext,
+        acc_expr: Ast.ExprId,
+        source_item: Ast.ExprId,
+        source_item_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
+    ) Allocator.Error!Ast.ExprId {
+        const body_item = try self.foldAdaptItem(source_item, source_item_ty, body_item_ty, adapter);
+        return try self.foldStepExpr(acc_expr, body_item, step_fn, step_fn_ty, acc_ty, body_item_ty);
+    }
+
+    fn foldAdaptItem(
+        self: *BodyContext,
+        source_item: Ast.ExprId,
+        source_item_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
+        adapter: FoldItemAdapter,
+    ) Allocator.Error!Ast.ExprId {
+        switch (adapter) {
+            .none => {
+                if (!self.sameType(source_item_ty, body_item_ty)) {
+                    Common.invariant("unadapted iterator fold item type differed from fold step item type");
+                }
+                return source_item;
+            },
+            .map => |map| {
+                const mapping_shape = self.builder.functionShape(map.mapping_fn_ty, "Iter.map mapping function had a non-function type");
+                const mapping_args = self.builder.program.types.span(mapping_shape.args);
+                if (mapping_args.len != 1) Common.invariant("Iter.map mapping function had an unexpected arity");
+                if (!self.sameType(mapping_args[0], source_item_ty) or !self.sameType(mapping_shape.ret, map.result_ty)) {
+                    Common.invariant("Iter.map mapping function type differed from iterator plan types");
+                }
+                if (!self.sameType(map.result_ty, body_item_ty)) {
+                    Common.invariant("Iter.map result type differed from fold step item type");
+                }
+                const mapped_data: Ast.ExprData = switch (map.mapping_fn) {
+                    .direct => |fn_id| .{ .call_proc = .{
+                        .callee = .{ .func = fn_id },
+                        .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{source_item}),
+                    } },
+                    .value => |mapping_fn| .{ .call_value = .{
+                        .callee = mapping_fn,
+                        .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{source_item}),
+                    } },
+                };
+                return try self.builder.program.addExpr(.{
+                    .ty = map.result_ty,
+                    .data = mapped_data,
+                });
+            },
+        }
     }
 
     fn foldStepExpr(
