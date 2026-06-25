@@ -495,8 +495,15 @@ footer p {
   text-overflow: ellipsis;
   margin-left: 20px;
   padding-left: 16px;
-  border-left: 4px solid var(--gray-border-subtle);
+  /* Transparent by default so the indent is consistent; only values/methods
+     (`.sidebar-value`) get a visible bar — nested types, type-module entries,
+     and language-reference links do not. */
+  border-left: 4px solid transparent;
   white-space: nowrap;
+}
+
+.sidebar-sub-entries a.sidebar-value {
+  border-left-color: var(--gray-border-subtle);
 }
 
 .sidebar-sub-entries > li:first-child > a {
@@ -510,9 +517,12 @@ footer p {
 }
 
 .sidebar-sub-entries a:hover {
-    border-left-color: var(--violet-border-hover);
     color: var(--violet);
     text-decoration: none;
+}
+
+.sidebar-sub-entries a.sidebar-value:hover {
+    border-left-color: var(--violet-border-hover);
 }
 
 /* Builtin docs only (the langref-enabled site): the "Builtin Types" and

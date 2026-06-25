@@ -1220,12 +1220,13 @@ fn renderSidebarTree(
                 try w.writeAll("                        ");
                 try w.writeAll("</li>\n");
             } else {
-                // Render as link
+                // Render as link. The `sidebar-value` class marks it as a value
+                // or method (not a type), which is what gets the left bar.
                 try w.writeAll("                        ");
                 for (0..depth - 1) |_| {
                     try w.writeAll("  ");
                 }
-                try w.writeAll("<li><a href=\"");
+                try w.writeAll("<li><a class=\"sidebar-value\" href=\"");
                 try w.writeAll(module_link_prefix);
                 try w.writeAll("#");
                 try writeHtmlEscaped(w, node.full_path);
