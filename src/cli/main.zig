@@ -4523,8 +4523,8 @@ fn testingPrepareHotReloadDescriptor(
     image_bound: usize,
     allocation_start: usize,
     allocation_end: usize,
-) *ipc.hot_reload.ImageDescriptor {
-    const descriptor = testingHotReloadDescriptor(shm, descriptor_offset);
+) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    const descriptor = try hotReloadDescriptorForWrite(shm, descriptor_offset);
     ipc.hot_reload.prepareDescriptor(
         descriptor,
         generation,
@@ -4558,15 +4558,15 @@ test "hot reload allocation coalesces adjacent reclaimed image regions" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -4601,11 +4601,11 @@ test "hot reload sweep keeps acknowledged current descriptor live" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.acknowledge(control, 2, .accepted);
@@ -4638,11 +4638,11 @@ test "hot reload sweep keeps top reclaimed descriptor region addressable" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.publishDescriptor(control, 3, desc0_offset, desc0);
 
@@ -4676,17 +4676,17 @@ test "hot reload allocation skips retired retained descriptors" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     ipc.hot_reload.retainDescriptor(desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     ipc.hot_reload.retainDescriptor(desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -4722,7 +4722,7 @@ test "hot reload allocation rolls back fresh descriptor when append has no room"
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
@@ -4750,7 +4750,7 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
