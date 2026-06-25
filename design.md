@@ -1345,8 +1345,24 @@ This public model is not the optimized internal representation. In optimized
 post-check code, builtin iterator operations may lower to compiler-owned
 iterator plans. An iterator plan is a value-level state machine described by
 explicit checked and Monotype data, not by source syntax, names, closure bytes,
-or backend inspection. It exists only inside post-check lowering and later IR
-stages that consume its explicit output.
+or backend inspection.
+
+Iterator plans are first-class post-check values until they are either consumed
+by an optimized iterator consumer or materialized into the public `Iter`
+representation. This is the source of truth for propagation through locals,
+blocks, `if`, `match`, and function specialization. The compiler must not
+propagate iterator information by replaying checked expressions, re-lowering
+declaration right-hand sides, mining the public record/closure representation,
+or asking a backend to recover iterator semantics from generated code.
+
+Because plans are post-check values, source evaluation order is preserved by
+normal IR evaluation. For example, a declaration whose right-hand side is an
+`if` expression evaluates the condition and selected branch at the declaration
+site, producing a plan value. A later `for` over that local consumes that
+already-produced plan value; it does not re-evaluate the condition, branch body,
+or any appended item expressions. This matters for `dbg`, `expect`, `crash`,
+and any other observable runtime behavior that is not modeled as an ordinary
+effectful function call.
 
 The reason for the split is purity. Source such as:
 
@@ -1415,6 +1431,20 @@ crosses this boundary, lowering constructs the ordinary public `Iter` value and
 public step values with the same meaning as the Roc builtin implementation. A
 later consumer that receives only a public iterator value must treat it as a
 `Public` plan unless explicit specialization data proves a more concrete plan.
+
+Unmaterialized iterator plans must not reach LIR. Before LIR lowering, every
+post-check plan value must be in one of these states:
+
+- consumed by an optimized post-check consumer such as source `for`,
+  specialized `Iter.fold`, or specialized `List.from_iter`
+- materialized to the public `Iter` representation because it crosses a public
+  observation boundary
+- explicitly represented as `Public(iter_value)` because the compiler has no
+  more precise plan for that value
+
+LIR and backends consume ordinary values, control flow, and explicit ARC
+statements. They must not know builtin iterator semantics, public `Iter`
+closure layouts, or special reference-counting rules for iterator wrappers.
 
 Optimized consumers lower plans directly. For example, consuming a
 `ListIter(list, index, len)` in a `for` loop produces loop state carrying the
