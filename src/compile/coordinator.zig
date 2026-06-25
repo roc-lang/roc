@@ -5575,7 +5575,9 @@ test "Coordinator collectWatchInputStates includes package root state" {
     defer coord.freeWatchInputStates(inputs);
 
     try std.testing.expectEqual(@as(usize, 1), inputs.len);
-    try std.testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
+    const expected_root = try std.fs.path.resolve(allocator, &.{"/test/pkg/main.roc"});
+    defer allocator.free(expected_root);
+    try std.testing.expectEqualStrings(expected_root, inputs[0].path);
     switch (inputs[0].state) {
         .hash => |hash| try std.testing.expectEqualSlices(u8, &root_hash, &hash),
         .missing, .unreadable => try std.testing.expect(false),
@@ -5649,8 +5651,12 @@ test "Coordinator collectWatchInputStates includes module source file state" {
     defer coord.freeWatchInputStates(inputs);
 
     try std.testing.expectEqual(@as(usize, 2), inputs.len);
-    try std.testing.expectEqualStrings("/test/pkg/main.roc", inputs[0].path);
-    try std.testing.expectEqualStrings("/test/pkg/Foo.roc", inputs[1].path);
+    const expected_root = try std.fs.path.resolve(allocator, &.{"/test/pkg/main.roc"});
+    defer allocator.free(expected_root);
+    const expected_module = try std.fs.path.resolve(allocator, &.{"/test/pkg/Foo.roc"});
+    defer allocator.free(expected_module);
+    try std.testing.expectEqualStrings(expected_root, inputs[0].path);
+    try std.testing.expectEqualStrings(expected_module, inputs[1].path);
     switch (inputs[1].state) {
         .hash => |hash| try std.testing.expectEqualSlices(u8, &module_hash, &hash),
         .missing, .unreadable => try std.testing.expect(false),
