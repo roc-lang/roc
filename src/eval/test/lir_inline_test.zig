@@ -1354,6 +1354,32 @@ test "optimized for over list.iter append chain uses private iterator cursor" {
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
+test "user iter method is not recognized as builtin list cursor" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    iter : Bag -> Iter(I64)
+        \\    iter = |_| Iter.single(1.I64)
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in Bag.Bag {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_get_unsafe_count);
+}
+
 test "destination baseline: boxed record update reboxes a list and string payload" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,

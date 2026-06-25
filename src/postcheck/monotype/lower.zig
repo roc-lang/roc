@@ -14062,10 +14062,10 @@ const BodyContext = struct {
     ) Allocator.Error!?ListIteratorSource {
         if (!self.builder.iterator_plans) return null;
 
-        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.iter.method), "iter")) {
+        if (!self.methodNameIs(plan.iter.method, "iter")) {
             Common.invariant("checked iterator for plan did not call .iter");
         }
-        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.next.method), "next")) {
+        if (!self.methodNameIs(plan.next.method, "next")) {
             Common.invariant("checked iterator for plan did not call .next");
         }
 
@@ -14121,7 +14121,7 @@ const BodyContext = struct {
             else => Common.invariant("checked iterator producer dispatch receiver was not a checked expression"),
         };
 
-        if (std.mem.eql(u8, self.view.names.methodNameText(plan.method), "append")) {
+        if (self.methodNameIs(plan.method, "append")) {
             if (plan_args.len != 2) Common.invariant("checked Iter.append dispatch plan had an unexpected arity");
             const appended_expr = switch (plan_args[1]) {
                 .checked_expr => |arg| arg,
@@ -14138,7 +14138,7 @@ const BodyContext = struct {
             return source;
         }
 
-        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "iter")) return null;
+        if (!self.methodNameIs(plan.method, "iter")) return null;
 
         const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) {
@@ -14155,6 +14155,17 @@ const BodyContext = struct {
             .list_ty = dispatcher_ty,
             .item_ty = item_ty,
         };
+    }
+
+    fn methodNameIs(
+        self: *BodyContext,
+        method: names.MethodNameId,
+        comptime wanted: []const u8,
+    ) bool {
+        return if (self.view.names.lookupMethodName(wanted)) |wanted_id|
+            method == wanted_id
+        else
+            false;
     }
 
     fn lowerListIteratorFor(
