@@ -1229,6 +1229,52 @@ fn renderSidebarEntries(
     try renderSidebarTree(w, module_name, module_link_prefix, entry_tree.root, 0);
 }
 
+/// Render one module's sidebar entry: a `sidebar-entry` whose `sidebar-module-link`
+/// names the module and toggles a `sidebar-sub-entries` list of its members.
+fn renderSidebarModuleEntry(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8, mod: DocModel.ModuleDocs) (Allocator.Error || error{WriteFailed})!void {
+    const is_active = if (ctx.current_module) |cur|
+        std.mem.eql(u8, cur, mod.name)
+    else
+        false;
+
+    // Build the href prefix for entries inside this module so that clicking a
+    // sidebar entry from another module's page navigates to the correct module
+    // page (not just changes the fragment on the current page).
+    var module_link_prefix = std.ArrayList(u8).empty;
+    defer module_link_prefix.deinit(gpa);
+    if (ctx.single_module_at_root) {
+        if (base.len != 0) try module_link_prefix.appendSlice(gpa, base);
+    } else {
+        try module_link_prefix.appendSlice(gpa, base);
+        // module names contain only identifier characters, no escaping needed for href
+        try module_link_prefix.appendSlice(gpa, mod.name);
+        try module_link_prefix.append(gpa, '/');
+    }
+
+    try w.writeAll("                <li class=\"sidebar-entry\">\n");
+    try w.writeAll("                    <a class=\"sidebar-module-link");
+    if (is_active) try w.writeAll(" active");
+    try w.writeAll("\" data-module-name=\"");
+    try writeHtmlEscaped(w, mod.name);
+    try w.writeAll("\" href=\"");
+    if (module_link_prefix.items.len == 0) {
+        try w.writeAll(".");
+    } else {
+        try w.writeAll(module_link_prefix.items);
+    }
+    try w.writeAll("\">");
+    try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
+    try w.writeAll("<span>");
+    try writeHtmlEscaped(w, mod.name);
+    try w.writeAll("</span></a>\n");
+
+    // Sub-entries - grouped hierarchically
+    try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
+    try renderSidebarEntries(w, gpa, mod.name, module_link_prefix.items, mod.entries, mod.builtin_derived, 0);
+    try w.writeAll("                    </ul>\n");
+    try w.writeAll("                </li>\n");
+}
+
 fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll("    <nav id=\"sidebar-nav\">\n");
     try w.writeAll("        <div class=\"pkg-and-logo\">\n");
@@ -1262,64 +1308,29 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("        <div class=\"module-links-container\">\n");
     try w.writeAll("            <ul class=\"module-links\">\n");
 
+    // The promoted builtin types are grouped under one collapsible "Builtin
+    // Types" entry so the (long) list can be hidden in one click and doesn't
+    // push the Language Reference section down. Everything else renders as a
+    // top-level module entry.
+    var rendered_builtin_group = false;
     for (ctx.package_docs.modules) |mod| {
-        const is_active = if (ctx.current_module) |cur|
-            std.mem.eql(u8, cur, mod.name)
-        else
-            false;
-
-        // Build the href prefix for entries inside this module so that
-        // clicking a sidebar entry from another module's page navigates to
-        // the correct module page (not just changes the fragment on the
-        // current page).
-        var module_link_prefix = std.ArrayList(u8).empty;
-        defer module_link_prefix.deinit(gpa);
-        if (ctx.single_module_at_root) {
-            if (base.len == 0) {
-                // Root index page for the single module — same-page anchors.
-            } else {
-                try module_link_prefix.appendSlice(gpa, base);
+        if (mod.builtin_derived and !rendered_builtin_group) {
+            rendered_builtin_group = true;
+            try w.writeAll("                <li class=\"sidebar-entry\">\n");
+            try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" data-module-name=\"__builtin_types__\" href=\"");
+            try writeHtmlEscaped(w, base);
+            try w.writeAll("\">");
+            try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
+            try w.writeAll("<span>Builtin Types</span></a>\n");
+            try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
+            for (ctx.package_docs.modules) |inner| {
+                if (inner.builtin_derived) try renderSidebarModuleEntry(w, ctx, gpa, base, inner);
             }
-        } else {
-            try module_link_prefix.appendSlice(gpa, base);
-            // module names contain only identifier characters, no escaping needed for href
-            try module_link_prefix.appendSlice(gpa, mod.name);
-            try module_link_prefix.append(gpa, '/');
+            try w.writeAll("                    </ul>\n");
+            try w.writeAll("                </li>\n");
+        } else if (!mod.builtin_derived) {
+            try renderSidebarModuleEntry(w, ctx, gpa, base, mod);
         }
-
-        // On the roc builtins site (the only docs rendered with a langref), the
-        // "Builtin" module is labelled "Builtin Types" in the page font, to match
-        // the "Language Reference" entry. Everywhere else module names are code
-        // identifiers shown in monospace, so this stays scoped to that one case.
-        const is_builtin_types = ctx.langref != null and std.mem.eql(u8, mod.name, "Builtin");
-
-        try w.writeAll("                <li class=\"sidebar-entry\">\n");
-        try w.writeAll("                    <a class=\"sidebar-module-link");
-        if (is_active) try w.writeAll(" active");
-        if (is_builtin_types) try w.writeAll(" prose-label");
-        try w.writeAll("\" data-module-name=\"");
-        try writeHtmlEscaped(w, mod.name);
-        try w.writeAll("\" href=\"");
-        if (module_link_prefix.items.len == 0) {
-            try w.writeAll(".");
-        } else {
-            try w.writeAll(module_link_prefix.items);
-        }
-        try w.writeAll("\">");
-        try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
-        try w.writeAll("<span>");
-        if (is_builtin_types) {
-            try w.writeAll("Builtin Types");
-        } else {
-            try writeHtmlEscaped(w, mod.name);
-        }
-        try w.writeAll("</span></a>\n");
-
-        // Sub-entries - grouped hierarchically
-        try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
-        try renderSidebarEntries(w, gpa, mod.name, module_link_prefix.items, mod.entries, mod.builtin_derived, 0);
-        try w.writeAll("                    </ul>\n");
-        try w.writeAll("                </li>\n");
     }
 
     if (ctx.langref) |lr| {
