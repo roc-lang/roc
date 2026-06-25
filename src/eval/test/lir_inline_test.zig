@@ -1735,6 +1735,33 @@ test "Iter.append producer wraps unknown receiver as public plan" {
     try std.testing.expect(found);
 }
 
+test "user append producer is not lowered as builtin Iter.append plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    append : Bag, I64 -> Bag
+        \\    append = |bag, _| bag
+        \\}
+        \\
+        \\main : Bag
+        \\main = Bag.append(Bag.Bag, 42)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .append => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 test "Iter.iter producer forwards known iterator plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
@@ -1810,6 +1837,33 @@ test "Iter.concat producer lowers to a materialized concat plan" {
     try std.testing.expect(found);
 }
 
+test "user concat producer is not lowered as builtin Iter.concat plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    concat : Bag, Bag -> Bag
+        \\    concat = |bag, _| bag
+        \\}
+        \\
+        \\main : Bag
+        \\main = Bag.concat(Bag.Bag, Bag.Bag)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .concat => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 test "Iter.map producer lowers to a materialized map plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
@@ -1845,6 +1899,150 @@ test "Iter.map producer lowers to a materialized map plan" {
         }
     }
     try std.testing.expect(found);
+}
+
+test "user map producer is not lowered as builtin Iter.map plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    map : Bag, (I64 -> I64) -> Bag
+        \\    map = |bag, _| bag
+        \\}
+        \\
+        \\main : Bag
+        \\main = Bag.map(Bag.Bag, |n| n + 1)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .map => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
+test "Iter.keep_if producer lowers to a materialized filter plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().keep_if(|n| n > 10)
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .filter => |filter| {
+                if (filter.kind != .keep_if) continue;
+                found = true;
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                switch (mono_source.mono.iterPlan(filter.source).data) {
+                    .list => {},
+                    else => return error.TestUnexpectedResult,
+                }
+                switch (plan.length) {
+                    .known => return error.TestUnexpectedResult,
+                    .unknown => {},
+                }
+                try std.testing.expect(!plan.steps.append);
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.skip);
+                try std.testing.expect(plan.steps.done);
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "Iter.drop_if producer lowers to a materialized filter plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().drop_if(|n| n > 10)
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .filter => |filter| {
+                if (filter.kind != .drop_if) continue;
+                found = true;
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                switch (mono_source.mono.iterPlan(filter.source).data) {
+                    .list => {},
+                    else => return error.TestUnexpectedResult,
+                }
+                switch (plan.length) {
+                    .known => return error.TestUnexpectedResult,
+                    .unknown => {},
+                }
+                try std.testing.expect(!plan.steps.append);
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.skip);
+                try std.testing.expect(plan.steps.done);
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "user filter producers are not lowered as builtin Iter filter plans" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    keep_if : Bag, (I64 -> Bool) -> Bag
+        \\    keep_if = |bag, _| bag
+        \\
+        \\    drop_if : Bag, (I64 -> Bool) -> Bag
+        \\    drop_if = |bag, _| bag
+        \\}
+        \\
+        \\main : (Bag, Bag)
+        \\main = (
+        \\    Bag.keep_if(Bag.Bag, |_| Bool.True),
+        \\    Bag.drop_if(Bag.Bag, |_| Bool.False),
+        \\)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .filter => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
 }
 
 test "List.iter producer materializes before Lambda when returned publicly" {
@@ -1919,6 +2117,32 @@ test "Iter.map producer materializes before Lambda when returned publicly" {
         \\
         \\main : Iter(I64)
         \\main = [10.I64, 20.I64].iter().map(|n| n + 1)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "Iter.keep_if producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().keep_if(|n| n > 10)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "Iter.drop_if producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().drop_if(|n| n > 10)
     );
     defer lifted_source.deinit(allocator);
 

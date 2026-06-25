@@ -1205,24 +1205,30 @@ fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodO
 
 fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
     return switch (payload) {
-        .nominal => |nominal| if (nominal.builtin) |builtin|
-            .{ .builtin = builtinOwnerForCheckedBuiltin(builtin) }
-        else if (nominal.source_decl) |source_decl|
-            .{ .source_decl = .{
+        .nominal => |nominal| if (nominal.builtin) |builtin| blk: {
+            if (builtinOwnerForCheckedBuiltin(builtin)) |owner| break :blk .{ .builtin = owner };
+            if (nominal.source_decl) |source_decl| break :blk .{ .source_decl = .{
                 .module_name = nominal.origin_module,
                 .statement = source_decl,
-            } }
-        else
-            .{ .nominal = .{
+            } };
+            break :blk .{ .nominal = .{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
                 .source_decl = null,
-            } },
+            } };
+        } else if (nominal.source_decl) |source_decl| .{ .source_decl = .{
+            .module_name = nominal.origin_module,
+            .statement = source_decl,
+        } } else .{ .nominal = .{
+            .module_name = nominal.origin_module,
+            .type_name = nominal.name,
+            .source_decl = null,
+        } },
         else => null,
     };
 }
 
-fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
+fn builtinOwnerForCheckedBuiltin(builtin: anytype) ?BuiltinOwner {
     return switch (builtin) {
         .bool => .bool,
         .str => .str,
@@ -1240,6 +1246,7 @@ fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .f64 => .f64,
         .dec => .dec,
         .list => .list,
+        .iter => null,
         .box => .box,
         .fields => .fields,
         .field => .field,

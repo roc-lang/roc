@@ -68,6 +68,7 @@ pub const InstNamed = struct {
     named_type: Type.NamedType,
     def: Type.TypeDef,
     kind: Type.NamedKind,
+    builtin_nominal: ?checked.CheckedBuiltinNominal = null,
     builtin_owner: ?static_dispatch.BuiltinOwner,
     args: []NodeId,
     backing: ?InstBacking,
@@ -703,6 +704,7 @@ pub const InstGraph = struct {
     fn sameNamedInstance(left: InstNamed, right: InstNamed) bool {
         return left.kind == right.kind and
             sameTypeDef(left.def, right.def) and
+            left.builtin_nominal == right.builtin_nominal and
             left.builtin_owner == right.builtin_owner;
     }
 
@@ -1139,6 +1141,7 @@ pub const InstGraph = struct {
                 .named_type = named.named_type,
                 .def = named.def,
                 .kind = named.kind,
+                .builtin_nominal = named.builtin_nominal,
                 .builtin_owner = named.builtin_owner,
                 .args = try self.importMonoSlice(types.span(named.args)),
                 .backing = if (named.backing) |backing| .{
@@ -1283,6 +1286,7 @@ pub const InstGraph = struct {
                     .named_type = named.named_type,
                     .def = named.def,
                     .kind = named.kind,
+                    .builtin_nominal = named.builtin_nominal,
                     .builtin_owner = named.builtin_owner,
                     .args = try self.monoSpanWithReuse(named.args, switch (previous) {
                         .named => |old| old.args,
@@ -1530,6 +1534,7 @@ fn instNamedEql(left: InstNamed, right: InstNamed) bool {
     return std.meta.eql(left.named_type, right.named_type) and
         std.meta.eql(left.def, right.def) and
         left.kind == right.kind and
+        std.meta.eql(left.builtin_nominal, right.builtin_nominal) and
         std.meta.eql(left.builtin_owner, right.builtin_owner) and
         nodeSliceEql(left.args, right.args) and
         backingEql(left.backing, right.backing);

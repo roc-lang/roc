@@ -2098,6 +2098,7 @@ pub const CheckedBuiltinNominal = enum {
     f64,
     dec,
     list,
+    iter,
     box,
     parse_tag_union_spec,
     fields,
@@ -2125,6 +2126,7 @@ pub const CheckedPrimitive = enum {
 
 /// Public `CheckedBuiltinRuntimeEncoding` declaration.
 pub const CheckedBuiltinRuntimeEncoding = union(enum) {
+    ordinary,
     primitive: CheckedPrimitive,
     bool_tag_union,
     list,
@@ -2153,6 +2155,7 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .f64 => .{ .primitive = .f64 },
         .dec => .{ .primitive = .dec },
         .list => .list,
+        .iter => .ordinary,
         .box => .box,
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
@@ -5791,6 +5794,7 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.f64) or ident.eql(common.f64_type)) return .f64;
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
+    if (ident.eql(common.iter) or ident.eql(common.builtin_iter)) return .iter;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
     if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
     if (ident.eql(common.builtin_str_field_names)) return .fields;
@@ -18008,6 +18012,7 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                         if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
                         break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active);
                     },
+                    .iter => {},
                 }
             }
             break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.backing, active);

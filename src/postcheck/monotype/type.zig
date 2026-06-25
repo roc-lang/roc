@@ -99,6 +99,7 @@ pub const Content = union(enum) {
         named_type: NamedType,
         def: TypeDef,
         kind: NamedKind,
+        builtin_nominal: ?checked.CheckedBuiltinNominal = null,
         builtin_owner: ?static_dispatch.BuiltinOwner = null,
         args: Span,
         backing: ?NamedBacking = null,
@@ -290,6 +291,10 @@ pub const Store = struct {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 }
                 writeBytes(hasher, @tagName(named.kind));
+                if (named.builtin_nominal) |builtin_nominal| {
+                    writeBytes(hasher, "builtin-nominal");
+                    writeBytes(hasher, @tagName(builtin_nominal));
+                }
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
                     writeBytes(hasher, @tagName(owner));

@@ -1482,6 +1482,7 @@ const Builder = struct {
             .nominal => |nominal| blk: {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                        .ordinary => {},
                         .primitive => |primitive| break :blk .{ .primitive = primitive },
                         .bool_tag_union => {},
                         .list => {
@@ -1507,6 +1508,7 @@ const Builder = struct {
                     .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = checked_ty },
                     .def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl),
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
+                    .builtin_nominal = nominal.builtin,
                     .builtin_owner = builtinOwner(nominal.builtin),
                     .args = try self.program.types.addSpan(args),
                     .backing = switch (nominal.representation) {
@@ -3881,6 +3883,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         switch (nominal.representation) {
             .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                .ordinary => {},
                 .primitive => |primitive| return try self.graph.newNode(.{ .primitive = primitive }),
                 .bool_tag_union => {},
                 .list => {
@@ -3912,6 +3915,7 @@ const BodyContext = struct {
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
             .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl),
             .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
+            .builtin_nominal = nominal.builtin,
             .builtin_owner = builtinOwner(nominal.builtin),
             .args = args,
             .backing = backing,
@@ -5627,6 +5631,7 @@ const BodyContext = struct {
                 .named_type = named.named_type,
                 .def = named.def,
                 .kind = named.kind,
+                .builtin_nominal = named.builtin_nominal,
                 .builtin_owner = named.builtin_owner,
                 .args = named.args,
                 .backing = .{
@@ -9952,6 +9957,7 @@ const BodyContext = struct {
     fn iterItemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
         return switch (self.builder.program.types.get(ty)) {
             .named => |named| blk: {
+                if (named.builtin_nominal != .iter) Common.invariant("expected checked builtin Iter type");
                 const args = self.builder.program.types.span(named.args);
                 if (args.len != 1) Common.invariant("Iter nominal did not have one type argument");
                 break :blk args[0];
@@ -10105,6 +10111,7 @@ const BodyContext = struct {
         if (expected.def.source_decl != actual.def.source_decl) return false;
         if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
         if (expected.kind != actual.kind) return false;
+        if (expected.builtin_nominal != actual.builtin_nominal) return false;
         if (expected.builtin_owner != actual.builtin_owner) return false;
         return self.sameTypeSpans(expected.args, actual.args, depth);
     }
@@ -10678,6 +10685,17 @@ const BodyContext = struct {
             .builtin => |actual| actual == owner,
             .source_decl => false,
             .nominal => false,
+        };
+    }
+
+    fn typeHasCheckedBuiltinNominal(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        builtin_nominal: checked.CheckedBuiltinNominal,
+    ) bool {
+        return switch (self.builder.program.types.get(ty)) {
+            .named => |named| named.builtin_nominal == builtin_nominal,
+            else => false,
         };
     }
 
@@ -11469,6 +11487,7 @@ const BodyContext = struct {
             .named_type = template.named_type,
             .def = template.def,
             .kind = template.kind,
+            .builtin_nominal = template.builtin_nominal,
             .builtin_owner = template.builtin_owner,
             .args = try self.builder.program.types.addSpan(args),
             .backing = .{ .ty = backing_ty, .use = template.backing.?.use },
@@ -14023,32 +14042,44 @@ const BodyContext = struct {
         }
         const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
         if (self.methodNameIs(plan.method, "single") and
-            self.resolvedDispatchMatchesTypeMethod(resolved, materialized_expr.ty, "single"))
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "single"))
         {
             return try self.lowerSingleIteratorProducerPlanExpr(plan, lowered_call, materialized);
         }
 
         if (self.methodNameIs(plan.method, "append") and
-            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "append"))
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "append"))
         {
             return try self.lowerAppendIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
         }
 
         if (self.methodNameIs(plan.method, "concat") and
-            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "concat"))
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "concat"))
         {
             return try self.lowerConcatIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
         }
 
         if (self.methodNameIs(plan.method, "map") and
-            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "map"))
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "map"))
         {
             return try self.lowerMapIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
         }
 
+        if (self.methodNameIs(plan.method, "keep_if") and
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "keep_if"))
+        {
+            return try self.lowerFilterIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized, .keep_if);
+        }
+
+        if (self.methodNameIs(plan.method, "drop_if") and
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "drop_if"))
+        {
+            return try self.lowerFilterIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized, .drop_if);
+        }
+
         if (!self.methodNameIs(plan.method, "iter")) return null;
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list) and
-            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "iter"))
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "iter"))
         {
             return try self.lowerIdentityIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call);
         }
@@ -14162,6 +14193,58 @@ const BodyContext = struct {
             .data = .{ .map = .{
                 .source = source_plan,
                 .mapping_fn = mapping_fn,
+            } },
+        });
+
+        return try self.builder.program.addExpr(.{
+            .ty = materialized_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lowerFilterIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: Type.TypeId,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+        kind: Ast.IterPlan.FilterKind,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter filter dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter filter dispatch plan had an unexpected argument shape");
+        }
+        const predicate_index: usize = if (receiver_index == 0) 1 else 0;
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter filter call argument count differed from its dispatch plan");
+        }
+
+        const source_plan = try self.iteratorPlanForLoweredPublicExpr(lowered_args[receiver_index], dispatcher_ty);
+        const source = self.builder.program.iterPlan(source_plan);
+        const predicate_fn = lowered_args[predicate_index];
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(materialized_expr.ty),
+            .length = .unknown,
+            .steps = .{
+                .append = false,
+                .one = source.steps.one or source.steps.append,
+                .skip = source.steps.one or source.steps.append or source.steps.skip,
+                .done = source.steps.done,
+            },
+            .done = source.done,
+            .materialized = materialized,
+            .data = .{ .filter = .{
+                .source = source_plan,
+                .predicate_fn = predicate_fn,
+                .kind = kind,
             } },
         });
 
@@ -14661,6 +14744,7 @@ const BodyContext = struct {
         iterator_ty: Type.TypeId,
         comptime method_name: []const u8,
     ) bool {
+        if (!self.typeHasCheckedBuiltinNominal(iterator_ty, .iter)) return false;
         const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse return false;
         const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse return false;
         const expected = switch (lookup.target.kind) {
@@ -14678,6 +14762,16 @@ const BodyContext = struct {
     ) bool {
         const expected = self.builder.lookupMethodTargetByName(.{ .builtin = owner }, method_name) orelse return false;
         return methodLookupMatches(resolved, expected);
+    }
+
+    fn resolvedDispatchMatchesIteratorMethod(
+        self: *BodyContext,
+        resolved: MethodLookup,
+        iterator_ty: Type.TypeId,
+        comptime method_name: []const u8,
+    ) bool {
+        if (!self.typeHasCheckedBuiltinNominal(iterator_ty, .iter)) return false;
+        return self.resolvedDispatchMatchesTypeMethod(resolved, iterator_ty, method_name);
     }
 
     fn resolvedDispatchMatchesTypeMethod(
@@ -17379,6 +17473,7 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .f64 => .f64,
         .dec => .dec,
         .list => .list,
+        .iter => null,
         .box => .box,
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
