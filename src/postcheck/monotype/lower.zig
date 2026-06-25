@@ -14077,7 +14077,13 @@ const BodyContext = struct {
         }
 
         const list_ty = try self.lowerType(plan.iter.dispatcher_ty);
-        if (!self.typeHasBuiltinOwner(list_ty, .list)) return null;
+        if (!self.typeHasBuiltinOwner(list_ty, .list)) {
+            if (try self.listIteratorSourceFromExpr(iterable_expr)) |source| {
+                try self.constrainTypeToMono(plan.item_ty, source.item_ty);
+                return source;
+            }
+            return null;
+        }
         const item_ty = switch (self.builder.shapeContent(list_ty)) {
             .list => |elem_ty| elem_ty,
             else => Common.invariant("builtin List owner lowered to non-list Monotype content"),
@@ -14087,6 +14093,42 @@ const BodyContext = struct {
         return .{
             .expr = iterable_expr,
             .list_ty = list_ty,
+            .item_ty = item_ty,
+        };
+    }
+
+    fn listIteratorSourceFromExpr(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+    ) Allocator.Error!?ListIteratorSource {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan_id = switch (expr.data) {
+            .dispatch_call => |maybe_plan| maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan"),
+            else => return null,
+        };
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "iter")) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len == 0) Common.invariant("checked .iter dispatch plan had no receiver argument");
+        const receiver_expr = switch (plan_args[0]) {
+            .checked_expr => |receiver| receiver,
+            else => Common.invariant("checked .iter dispatch receiver was not a checked expression"),
+        };
+
+        const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
+        if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) {
+            return try self.listIteratorSourceFromExpr(receiver_expr);
+        }
+
+        const item_ty = switch (self.builder.shapeContent(dispatcher_ty)) {
+            .list => |elem_ty| elem_ty,
+            else => Common.invariant("builtin List owner lowered to non-list Monotype content"),
+        };
+
+        return .{
+            .expr = receiver_expr,
+            .list_ty = dispatcher_ty,
             .item_ty = item_ty,
         };
     }
