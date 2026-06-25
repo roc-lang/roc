@@ -13845,15 +13845,23 @@ const BodyContext = struct {
             .assign => |binder| binder,
             else => return false,
         };
-        if (!try self.binderOnlyUsedAsForIterable(binder, remaining_statements, final_expr)) return false;
+        if (!try self.binderOnlyUsedAsPrivateIterator(binder, remaining_statements, final_expr)) return false;
 
-        const expr = self.view.bodies.expr(decl.expr);
-        const iterator_ty = try self.lowerType(expr.ty);
-        if (!try self.checkedExprCanProduceListIterPlan(decl.expr, iterator_ty)) return false;
-
-        const plan_id = (try self.listIteratorPlanForPrivateLocal(decl.expr, iterator_ty, lowered)) orelse return false;
+        const iterator_ty = try self.lowerType(self.view.bodies.expr(decl.expr).ty);
+        const plan_id = (try self.privateIteratorPlanForLocalDeclaration(decl.expr, iterator_ty, lowered)) orelse return false;
         try self.local_iter_plans.put(binder, plan_id);
         return true;
+    }
+
+    fn privateIteratorPlanForLocalDeclaration(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        if (try self.listIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.appendIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        return null;
     }
 
     fn listIteratorPlanForPrivateLocal(
@@ -13914,21 +13922,103 @@ const BodyContext = struct {
         });
     }
 
+    fn appendIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        if (!self.methodNameIs(plan.method, "append")) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.append dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.append dispatch plan had an unexpected argument shape");
+        }
+        const after_index: usize = if (receiver_index == 0) 1 else 0;
+
+        const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
+        const before_plan = (try self.iteratorPlanForPrivateProducerOperand(plan_args[receiver_index], dispatcher_ty, lowered)) orelse return null;
+        const before = self.builder.program.iterPlan(before_plan);
+        const item_ty = self.iterItemType(iterator_ty);
+
+        const after_value = try self.lowerDispatchOperandAtType(plan_args[after_index], item_ty);
+        const after_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const after_expr = try self.builder.localExpr(after_local, item_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(after_local, item_ty),
+            .value = after_value,
+        } }));
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const phase_expr = try self.boolLiteral(false, bool_ty);
+        const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
+
+        var steps = before.steps;
+        steps.one = true;
+        steps.done = before.done == .reachable;
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = item_ty,
+            .length = switch (before.length) {
+                .known => |len| .{ .known = try self.builder.lowLevelExpr(.num_plus, &.{ len, one_expr }, u64_ty) },
+                .unknown => .unknown,
+            },
+            .steps = steps,
+            .done = before.done,
+            .materialized = null,
+            .data = .{ .append = .{
+                .before = before_plan,
+                .after = after_expr,
+                .phase = phase_expr,
+            } },
+        });
+    }
+
+    fn iteratorPlanForPrivateProducerOperand(
+        self: *BodyContext,
+        operand: static_dispatch.StaticDispatchOperand,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr_id = switch (operand) {
+            .checked_expr => |expr| expr,
+            else => return null,
+        };
+        if (self.lookupExprBinder(expr_id)) |binder| {
+            if (self.local_iter_plans.get(binder)) |plan_id| return plan_id;
+        }
+        const expr_ty = try self.lowerType(self.view.bodies.expr(expr_id).ty);
+        if (!self.sameType(expr_ty, iterator_ty)) return null;
+        return try self.privateIteratorPlanForLocalDeclaration(expr_id, iterator_ty, lowered);
+    }
+
     const PrivateIteratorUseScan = struct {
         target: checked.PatternBinderId,
         allowed_for_uses: usize = 0,
         invalid: bool = false,
     };
 
-    fn binderOnlyUsedAsForIterable(
+    fn binderOnlyUsedAsPrivateIterator(
         self: *BodyContext,
         binder: checked.PatternBinderId,
         remaining_statements: []const checked.CheckedStatementId,
         final_expr: checked.CheckedExprId,
     ) Allocator.Error!bool {
         var scan = PrivateIteratorUseScan{ .target = binder };
-        for (remaining_statements) |statement| {
-            try self.scanStatementForPrivateIteratorUse(statement, &scan, true);
+        for (remaining_statements, 0..) |statement, index| {
+            try self.scanStatementForPrivateIteratorUse(statement, remaining_statements[index + 1 ..], final_expr, &scan, true);
             if (scan.invalid) return false;
         }
         try self.scanExprForPrivateIteratorUse(final_expr, &scan, true);
@@ -13938,13 +14028,18 @@ const BodyContext = struct {
     fn scanStatementForPrivateIteratorUse(
         self: *BodyContext,
         statement_id: checked.CheckedStatementId,
+        remaining_statements: []const checked.CheckedStatementId,
+        final_expr: checked.CheckedExprId,
         scan: *PrivateIteratorUseScan,
         allow_for_iterable: bool,
     ) Allocator.Error!void {
         if (scan.invalid) return;
         const statement = self.view.bodies.statement(statement_id);
         switch (statement.data) {
-            .decl => |decl| try self.scanExprForPrivateIteratorUse(decl.expr, scan, allow_for_iterable),
+            .decl => |decl| {
+                if (try self.scanPrivateProducerDeclarationUse(decl, remaining_statements, final_expr, scan, allow_for_iterable)) return;
+                try self.scanExprForPrivateIteratorUse(decl.expr, scan, allow_for_iterable);
+            },
             .var_ => |var_| try self.scanExprForPrivateIteratorUse(var_.expr, scan, allow_for_iterable),
             .var_uninitialized => {},
             .reassign => |reassign| {
@@ -14029,7 +14124,9 @@ const BodyContext = struct {
                 for (record.fields) |field| try self.scanExprForPrivateIteratorUse(field.value, scan, allow_for_iterable);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.scanStatementForPrivateIteratorUse(statement, scan, allow_for_iterable);
+                for (block.statements, 0..) |statement, index| {
+                    try self.scanStatementForPrivateIteratorUse(statement, block.statements[index + 1 ..], block.final_expr, scan, allow_for_iterable);
+                }
                 try self.scanExprForPrivateIteratorUse(block.final_expr, scan, allow_for_iterable);
             },
             .tag => |tag| for (tag.args) |arg| try self.scanExprForPrivateIteratorUse(arg, scan, allow_for_iterable),
@@ -14129,6 +14226,76 @@ const BodyContext = struct {
         }
         try self.scanExprForPrivateIteratorUse(iterable, scan, allow_for_iterable);
         try self.scanExprForPrivateIteratorUse(body, scan, allow_for_iterable);
+    }
+
+    fn scanPrivateProducerDeclarationUse(
+        self: *BodyContext,
+        decl: anytype,
+        remaining_statements: []const checked.CheckedStatementId,
+        final_expr: checked.CheckedExprId,
+        scan: *PrivateIteratorUseScan,
+        allow_for_iterable: bool,
+    ) Allocator.Error!bool {
+        if (!allow_for_iterable) return false;
+        const produced_binder = switch (self.view.bodies.pattern(decl.pattern).data) {
+            .assign => |binder| binder,
+            else => return false,
+        };
+        if (produced_binder == scan.target) return false;
+
+        const receiver_index = (try self.privateProducerReceiverUse(decl.expr, scan.target)) orelse return false;
+        if (!try self.binderOnlyUsedAsPrivateIterator(produced_binder, remaining_statements, final_expr)) return false;
+
+        try self.scanPrivateProducerNonReceiverOperands(decl.expr, receiver_index, scan, allow_for_iterable);
+        if (scan.invalid) return true;
+        scan.allowed_for_uses += 1;
+        return true;
+    }
+
+    fn privateProducerReceiverUse(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        target: checked.PatternBinderId,
+    ) Allocator.Error!?usize {
+        const expr = self.view.bodies.expr(expr_id);
+        const iterator_ty = try self.lowerType(expr.ty);
+        if (!try self.checkedExprCanProduceAppendPlan(expr_id, iterator_ty)) return null;
+
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => return null,
+        };
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (receiver_index >= plan_args.len) {
+            Common.invariant("checked private iterator producer plan had an unexpected receiver index");
+        }
+        const receiver_expr = switch (plan_args[receiver_index]) {
+            .checked_expr => |receiver| receiver,
+            else => return null,
+        };
+        return if (self.lookupExprBinder(receiver_expr) == target) receiver_index else null;
+    }
+
+    fn scanPrivateProducerNonReceiverOperands(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        receiver_index: usize,
+        scan: *PrivateIteratorUseScan,
+        allow_for_iterable: bool,
+    ) Allocator.Error!void {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return;
+        for (plan.argsSlice(self.view.static_dispatch_plans), 0..) |operand, index| {
+            if (index == receiver_index) continue;
+            switch (operand) {
+                .checked_expr => |child| try self.scanExprForPrivateIteratorUse(child, scan, allow_for_iterable),
+                .generated_interpolation_iter => |child| try self.scanExprForPrivateIteratorUse(child, scan, allow_for_iterable),
+                .generated_numeral,
+                .generated_quote,
+                => {},
+            }
+        }
     }
 
     fn scanStaticDispatchPlanForPrivateIteratorUse(
@@ -15299,19 +15466,21 @@ const BodyContext = struct {
         const iter_plan_value = self.builder.program.iterPlan(plan_id);
         try self.constrainTypeToMono(for_plan.item_ty, iter_plan_value.item_ty);
 
-        return switch (iter_plan_value.data) {
-            .list => |list| try self.lowerListIteratorPlanFor(
+        if (try self.listAppendIteratorPlanFromPlan(plan_id)) |append_plan| {
+            defer append_plan.deinit(self.allocator);
+            return try self.lowerListIteratorPlanFor(
                 for_,
                 result_ty,
                 carries,
-                list,
-                iter_plan_value.item_ty,
-                iter_plan_value.item_ty,
-                &.{},
+                append_plan.list,
+                append_plan.item_ty,
+                append_plan.item_ty,
+                append_plan.append_items,
                 .none,
-            ),
-            else => null,
-        };
+            );
+        }
+
+        return null;
     }
 
     fn listIteratorSourceFromPlan(

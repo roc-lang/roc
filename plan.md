@@ -143,6 +143,9 @@ Current branch status:
 - direct private `ListIter` state can cross an immutable local when the local's
   only later observations are exact `for` iterable uses in the same lowering
   scope. Other uses still keep the public iterator value.
+- direct private `ListIter` state can feed a private `.append(...)` local when
+  that produced local is itself only observed by private iterator consumers; the
+  appended item is evaluated at the append declaration site.
 - direct finite numeric ranges are consumed by optimized `for` as private
   numeric cursor state, including inclusive end values at numeric maxima.
 - direct `Iter.custom` is consumed by optimized `for` as private custom state
@@ -590,6 +593,8 @@ Tasks:
 - [ ] Private plan state can cross locals.
   - [x] Direct `ListIter` private state can cross an immutable local when every
     later use is the exact iterable in a `for`.
+  - [x] Direct `ListIter` private state can feed a local `.append(...)` producer
+    whose result is consumed privately.
 - [ ] Private plan state can cross `if`.
 - [ ] Private plan state can cross `match`.
 - [ ] Materialization is implemented for every plan.
@@ -604,6 +609,8 @@ Tasks:
 - [ ] Optimized `for` through locals avoids public step values.
   - [x] Direct local `List.iter` avoids public step values when all uses are
     private `for` consumers.
+  - [x] Direct local `List.iter` plus local `.append(...)` avoids public step
+    values when the append result is consumed privately.
 - [ ] Optimized `for` through `if` avoids public step values.
 - [ ] Optimized `for` through `match` avoids public step values.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
