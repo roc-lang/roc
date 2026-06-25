@@ -328,7 +328,7 @@ pub fn renderArticleBody(
 
     // Page title (rendered from the first `# ` heading; the heading itself is
     // skipped while rendering the body so it is not duplicated).
-    try w.writeAll("        <h1 class=\"module-name\">");
+    try w.writeAll("        <h1 class=\"module-name langref-title\">");
     try renderInline(&rctx, article.title);
     try w.writeAll("</h1>\n");
 
@@ -832,13 +832,13 @@ fn writeLinkHref(rctx: *RenderCtx, url: []const u8) RenderError!void {
     // Resolve aliases (e.g. `conditionals` -> the `if-else` article).
     path = resolveSlugAlias(path);
 
-    // All article pages live in the same directory (langref/), so a sibling
-    // reference is just "<slug>.html"; the README lives at "index.html".
+    // Every langref page resolves relative links against `/langref/`, so a
+    // reference to another article is just its extensionless slug, and the
+    // README (the `/langref/` landing page) is "./".
     if (std.ascii.eqlIgnoreCase(path, "README")) {
-        try w.writeAll("index.html");
+        try w.writeAll("./");
     } else {
         try writeEscaped(w, path);
-        try w.writeAll(".html");
     }
     try writeEscaped(w, anchor);
 }
@@ -1215,9 +1215,9 @@ test "renderInline emphasis, code, and escaping" {
 
 test "renderInline rewrites relative links and preserves external ones" {
     const gpa = testing.allocator;
-    try expectInline(gpa, "[match](pattern-matching#match)", "<a href=\"pattern-matching.html#match\">match</a>");
-    try expectInline(gpa, "[v](types.md#nominal-types)", "<a href=\"types.html#nominal-types\">v</a>");
-    try expectInline(gpa, "[home](README.md)", "<a href=\"index.html\">home</a>");
+    try expectInline(gpa, "[match](pattern-matching#match)", "<a href=\"pattern-matching#match\">match</a>");
+    try expectInline(gpa, "[v](types.md#nominal-types)", "<a href=\"types#nominal-types\">v</a>");
+    try expectInline(gpa, "[home](README.md)", "<a href=\"./\">home</a>");
     try expectInline(gpa, "[here](#values)", "<a href=\"#values\">here</a>");
     try expectInline(gpa, "[ext](https://roc-lang.org)", "<a href=\"https://roc-lang.org\">ext</a>");
 }
@@ -1245,7 +1245,7 @@ test "renderArticleBody produces titled, anchored output" {
         .markdown = md,
         .is_index = false,
     };
-    try expectBody(gpa, &article, "<h1 class=\"module-name\">Title</h1>");
+    try expectBody(gpa, &article, "<h1 class=\"module-name langref-title\">Title</h1>");
     try expectBody(gpa, &article, "<h2 id=\"a-section\">A Section</h2>");
     try expectBody(gpa, &article, "<em>world</em>");
     try expectBody(gpa, &article, "<li>one</li>");
@@ -1293,8 +1293,8 @@ test "linkTargetSlug extracts article slugs" {
 
 test "conditionals links resolve to the if-else page" {
     const gpa = testing.allocator;
-    try expectInline(gpa, "[c](conditionals.md)", "<a href=\"if-else.html\">c</a>");
-    try expectInline(gpa, "[if](conditionals.md#if)", "<a href=\"if-else.html#if\">if</a>");
+    try expectInline(gpa, "[c](conditionals.md)", "<a href=\"if-else\">c</a>");
+    try expectInline(gpa, "[if](conditionals.md#if)", "<a href=\"if-else#if\">if</a>");
     try testing.expectEqualStrings("if-else", linkTargetSlug("conditionals.md#if").?);
 }
 

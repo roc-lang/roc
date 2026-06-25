@@ -337,7 +337,7 @@ main > * {
     font-size: large;
 }
 
-section {
+section:not(.langref-article) {
   padding: 0px 0px 16px 20px;
 }
 
@@ -363,20 +363,26 @@ section > *:last-child {
   margin-bottom: 0;
 }
 
-section h1,
-section h2,
-section h3,
-section h4,
-section p {
+section:not(.langref-article) h1,
+section:not(.langref-article) h2,
+section:not(.langref-article) h3,
+section:not(.langref-article) h4,
+section:not(.langref-article) p {
 padding: 0px 16px;
 }
 
 /* Language reference articles reuse the module-page chrome and layout. These
-   rules give the converted Markdown block elements (headings, lists, tables,
-   code blocks) the same horizontal rhythm as the surrounding paragraphs. */
+   rules give the converted Markdown block elements (lists, tables, code blocks)
+   their horizontal rhythm. Headings and the page title use the page font rather
+   than the monospace reserved for code identifiers. */
+.module-name.langref-title,
+.langref-article h1,
+.langref-article h2,
+.langref-article h3,
+.langref-article h4,
 .langref-article h5,
 .langref-article h6 {
-  padding: 0px 16px;
+  font-family: var(--font-sans);
 }
 
 .langref-article ul,

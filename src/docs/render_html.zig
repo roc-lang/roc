@@ -443,8 +443,10 @@ pub fn renderPackageDocs(
 }
 
 /// Writes each langref article as a page under `langref/`: the README becomes
-/// `langref/index.html` (the section landing page) and every other article
-/// becomes `langref/<slug>.html`. All pages share the same `../` asset base.
+/// `langref/index.html` (the section landing page, served at `/langref/`) and
+/// every other article becomes `langref/<slug>/index.html`, so its URL is the
+/// extensionless `/langref/<slug>`. Every page resolves relative links against
+/// `/langref/`, so they all share the same `../` asset base.
 fn writeLangRefPages(
     ctx: *const RenderContext,
     gpa: Allocator,
@@ -460,9 +462,20 @@ fn writeLangRefPages(
     defer sub_dir.close(io);
 
     for (langref.articles) |*article| {
-        const file_name = if (article.is_index) "index.html" else try std.fmt.allocPrint(gpa, "{s}.html", .{article.slug});
-        defer if (!article.is_index) gpa.free(file_name);
-        try writeLangRefArticlePage(ctx, gpa, io, sub_dir, langref, article, file_name);
+        if (article.is_index) {
+            try writeLangRefArticlePage(ctx, gpa, io, sub_dir, langref, article, "index.html");
+            continue;
+        }
+
+        // Each article gets its own directory so the page can be `index.html`,
+        // giving the extensionless `/langref/<slug>` URL. Slugs are filename-safe.
+        sub_dir.createDirPath(io, article.slug) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        var article_dir = try sub_dir.openDir(io, article.slug, .{});
+        defer article_dir.close(io);
+        try writeLangRefArticlePage(ctx, gpa, io, article_dir, langref, article, "index.html");
     }
 }
 
@@ -487,7 +500,9 @@ fn writeLangRefArticlePage(
     defer if (plain_title) |t| gpa.free(t);
     const title = std.fmt.bufPrint(&title_buf, "{s} Docs", .{plain_title orelse article.slug}) catch (plain_title orelse article.slug);
 
-    // All langref pages live one level deep (langref/…), so assets are at "../".
+    // Every langref page is served from within `/langref/` (the README at
+    // `/langref/`, each article at `/langref/<slug>`), so relative links resolve
+    // against `/langref/` and the site root is one level up at "../".
     const base = "../";
     try writeHtmlHead(w, title, base);
     try writeBodyOpen(w);
@@ -1249,8 +1264,9 @@ fn renderLangRefSidebar(
         try writeHtmlEscaped(w, base);
         try w.writeAll("langref/");
         // Slugs contain only filename-safe characters, but escape defensively.
+        // No `.html`: each article is served at the extensionless `/langref/<slug>`.
         try writeHtmlEscaped(w, article.slug);
-        try w.writeAll(".html\">");
+        try w.writeAll("\">");
         // Render the title inline so backtick spans (e.g. the "`if` / `else`"
         // heading) become inline `<code>` rather than literal backticks.
         try render_markdown.renderTitleInline(w, gpa, langref.articles, article);
