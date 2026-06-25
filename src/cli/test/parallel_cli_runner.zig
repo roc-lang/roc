@@ -3828,9 +3828,23 @@ fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u
         if (entry.kind != .file) continue;
         if (std.mem.endsWith(u8, entry.basename, ".meta")) continue;
         if (std.mem.endsWith(u8, entry.basename, ".tmp")) continue;
+        // Count only the checked-module (type-info) cache, under the `mod`
+        // subdirectory. The source-pure CIR cache (under `cir`) holds a second
+        // entry per module; it is verified separately and excluded here so this
+        // assertion keeps meaning "one checked-module entry per module".
+        if (!hasPathComponent(entry.path, "mod")) continue;
         count += 1;
     }
     return count;
+}
+
+/// True if `path` contains `component` as a whole path segment.
+fn hasPathComponent(path: []const u8, component: []const u8) bool {
+    var it = std.mem.tokenizeScalar(u8, path, std.fs.path.sep);
+    while (it.next()) |seg| {
+        if (std.mem.eql(u8, seg, component)) return true;
+    }
+    return false;
 }
 
 fn customFmtReformatsFile(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
