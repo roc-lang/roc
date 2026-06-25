@@ -568,8 +568,8 @@ Tasks:
 - [ ] Public aggregate storage materializes.
 - [ ] Unspecialized function return materializes.
 - [ ] Unspecialized call argument materializes.
-- [ ] Raw plan expressions cannot reach Lambda-to-LIR lowering.
-- [ ] Raw plan expressions cannot reach LIR.
+- [x] Raw plan expressions cannot reach Lambda-to-LIR lowering.
+- [x] Raw plan expressions cannot reach LIR.
 - [ ] Optimized `for` consumes plan values directly.
 - [ ] Optimized `for` through locals avoids public step values.
 - [ ] Optimized `for` through `if` avoids public step values.
