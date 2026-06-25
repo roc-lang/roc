@@ -1164,6 +1164,33 @@ Builtin :: [].{
             sort_impl(list, is_leq)
 		}
 
+		## Sort a list using the default comparison function defined by the element's type.
+		## This function must take two elements and return one of `FirstBeforeSecond`,
+        ## `Equivalent`, `SecondBeforeFirst` to indicate their relative order.
+		## ```roc
+		## expect [3, 1, 2].sort_with_default() == [1, 2, 3]
+		## ```
+		sort_with_default : List(item) -> List(item)
+            where [item.default_cmp : item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]]
+		sort_with_default = |list| {
+            # TODO - is there syntax for looking up the function for the module?
+            cmp = |a, b| a.default_cmp(b)
+            list.sort(cmp)
+		}
+
+		## Sort a list according to a key function.
+        ## The key function must return a type that can be compared by default.
+		## ```roc
+		## expect [3, 1, 2].sort_with_default() == [1, 2, 3]
+		## ```
+		sort_by : List(item), (item -> key) -> List(item)
+            where [key.default_cmp : key, key -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]]
+		sort_by = |list, key_fn| {
+            cmp = |a, b| key_fn(a).default_cmp(key_fn(b))
+            list.sort(cmp)
+		}
+
+
 		## Returns `True` if the two lists have the same length and their elements are pairwise equal.
 		is_eq : List(item), List(item) -> Bool
 			where [item.is_eq : item, item -> Bool]
