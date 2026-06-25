@@ -56,6 +56,7 @@ const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const UnreachableCode = problem_mod.UnreachableCode;
 const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
+const ComptimeCondition = problem_mod.ComptimeCondition;
 
 // Type declaration errors
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
@@ -880,6 +881,7 @@ pub const ReportBuilder = struct {
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
+            .comptime_condition => |data| return self.buildComptimeConditionReport(data),
         }
     }
 
@@ -4127,6 +4129,42 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Note: This warning is empirical; it only describes the compile-time evaluation that ran for this definition."),
         }, self, &report);
+
+        return report;
+    }
+
+    fn buildComptimeConditionReport(self: *Self, data: ComptimeCondition) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "UNCONDITIONAL CONDITION", .warning);
+        errdefer report.deinit();
+
+        const noun = switch (data.kind) {
+            .if_condition => "if condition",
+            .if_guard => "if guard",
+            .match_scrutinee => "match value",
+        };
+        const consequence = switch (data.kind) {
+            .if_condition,
+            .if_guard,
+            => "this conditional will always make the same choice:",
+            .match_scrutinee => "this match will always inspect the same value:",
+        };
+
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.bytes(noun),
+            D.bytes("is known at compile time, so"),
+            D.bytes(consequence),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
 
         return report;
     }

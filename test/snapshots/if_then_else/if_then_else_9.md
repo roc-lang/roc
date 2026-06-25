@@ -14,10 +14,20 @@ if bool {
 }
 ~~~
 # EXPECTED
+UNCONDITIONAL CONDITION - if_then_else_9.md:3:11:3:13
 TYPE MISMATCH - if_then_else_9.md:3:11:3:13
 MISSING METHOD - if_then_else_9.md:2:2:2:3
 MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
+**UNCONDITIONAL CONDITION**
+This if condition is known at compile time, so this conditional will always make the same choice:
+**if_then_else_9.md:3:11:3:13:**
+```roc
+} else if 10 { # Comment after else open
+```
+          ^^
+
+
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
 **if_then_else_9.md:3:11:3:13:**

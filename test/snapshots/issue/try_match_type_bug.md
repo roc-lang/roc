@@ -14,9 +14,17 @@ get_greeting = |{}| {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - try_match_type_bug.md:3:11:3:16
 # PROBLEMS
-NIL
+**UNCONDITIONAL CONDITION**
+This match value is known at compile time, so this match will always inspect the same value:
+**try_match_type_bug.md:3:11:3:16:**
+```roc
+    match 0.U64 {
+```
+          ^^^^^
+
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,Underscore,CloseRound,

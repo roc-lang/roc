@@ -12,9 +12,17 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - record_destructure.md:1:1:1:1
 # PROBLEMS
-NIL
+**UNCONDITIONAL CONDITION**
+This match value is known at compile time, so this match will always inspect the same value:
+**record_destructure.md:1:1:1:1:**
+```roc
+match ... {
+```
+^
+
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

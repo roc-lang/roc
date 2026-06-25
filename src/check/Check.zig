@@ -1412,6 +1412,23 @@ fn checkedExprBlocksLaterHoists(self: *const Self, expr: CIR.Expr.Idx, does_fx: 
     return completed.has_observable_effect;
 }
 
+fn warnIfComptimeConditionalExpr(
+    self: *Self,
+    expr: CIR.Expr.Idx,
+    kind: @FieldType(problem.ComptimeCondition, "kind"),
+) Allocator.Error!void {
+    const completed = self.last_hoist_result orelse return;
+    if (completed.expr != expr or !completed.top_level_equivalent) return;
+
+    self.var_set.clearRetainingCapacity();
+    if (try self.varContainsError(ModuleEnv.varFrom(expr), &self.var_set)) return;
+
+    _ = try self.problems.appendProblem(self.gpa, .{ .comptime_condition = .{
+        .kind = kind,
+        .region = self.cir.store.getExprRegion(expr),
+    } });
+}
+
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
     if (self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0) return;
     const completed = self.last_hoist_result orelse return;
@@ -12470,7 +12487,10 @@ fn checkIfElseExpr(
     var does_fx = try self.checkExpr(first_branch.cond, env, Expected.none());
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(env, expr_region);
-    _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
+    const first_cond_result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
+    if (if_.warn_unused_branches and first_cond_result.isOk()) {
+        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition);
+    }
 
     // Then we check the 1st branch's body
     does_fx = try self.checkExprWithHoistSelectionSuppressed(first_branch.body, env, expected.forBranchBody()) or does_fx;
@@ -12500,7 +12520,10 @@ fn checkIfElseExpr(
         does_fx = try self.checkExpr(branch.cond, env, Expected.none()) or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
         const branch_bool_var = try self.freshBool(env, expr_region);
-        _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
+        const cond_result = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
+        if (if_.warn_unused_branches and cond_result.isOk()) {
+            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition);
+        }
 
         // Check the branch body
         does_fx = try self.checkExprWithHoistSelectionSuppressed(branch.body, env, expected.forBranchBody()) or does_fx;
@@ -12534,7 +12557,10 @@ fn checkIfElseExpr(
                     const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
                     const fresh_bool = try self.freshBool(env, expr_region);
-                    _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
+                    const remaining_cond_result = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
+                    if (if_.warn_unused_branches and remaining_cond_result.isOk()) {
+                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition);
+                    }
 
                     does_fx = try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
                     try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
@@ -12648,6 +12674,9 @@ fn checkMatchExpr(
             has_invalid_try = true;
         }
     }
+    if (!match.is_try_suffix and !match.skip_exhaustiveness) {
+        try self.warnIfComptimeConditionalExpr(match.cond, .match_scrutinee);
+    }
 
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
@@ -12696,7 +12725,10 @@ fn checkMatchExpr(
             does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const guard_bool_var = try self.freshBool(env, expr_region);
-            _ = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
+            const guard_result = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
+            if (!match.skip_exhaustiveness and guard_result.isOk()) {
+                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard);
+            }
         }
 
         // Check the first branch's value, then use that at the branch_var
@@ -12751,7 +12783,10 @@ fn checkMatchExpr(
             does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
-            _ = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
+            const guard_result = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
+            if (!match.skip_exhaustiveness and guard_result.isOk()) {
+                try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard);
+            }
         }
 
         // Then, check the body

@@ -14,9 +14,17 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - nested_record_patterns.md:1:1:1:1
 # PROBLEMS
-NIL
+**UNCONDITIONAL CONDITION**
+This match value is known at compile time, so this match will always inspect the same value:
+**nested_record_patterns.md:1:1:1:1:**
+```roc
+match ... {
+```
+^
+
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

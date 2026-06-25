@@ -19,8 +19,9 @@ square_root = |radicand| {
 	binary_search(0, radicand)
 }
 
-main! = |_args| {
-	result = square_root(25 * 25)
+main! = |args| {
+	arg_count = List.len(args)
+	result = square_root((25 * 25) + arg_count - arg_count)
 	if result != 25 {
 		crash "square_root(625) should be 25"
 	}

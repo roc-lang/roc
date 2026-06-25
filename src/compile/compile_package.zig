@@ -349,7 +349,7 @@ pub const ArtifactPublicationInputs = struct {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .comptime_condition, .literal_defaulted => false,
         else => true,
     };
 }

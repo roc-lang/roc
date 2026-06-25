@@ -2974,6 +2974,60 @@ test "check type - if with all crash branches makes following code unreachable" 
     } }, "Bool -> Str");
 }
 
+test "check type - constant if condition warns" {
+    const source =
+        \\choose : Str -> Str
+        \\choose = |value| if False { value } else { value }
+    ;
+
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"UNCONDITIONAL CONDITION"},
+    } }, "Str -> Str");
+}
+
+test "check type - constant match scrutinee warns" {
+    const source =
+        \\choose : Str -> Str
+        \\choose = |value| match True {
+        \\    True => value
+        \\    False => value
+        \\}
+    ;
+
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"UNCONDITIONAL CONDITION"},
+    } }, "Str -> Str");
+}
+
+test "check type - constant match guard warns" {
+    const source =
+        \\choose : Bool -> Str
+        \\choose = |flag| match flag {
+        \\    _ if True => "first"
+        \\    _ => "second"
+        \\}
+    ;
+
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"UNCONDITIONAL CONDITION"},
+    } }, "Bool -> Str");
+}
+
+test "check type - match guard depending on pattern binder does not warn" {
+    const source =
+        \\choose : Bool -> Str
+        \\choose = |flag| match flag {
+        \\    value if value => "true"
+        \\    _ => "false"
+        \\}
+    ;
+
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool -> Str");
+}
+
 // dbg //
 
 test "check type - dbg" {
@@ -4473,7 +4527,10 @@ test "check type - try return with match and error propagation should type-check
     // boundary-defaulted to Dec — but SILENTLY: its dispatch constraints touch
     // nothing signature-reachable, so the def's interface is identical either
     // way and no LITERAL DEFAULTED warning is emitted.
-    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Str, [Impossible, ListWasEmpty, ..])");
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"UNCONDITIONAL CONDITION"},
+    } }, "{} -> Try(Str, [Impossible, ListWasEmpty, ..])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {

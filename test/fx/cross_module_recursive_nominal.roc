@@ -5,9 +5,12 @@ app [main!] {
 
 import pf.Stdout
 import elem.Elem
+import pf.Host
 
 main! = || {
-    tree = Elem.div([])
+    runtime = Host.get_greeting!(Host.new("tree"))
+    children = if Str.count_utf8_bytes(runtime) > 0 { [] } else { [Elem.text("missing")] }
+    tree = Elem.div(children)
 
     match tree {
         Div(_) => Stdout.line!("Div (correct)")

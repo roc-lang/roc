@@ -8,9 +8,17 @@ type=expr
 if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - if_expression.md:1:4:1:9
 # PROBLEMS
-NIL
+**UNCONDITIONAL CONDITION**
+This if condition is known at compile time, so this conditional will always make the same choice:
+**if_expression.md:1:4:1:9:**
+```roc
+if x > 5 "big" else "small"
+```
+   ^^^^^
+
+
 # TOKENS
 ~~~zig
 KwIf,LowerIdent,OpGreaterThan,Int,StringStart,StringPart,StringEnd,KwElse,StringStart,StringPart,StringEnd,

@@ -753,7 +753,7 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval helper auto-imports builtin typed suffix types", .source_kind = .module, .source = builtin_suffix_constant, .expected = .{ .inspect_str = "42" } },
     .{ .name = "comptime eval - crash in constant", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "comptime eval - crash in if branch not taken", .source_kind = .module, .source = crash_branch_not_taken, .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "comptime eval - crash in if branch taken", .source = crash_branch_taken, .expected = .{ .crash = {} } },
+    .{ .name = "comptime eval - crash in if branch taken", .source = crash_branch_taken, .expected = .{ .problem_and_crash = {} } },
     .{ .name = "comptime eval - lambda is skipped", .source_kind = .module, .source = lambda_skipped, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - multiple declarations with mixed results", .source_kind = .module, .source = mixed_declarations, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - cross-module constant works", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "module [x]\nx = 40\n" }}, .source = "import Util\nmain = Util.x + 2", .expected = .{ .inspect_str = "42.0" } },

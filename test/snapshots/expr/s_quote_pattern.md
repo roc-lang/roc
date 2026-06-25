@@ -12,9 +12,17 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - s_quote_pattern.md:1:1:1:1
 # PROBLEMS
-NIL
+**UNCONDITIONAL CONDITION**
+This match value is known at compile time, so this match will always inspect the same value:
+**s_quote_pattern.md:1:1:1:1:**
+```roc
+match ... {
+```
+^
+
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

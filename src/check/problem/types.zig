@@ -62,6 +62,7 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
+    comptime_condition: ComptimeCondition,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -288,6 +289,16 @@ pub const ComptimeUnusedBranch = struct {
     },
     site_region: base.Region,
     branch_region: base.Region,
+};
+
+/// A conditional expression was known while checking, so it will always make the same choice.
+pub const ComptimeCondition = struct {
+    kind: enum {
+        if_condition,
+        if_guard,
+        match_scrutinee,
+    },
+    region: base.Region,
 };
 
 /// Problem data for a redundant pattern in a match

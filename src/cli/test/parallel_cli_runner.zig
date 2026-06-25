@@ -1981,10 +1981,10 @@ const hot_reload_app_data_body =
     \\import "data.txt" as data : Str
     \\
     \\main! : U64 => U64
-    \\main! = |_|
-    \\    if data == "one" {
+    \\main! = |seed|
+    \\    if seed == 0 and data == "one" {
     \\        1
-    \\    } else if data == "two" {
+    \\    } else if seed == 0 and data == "two" {
     \\        2
     \\    } else {
     \\        99

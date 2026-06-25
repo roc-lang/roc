@@ -13,9 +13,19 @@ match Answer {
 }
 ~~~
 # EXPECTED
+UNCONDITIONAL CONDITION - literal_patterns.md:1:7:1:13
 MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
+**UNCONDITIONAL CONDITION**
+This match value is known at compile time, so this match will always inspect the same value:
+**literal_patterns.md:1:7:1:13:**
+```roc
+match Answer {
+```
+      ^^^^^^
+
+
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
 **literal_patterns.md:5:5:5:7:**
