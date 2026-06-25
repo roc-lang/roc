@@ -356,4 +356,10 @@ pub const tests = [_]TestCase{
         .source = "I8.div_by(I8.lowest, -1)",
         .expected = .{ .crash = {} },
     },
+    .{
+        // The same signed division edge has a defined remainder of zero.
+        .name = "issue 9814: signed rem and mod by negative one return zero",
+        .source = "(I8.rem_by(I8.lowest, -1), I8.mod_by(I8.lowest, -1))",
+        .expected = .{ .inspect_str = "(0, 0)" },
+    },
 };
