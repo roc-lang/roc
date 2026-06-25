@@ -4297,16 +4297,52 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
     const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
         return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
-    for ([_][]const u8{ "pub struct RocOps", "pub struct RocStr", "PlatformHostedFns" }) |needle| {
+    for ([_][]const u8{
+        "pub struct RocStr",
+        "pub struct RocHost",
+        "pub type RocBox = *mut c_void;",
+        "pub fn incref_box",
+        "pub fn decref_box",
+        "pub fn decref_box_with",
+        "pub fn allocate_box",
+        "pub fn decref_erased_callable",
+        "pub fn decref_host_tree(value: HostTree, roc_host: &RocHost)",
+        "extern \"C\" fn decref_box_payload_type",
+        "pub fn roc_alloc(length: usize, alignment: usize) -> *mut c_void;",
+        "pub struct BuilderPrintValueArgs",
+        "pub fn roc_stdout_line(arg0: RocStr);",
+        "pub fn roc_main();",
+    }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Rust file missing {s}", .{needle});
         }
     }
-    // The old uniform-ABI argument struct must be gone (confirms RustGlue tracks the new
-    // register-style host ABI rather than the struct-by-pointer callbacks).
-    if (std.mem.find(u8, generated, "pub struct RocAlloc") != null) {
-        return customFailure(allocator, timer, "generated Rust file still defines the obsolete RocAlloc struct", .{});
+    for ([_][]const u8{
+        "ret_ptr",
+        "arg_ptr",
+        "RocOps",
+        "HostedFunctions",
+        "PlatformHostedFns",
+        "pub struct RocAlloc",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) != null) {
+            return customFailure(allocator, timer, "generated Rust file still contains obsolete ABI text {s}", .{needle});
+        }
     }
+
+    const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "rustc",
+        "--edition=2021",
+        "-D",
+        "warnings",
+        "--crate-type",
+        "lib",
+        generated_path,
+        "-o",
+        test_rlib_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 

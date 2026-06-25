@@ -10,15 +10,18 @@ import pf.RecordRepr exposing [RecordRepr]
 import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
 import pf.TagVariant exposing [TagVariant]
+import pf.ProvidesEntry exposing [ProvidesEntry]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	# Collect all hosted functions from all modules, with module name prefix
 	var $hosted_functions = []
 	var $type_table = []
+	var $provides_entries = []
 
 	for types in types_list {
 		$type_table = types.type_table
+		$provides_entries = types.provides_entries
 
 		for mod in types.modules {
 			for func in mod.hosted_functions {
@@ -27,6 +30,7 @@ make_glue = |types_list| {
 				hosted_func = {
 					arg_fields: func.arg_fields,
 					arg_type_ids: func.arg_type_ids,
+					ffi_symbol: func.ffi_symbol,
 					index: func.index,
 					name: full_qualified_name,
 					ret_fields: func.ret_fields,
@@ -42,7 +46,7 @@ make_glue = |types_list| {
 	# Sort by index so array entries are in the correct order
 	sorted = List.sort_with($hosted_functions, compare_by_index)
 
-	rust_content = generate_rust_file(sorted, $type_table)
+	rust_content = generate_rust_file(sorted, $type_table, $provides_entries)
 
 	Ok([{ name: "roc_platform_abi.rs", content: rust_content }])
 }
@@ -197,8 +201,18 @@ expect roc_type_to_rust("{ foo : Str }") == "*mut c_void"
 type_id_to_rust : List(TypeRepr), U64 -> Str
 type_id_to_rust = |type_table, type_id| {
 	match List.get(type_table, type_id) {
-		Ok(type_repr) => type_repr_to_rust(type_table, type_repr)
-		Err(_) => "*mut c_void"
+		Ok(type_repr) =>
+			match type_repr {
+				RocRecord(rec) =>
+					if rec.name == "" {
+						"*mut c_void"
+					} else {
+						name_to_struct_name(rec.name)
+					}
+				RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, type_id, tu)
+				_ => type_repr_to_rust(type_table, type_repr)
+			}
+		Err(_) => "MissingRocType${U64.to_str(type_id)}"
 	}
 }
 
@@ -207,12 +221,13 @@ type_id_to_rust = |type_table, type_id| {
 ## named fields use their resolved Rust type.
 rust_record_field_decl : List(TypeRepr), RecordField -> Str
 rust_record_field_decl = |type_table, field| {
+	field_name = name_to_rust_field_ident(field.name)
 	rust_type = if field.is_padding {
 		"[u8; ${U64.to_str(field.size)}]"
 	} else {
 		type_id_to_rust(type_table, field.type_id)
 	}
-	"    pub ${field.name}: ${rust_type},\n"
+	"    pub ${field_name}: ${rust_type},\n"
 }
 
 ## Convert a TypeRepr to its Rust type string
@@ -223,7 +238,16 @@ type_repr_to_rust = |type_table, type_repr| {
 		RocBox(inner_id) =>
 			match List.get(type_table, inner_id) {
 				Ok(RocFunction(_)) => "RocErasedCallable"
-				_ => "*mut ${type_id_to_rust(type_table, inner_id)}"
+				Ok(RocUnknown(_)) => "RocBox"
+				Ok(_) => {
+					inner_rust = type_id_to_rust(type_table, inner_id)
+					if inner_rust == "*mut c_void" {
+						"RocBox"
+					} else {
+						"*mut ${inner_rust}"
+					}
+				}
+				Err(_) => "MissingRocType${U64.to_str(inner_id)}"
 			}
 		RocStr => "RocStr"
 		RocUnit => "()"
@@ -252,7 +276,21 @@ type_repr_to_rust = |type_table, type_repr| {
 			} else {
 				name_to_struct_name(rec.name)
 			}
-		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, tu)
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => type_id_to_rust(type_table, payload_id)
+							_ => "*mut c_void"
+						}
+					_ => "*mut c_void"
+				}
+			} else if tu.name != "" {
+				name_to_struct_name(tu.name)
+			} else {
+				"*mut c_void"
+			}
 		RocFunction(_) => "*mut c_void"
 		RocUnknown(_) => "*mut c_void"
 	}
@@ -260,7 +298,7 @@ type_repr_to_rust = |type_table, type_repr| {
 
 ## Resolve a tag union to a Rust type. Single-variant unions are unwrapped to their payload.
 ## Multi-variant unions with a name return a generated struct name.
-resolve_tag_union_type_rust = |type_table, tu| {
+resolve_tag_union_type_rust = |type_table, type_id, tu| {
 	if List.len(tu.tags) == 1 {
 		match List.first(tu.tags) {
 			Ok(tag) =>
@@ -271,7 +309,7 @@ resolve_tag_union_type_rust = |type_table, tu| {
 			_ => "*mut c_void"
 		}
 	} else if tu.name != "" {
-		name_to_struct_name(tu.name)
+		tag_union_struct_name(type_table, type_id, tu)
 	} else {
 		"*mut c_void"
 	}
@@ -447,18 +485,64 @@ name_to_struct_name = |name| {
 
 	var $result = ""
 	for part in parts {
-		capitalized = part
-			->str_replace_all("!", "")
-			->capitalize_first()
-		$result = Str.concat($result, capitalized)
+		for subpart in Str.split_on(part, "_") {
+			cleaned = subpart
+				->str_replace_all("!", "")
+				->str_replace_all("-", "")
+				->str_replace_all(" ", "")
+
+			if cleaned != "" {
+				$result = Str.concat($result, capitalize_first(cleaned))
+			}
+		}
 	}
 
-	$result
+	if $result == "" {
+		"Anon"
+	} else {
+		$result
+	}
 }
 
 expect name_to_struct_name("Stdout.line!") == "StdoutLine"
 expect name_to_struct_name("line!") == "Line"
 expect name_to_struct_name("Foo.bar.baz!") == "FooBarBaz"
+expect name_to_struct_name("Builder.print_value!") == "BuilderPrintValue"
+expect name_to_struct_name("__AnonStruct10") == "AnonStruct10"
+
+## Count multi-variant tag unions with the given Roc name in the type table.
+tag_union_name_count : List(TypeRepr), Str -> U64
+tag_union_name_count = |type_table, name| {
+	var $count = 0
+
+	for type_repr in type_table {
+		match type_repr {
+			RocTagUnion(tu) =>
+				if List.len(tu.tags) >= 2 and tu.name == name {
+					$count = $count + 1
+				}
+			_ => {}
+		}
+	}
+
+	$count
+}
+
+## Return the emitted Rust struct name for a multi-variant tag union.
+##
+## Generic tag unions such as `Try(ok, err)` can appear many times in the type table
+## with the same Roc name but different payload layouts. Rust needs a distinct
+## concrete type for each layout.
+tag_union_struct_name : List(TypeRepr), U64, TagUnionRepr -> Str
+tag_union_struct_name = |type_table, type_id, tu| {
+	base = name_to_struct_name(tu.name)
+
+	if tag_union_name_count(type_table, tu.name) > 1 {
+		"${base}Type${U64.to_str(type_id)}"
+	} else {
+		base
+	}
+}
 
 ## Convert function name to snake_case (e.g., "Stdout.line!" -> "stdout_line")
 name_to_snake : Str -> Str
@@ -474,6 +558,55 @@ expect name_to_snake("line!") == "line"
 expect name_to_snake("Foo.barBaz!") == "foo_bar_baz"
 expect name_to_snake("PartDef.Idx.get!") == "part_def_idx_get"
 
+## Convert a Roc name to a Rust snake_case function suffix.
+name_to_rust_fn_suffix : Str -> Str
+name_to_rust_fn_suffix = |name| {
+	suffix =
+		name
+			->str_replace_all(".", "_")
+			->str_replace_all("!", "")
+			->str_replace_all("-", "_")
+			->str_replace_all(" ", "_")
+			->to_lower_snake_case()
+			->strip_leading_underscores()
+
+	if suffix == "" or suffix == "_" {
+		"anon"
+	} else {
+		suffix
+	}
+}
+
+expect name_to_rust_fn_suffix("Host.Tree") == "host_tree"
+expect name_to_rust_fn_suffix("TryType17") == "try_type17"
+expect name_to_rust_fn_suffix("__AnonStruct10") == "anon_struct10"
+
+strip_leading_underscores : Str -> Str
+strip_leading_underscores = |s| {
+	bytes = Str.to_utf8(s)
+	var $drop_count = 0
+	var $done = Bool.False
+
+	for byte in bytes {
+		if !$done {
+			if byte == '_' {
+				$drop_count = $drop_count + 1
+			} else {
+				$done = Bool.True
+			}
+		}
+	}
+
+	new_bytes = List.drop_first(bytes, $drop_count)
+	match Str.from_utf8(new_bytes) {
+		Ok(str) => str
+		Err(_) => s
+	}
+}
+
+expect strip_leading_underscores("__anon") == "anon"
+expect strip_leading_underscores("anon") == "anon"
+
 ## Convert function name to SCREAMING_SNAKE_CASE (e.g., "Stdout.line!" -> "STDOUT_LINE")
 name_to_screaming_snake : Str -> Str
 name_to_screaming_snake = |name| {
@@ -487,6 +620,66 @@ expect name_to_screaming_snake("Stdout.line!") == "STDOUT_LINE"
 expect name_to_screaming_snake("line!") == "LINE"
 expect name_to_screaming_snake("Foo.barBaz!") == "FOO_BAR_BAZ"
 expect name_to_screaming_snake("PartDef.Idx.get!") == "PART_DEF_IDX_GET"
+
+## Convert a Roc record field name to a valid Rust field identifier.
+## Rust cannot quote arbitrary punctuation in identifiers, so ABI structs use
+## sanitized field names while preserving Roc's field order and repr(C) layout.
+name_to_rust_field_ident : Str -> Str
+name_to_rust_field_ident = |name| {
+	sanitized =
+		name
+			->str_replace_all("!", "_bang")
+			->str_replace_all("-", "_")
+			->str_replace_all(".", "_")
+			->str_replace_all(" ", "_")
+			->to_lower_snake_case()
+
+	match sanitized {
+		"" => "_field"
+		"_" => "_field"
+		"as" => "r#as"
+		"break" => "r#break"
+		"const" => "r#const"
+		"continue" => "r#continue"
+		"crate" => "r#crate"
+		"else" => "r#else"
+		"enum" => "r#enum"
+		"extern" => "r#extern"
+		"false" => "r#false"
+		"fn" => "r#fn"
+		"for" => "r#for"
+		"if" => "r#if"
+		"impl" => "r#impl"
+		"in" => "r#in"
+		"let" => "r#let"
+		"loop" => "r#loop"
+		"match" => "r#match"
+		"mod" => "r#mod"
+		"move" => "r#move"
+		"mut" => "r#mut"
+		"pub" => "r#pub"
+		"ref" => "r#ref"
+		"return" => "r#return"
+		"self" => "self_"
+		"Self" => "self_type"
+		"static" => "r#static"
+		"struct" => "r#struct"
+		"super" => "super_"
+		"trait" => "r#trait"
+		"true" => "r#true"
+		"type" => "r#type"
+		"unsafe" => "r#unsafe"
+		"use" => "r#use"
+		"where" => "r#where"
+		"while" => "r#while"
+		_ => sanitized
+	}
+}
+
+expect name_to_rust_field_ident("init!") == "init_bang"
+expect name_to_rust_field_ident("render!") == "render_bang"
+expect name_to_rust_field_ident("type") == "r#type"
+expect name_to_rust_field_ident("_") == "_field"
 
 ## Return the Rust discriminant type for a given tag count.
 disc_type_for_count = |count| {
@@ -540,33 +733,31 @@ lookup_record_in_type_table = |type_table, type_id| {
 # =============================================================================
 
 ## Generate the complete Rust source file
-generate_rust_file = |hosted_functions, type_table| {
-	count = List.len(hosted_functions)
-
+generate_rust_file = |hosted_functions, type_table, provides_list| {
 	generate_rust_file_header
 		.concat(generate_rust_imports)
 		.concat("\n")
 		.concat(generate_host_abi_types_rust)
 		.concat("\n")
+		.concat(generate_roc_box_helpers_rust)
+		.concat("\n")
 		.concat(generate_rust_roc_str)
 		.concat("\n")
 		.concat(generate_rust_roc_list)
-		.concat("\n")
-		.concat(generate_index_constants_rust(hosted_functions, count))
 		.concat("\n")
 		.concat(generate_element_type_structs_rust(type_table))
 		.concat(generate_tag_union_structs_rust(type_table))
 		.concat(generate_all_record_structs_rust(hosted_functions, type_table))
 		.concat(generate_all_args_structs_rust(hosted_functions, type_table))
-		.concat(generate_platform_fns_struct_rust(hosted_functions, type_table))
+		.concat(generate_refcount_helpers_rust(type_table))
 		.concat("\n")
-		.concat(generate_hosted_functions_helper_rust(hosted_functions))
+		.concat(generate_runtime_symbol_externs_rust)
 		.concat("\n")
-		.concat(generate_default_allocators_rust)
+		.concat(generate_hosted_symbol_externs_rust(hosted_functions, type_table))
 		.concat("\n")
-		.concat(generate_default_handlers_rust)
+		.concat(generate_host_helpers_rust)
 		.concat("\n")
-		.concat(generate_make_roc_ops_rust)
+		.concat(generate_entrypoint_externs_rust(provides_list, type_table))
 }
 
 ## File header comment
@@ -582,12 +773,11 @@ generate_rust_file_header =
 	\\//! - The hosted function must decref owned refcounted arguments when done.
 	\\//! - If the host stores or returns an argument, it must retain or transfer ownership explicitly.
 	\\//!
-	\\//! Usage:
-	\\//! 1. Import this module in your platform host
-	\\//! 2. Implement each hosted function according to its signature
-	\\//! 3. Call `hosted_functions()` to create the dispatch table for RocOps
+	\\//! Import this module from the platform host and implement the listed hosted symbols
+	\\//! with the exact natural C ABI signatures shown below.
 	\\
-	\\#![allow(non_camel_case_types, dead_code, unused_imports, clippy::missing_safety_doc)]
+	\\#![cfg_attr(rustfmt, rustfmt_skip)]
+	\\#![allow(dead_code)]
 	\\
 	\\
 
@@ -595,38 +785,76 @@ generate_rust_file_header =
 generate_rust_imports : Str
 generate_rust_imports =
 	\\use core::ffi::c_void;
+	\\use core::sync::atomic::{AtomicIsize, Ordering};
 	\\use std::alloc::Layout;
 	\\
 
 ## Generate self-contained host ABI type definitions (matching roc_ops.rs)
 generate_host_abi_types_rust : Str
 generate_host_abi_types_rust =
-	\\/// Type-erased pointer to a hosted function. Each hosted function has its own natural
-	\\/// C signature (determined by its Roc argument and return types under the platform C
-	\\/// ABI), so they are stored type-erased here and cast to their concrete signature at
-	\\/// the Roc call site. A hosted function takes a leading `*const RocOps` only when it
-	\\/// allocates or frees Roc-managed memory (i.e. when an argument or its return is a heap
-	\\/// type).
-	\\///
-	\\/// Roc transfers ownership of refcounted arguments to hosted functions. Hosted functions
-	\\/// must decref owned refcounted arguments when done, or transfer that ownership into the
-	\\/// return value or longer-lived storage. If the host keeps both the call argument and a
-	\\/// stored copy, it must incref the stored copy so each live reference has one ownership.
-	\\pub type HostedFn = extern "C" fn();
+	\\/// Runtime representation of an opaque `Box(T)` value.
+	\\pub type RocBox = *mut c_void;
 	\\
-	\\/// Table of hosted function pointers passed to the Roc runtime.
+	\\/// Host-internal allocator and diagnostic context used by helper functions in this file.
+	\\///
+	\\/// Compiled Roc code does not receive this value. The real host ABI is the set of direct
+	\\/// linker symbols declared below (`roc_alloc`, hosted symbols, and provided entrypoints).
 	\\#[repr(C)]
-	\\#[derive(Debug, Clone, Copy)]
-	\\pub struct HostedFunctions {
-	\\    pub count: u32,
-	\\    pub fns: *const HostedFn,
+	\\pub struct RocHost {
+	\\    pub env: *mut c_void,
+	\\    pub roc_alloc: extern "C" fn(*mut RocHost, usize, usize) -> *mut c_void,
+	\\    pub roc_dealloc: extern "C" fn(*mut RocHost, *mut c_void, usize),
+	\\    pub roc_realloc: extern "C" fn(*mut RocHost, *mut c_void, usize, usize) -> *mut c_void,
+	\\    pub roc_dbg: extern "C" fn(*mut RocHost, *const u8, usize),
+	\\    pub roc_expect_failed: extern "C" fn(*mut RocHost, *const u8, usize),
+	\\    pub roc_crashed: extern "C" fn(*mut RocHost, *const u8, usize),
+	\\}
+	\\
+	\\impl RocHost {
+	\\    /// Allocate memory with the given alignment and length.
+	\\    ///
+	\\    /// # Safety
+	\\    /// The returned pointer must be used only according to Roc allocation layout
+	\\    /// rules and later released through the matching host deallocator.
+	\\    #[inline]
+	\\    pub unsafe fn alloc(&self, alignment: usize, length: usize) -> *mut c_void {
+	\\        let host = self as *const RocHost as *mut RocHost;
+	\\        (self.roc_alloc)(host, length, alignment)
+	\\    }
+	\\
+	\\    /// Deallocate memory previously allocated with `alloc`.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `ptr` must have been allocated by this host with the same alignment and must
+	\\    /// not be used after this call.
+	\\    #[inline]
+	\\    pub unsafe fn dealloc(&self, ptr: *mut c_void, alignment: usize) {
+	\\        let host = self as *const RocHost as *mut RocHost;
+	\\        (self.roc_dealloc)(host, ptr, alignment);
+	\\    }
+	\\
+	\\    /// Reallocate memory to a new size.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `old_ptr` must have been allocated by this host with the same alignment.
+	\\    /// The returned pointer replaces `old_ptr`; the old pointer must not be used.
+	\\    #[inline]
+	\\    pub unsafe fn realloc(
+	\\        &self,
+	\\        old_ptr: *mut c_void,
+	\\        alignment: usize,
+	\\        new_length: usize,
+	\\    ) -> *mut c_void {
+	\\        let host = self as *const RocHost as *mut RocHost;
+	\\        (self.roc_realloc)(host, old_ptr, new_length, alignment)
+	\\    }
 	\\}
 	\\
 	\\/// Uniform ABI function pointer stored in `RocErasedCallablePayload`.
-	\\pub type RocErasedCallableFn = extern "C" fn(*const RocOps, *mut u8, *const u8, *mut u8);
+	\\pub type RocErasedCallableFn = extern "C" fn(*mut RocHost, *mut u8, *const u8, *mut u8);
 	\\
 	\\/// Final-drop callback for inline erased-callable captures.
-	\\pub type RocErasedCallableOnDrop = extern "C" fn(*mut u8, *const RocOps);
+	\\pub type RocErasedCallableOnDrop = extern "C" fn(*mut u8, *mut RocHost);
 	\\
 	\\/// Payload header for `Box(function)`.
 	\\#[repr(C)]
@@ -650,17 +878,27 @@ generate_host_abi_types_rust =
 	\\}
 	\\
 	\\#[inline]
+	\\/// # Safety
+	\\/// `callable` must be a non-null Roc erased-callable data pointer.
 	\\pub unsafe fn roc_erased_callable_payload_ptr(callable: RocErasedCallable) -> *mut RocErasedCallablePayload {
 	\\    callable as *mut RocErasedCallablePayload
 	\\}
 	\\
 	\\#[inline]
+	\\/// # Safety
+	\\/// `callable` must be a non-null Roc erased-callable data pointer.
 	\\pub unsafe fn roc_erased_callable_capture_ptr(callable: RocErasedCallable) -> *mut u8 {
 	\\    callable.add(ROC_ERASED_CALLABLE_CAPTURE_OFFSET)
 	\\}
 	\\
+	\\/// Allocate a Roc erased callable payload.
+	\\///
+	\\/// # Safety
+	\\/// The caller must initialize and use the returned callable according to Roc's
+	\\/// erased-callable ABI. `callable_fn_ptr` and `on_drop` must have matching ABI
+	\\/// signatures for the captured payload.
 	\\pub unsafe fn roc_erased_callable_allocate(
-	\\    roc_ops: &RocOps,
+	\\    roc_host: &RocHost,
 	\\    callable_fn_ptr: RocErasedCallableFn,
 	\\    on_drop: Option<RocErasedCallableOnDrop>,
 	\\    capture_size: usize,
@@ -668,7 +906,7 @@ generate_host_abi_types_rust =
 	\\    let ptr_width = core::mem::size_of::<usize>();
 	\\    let alignment = core::cmp::max(ptr_width, ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT);
 	\\    let extra_bytes = core::cmp::max(ptr_width, ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT);
-	\\    let base = roc_ops.alloc(alignment, extra_bytes + roc_erased_callable_payload_size(capture_size)) as *mut u8;
+	\\    let base = roc_host.alloc(alignment, extra_bytes + roc_erased_callable_payload_size(capture_size)) as *mut u8;
 	\\    let data = base.add(extra_bytes);
 	\\    let rc = data.sub(core::mem::size_of::<isize>()) as *mut isize;
 	\\    *rc = 1;
@@ -677,48 +915,163 @@ generate_host_abi_types_rust =
 	\\    data
 	\\}
 	\\
-	\\/// The operations table passed from the host to the Roc runtime. The memory and
-	\\/// diagnostic callbacks take a leading `*mut RocOps` and pass their remaining arguments
-	\\/// and return value in registers per the platform C ABI. `roc_alloc`/`roc_realloc`
-	\\/// return the allocation (or null on OOM — a platform host aborts instead of returning
-	\\/// null).
-	\\#[repr(C)]
-	\\pub struct RocOps {
-	\\    pub env: *mut c_void,
-	\\    pub roc_alloc: extern "C" fn(*mut RocOps, usize, usize) -> *mut c_void,
-	\\    pub roc_dealloc: extern "C" fn(*mut RocOps, *mut c_void, usize),
-	\\    pub roc_realloc: extern "C" fn(*mut RocOps, *mut c_void, usize, usize) -> *mut c_void,
-	\\    pub roc_dbg: extern "C" fn(*mut RocOps, *const u8, usize),
-	\\    pub roc_expect_failed: extern "C" fn(*mut RocOps, *const u8, usize),
-	\\    pub roc_crashed: extern "C" fn(*mut RocOps, *const u8, usize),
-	\\    pub hosted_fns: HostedFunctions,
+
+## Generate self-contained RocBox refcount helpers.
+generate_roc_box_helpers_rust : Str
+generate_roc_box_helpers_rust =
+	\\/// Payload drop callback for a boxed value.
+	\\///
+	\\/// The callback receives the boxed payload data pointer and must recursively
+	\\/// decref any Roc refcounted values inside the payload. It must not free the
+	\\/// box allocation; `decref_box_with` and `free_box_with` free it after the callback.
+	\\pub type RocBoxPayloadDecref = extern "C" fn(*mut c_void, *mut RocHost);
+	\\
+	\\/// Increment the refcount of a boxed payload data pointer.
+	\\pub fn incref_box(data_ptr: RocBox, amount: isize) {
+	\\    let data = match box_data_ptr(data_ptr) {
+	\\        Some(ptr) => ptr,
+	\\        None => return,
+	\\    };
+	\\    let rc = box_refcount_ptr(data);
+	\\    unsafe {
+	\\        if (*rc).load(Ordering::Relaxed) == 0 {
+	\\            return; // REFCOUNT_STATIC_DATA
+	\\        }
+	\\        (*rc).fetch_add(amount, Ordering::Relaxed);
+	\\    }
 	\\}
 	\\
-	\\impl RocOps {
-	\\    /// Allocate memory with the given alignment and length.
-	\\    #[inline]
-	\\    pub unsafe fn alloc(&self, alignment: usize, length: usize) -> *mut c_void {
-	\\        let ops = self as *const RocOps as *mut RocOps;
-	\\        (self.roc_alloc)(ops, length, alignment)
+	\\/// Allocate a Roc box and return a pointer to its payload data.
+	\\pub fn allocate_box(
+	\\    payload_size: usize,
+	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
+	\\    roc_host: &RocHost,
+	\\) -> RocBox {
+	\\    let ptr_width = core::mem::size_of::<usize>();
+	\\    let required_space = if payload_contains_refcounted { 2 * ptr_width } else { ptr_width };
+	\\    let header_bytes = required_space.max(payload_alignment);
+	\\    let alloc_alignment = ptr_width.max(payload_alignment);
+	\\    let base = unsafe { roc_host.alloc(alloc_alignment, header_bytes + payload_size) } as *mut u8;
+	\\    let data = unsafe { base.add(header_bytes) };
+	\\    unsafe {
+	\\        let rc = data.sub(core::mem::size_of::<isize>()) as *mut isize;
+	\\        *rc = 1;
 	\\    }
+	\\    data as RocBox
+	\\}
 	\\
-	\\    /// Deallocate memory previously allocated with `alloc`.
-	\\    #[inline]
-	\\    pub unsafe fn dealloc(&self, ptr: *mut c_void, alignment: usize) {
-	\\        let ops = self as *const RocOps as *mut RocOps;
-	\\        (self.roc_dealloc)(ops, ptr, alignment);
+	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
+	\\pub fn decref_box(data_ptr: RocBox, roc_host: &RocHost) {
+	\\    decref_box_with(data_ptr, core::mem::align_of::<usize>(), None, roc_host);
+	\\}
+	\\
+	\\/// Increment a boxed function closure.
+	\\pub fn incref_erased_callable(callable: RocErasedCallable, amount: isize) {
+	\\    incref_box(callable as RocBox, amount);
+	\\}
+	\\
+	\\/// Decrement a boxed function closure and run its capture drop callback on final release.
+	\\pub fn decref_erased_callable(callable: RocErasedCallable, roc_host: &RocHost) {
+	\\    decref_box_with(
+	\\        callable as RocBox,
+	\\        ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT,
+	\\        Some(drop_erased_callable_payload),
+	\\        roc_host,
+	\\    );
+	\\}
+	\\
+	\\extern "C" fn drop_erased_callable_payload(data_ptr: *mut c_void, roc_host: *mut RocHost) {
+	\\    if data_ptr.is_null() || roc_host.is_null() {
+	\\        return;
 	\\    }
+	\\    unsafe {
+	\\        let callable = data_ptr as RocErasedCallable;
+	\\        let payload = roc_erased_callable_payload_ptr(callable);
+	\\        if let Some(on_drop) = (*payload).on_drop {
+	\\            on_drop(roc_erased_callable_capture_ptr(callable), roc_host);
+	\\        }
+	\\    }
+	\\}
 	\\
-	\\    /// Reallocate memory to a new size.
-	\\    #[inline]
-	\\    pub unsafe fn realloc(
-	\\        &self,
-	\\        old_ptr: *mut c_void,
-	\\        alignment: usize,
-	\\        new_length: usize,
-	\\    ) -> *mut c_void {
-	\\        let ops = self as *const RocOps as *mut RocOps;
-	\\        (self.roc_realloc)(ops, old_ptr, new_length, alignment)
+	\\/// Decrement a boxed payload and run payload teardown when this is the final ref.
+	\\pub fn decref_box_with(
+	\\    data_ptr: RocBox,
+	\\    payload_alignment: usize,
+	\\    payload_decref: Option<RocBoxPayloadDecref>,
+	\\    roc_host: &RocHost,
+	\\) {
+	\\    let data = match box_data_ptr(data_ptr) {
+	\\        Some(ptr) => ptr,
+	\\        None => return,
+	\\    };
+	\\    let rc = box_refcount_ptr(data);
+	\\    unsafe {
+	\\        if (*rc).load(Ordering::Relaxed) == 0 {
+	\\            return; // REFCOUNT_STATIC_DATA
+	\\        }
+	\\        let prev = (*rc).fetch_sub(1, Ordering::Relaxed);
+	\\        if prev == 1 {
+	\\            if let Some(callback) = payload_decref {
+	\\                callback(data_ptr, roc_host as *const RocHost as *mut RocHost);
+	\\            }
+	\\            free_box_allocation(data, payload_alignment, payload_decref.is_some(), roc_host);
+	\\        }
+	\\    }
+	\\}
+	\\
+	\\/// Free a boxed payload allocation immediately after running payload teardown.
+	\\pub fn free_box_with(
+	\\    data_ptr: RocBox,
+	\\    payload_alignment: usize,
+	\\    payload_decref: Option<RocBoxPayloadDecref>,
+	\\    roc_host: &RocHost,
+	\\) {
+	\\    let data = match box_data_ptr(data_ptr) {
+	\\        Some(ptr) => ptr,
+	\\        None => return,
+	\\    };
+	\\    if let Some(callback) = payload_decref {
+	\\        callback(data_ptr, roc_host as *const RocHost as *mut RocHost);
+	\\    }
+	\\    free_box_allocation(data, payload_alignment, payload_decref.is_some(), roc_host);
+	\\}
+	\\
+	\\/// Return true when a boxed payload data pointer has exactly one live ref.
+	\\pub fn is_unique_box(data_ptr: RocBox) -> bool {
+	\\    let data = match box_data_ptr(data_ptr) {
+	\\        Some(ptr) => ptr,
+	\\        None => return true,
+	\\    };
+	\\    let rc = box_refcount_ptr(data);
+	\\    unsafe { (*rc).load(Ordering::Relaxed) == 1 }
+	\\}
+	\\
+	\\fn box_data_ptr(data_ptr: RocBox) -> Option<*mut u8> {
+	\\    if data_ptr.is_null() {
+	\\        None
+	\\    } else {
+	\\        Some(data_ptr as *mut u8)
+	\\    }
+	\\}
+	\\
+	\\fn box_refcount_ptr(data: *mut u8) -> *mut AtomicIsize {
+	\\    unsafe { data.sub(core::mem::size_of::<isize>()) as *mut AtomicIsize }
+	\\}
+	\\
+	\\fn free_box_allocation(
+	\\    data: *mut u8,
+	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
+	\\    roc_host: &RocHost,
+	\\) {
+	\\    let ptr_width = core::mem::size_of::<usize>();
+	\\    let required_space = if payload_contains_refcounted { 2 * ptr_width } else { ptr_width };
+	\\    let header_bytes = required_space.max(payload_alignment);
+	\\    let alloc_alignment = ptr_width.max(payload_alignment);
+	\\    let base = unsafe { data.sub(header_bytes) } as *mut c_void;
+	\\    unsafe {
+	\\        roc_host.dealloc(base, alloc_alignment);
 	\\    }
 	\\}
 	\\
@@ -738,6 +1091,7 @@ generate_rust_roc_str =
 	\\///
 	\\/// This type is ABI-compatible with the Zig RocStr (24 bytes, `#[repr(C)]`).
 	\\#[repr(C)]
+	\\#[derive(Clone, Copy)]
 	\\pub struct RocStr {
 	\\    pub bytes: *mut u8,
 	\\    pub capacity_or_alloc_ptr: usize,
@@ -811,8 +1165,8 @@ generate_rust_roc_str =
 	\\        unsafe { core::str::from_utf8_unchecked(self.as_slice()) }
 	\\    }
 	\\
-	\\    /// Create a RocStr from a byte slice, using `roc_ops` for heap allocation if needed.
-	\\    pub fn from_slice(slice: &[u8], roc_ops: &RocOps) -> Self {
+	\\    /// Create a RocStr from a byte slice, using `roc_host` for heap allocation if needed.
+	\\    pub fn from_slice(slice: &[u8], roc_host: &RocHost) -> Self {
 	\\        if slice.len() < ROC_STR_SIZE {
 	\\            let mut result = Self::empty();
 	\\            let ptr = &mut result as *mut Self as *mut u8;
@@ -824,7 +1178,7 @@ generate_rust_roc_str =
 	\\        } else {
 	\\            let ptr_width = core::mem::size_of::<usize>();
 	\\            let total = ptr_width + slice.len();
-	\\            let base = unsafe { roc_ops.alloc(core::mem::align_of::<usize>(), total) };
+	\\            let base = unsafe { roc_host.alloc(core::mem::align_of::<usize>(), total) };
 	\\            let data_ptr = unsafe { (base as *mut u8).add(ptr_width) };
 	\\            // Write refcount = 1
 	\\            unsafe {
@@ -841,12 +1195,12 @@ generate_rust_roc_str =
 	\\    }
 	\\
 	\\    /// Create a RocStr from a `&str`.
-	\\    pub fn from_str(s: &str, roc_ops: &RocOps) -> Self {
-	\\        Self::from_slice(s.as_bytes(), roc_ops)
+	\\    pub fn from_str(s: &str, roc_host: &RocHost) -> Self {
+	\\        Self::from_slice(s.as_bytes(), roc_host)
 	\\    }
 	\\
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
-	\\    pub fn decref(&self, roc_ops: &RocOps) {
+	\\    pub fn decref(&self, roc_host: &RocHost) {
 	\\        if self.is_small_str() {
 	\\            return;
 	\\        }
@@ -855,17 +1209,50 @@ generate_rust_roc_str =
 	\\            return;
 	\\        }
 	\\        unsafe {
-	\\            let rc = (alloc_ptr as *mut isize).sub(1);
-	\\            let prev = *rc;
-	\\            if prev == 0 {
+	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
+	\\            if (*rc).load(Ordering::Relaxed) == 0 {
 	\\                return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
 	\\            }
-	\\            *rc = prev - 1;
+	\\            let prev = (*rc).fetch_sub(1, Ordering::Relaxed);
 	\\            if prev == 1 {
 	\\                let ptr_width = core::mem::size_of::<usize>();
 	\\                let base = (alloc_ptr as *mut u8).sub(ptr_width) as *mut c_void;
-	\\                roc_ops.dealloc(base, core::mem::align_of::<usize>());
+	\\                roc_host.dealloc(base, core::mem::align_of::<usize>());
 	\\            }
+	\\        }
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    pub fn incref(&self, amount: isize) {
+	\\        if self.is_small_str() {
+	\\            return;
+	\\        }
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
+	\\            return;
+	\\        }
+	\\        unsafe {
+	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
+	\\            if (*rc).load(Ordering::Relaxed) == 0 {
+	\\                return; // REFCOUNT_STATIC_DATA
+	\\            }
+	\\            (*rc).fetch_add(amount, Ordering::Relaxed);
+	\\        }
+	\\    }
+	\\
+	\\    /// Return true if this string has a reference count of exactly one.
+	\\    pub fn is_unique(&self) -> bool {
+	\\        if self.is_small_str() {
+	\\            return true;
+	\\        }
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
+	\\            return true;
+	\\        }
+	\\        unsafe {
+	\\            let rc = (alloc_ptr as *const AtomicIsize).sub(1);
+	\\            let count = (*rc).load(Ordering::Relaxed);
+	\\            count == 0 || count == 1
 	\\        }
 	\\    }
 	\\
@@ -901,6 +1288,7 @@ generate_rust_roc_list =
 	\\
 	\\/// Parameterized list constructor; use `RocList<T>` for refcounted elements.
 	\\#[repr(C)]
+	\\#[derive(Clone, Copy)]
 	\\pub struct RocListWith<T, const ELEMENTS_REFCOUNTED: bool> {
 	\\    pub elements: *mut T,
 	\\    pub length: usize,
@@ -955,6 +1343,21 @@ generate_rust_roc_list =
 	\\        }
 	\\    }
 	\\
+	\\    fn allocation_element_count(&self) -> usize {
+	\\        if self.is_seamless_slice() && ELEMENTS_REFCOUNTED {
+	\\            let alloc_ptr = self.get_allocation_ptr();
+	\\            if alloc_ptr.is_null() {
+	\\                return 0;
+	\\            }
+	\\            unsafe {
+	\\                let ptr = alloc_ptr as *const usize;
+	\\                *ptr.sub(2)
+	\\            }
+	\\        } else {
+	\\            self.length
+	\\        }
+	\\    }
+	\\
 	\\    /// Return the list elements as a slice.
 	\\    pub fn as_slice(&self) -> &[T] {
 	\\        if self.elements.is_null() {
@@ -964,8 +1367,17 @@ generate_rust_roc_list =
 	\\        }
 	\\    }
 	\\
+	\\    /// Return all items in the backing allocation, not just this slice.
+	\\    pub fn allocation_items(&self) -> &[T] {
+	\\        if self.elements.is_null() {
+	\\            &[]
+	\\        } else {
+	\\            unsafe { core::slice::from_raw_parts(self.get_allocation_ptr() as *const T, self.allocation_element_count()) }
+	\\        }
+	\\    }
+	\\
 	\\    /// Allocate a new list with space for `length` elements.
-	\\    pub fn allocate(length: usize, roc_ops: &RocOps) -> Self {
+	\\    pub fn allocate(length: usize, roc_host: &RocHost) -> Self {
 	\\        if length == 0 {
 	\\            return Self::empty();
 	\\        }
@@ -973,7 +1385,7 @@ generate_rust_roc_list =
 	\\        let header_bytes = Self::header_bytes();
 	\\        let data_bytes = length * core::mem::size_of::<T>();
 	\\        let total = data_bytes + header_bytes;
-	\\        let base = unsafe { roc_ops.alloc(align, total) };
+	\\        let base = unsafe { roc_host.alloc(align, total) };
 	\\        let data_ptr = unsafe { (base as *mut u8).add(header_bytes) };
 	\\        // Write refcount = 1
 	\\        unsafe {
@@ -988,11 +1400,11 @@ generate_rust_roc_list =
 	\\    }
 	\\
 	\\    /// Create a RocList from a slice, copying elements into a new allocation.
-	\\    pub fn from_slice(slice: &[T], roc_ops: &RocOps) -> Self where T: Copy {
+	\\    pub fn from_slice(slice: &[T], roc_host: &RocHost) -> Self where T: Copy {
 	\\        if slice.is_empty() {
 	\\            return Self::empty();
 	\\        }
-	\\        let list = Self::allocate(slice.len(), roc_ops);
+	\\        let list = Self::allocate(slice.len(), roc_host);
 	\\        unsafe {
 	\\            core::ptr::copy_nonoverlapping(
 	\\                slice.as_ptr(),
@@ -1004,7 +1416,7 @@ generate_rust_roc_list =
 	\\    }
 	\\
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
-	\\    pub fn decref(&self, roc_ops: &RocOps) {
+	\\    pub fn decref(&self, roc_host: &RocHost) {
 	\\        if self.elements.is_null() {
 	\\            return;
 	\\        }
@@ -1015,16 +1427,58 @@ generate_rust_roc_list =
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
 	\\        let header_bytes = Self::header_bytes();
 	\\        unsafe {
-	\\            let rc = (alloc_ptr as *mut isize).sub(1);
-	\\            let prev = *rc;
-	\\            if prev == 0 {
+	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
+	\\            if (*rc).load(Ordering::Relaxed) == 0 {
 	\\                return; // REFCOUNT_STATIC_DATA — elements are in read-only memory
 	\\            }
-	\\            *rc = prev - 1;
+	\\            let prev = (*rc).fetch_sub(1, Ordering::Relaxed);
 	\\            if prev == 1 {
 	\\                let base = alloc_ptr.sub(header_bytes) as *mut c_void;
-	\\                roc_ops.dealloc(base, align);
+	\\                roc_host.dealloc(base, align);
 	\\            }
+	\\        }
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    pub fn incref(&self, amount: isize) {
+	\\        if self.elements.is_null() {
+	\\            return;
+	\\        }
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
+	\\            return;
+	\\        }
+	\\        unsafe {
+	\\            let rc = (alloc_ptr as *mut AtomicIsize).sub(1);
+	\\            if (*rc).load(Ordering::Relaxed) == 0 {
+	\\                return; // REFCOUNT_STATIC_DATA
+	\\            }
+	\\            (*rc).fetch_add(amount, Ordering::Relaxed);
+	\\        }
+	\\    }
+	\\
+	\\    /// Return true if this list has a reference count of exactly one.
+	\\    pub fn is_unique(&self) -> bool {
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
+	\\            return true;
+	\\        }
+	\\        unsafe {
+	\\            let rc = (alloc_ptr as *const AtomicIsize).sub(1);
+	\\            let count = (*rc).load(Ordering::Relaxed);
+	\\            count == 0 || count == 1
+	\\        }
+	\\    }
+	\\
+	\\    /// Return true if this list's allocation has exactly one counted ref.
+	\\    pub fn has_one_ref(&self) -> bool {
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
+	\\            return false;
+	\\        }
+	\\        unsafe {
+	\\            let rc = (alloc_ptr as *const AtomicIsize).sub(1);
+	\\            (*rc).load(Ordering::Relaxed) == 1
 	\\        }
 	\\    }
 	\\}
@@ -1078,7 +1532,7 @@ generate_element_type_structs_rust = |type_table| {
 
 					$structs = Str.concat(
 						$structs,
-						"/// Element type for ${rec.name}\n#[repr(C)]\npub struct ${struct_name} {\n${$field_strs}}\n\n${assertions}",
+						"/// Element type for ${rec.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n${$field_strs}}\n\n${assertions}",
 					)
 				}
 			_ => {}
@@ -1093,24 +1547,30 @@ generate_tag_union_structs_rust : List(TypeRepr) -> Str
 generate_tag_union_structs_rust = |type_table| {
 	var $structs = ""
 	var $seen_names = []
+	var $type_id = 0
 
 	for type_repr in type_table {
 		match type_repr {
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) {
-					$seen_names = $seen_names.append(tu.name)
-					$structs = Str.concat($structs, generate_single_tag_union_rust(type_table, tu))
+				if List.len(tu.tags) >= 2 and tu.name != "" {
+					struct_name = tag_union_struct_name(type_table, $type_id, tu)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
+						$structs = Str.concat($structs, generate_single_tag_union_rust(type_table, $type_id, tu))
+					}
 				}
 			_ => {}
 		}
+
+		$type_id = $type_id + 1
 	}
 
 	$structs
 }
 
 ## Generate Rust code for a single multi-variant tag union.
-generate_single_tag_union_rust = |type_table, tu| {
-	struct_name = name_to_struct_name(tu.name)
+generate_single_tag_union_rust = |type_table, type_id, tu| {
+	struct_name = tag_union_struct_name(type_table, type_id, tu)
 	tag_count = List.len(tu.tags)
 	disc_type = disc_type_for_count(tag_count)
 
@@ -1179,7 +1639,7 @@ generate_single_tag_union_rust = |type_table, tu| {
 			""
 		}
 
-		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name}Tag {\n${$enum_variants}}\n\n/// Tag union: ${tu.name}\n#[repr(C)]\npub struct ${struct_name} {\n    pub payload: ${struct_name}Payload,\n    pub tag: ${struct_name}Tag,\n}\n\n#[repr(C)]\npub union ${struct_name}Payload {\n${$union_fields}}\n\n${assertions}"
+		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name}Tag {\n${$enum_variants}}\n\n/// Tag union: ${tu.name}\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name} {\n    pub payload: ${struct_name}Payload,\n    pub tag: ${struct_name}Tag,\n}\n\n#[repr(C)]\n#[derive(Clone, Copy)]\npub union ${struct_name}Payload {\n${$union_fields}}\n\n${assertions}"
 	}
 }
 
@@ -1206,7 +1666,7 @@ generate_all_record_structs_rust = |hosted_functions, type_table| {
 			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
 			$structs = Str.concat(
 				$structs,
-				"${doc}#[repr(C)]\npub struct ${struct_name}RetRecord {\n${$fields}}\n\n${assertions}",
+				"${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}RetRecord {\n${$fields}}\n\n${assertions}",
 			)
 		}
 	}
@@ -1255,7 +1715,7 @@ generate_args_struct_rust = |func, type_table| {
 		}
 
 		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-		return "${doc}#[repr(C)]\npub struct ${struct_name}Args {\n${$fields}}\n\n${assertions}"
+		return "${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}Args {\n${$fields}}\n\n${assertions}"
 	}
 
 	# Multi-arg or primitive args: use positional fields from type table
@@ -1272,100 +1732,544 @@ generate_args_struct_rust = |func, type_table| {
 
 	doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
 
-	"${doc}#[repr(C)]\npub struct ${struct_name}Args {\n${$positional_fields}}\n\n"
+	"${doc}#[repr(C)]\n#[derive(Clone, Copy)]\npub struct ${struct_name}Args {\n${$positional_fields}}\n\n"
 }
 
-## Generate the PlatformHostedFns struct type
-generate_platform_fns_struct_rust = |hosted_functions, type_table| {
-	var $fields = ""
+# =============================================================================
+# Generated Refcount Helpers
+# =============================================================================
 
-	for func in hosted_functions {
-		snake = name_to_snake(func.name)
-		fn_type = hosted_fn_type_rust(func, type_table)
-
-		$fields = Str.concat(
-			$fields,
-			"    pub ${snake}: ${fn_type}, // ${func.name}\n",
-		)
+indent_lines = |text, prefix| {
+	if text == "" {
+		return ""
 	}
 
-	"/// Implement this struct with your hosted function implementations.\n/// Refcounted hosted arguments are owned by the hosted function.\n/// Pass it to `hosted_functions()` to create the dispatch table.\npub struct PlatformHostedFns {\n${$fields}}\n"
+	lines = Str.split_on(text, "\n")
+	var $result = ""
+	for line in lines {
+		if line != "" {
+			$result = Str.concat($result, "${prefix}${line}\n")
+		}
+	}
+
+	$result
 }
 
-## Get the Rust function-pointer type for a hosted function, in its natural C signature.
-##
-## A leading `*mut RocOps` is present only when the function allocates or frees Roc-managed
-## memory (i.e. when its return or any argument is a heap type). Each Roc argument becomes a
-## by-value parameter of its natural Rust type; the return is the natural Rust return type
-## (unit `()` is elided, so the function returns nothing). This matches exactly what the
-## compiler emits at the call site.
-hosted_fn_type_rust = |func, type_table| {
-	needs_ops =
-		is_type_refcounted(type_table, func.ret_type_id)
-		or List.any(func.arg_type_ids, |id| is_type_refcounted(type_table, id))
+box_payload_decref_name_rust = |inner_id| "decref_box_payload_type${U64.to_str(inner_id)}"
 
-	var $params = if needs_ops {
-		"*mut RocOps"
-	} else {
-		""
-	}
+missing_type_compile_error_rust = |type_id, mode| {
+	"    compile_error!(\"missing glue type information for recursive ${mode} of type id ${U64.to_str(type_id)}\");\n"
+}
 
-	for arg_type_id in func.arg_type_ids {
-		# Unit (zero-sized) arguments are not passed.
-		is_unit =
-			match List.get(type_table, arg_type_id) {
-				Ok(RocUnit) => Bool.True
-				_ => Bool.False
+decref_helper_name_for_type_id_rust = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(RocRecord(rec)) =>
+			if rec.name == "" {
+				""
+			} else {
+				"decref_${name_to_rust_fn_suffix(rec.name)}"
 			}
-		if !is_unit {
+		Ok(RocTagUnion(tu)) =>
+			if List.len(tu.tags) >= 2 and tu.name != "" {
+				"decref_${name_to_rust_fn_suffix(tag_union_struct_name(type_table, type_id, tu))}"
+			} else {
+				""
+			}
+		_ => ""
+	}
+}
+
+incref_helper_name_for_type_id_rust = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(RocRecord(rec)) =>
+			if rec.name == "" {
+				""
+			} else {
+				"incref_${name_to_rust_fn_suffix(rec.name)}"
+			}
+		Ok(RocTagUnion(tu)) =>
+			if List.len(tu.tags) >= 2 and tu.name != "" {
+				"incref_${name_to_rust_fn_suffix(tag_union_struct_name(type_table, type_id, tu))}"
+			} else {
+				""
+			}
+		_ => ""
+	}
+}
+
+decref_stmt_for_type_id_rust = |type_table, type_id, expr| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => decref_stmt_for_repr_rust(type_table, type_id, type_repr, expr)
+		Err(_) => missing_type_compile_error_rust(type_id, "decref")
+	}
+}
+
+decref_stmt_for_repr_rust = |type_table, type_id, type_repr, expr| {
+	match type_repr {
+		RocStr => "    ${expr}.decref(roc_host);\n"
+		RocList(elem_id) => {
+			elem_stmt = decref_stmt_for_type_id_rust(type_table, elem_id, "item")
+			if elem_stmt == "" {
+				"    {\n        let list = ${expr};\n        list.decref(roc_host);\n    }\n"
+			} else {
+				"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item in list.allocation_items().iter().copied() {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+			}
+		}
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "    decref_erased_callable(${expr}, roc_host);\n"
+				Ok(_) => {
+					inner_rust = type_id_to_rust(type_table, inner_id)
+					if inner_rust == "RocBox" or inner_rust == "*mut c_void" {
+						"    decref_box(${expr} as RocBox, roc_host);\n"
+					} else if is_type_refcounted(type_table, inner_id) {
+						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), Some(${box_payload_decref_name_rust(inner_id)}), roc_host);\n"
+					} else {
+						"    decref_box(${expr} as RocBox, roc_host);\n"
+					}
+				}
+				Err(_) => missing_type_compile_error_rust(inner_id, "boxed-payload decref")
+			}
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				helper = decref_helper_name_for_type_id_rust(type_table, type_id)
+				if helper == "" {
+					""
+				} else {
+					"    ${helper}(${expr}, roc_host);\n"
+				}
+			}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => decref_stmt_for_type_id_rust(type_table, payload_id, expr)
+							_ => ""
+						}
+					_ => ""
+				}
+			} else {
+				helper = decref_helper_name_for_type_id_rust(type_table, type_id)
+				if helper == "" {
+					""
+				} else {
+					"    ${helper}(${expr}, roc_host);\n"
+				}
+			}
+		_ => ""
+	}
+}
+
+incref_stmt_for_type_id_rust = |type_table, type_id, expr| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => incref_stmt_for_repr_rust(type_table, type_id, type_repr, expr)
+		Err(_) => missing_type_compile_error_rust(type_id, "incref")
+	}
+}
+
+incref_stmt_for_repr_rust = |type_table, type_id, type_repr, expr| {
+	match type_repr {
+		RocStr => "    ${expr}.incref(amount);\n"
+		RocList(_) => "    ${expr}.incref(amount);\n"
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "    incref_erased_callable(${expr}, amount);\n"
+				Ok(_) => "    incref_box(${expr} as RocBox, amount);\n"
+				Err(_) => missing_type_compile_error_rust(inner_id, "boxed-payload incref")
+			}
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				helper = incref_helper_name_for_type_id_rust(type_table, type_id)
+				if helper == "" {
+					""
+				} else {
+					"    ${helper}(${expr}, amount);\n"
+				}
+			}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => incref_stmt_for_type_id_rust(type_table, payload_id, expr)
+							_ => ""
+						}
+					_ => ""
+				}
+			} else {
+				helper = incref_helper_name_for_type_id_rust(type_table, type_id)
+				if helper == "" {
+					""
+				} else {
+					"    ${helper}(${expr}, amount);\n"
+				}
+			}
+		_ => ""
+	}
+}
+
+generate_record_refcount_helpers_rust = |type_table, rec| {
+	struct_name = name_to_struct_name(rec.name)
+	decref_name = "decref_${name_to_rust_fn_suffix(rec.name)}"
+	incref_name = "incref_${name_to_rust_fn_suffix(rec.name)}"
+	var $decref_body = ""
+	var $incref_body = ""
+
+	for field in rec.fields {
+		if !field.is_padding {
+			field_expr = "value.${name_to_rust_field_ident(field.name)}"
+			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, field.type_id, field_expr))
+			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id_rust(type_table, field.type_id, field_expr))
+		}
+	}
+
+	if $decref_body == "" {
+		$decref_body = "    let _ = value;\n    let _ = roc_host;\n"
+	}
+	if $incref_body == "" {
+		$incref_body = "    let _ = value;\n    let _ = amount;\n"
+	}
+
+	"/// Recursively decrement Roc-owned fields in ${struct_name}.\npub fn ${decref_name}(value: ${struct_name}, roc_host: &RocHost) {\n${$decref_body}}\n\n/// Increment Roc-owned fields in ${struct_name}.\npub fn ${incref_name}(value: ${struct_name}, amount: isize) {\n${$incref_body}}\n\n"
+}
+
+generate_tag_payload_refcount_branch_rust = |type_table, struct_name, tag, mode| {
+	snake = to_lower_snake_case(tag.name)
+	variant = capitalize_first(tag.name)
+	if List.is_empty(tag.payload) {
+		return "        ${struct_name}Tag::${variant} => {},\n"
+	}
+
+	if List.len(tag.payload) == 1 {
+		body =
+			match List.first(tag.payload) {
+				Ok(payload_id) => {
+					payload_expr = "payload"
+					if mode == "decref" {
+						decref_stmt_for_type_id_rust(type_table, payload_id, payload_expr)
+					} else {
+						incref_stmt_for_type_id_rust(type_table, payload_id, payload_expr)
+					}
+				}
+				_ => ""
+			}
+
+		if body == "" {
+			"        ${struct_name}Tag::${variant} => {},\n"
+		} else {
+			"        ${struct_name}Tag::${variant} => unsafe {\n            let payload = core::mem::ManuallyDrop::into_inner(value.payload.${snake});\n${indent_lines(body, "        ")}        },\n"
+		}
+	} else {
+		var $body = "            let payload = core::mem::ManuallyDrop::into_inner(value.payload.${snake});\n"
+		var $idx = 0
+		for payload_id in tag.payload {
+			field_expr = "payload._${U64.to_str($idx)}"
+			stmt = if mode == "decref" {
+				decref_stmt_for_type_id_rust(type_table, payload_id, field_expr)
+			} else {
+				incref_stmt_for_type_id_rust(type_table, payload_id, field_expr)
+			}
+			$body = Str.concat($body, indent_lines(stmt, "        "))
+			$idx = $idx + 1
+		}
+
+		"        ${struct_name}Tag::${variant} => unsafe {\n${$body}        },\n"
+	}
+}
+
+generate_tag_union_refcount_helpers_rust = |type_table, type_id, tu| {
+	struct_name = tag_union_struct_name(type_table, type_id, tu)
+	decref_name = "decref_${name_to_rust_fn_suffix(struct_name)}"
+	incref_name = "incref_${name_to_rust_fn_suffix(struct_name)}"
+	var $decref_branches = ""
+	var $incref_branches = ""
+	for tag in tu.tags {
+		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, struct_name, tag, "decref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, struct_name, tag, "incref"))
+	}
+
+	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn ${decref_name}(value: ${struct_name}, roc_host: &RocHost) {\n    let _ = roc_host;\n    match value.tag {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn ${incref_name}(value: ${struct_name}, amount: isize) {\n    let _ = amount;\n    match value.tag {\n${$incref_branches}    }\n}\n\n"
+}
+
+generate_box_payload_decref_helpers_rust = |type_table| {
+	var $helpers = ""
+	var $seen_inner_ids = []
+
+	for type_repr in type_table {
+		match type_repr {
+			RocBox(inner_id) => {
+				if !(List.contains($seen_inner_ids, inner_id)) {
+					$seen_inner_ids = $seen_inner_ids.append(inner_id)
+					match List.get(type_table, inner_id) {
+						Ok(RocFunction(_)) => {}
+						Ok(_) => {
+							inner_rust = type_id_to_rust(type_table, inner_id)
+							if inner_rust != "RocBox" and inner_rust != "*mut c_void" and is_type_refcounted(type_table, inner_id) {
+								stmt = decref_stmt_for_type_id_rust(type_table, inner_id, "payload")
+								$helpers = Str.concat(
+									$helpers,
+									"extern \"C\" fn ${box_payload_decref_name_rust(inner_id)}(data_ptr: *mut c_void, roc_host: *mut RocHost) {\n    if data_ptr.is_null() || roc_host.is_null() {\n        return;\n    }\n    let payload = unsafe { *(data_ptr as *const ${inner_rust}) };\n    let roc_host = unsafe { &*roc_host };\n${stmt}}\n\n",
+								)
+							}
+						}
+						Err(_) => {
+							$helpers = Str.concat(
+								$helpers,
+								"extern \"C\" fn ${box_payload_decref_name_rust(inner_id)}(_data_ptr: *mut c_void, _roc_host: *mut RocHost) {\n    compile_error!(\"missing glue type information for boxed payload type id ${U64.to_str(inner_id)}\");\n}\n\n",
+							)
+						}
+					}
+				}
+			}
+			_ => {}
+		}
+	}
+
+	$helpers
+}
+
+generate_refcount_helpers_rust = |type_table| {
+	var $helpers = "// =============================================================================\n// Generated Refcount Helpers\n// =============================================================================\n\n"
+	var $seen_names = []
+	var $type_id = 0
+
+	for type_repr in type_table {
+		match type_repr {
+			RocRecord(rec) =>
+				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
+					$seen_names = $seen_names.append(rec.name)
+					$helpers = Str.concat($helpers, generate_record_refcount_helpers_rust(type_table, rec))
+				}
+			RocTagUnion(tu) =>
+				if List.len(tu.tags) >= 2 and tu.name != "" {
+					struct_name = tag_union_struct_name(type_table, $type_id, tu)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
+						$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers_rust(type_table, $type_id, tu))
+					}
+				}
+			_ => {}
+		}
+
+		$type_id = $type_id + 1
+	}
+
+	$helpers.concat(generate_box_payload_decref_helpers_rust(type_table))
+}
+
+## Check whether a type is the zero-sized Roc unit type.
+is_unit_type_id_rust = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(RocUnit) => Bool.True
+		_ => Bool.False
+	}
+}
+
+## Check whether a type is an explicitly anonymous record shape.
+is_anonymous_record_type_id_rust = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => is_anonymous_record_repr_rust(type_table, type_repr)
+		Err(_) => Bool.False
+	}
+}
+
+is_anonymous_record_repr_rust = |type_table, type_repr| {
+	match type_repr {
+		RocRecord(rec) => rec.anonymous
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => is_anonymous_record_type_id_rust(type_table, payload_id)
+							_ => Bool.False
+						}
+					_ => Bool.False
+				}
+			} else {
+				Bool.False
+			}
+		_ => Bool.False
+	}
+}
+
+## Build a natural C ABI parameter list from Roc function argument type IDs.
+direct_param_list_rust = |type_table, arg_type_ids| {
+	var $params = ""
+	var $idx = 0
+
+	for arg_type_id in arg_type_ids {
+		if !is_unit_type_id_rust(type_table, arg_type_id) {
 			arg_rust = type_id_to_rust(type_table, arg_type_id)
 			sep = if $params == "" {
 				""
 			} else {
 				", "
 			}
-			$params = "${$params}${sep}${arg_rust}"
+			$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_rust}"
+			$idx = $idx + 1
 		}
 	}
 
-	rust_ret = type_id_to_rust(type_table, func.ret_type_id)
-	ret_suffix = if rust_ret == "()" {
-		""
-	} else {
-		" -> ${rust_ret}"
-	}
-
-	"extern \"C\" fn(${$params})${ret_suffix}"
+	$params
 }
 
-## Generate the hosted_functions() helper that builds the dispatch table
-generate_hosted_functions_helper_rust = |hosted_functions| {
-	var $entries = ""
+## Build a hosted symbol parameter list, using the generated Args wrapper for
+## anonymous single-record arguments so direct-symbol glue stays readable.
+direct_hosted_param_list_rust = |type_table, func| {
+	use_args_wrapper =
+		if List.len(func.arg_type_ids) == 1 {
+			match List.first(func.arg_type_ids) {
+				Ok(arg_id) => is_anonymous_record_type_id_rust(type_table, arg_id)
+				Err(_) => Bool.False
+			}
+		} else {
+			Bool.False
+		}
+
+	var $params = ""
+	var $idx = 0
+
+	for arg_type_id in func.arg_type_ids {
+		if !is_unit_type_id_rust(type_table, arg_type_id) {
+			arg_rust = if use_args_wrapper {
+				"${name_to_struct_name(func.name)}Args"
+			} else {
+				type_id_to_rust(type_table, arg_type_id)
+			}
+			sep = if $params == "" {
+				""
+			} else {
+				", "
+			}
+			$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_rust}"
+			$idx = $idx + 1
+		}
+	}
+
+	$params
+}
+
+# =============================================================================
+# Direct ABI Declarations
+# =============================================================================
+
+## Generate direct extern declarations for the fixed runtime symbols every host defines.
+generate_runtime_symbol_externs_rust : Str
+generate_runtime_symbol_externs_rust =
+	\\// =============================================================================
+	\\// Runtime Symbols
+	\\//
+	\\// The host defines these linker symbols. Compiled Roc code calls them directly.
+	\\// =============================================================================
+	\\
+	\\#[allow(improper_ctypes)]
+	\\unsafe extern "C" {
+	\\    pub fn roc_alloc(length: usize, alignment: usize) -> *mut c_void;
+	\\    pub fn roc_dealloc(ptr: *mut c_void, alignment: usize);
+	\\    pub fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void;
+	\\    pub fn roc_dbg(bytes: *const u8, len: usize);
+	\\    pub fn roc_expect_failed(bytes: *const u8, len: usize);
+	\\    pub fn roc_crashed(bytes: *const u8, len: usize);
+	\\}
+	\\
+
+## Generate direct extern declarations for hosted symbols.
+generate_hosted_symbol_externs_rust = |hosted_functions, type_table| {
+	if List.is_empty(hosted_functions) {
+		return ""
+	}
+
+	var $result = "// =============================================================================\n// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n// =============================================================================\n\n#[allow(improper_ctypes)]\nunsafe extern \"C\" {\n"
 
 	for func in hosted_functions {
-		snake = name_to_snake(func.name)
-		$entries = Str.concat(
-			$entries,
-			"        unsafe { core::mem::transmute(fns.${snake} as *const ()) }, // ${func.name} (index ${U64.to_str(func.index)})\n",
+		params = direct_hosted_param_list_rust(type_table, func)
+		ret_rust = type_id_to_rust(type_table, func.ret_type_id)
+		ret_suffix = if ret_rust == "()" {
+			""
+		} else {
+			" -> ${ret_rust}"
+		}
+
+		$result = Str.concat(
+			$result,
+			"    /// Hosted symbol for ${func.name}\n    /// Roc signature: ${func.type_str}\n    pub fn ${func.ffi_symbol}(${params})${ret_suffix};\n\n",
 		)
 	}
 
-	"/// Create a HostedFunctions dispatch table from your implementations.\n///\n/// The returned `HostedFunctions` contains a pointer to a leaked heap allocation\n/// that lives for the remainder of the program. This is intentional — the dispatch\n/// table is typically created once at startup.\n///\n/// # Safety\n/// The function pointers in `fns` must have the correct ABI signatures.\npub fn hosted_functions(fns: &PlatformHostedFns) -> HostedFunctions {\n    let ptrs: &'static [HostedFn] = Box::leak(Box::new([\n${$entries}    ]));\n\n    HostedFunctions {\n        count: ptrs.len() as u32,\n        fns: ptrs.as_ptr(),\n    }\n}\n"
+	Str.concat($result, "}\n")
 }
 
-## Generate the DefaultAllocators using std::alloc::Layout
-generate_default_allocators_rust : Str
-generate_default_allocators_rust =
-	\\/// Default memory management functions for Roc platforms.
+generate_provided_decl_rust = |entry, type_table, type_repr| {
+	match type_repr {
+		RocFunction(func) => {
+			params = direct_param_list_rust(type_table, func.args)
+			ret_rust = type_id_to_rust(type_table, func.ret)
+			ret_suffix = if ret_rust == "()" {
+				""
+			} else {
+				" -> ${ret_rust}"
+			}
+			"    /// Entrypoint: ${entry.name}\n    pub fn ${entry.ffi_symbol}(${params})${ret_suffix};\n\n"
+		}
+		_ => {
+			value_rust = type_repr_to_rust(type_table, type_repr)
+			"    /// Static provided value: ${entry.name}\n    pub static ${entry.ffi_symbol}: ${value_rust};\n\n"
+		}
+	}
+}
+
+## Generate extern declarations for entrypoints from the provides clause.
+generate_entrypoint_externs_rust = |provides_list, type_table| {
+	if List.is_empty(provides_list) {
+		return ""
+	}
+
+	var $result = "// =============================================================================\n// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n// =============================================================================\n\n#[allow(improper_ctypes)]\nunsafe extern \"C\" {\n"
+
+	for entry in provides_list {
+		match List.get(type_table, entry.type_id) {
+			Ok(type_repr) => {
+				$result = Str.concat($result, generate_provided_decl_rust(entry, type_table, type_repr))
+			}
+			Err(_) => {
+				$result = Str.concat($result, "    compile_error!(\"missing glue type information for provided symbol ${entry.ffi_symbol}\");\n\n")
+			}
+		}
+	}
+
+	Str.concat($result, "}\n")
+}
+
+# =============================================================================
+# Host Helper Utilities
+# =============================================================================
+
+## Generate DefaultAllocators, DefaultHandlers, and make_roc_host helpers.
+generate_host_helpers_rust : Str
+generate_host_helpers_rust =
+	generate_default_allocators_direct_rust
+		.concat("\n")
+		.concat(generate_default_handlers_direct_rust)
+		.concat("\n")
+		.concat(generate_make_roc_host_rust)
+
+generate_default_allocators_direct_rust : Str
+generate_default_allocators_direct_rust =
+	\\/// Default memory management functions for Roc platform helpers.
 	\\///
 	\\/// Memory layout: each allocation prepends size metadata so that dealloc/realloc
-	\\/// can recover the original allocation size (required because `roc_dealloc` does
-	\\/// not receive a length parameter).
+	\\/// can recover the original allocation size because `roc_dealloc` receives no length.
 	\\pub struct DefaultAllocators;
 	\\
 	\\impl DefaultAllocators {
-	\\    /// Allocate memory for the Roc runtime using the global allocator.
-	\\    pub extern "C" fn roc_alloc(_roc_ops: *mut RocOps, length: usize, alignment: usize) -> *mut c_void {
+	\\    /// Allocate memory using the Rust global allocator.
+	\\    pub extern "C" fn roc_alloc(_roc_host: *mut RocHost, length: usize, alignment: usize) -> *mut c_void {
 	\\        unsafe {
 	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
@@ -1379,7 +2283,6 @@ generate_default_allocators_rust =
 	\\                std::process::exit(1);
 	\\            }
 	\\
-	\\            // Store total size immediately before the user data pointer
 	\\            let size_ptr = base_ptr.add(size_storage_bytes).sub(core::mem::size_of::<usize>()) as *mut usize;
 	\\            *size_ptr = total_size;
 	\\
@@ -1388,7 +2291,7 @@ generate_default_allocators_rust =
 	\\    }
 	\\
 	\\    /// Free memory previously allocated by `roc_alloc`.
-	\\    pub extern "C" fn roc_dealloc(_roc_ops: *mut RocOps, ptr: *mut c_void, alignment: usize) {
+	\\    pub extern "C" fn roc_dealloc(_roc_host: *mut RocHost, ptr: *mut c_void, alignment: usize) {
 	\\        unsafe {
 	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
@@ -1403,18 +2306,16 @@ generate_default_allocators_rust =
 	\\        }
 	\\    }
 	\\
-	\\    /// Reallocate memory, potentially extending the existing allocation in-place.
-	\\    pub extern "C" fn roc_realloc(_roc_ops: *mut RocOps, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+	\\    /// Reallocate memory, preserving existing user data.
+	\\    pub extern "C" fn roc_realloc(_roc_host: *mut RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
 	\\        unsafe {
 	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
 	\\
-	\\            // Read old size from metadata
 	\\            let old_size_ptr = (ptr as *const u8).sub(core::mem::size_of::<usize>()) as *const usize;
 	\\            let old_total_size = *old_size_ptr;
 	\\            let old_base_ptr = (ptr as *mut u8).sub(size_storage_bytes);
 	\\
-	\\            // Realloc (may extend in-place without copying)
 	\\            let new_total_size = new_length + size_storage_bytes;
 	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let old_layout = Layout::from_size_align_unchecked(old_total_size, min_alignment);
@@ -1424,7 +2325,6 @@ generate_default_allocators_rust =
 	\\                std::process::exit(1);
 	\\            }
 	\\
-	\\            // Store new size and return user pointer
 	\\            let new_user_ptr = new_base_ptr.add(size_storage_bytes);
 	\\            let new_size_ptr = new_user_ptr.sub(core::mem::size_of::<usize>()) as *mut usize;
 	\\            *new_size_ptr = new_total_size;
@@ -1434,68 +2334,50 @@ generate_default_allocators_rust =
 	\\}
 	\\
 
-## Generate the DefaultHandlers
-generate_default_handlers_rust : Str
-generate_default_handlers_rust =
+generate_default_handlers_direct_rust : Str
+generate_default_handlers_direct_rust =
 	\\/// Default handlers for dbg, expect-failed, and crash.
-	\\///
-	\\/// These print to stderr. Suitable for most platform hosts.
 	\\pub struct DefaultHandlers;
 	\\
 	\\impl DefaultHandlers {
 	\\    /// Print a `dbg` expression to stderr.
-	\\    pub extern "C" fn roc_dbg(_roc_ops: *mut RocOps, bytes: *const u8, len: usize) {
+	\\    pub extern "C" fn roc_dbg(_roc_host: *mut RocHost, bytes: *const u8, len: usize) {
 	\\        unsafe {
 	\\            let msg = core::slice::from_raw_parts(bytes, len);
-	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
-	\\            eprintln!("\\x1b[36m[ROC DBG]\\x1b[0m {}", msg);
+	\\            eprintln!("[ROC DBG] {}", msg);
 	\\        }
 	\\    }
 	\\
 	\\    /// Print a failed `expect` to stderr.
-	\\    pub extern "C" fn roc_expect_failed(_roc_ops: *mut RocOps, bytes: *const u8, len: usize) {
+	\\    pub extern "C" fn roc_expect_failed(_roc_host: *mut RocHost, bytes: *const u8, len: usize) {
 	\\        unsafe {
 	\\            let msg = core::slice::from_raw_parts(bytes, len);
-	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
-	\\            eprintln!("\\x1b[33m[ROC EXPECT]\\x1b[0m {}", msg);
+	\\            eprintln!("[ROC EXPECT] {}", msg);
 	\\        }
 	\\    }
 	\\
 	\\    /// Print a `crash` message to stderr and exit.
-	\\    pub extern "C" fn roc_crashed(_roc_ops: *mut RocOps, bytes: *const u8, len: usize) {
+	\\    pub extern "C" fn roc_crashed(_roc_host: *mut RocHost, bytes: *const u8, len: usize) {
 	\\        unsafe {
 	\\            let msg = core::slice::from_raw_parts(bytes, len);
-	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
-	\\            eprintln!("\\x1b[31m[ROC CRASHED]\\x1b[0m {}", msg);
+	\\            eprintln!("[ROC CRASHED] {}", msg);
 	\\            std::process::exit(1);
 	\\        }
 	\\    }
 	\\}
 	\\
 
-## Generate the make_roc_ops convenience function
-generate_make_roc_ops_rust : Str
-generate_make_roc_ops_rust =
-	\\/// Create a RocOps struct with default memory management and error handlers.
+generate_make_roc_host_rust : Str
+generate_make_roc_host_rust =
+	\\/// Create a host-internal helper context with default memory management and handlers.
 	\\///
-	\\/// This is a convenience function that wires together `DefaultAllocators`,
-	\\/// `DefaultHandlers`, and the provided hosted functions into a ready-to-use `RocOps`.
-	\\///
-	\\/// # Arguments
-	\\///
-	\\/// * `env` - A pointer to your host environment (or null if unused)
-	\\/// * `hosted_fns` - The hosted function dispatch table from `hosted_functions()`
-	\\///
-	\\/// # Example
-	\\///
-	\\/// ```ignore
-	\\/// let roc_ops = make_roc_ops(core::ptr::null_mut(), hosted_functions(&fns));
-	\\/// ```
-	\\pub fn make_roc_ops(env: *mut c_void, hosted_fns: HostedFunctions) -> RocOps {
-	\\    RocOps {
+	\\/// This is only for helper functions in this generated file. It is not passed to
+	\\/// compiled Roc code, which uses the direct symbol ABI declared above.
+	\\pub fn make_roc_host(env: *mut c_void) -> RocHost {
+	\\    RocHost {
 	\\        env,
 	\\        roc_alloc: DefaultAllocators::roc_alloc,
 	\\        roc_dealloc: DefaultAllocators::roc_dealloc,
@@ -1503,7 +2385,6 @@ generate_make_roc_ops_rust =
 	\\        roc_dbg: DefaultHandlers::roc_dbg,
 	\\        roc_expect_failed: DefaultHandlers::roc_expect_failed,
 	\\        roc_crashed: DefaultHandlers::roc_crashed,
-	\\        hosted_fns,
 	\\    }
 	\\}
 	\\
