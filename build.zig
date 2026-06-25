@@ -5055,14 +5055,65 @@ fn add_fuzz_target(
 
         const fuzz_exe = if (target.result.os.tag == .macos)
             addMacosAflFuzzExe(b, target, .ReleaseSafe, use_system_afl, fuzz_obj) orelse return
-        else blk: {
-            const afl = b.lazyImport(@This(), "afl_kit") orelse return;
-            break :blk afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
-        };
+        else
+            addAflFuzzExe(b, target, .ReleaseSafe, use_system_afl, fuzz_obj) orelse return;
         const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
         fuzz_step.dependOn(&install_fuzz.step);
         b.getInstallStep().dependOn(&install_fuzz.step);
     }
+}
+
+fn addAflFuzzExe(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    use_system_afl: bool,
+    fuzz_obj: *Step.Compile,
+) ?std.Build.LazyPath {
+    const afl_kit = b.lazyDependency("afl_kit", .{}) orelse return null;
+
+    var run_afl_cc: *Step.Run = undefined;
+    if (use_system_afl) {
+        run_afl_cc = b.addSystemCommand(&.{
+            b.findProgram(&.{"afl-cc"}, &.{}) catch @panic("Could not find 'afl-cc', which is required to build"),
+            "-O3",
+        });
+    } else {
+        const afl = afl_kit.builder.lazyDependency("AFLplusplus", .{
+            .target = target,
+            .optimize = optimize,
+            .@"llvm-config-path" = &[_][]const u8{},
+        }) orelse return null;
+
+        const install_tools = b.addInstallDirectory(.{
+            .source_dir = std.Build.LazyPath{
+                .cwd_relative = afl.builder.install_path,
+            },
+            .install_dir = .prefix,
+            .install_subdir = "AFLplusplus",
+        });
+
+        install_tools.step.dependOn(afl.builder.getInstallStep());
+        run_afl_cc = b.addSystemCommand(&.{
+            b.pathJoin(&.{ afl.builder.exe_dir, "afl-cc" }),
+            "-O3",
+        });
+        run_afl_cc.step.dependOn(&afl.builder.top_level_steps.get("llvm_exes").?.step);
+        run_afl_cc.step.dependOn(&install_tools.step);
+    }
+
+    // Keep the object output requested so Zig materializes the LLVM bitcode output.
+    _ = fuzz_obj.getEmittedBin();
+
+    run_afl_cc.addArg("-o");
+    const fuzz_exe = run_afl_cc.addOutputFileArg(fuzz_obj.name);
+    run_afl_cc.addFileArg(afl_kit.path("afl.c"));
+    run_afl_cc.addFileArg(fuzz_obj.getEmittedLlvmBc());
+    // ELF linkers resolve libraries left-to-right, so math libraries must follow the bitcode.
+    run_afl_cc.addArg("-lm");
+    run_afl_cc.addArg("-lquadmath");
+
+    return fuzz_exe;
 }
 
 fn addMacosAflFuzzExe(
