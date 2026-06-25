@@ -28,6 +28,28 @@ test "getTestCacheDir returns test subdirectory" {
     try testing.expect(std.mem.startsWith(u8, test_dir, version_dir));
 }
 
+test "getCirCacheDir returns cir subdirectory under the version dir" {
+    const allocator = testing.allocator;
+    const config = CacheConfig{
+        .cache_dir = "/tmp/roc_test_cache",
+        .roc_ctx = CoreCtx.testing(testing.allocator, testing.allocator),
+    };
+
+    const version_dir = try config.getVersionCacheDir(allocator);
+    defer allocator.free(version_dir);
+
+    const cir_dir = try config.getCirCacheDir(allocator);
+    defer allocator.free(cir_dir);
+
+    // Should be a sibling of the checked-artifact ("mod") cache, ending in "cir".
+    try testing.expect(std.mem.endsWith(u8, cir_dir, "/cir") or std.mem.endsWith(u8, cir_dir, "\\cir"));
+    try testing.expect(std.mem.startsWith(u8, cir_dir, version_dir));
+
+    const mod_dir = try config.getCheckedArtifactCacheDir(allocator);
+    defer allocator.free(mod_dir);
+    try testing.expect(!std.mem.eql(u8, cir_dir, mod_dir));
+}
+
 test "computeCacheFilePath uses subdirectory splitting" {
     const allocator = testing.allocator;
     const filesystem = CoreCtx.testing(std.testing.allocator, std.testing.allocator);
