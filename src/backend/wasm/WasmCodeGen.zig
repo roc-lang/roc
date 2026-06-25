@@ -452,6 +452,9 @@ stack_pointer_symbol: ?SymbolIndex = null,
 indirect_table_symbol: ?SymbolIndex = null,
 /// Whether generated static-data addresses must remain relocatable for object output.
 relocatable_object: bool = false,
+/// Whether final in-memory codegen should still emit relocation edges for
+/// static-data addresses so final DCE can trace data liveness explicitly.
+track_static_data_addresses: bool = false,
 pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore) Self {
     return .{
         .allocator = allocator,
@@ -511,6 +514,13 @@ pub fn configureTableReloc(self: *Self, symbol: SymbolIndex) void {
 /// Configure generated data-address operands for relocatable object output.
 pub fn configureRelocatableObject(self: *Self) void {
     self.relocatable_object = true;
+}
+
+/// Configure final in-memory codegen to keep explicit relocation edges from
+/// instructions to static data. `resolveRelocations()` still patches the known
+/// final address before encode; the relocation entry exists for DCE liveness.
+pub fn configureStaticDataAddressTracking(self: *Self) void {
+    self.track_static_data_addresses = true;
 }
 
 pub fn deinit(self: *Self) void {
@@ -1058,7 +1068,7 @@ fn externalCallsUseRelocs(self: *const Self) bool {
 
 fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    if (self.relocatable_object) {
+    if (self.relocatable_object or self.track_static_data_addresses) {
         const code_pos: u32 = @intCast(self.currentCode().items.len);
         try self.currentBody().addOffsetRelocation(
             self.allocator,
@@ -1067,7 +1077,11 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
             address.symbol,
             addend,
         );
-        WasmModule.appendPaddedI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        const placeholder: i32 = if (self.relocatable_object)
+            0
+        else
+            @intCast(@as(i64, @intCast(address.offset)) + @as(i64, addend));
+        WasmModule.appendPaddedI32(self.allocator, self.currentCode(), placeholder) catch return error.OutOfMemory;
     } else {
         WasmModule.leb128WriteI32(
             self.allocator,
@@ -16090,4 +16104,40 @@ test "rcAllocationLayout matches wasm32 builtin refcount allocation layout" {
     const refcounted_aligned = rcAllocationLayout(16, true);
     try expectEqual(@as(u32, 16), refcounted_aligned.data_offset);
     try expectEqual(@as(u32, 16), refcounted_aligned.allocation_alignment);
+}
+
+test "final static data address tracking keeps referenced data through DCE" {
+    const allocator = std.testing.allocator;
+    const fake_store: *const LirStore = undefined;
+    const fake_layouts: *const LayoutStore = undefined;
+
+    var codegen = Self.init(allocator, fake_store, fake_layouts);
+    defer codegen.deinit();
+    codegen.configureStaticDataAddressTracking();
+
+    const type_idx = try codegen.module.addFuncType(&.{}, &.{});
+    const defined = try codegen.module.addDefinedFunction(type_idx);
+    try codegen.module.addExport("main", .func, defined.function.raw());
+
+    const live_address = try codegen.addStaticDataSymbol(&.{ 0, 0, 0, 0, 'l', 'i', 'v', 'e' }, 4, ".rodata.live", "live.data", 4, 4);
+    _ = try codegen.addStaticDataSymbol(&.{ 0, 0, 0, 0, 'd', 'e', 'a', 'd' }, 4, ".rodata.dead", "dead.data", 4, 4);
+
+    try codegen.beginFunction(defined.local);
+    try codegen.emitDataAddressConst(live_address, 0);
+    try codegen.currentCode().append(allocator, Op.drop);
+    try codegen.currentCode().append(allocator, Op.end);
+    codegen.endFunction();
+    try codegen.flushPendingBodies();
+
+    try std.testing.expectEqual(@as(usize, 1), codegen.module.reloc_code.entries.items.len);
+    try codegen.module.resolveRelocations();
+
+    const called_fns = try allocator.alloc(bool, codegen.module.liveFunctionCount());
+    defer allocator.free(called_fns);
+    @memset(called_fns, false);
+    try codegen.module.eliminateDeadCode(called_fns);
+
+    try std.testing.expectEqual(@as(usize, 1), codegen.module.data_segments.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, codegen.module.data_segments.items[0].data, "live") != null);
+    try std.testing.expect(std.mem.indexOf(u8, codegen.module.data_segments.items[0].data, "dead") == null);
 }

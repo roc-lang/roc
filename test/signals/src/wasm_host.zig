@@ -167,6 +167,16 @@ fn emitAppendChildren(parent_elem_id: u64, next_child_ids: []const u64) void {
 var shared_engine: SharedEngine = .init();
 var command_buffer: render.Buffer = .{};
 var string_buffer: std.ArrayListUnmanaged(u8) = .empty;
+
+const RocAllocation = struct {
+    base_ptr: [*]u8,
+    user_ptr: [*]u8,
+    requested_size: usize,
+    total_size: usize,
+    alignment: std.mem.Alignment,
+};
+
+var roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty;
 var roc_host_env: u8 = 0;
 var roc_host = abi.RocHost{
     .env = @ptrCast(&roc_host_env),
@@ -190,25 +200,9 @@ fn toU32(value: anytype) u32 {
     return std.math.cast(u32, value) orelse failHost();
 }
 
-fn checkedAdd(left: usize, right: usize) usize {
-    return std.math.add(usize, left, right) catch failHost();
-}
-
 fn alignmentFromBytes(alignment: usize) std.mem.Alignment {
     if (alignment == 0 or !std.math.isPowerOfTwo(alignment)) failHost();
     return @enumFromInt(std.math.log2_int(usize, alignment));
-}
-
-fn allocWithHeader(length: usize, alignment_arg: usize) ?*anyopaque {
-    const alignment = @max(alignment_arg, @sizeOf(usize));
-    const align_log2 = alignmentFromBytes(alignment);
-    const header_size = alignment;
-    const total_size = checkedAdd(length, header_size);
-
-    const base = std.heap.wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse return null;
-    const size_ptr: *usize = @ptrCast(@alignCast(base));
-    size_ptr.* = total_size;
-    return @ptrCast(base + header_size);
 }
 
 fn appendCommand(op: render.Op, a: u32, b: u32, c: u32, d: u32, e: u32) void {
@@ -515,39 +509,105 @@ export fn __multi3(result: *align(8) u128, a_low: u64, a_high: u64, b_low: u64, 
 
 // --- Allocation marshalling (roc_alloc and friends) ---
 
-fn deallocWithHeader(ptr: *anyopaque, alignment_arg: usize) void {
-    const alignment = @max(alignment_arg, @sizeOf(usize));
-    const align_log2 = alignmentFromBytes(alignment);
-    const header_size = alignment;
-    const user_ptr: [*]u8 = @ptrCast(ptr);
-    const base = user_ptr - header_size;
-    const size_ptr: *const usize = @ptrCast(@alignCast(base));
-    const total_size = size_ptr.*;
-    std.heap.wasm_allocator.rawFree(base[0..total_size], align_log2, @returnAddress());
+fn allocatedSizeForRocRequest(length: usize) usize {
+    return if (length == 0) 1 else length;
+}
+
+fn rocAllocationHeaderBytes(alignment: usize) usize {
+    return @max(alignment, @sizeOf(usize));
+}
+
+fn findRocAllocationIndex(ptr: *anyopaque) ?usize {
+    const ptr_addr = @intFromPtr(ptr);
+    for (roc_allocations.items, 0..) |alloc, index| {
+        const user_addr = @intFromPtr(alloc.user_ptr);
+        const end_addr = @intFromPtr(alloc.base_ptr) + alloc.total_size;
+        if (ptr_addr >= user_addr and ptr_addr < end_addr) return index;
+    }
+    return null;
+}
+
+fn rocAllocationUserOffset(alloc: RocAllocation, ptr: *anyopaque) usize {
+    const ptr_addr = @intFromPtr(ptr);
+    const user_addr = @intFromPtr(alloc.user_ptr);
+    const end_addr = @intFromPtr(alloc.base_ptr) + alloc.total_size;
+    if (ptr_addr < user_addr or ptr_addr >= end_addr) failHost();
+    return ptr_addr - user_addr;
+}
+
+fn removeRocAllocationAt(index: usize, ptr: *anyopaque) RocAllocation {
+    if (index >= roc_allocations.items.len) failHost();
+    const alloc = roc_allocations.items[index];
+    _ = rocAllocationUserOffset(alloc, ptr);
+    return roc_allocations.swapRemove(index);
+}
+
+fn recordRocAllocation(base_ptr: [*]u8, user_ptr: [*]u8, requested_size: usize, total_size: usize, alignment: std.mem.Alignment) bool {
+    roc_allocations.append(allocator(), .{
+        .base_ptr = base_ptr,
+        .user_ptr = user_ptr,
+        .requested_size = requested_size,
+        .total_size = total_size,
+        .alignment = alignment,
+    }) catch return false;
+    return true;
+}
+
+fn allocRocMemory(length: usize, alignment_arg: usize) ?*anyopaque {
+    const min_alignment = @max(alignment_arg, @sizeOf(usize));
+    const alignment = alignmentFromBytes(min_alignment);
+    const header_size = rocAllocationHeaderBytes(min_alignment);
+    const allocated_size = allocatedSizeForRocRequest(length);
+    const total_size = std.math.add(usize, header_size, allocated_size) catch {
+        failHost();
+    };
+    const base_ptr = std.heap.wasm_allocator.rawAlloc(total_size, alignment, @returnAddress()) orelse return null;
+    const user_ptr = base_ptr + header_size;
+    if (!recordRocAllocation(base_ptr, user_ptr, length, total_size, alignment)) {
+        std.heap.wasm_allocator.rawFree(base_ptr[0..total_size], alignment, @returnAddress());
+        return null;
+    }
+    return @ptrCast(user_ptr);
+}
+
+fn freeRocAllocation(ptr: *anyopaque, alignment_arg: usize) RocAllocation {
+    const min_alignment = @max(alignment_arg, @sizeOf(usize));
+    _ = alignmentFromBytes(min_alignment);
+    const index = findRocAllocationIndex(ptr) orelse failHost();
+    const alloc = removeRocAllocationAt(index, ptr);
+    std.heap.wasm_allocator.rawFree(alloc.base_ptr[0..alloc.total_size], alloc.alignment, @returnAddress());
+    return alloc;
 }
 
 export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return allocWithHeader(length, alignment);
+    return allocRocMemory(length, alignment);
 }
 
 export fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    deallocWithHeader(ptr, alignment);
+    _ = freeRocAllocation(ptr, alignment);
 }
 
 export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
-    const alignment = @max(alignment_arg, @sizeOf(usize));
-    const header_size = alignment;
-    const user_ptr: [*]u8 = @ptrCast(ptr);
-    const old_base = user_ptr - header_size;
-    const old_size_ptr: *const usize = @ptrCast(@alignCast(old_base));
-    const old_total_size = old_size_ptr.*;
-    const old_user_size = old_total_size - header_size;
+    const old_index = findRocAllocationIndex(ptr) orelse failHost();
+    const old_alloc = roc_allocations.items[old_index];
+    const old_offset = rocAllocationUserOffset(old_alloc, ptr);
+    if (old_offset > old_alloc.requested_size) failHost();
+    const min_alignment = @max(alignment_arg, @sizeOf(usize));
+    _ = alignmentFromBytes(min_alignment);
 
-    const new_ptr = allocWithHeader(new_length, alignment) orelse return null;
-    const new_user_ptr: [*]u8 = @ptrCast(new_ptr);
-    @memcpy(new_user_ptr[0..@min(old_user_size, new_length)], user_ptr[0..@min(old_user_size, new_length)]);
-    deallocWithHeader(ptr, alignment);
-    return new_ptr;
+    const new_requested_size = std.math.add(usize, new_length, old_offset) catch {
+        failHost();
+    };
+    const new_alignment = @max(alignment_arg, old_alloc.alignment.toByteUnits());
+    const new_allocation_ptr = allocRocMemory(new_requested_size, new_alignment) orelse return null;
+    const new_allocation_user_ptr: [*]u8 = @ptrCast(new_allocation_ptr);
+    const new_user_ptr = new_allocation_user_ptr + old_offset;
+    const old_user_ptr: [*]const u8 = @ptrCast(ptr);
+    const old_available_size = old_alloc.requested_size - old_offset;
+    const copy_size = @min(old_available_size, new_length);
+    @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
+    _ = freeRocAllocation(ptr, alignment_arg);
+    return @ptrCast(new_user_ptr);
 }
 
 // --- Command-buffer wire surface (drained by the JS executor) ---
