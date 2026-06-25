@@ -1961,7 +1961,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 					} else if is_type_refcounted(type_table, inner_id) {
 						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), Some(${box_payload_decref_name_rust(inner_id)}), roc_host);\n"
 					} else {
-						"    decref_box(${expr} as RocBox, roc_host);\n"
+						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), None, roc_host);\n"
 					}
 				}
 				Err(_) => missing_type_compile_error_rust(inner_id, "boxed-payload decref")

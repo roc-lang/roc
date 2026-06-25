@@ -256,6 +256,7 @@ const CustomCase = enum {
     glue_zig_box_payload_alignment,
     glue_rust,
     glue_rust_duplicate_tag_unions,
+    glue_rust_box_payload_alignment,
     glue_zig_bang_record_fields,
     glue_c_tests,
 };
@@ -517,6 +518,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_zig_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue handles duplicate tag-union names", .body = .{ .custom = .glue_rust_duplicate_tag_unions } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_rust_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -1653,6 +1655,7 @@ fn runCustomCase(
         .glue_zig_box_payload_alignment => customGlueZigBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_duplicate_tag_unions => customGlueRustDuplicateTagUnions(io, allocator, &env, &timer),
+        .glue_rust_box_payload_alignment => customGlueRustBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
     };
@@ -4322,6 +4325,63 @@ fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *cons
         }
     }
 
+    return null;
+}
+
+fn customGlueRustBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Regression test for non-refcounted boxed payload teardown alignment.
+    //
+    // RustGlue.roc previously emitted `decref_box(expr as RocBox, roc_host)` for
+    // boxed payloads that are known and contain no refcounted values (e.g.
+    // `Box(I64)`). `decref_box` hardcodes pointer alignment
+    // (`align_of::<usize>()`), so on small-pointer targets like wasm32 an
+    // 8-aligned payload is freed from `base + 4` instead of `base`. The fix
+    // emits `decref_box_with(expr as RocBox, align_of::<payload>(), None, roc_host)`
+    // so the payload's real alignment is used to recover the allocation base.
+    //
+    // test/static-data-host exposes `BranchPair(Box(I64), Box(I64))`, which
+    // exercises exactly this path.
+    const output_dir = createWorkSubdir(io, allocator, env, "rust-box-align-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/RustGlue.roc", output_dir, "test/static-data-host/platform/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
+
+    for ([_][]const u8{
+        "decref_box_with(payload._0 as RocBox, core::mem::align_of::<i64>(), None, roc_host);",
+        "decref_box_with(payload._1 as RocBox, core::mem::align_of::<i64>(), None, roc_host);",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Rust file missing payload-aligned box decref {s}", .{needle});
+        }
+    }
+    // No boxed payload in this platform is opaque, so the pointer-aligned
+    // `decref_box(payload... as RocBox, roc_host)` form must never appear; its
+    // presence means a known non-refcounted boxed payload is being freed with
+    // pointer alignment instead of the payload's own alignment.
+    if (std.mem.find(u8, generated, "decref_box(payload") != null) {
+        return customFailure(allocator, timer, "generated Rust file uses pointer-aligned decref_box(payload...) for a known boxed payload", .{});
+    }
+
+    const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "rustc",
+        "--edition=2021",
+        "-D",
+        "warnings",
+        "--crate-type",
+        "lib",
+        generated_path,
+        "-o",
+        test_rlib_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 
