@@ -640,6 +640,12 @@ diagnostics: CIR.Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
+/// True when this env was loaded from a cache with the *whole* NodeStore copied
+/// out of the cache buffer (`deserializeWithCopyAll`), so it can be re-type-checked
+/// (the CIR cache). `deinitCachedModule` then frees the full store rather than only
+/// `regions`. False for a normally-built env and for a light cache load.
+cached_store_fully_owned: bool = false,
+
 /// Dependency analysis results (evaluation order for defs)
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
@@ -907,9 +913,14 @@ pub fn deinitCachedModule(self: *Self) void {
     // Free the type store arrays (allocated by deserializeWithMutableTypes)
     self.types.deinit();
 
-    // The whole NodeStore is heap-owned (deserializeWithCopy copies every
-    // sub-store out of the cache buffer so it can be re-checked), so free it all.
-    self.store.deinit();
+    // A fully-owned store (CIR cache, re-checkable) frees every sub-store; a light
+    // store (type-info cache) heap-owns only `regions` — the rest aliases the cache
+    // buffer and is freed when the buffer is freed.
+    if (self.cached_store_fully_owned) {
+        self.store.deinit();
+    } else {
+        self.store.regions.deinit(self.gpa);
+    }
 
     // Only free the hash map that was allocated during deserialization
     // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
@@ -3385,16 +3396,40 @@ pub const Serialized = extern struct {
         return env;
     }
 
-    /// Deserialize with mutable type store and node store for cache modules.
-    /// Allocates fresh memory for the type store and node store arrays,
-    /// allowing them to be mutated (e.g., during type checking).
-    /// Use this for disk cache modules that may need to add new types.
+    /// Deserialize with a mutable type store and a light node store (only `regions`
+    /// copied out of the cache buffer) for cache modules that are NOT re-type-checked
+    /// — the type-info cache, whose env is read-only after load. Avoids copying the
+    /// whole NodeStore on the warm hot path.
     pub fn deserializeWithMutableTypes(
         self: *const Serialized,
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
+    ) std.mem.Allocator.Error!*Self {
+        return self.deserializeMutable(base_addr, gpa, source, module_name, false);
+    }
+
+    /// Deserialize with a mutable type store and a *fully* heap-owned node store, so
+    /// the env can be re-type-checked — used by the CIR cache, whose relocated env is
+    /// type-checked when the type-info cache misses.
+    pub fn deserializeForRecheck(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) std.mem.Allocator.Error!*Self {
+        return self.deserializeMutable(base_addr, gpa, source, module_name, true);
+    }
+
+    fn deserializeMutable(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+        comptime full_store: bool,
     ) std.mem.Allocator.Error!*Self {
         // Allocate a fresh ModuleEnv on the heap
         const env = try gpa.create(Self);
@@ -3426,8 +3461,13 @@ pub const Serialized = extern struct {
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .diagnostics = self.diagnostics,
-            // Use deserializeWithCopy for NodeStore so regions can be extended
-            .store = try self.store.deserializeWithCopy(base_addr, gpa),
+            // A re-checkable env (CIR cache) needs the whole NodeStore heap-owned;
+            // a read-only cached env (type-info cache) needs only `regions` mutable.
+            .store = if (full_store)
+                try self.store.deserializeWithCopyAll(base_addr, gpa)
+            else
+                try self.store.deserializeWithCopy(base_addr, gpa),
+            .cached_store_fully_owned = full_store,
             .evaluation_order = null,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),

@@ -5056,7 +5056,9 @@ pub const Coordinator = struct {
         @memcpy(buffer, bodies.env_body);
 
         const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
-        const cached_env = serialized_ptr.deserializeWithMutableTypes(
+        // The relocated env may be re-type-checked (on a type-info-cache miss), so
+        // fully heap-own its NodeStore.
+        const cached_env = serialized_ptr.deserializeForRecheck(
             @intFromPtr(buffer.ptr),
             module_alloc,
             src,

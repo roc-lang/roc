@@ -5028,6 +5028,37 @@ pub const Serialized = extern struct {
         };
     }
 
+    /// Deserialize into a NodeStore value with fresh memory allocation for `regions`,
+    /// which type checking may extend, while every other sub-store still aliases the
+    /// cache buffer. Use this for a cached module that is NOT re-type-checked (the
+    /// type-info cache, whose env is read-only after load). Pair with
+    /// `ModuleEnv.deinitCachedModule` (light path: frees only `regions`).
+    pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
+        return NodeStore{
+            .gpa = gpa,
+            .nodes = self.nodes.deserializeInto(base_addr),
+            // Regions needs to be mutable (grown during type checking)
+            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
+            .int128_values = self.int128_values.deserializeInto(base_addr),
+            .span2_data = self.span2_data.deserializeInto(base_addr),
+            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .method_call_data = self.method_call_data.deserializeInto(base_addr),
+            .match_data = self.match_data.deserializeInto(base_addr),
+            .if_data = self.if_data.deserializeInto(base_addr),
+            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
+            .closure_data = self.closure_data.deserializeInto(base_addr),
+            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
+            .def_data = self.def_data.deserializeInto(base_addr),
+            .import_data = self.import_data.deserializeInto(base_addr),
+            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
+            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
+            .index_data = self.index_data.deserializeInto(base_addr),
+            .scratch = null,
+        };
+    }
+
     /// Deserialize into a fully heap-owned NodeStore, copying every sub-store out
     /// of the cache buffer so the store can be mutated freely.
     ///
@@ -5035,10 +5066,10 @@ pub const Serialized = extern struct {
     /// into dispatch calls, which appends new nodes/spans across many of these
     /// sub-stores (e.g. `addExpr` grows `nodes` + `span2_data`; dispatch rewrites
     /// grow `index_data`). A buffer-aliased sub-store cannot grow (reallocating a
-    /// pointer into the cache buffer aborts), so a re-checkable cached module needs
-    /// the whole store heap-owned. Pair this with `ModuleEnv.deinitCachedModule`,
-    /// which frees the store via `NodeStore.deinit`.
-    pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
+    /// pointer into the cache buffer aborts), so a re-checkable cached module (the
+    /// CIR cache) needs the whole store heap-owned. Pair with
+    /// `ModuleEnv.deinitCachedModule` (full path: frees the store via `deinit`).
+    pub fn deserializeWithCopyAll(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
         return NodeStore{
             .gpa = gpa,
             .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
