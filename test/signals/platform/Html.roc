@@ -11,11 +11,22 @@ Html := [].{
 	class_attr : Str -> Node.Attr
 	class_attr = |value| Node.Attr.StaticText({ field: Node.field_class, value })
 
+	class_attr_s : Signal(Str) -> Node.Attr
+	class_attr_s = |signal| {
+		tag = signal.tag
+		read : HostValue -> Str
+		read = |value| Box.unbox(HostValue.get_tagged(value, tag))
+		Node.Attr.SignalText({ field: Node.field_class, signal: Signal.to_expr(signal), read: Box.box(read) })
+	}
+
 	div : List(Node.Attr), List(Elem) -> Elem
 	div = |attrs, children| Elem.Element({ tag: "div", attrs, children })
 
 	div_c : Str, List(Elem) -> Elem
 	div_c = |classes, children| div([class_attr(classes)], children)
+
+	div_sc : Signal(Str), List(Elem) -> Elem
+	div_sc = |classes, children| div([class_attr_s(classes)], children)
 
 	section : Str, List(Node.Attr), List(Elem) -> Elem
 	section = |label, attrs, children| {
@@ -28,6 +39,9 @@ Html := [].{
 
 	section_c : Str, Str, List(Elem) -> Elem
 	section_c = |label, classes, children| section(label, [class_attr(classes)], children)
+
+	section_sc : Str, Signal(Str), List(Elem) -> Elem
+	section_sc = |label, classes, children| section(label, [class_attr_s(classes)], children)
 
 	heading : Str -> Elem
 	heading = |text_value| {

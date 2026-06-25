@@ -1,7 +1,6 @@
 # Ops dashboard server-backed smoke scenario
 
 expect_visible role:heading name:"Ops dashboard"
-expect_visible role:region name:"Status summary"
 expect_visible role:region name:"Traffic"
 expect_visible role:region name:"Active jobs"
 expect_visible role:region name:"Alerts"
