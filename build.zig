@@ -3573,6 +3573,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
 
+        const build_wasm_boxed_model_update_app = b.addRunArtifact(roc_exe);
+        build_wasm_boxed_model_update_app.addArgs(&.{
+            "build",
+            "test/wasm/boxed_model_update_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/boxed_model_update_static_lib_app.wasm",
+        });
+        build_wasm_boxed_model_update_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -3673,6 +3684,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
+
+            const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_boxed_model_update_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/boxed_model_update_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_boxed_model_update_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
@@ -5556,14 +5577,20 @@ fn addMainExe(
         }
     }
 
+    const use_bundled_deps = !use_system_llvm and user_llvm_path == null;
+
     const config = b.addOptions();
     config.addOption(bool, "llvm", true);
+    config.addOption(bool, "binaryen", use_bundled_deps);
     exe.root_module.addOptions("config", config);
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
     exe.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
     exe.root_module.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
+    if (use_bundled_deps) {
+        addStaticBinaryenOptionsToModule(exe.root_module);
+    }
     try addStaticLlvmOptionsToModule(exe.root_module);
 
     add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
@@ -5860,6 +5887,18 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
         mod.linkSystemLibrary("uuid", .{});
         mod.linkSystemLibrary("ole32", .{});
     }
+}
+
+fn addStaticBinaryenOptionsToModule(mod: *std.Build.Module) void {
+    const link_static = std.Build.Module.LinkSystemLibraryOptions{
+        .preferred_link_mode = .static,
+        .search_strategy = .mode_first,
+    };
+    mod.addCSourceFile(.{
+        .file = .{ .cwd_relative = "src/build/zig_binaryen.cpp" },
+        .flags = &exe_cflags,
+    });
+    mod.linkSystemLibrary("binaryen", link_static);
 }
 
 const cpp_sources = [_][]const u8{

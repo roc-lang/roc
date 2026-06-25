@@ -28,6 +28,7 @@ pub const LayoutRequest = struct {
     checked_type: @import("check").CheckedModule.CheckedTypeId,
     ty: Type.TypeVarId,
     fn_id: ?Lifted.FnId = null,
+    static_data: ?Common.StaticDataRequest = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.

@@ -338,6 +338,8 @@ const Pass = struct {
                 }
                 try self.pushStmt(s.next);
             },
+            .store_struct => |s| try self.pushStmt(s.next),
+            .store_tag => |s| try self.pushStmt(s.next),
             .set_local => |s| {
                 if (try self.localInfoMut(s.target).mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
                 try self.pushStmt(s.next);
@@ -443,11 +445,22 @@ const Pass = struct {
                 self.noteUse(s.closure);
                 for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
             },
-            .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
+            .assign_packed_erased_fn => |s| {
+                if (s.capture) |capture| self.noteUse(capture);
+                if (s.reuse) |reuse| self.noteUse(reuse);
+            },
             .assign_low_level => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
             .assign_list => |s| for (self.store.getLocalSpan(s.elems)) |elem| self.noteUse(elem),
             .assign_struct => |s| for (self.store.getLocalSpan(s.fields)) |field| self.noteUse(field),
             .assign_tag => |s| if (s.payload) |payload| self.noteUse(payload),
+            .store_struct => |s| {
+                self.noteUse(s.dest);
+                for (self.store.getLocalSpan(s.fields)) |field| self.noteUse(field);
+            },
+            .store_tag => |s| {
+                self.noteUse(s.dest);
+                if (s.payload) |payload| self.noteUse(payload);
+            },
             .set_local => |s| self.noteUse(s.value),
             .debug => |s| self.noteUse(s.message),
             .expect => |s| self.noteUse(s.condition),
@@ -577,6 +590,8 @@ const Pass = struct {
                 .assign_list => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_struct => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_tag => |*s| s.next = self.resolveRedirect(s.next),
+                .store_struct => |*s| s.next = self.resolveRedirect(s.next),
+                .store_tag => |*s| s.next = self.resolveRedirect(s.next),
                 .set_local => |*s| s.next = self.resolveRedirect(s.next),
                 .debug => |*s| s.next = self.resolveRedirect(s.next),
                 .expect => |*s| s.next = self.resolveRedirect(s.next),

@@ -1140,6 +1140,7 @@ fn generatePlatformHostShimFromLirData(
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
+        .lower_memory_intrinsics_to_loops = lowerMemoryIntrinsicsToLoopsForLlvmBuild(target),
     };
 
     if (builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config)) |success| {
@@ -5175,13 +5176,22 @@ fn configuredWasmMemory(
     wasm: ?roc_target.WasmTargetConfig,
 ) backend.wasm.WasmModule.FinalMemoryConfig {
     const stack_bytes = configuredWasmStackBytes(args, wasm);
+    const import_memory = if (wasm) |config| config.import_memory.importsMemory() else false;
     return .{
         .stack_bytes = @intCast(stack_bytes),
-        .import_memory = if (wasm) |config| config.import_memory else false,
+        .import_memory = import_memory,
+        .imported_memory_zeroed = if (wasm) |config| config.import_memory.importedMemoryIsZeroed() else false,
         .minimum_memory = configuredWasmMinimumMemory(args, wasm),
         .maximum_memory = if (wasm) |config| config.maximum_memory else null,
-        .export_memory = if (wasm) |config| !config.import_memory else true,
+        .export_memory = !import_memory,
     };
+}
+
+fn configuredWasmZeroFilledMemory(wasm: ?roc_target.WasmTargetConfig) bool {
+    if (wasm) |config| {
+        return !config.import_memory.importsMemory() or config.import_memory.importedMemoryIsZeroed();
+    }
+    return true;
 }
 
 fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.WasmTargetConfig) void {
@@ -5192,8 +5202,14 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
     }
 }
 
-fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) anyerror!void {
+fn removeWasmInternalFunctionExports(module: *backend.wasm.WasmModule, hosted_symbols: []const []const u8) void {
+    module.removeFunctionExports(&host_symbols.runtime_symbols);
+    module.removeFunctionExports(hosted_symbols);
+}
+
+fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule, hosted_symbols: []const []const u8) anyerror!void {
     try module.exportGlobalSymbols();
+    removeWasmInternalFunctionExports(module, hosted_symbols);
 }
 
 fn addWasmObject(
@@ -5272,11 +5288,13 @@ fn appendWasmObjectExportNames(
     path: []const u8,
     member_name: ?[]const u8,
     bytes: []const u8,
+    hosted_symbols: []const []const u8,
 ) anyerror!void {
     var module = try preloadWasmObject(ctx, path, member_name, bytes);
     defer module.deinit();
 
     try module.exportGlobalSymbols();
+    removeWasmInternalFunctionExports(&module, hosted_symbols);
     for (module.exports.items) |exp| {
         if (exp.kind == .func) {
             try appendUniqueWasmExportName(exports, exp.name);
@@ -5289,11 +5307,12 @@ fn appendWasmInputExportNames(
     exports: *std.array_list.Managed([]const u8),
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
+    hosted_symbols: []const []const u8,
 ) anyerror!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
-        try appendWasmObjectExportNames(ctx, exports, path, null, bytes);
+        try appendWasmObjectExportNames(ctx, exports, path, null, bytes, hosted_symbols);
         return;
     }
 
@@ -5315,7 +5334,7 @@ fn appendWasmInputExportNames(
         };
         const member = maybe_member orelse break;
         member_count += 1;
-        try appendWasmObjectExportNames(ctx, exports, path, member.name, member.bytes);
+        try appendWasmObjectExportNames(ctx, exports, path, member.name, member.bytes, hosted_symbols);
     }
 
     if (member_count == 0) {
@@ -5328,14 +5347,15 @@ fn collectWasmPlatformExports(
     ctx: *CliCtx,
     link_inputs: PlatformLinkInputs,
     owned_inputs: *std.ArrayList([]u8),
+    hosted_symbols: []const []const u8,
 ) anyerror![]const []const u8 {
     var exports = std.array_list.Managed([]const u8).init(ctx.arena);
 
     for (link_inputs.platform_files_pre) |path| {
-        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path);
+        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path, hosted_symbols);
     }
     for (link_inputs.platform_files_post) |path| {
-        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path);
+        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path, hosted_symbols);
     }
 
     return exports.items;
@@ -5346,6 +5366,7 @@ fn writeDevWasmObject(
     build_cache_dir: []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
+    static_data_exports: []const backend.StaticDataExport,
 ) anyerror![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -5415,6 +5436,7 @@ fn writeDevWasmObject(
     for (entrypoints) |entry| {
         _ = try codegen.module.findDefinedFunctionSymbolExact(entry.symbol_name);
     }
+    try mergeLlvmStaticDataWasmModule(ctx, &codegen.module, static_data_exports, .relocatable_object);
     try codegen.module.verifyNoLinkObjectContract();
 
     const wasm_bytes = try codegen.module.encodeRelocatable(ctx.gpa);
@@ -5440,6 +5462,8 @@ fn rocBuildWasmSurgical(
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
+    hosted_symbols: []const []const u8,
+    static_data_exports: []const backend.StaticDataExport,
 ) anyerror!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -5453,7 +5477,7 @@ fn rocBuildWasmSurgical(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -5467,10 +5491,10 @@ fn rocBuildWasmSurgical(
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
     if (link_inputs.wasm != null) {
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = obj_path;
-        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs, hosted_symbols);
 
         const link_config = linker.LinkConfig{
             .target_format = .wasm,
@@ -5487,7 +5511,10 @@ fn rocBuildWasmSurgical(
             .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
             .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
             .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
+            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+            .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .wasm_debug_info = args.debug,
+            .wasm_optimize = wasmOptimizeMode(args.opt),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .wasm_exports = wasm_exports,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -5519,7 +5546,7 @@ fn rocBuildWasmSurgical(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try exportConfiguredWasmEntrypoints(&wasm_module);
+    try exportConfiguredWasmEntrypoints(&wasm_module, hosted_symbols);
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
@@ -5573,6 +5600,7 @@ fn rocBuildWasmSurgical(
 
     try codegen.flushPendingBodies();
     try codegen.module.linkHostToAppCalls(host_to_app_map.items);
+    try mergeLlvmStaticDataWasmModule(ctx, &codegen.module, static_data_exports, .final_link);
 
     const memory_config = configuredWasmMemory(args, link_inputs.wasm);
     try codegen.module.finalizeMemoryAndTableWithConfig(memory_config);
@@ -5610,7 +5638,7 @@ fn staticDataLinkRootSymbols(
         static_data_exports.len + @as(usize, if (root_default_platform_backtrace) 2 else 0),
     );
     for (static_data_exports) |data_export| {
-        if (!data_export.is_global) continue;
+        if (!data_export.is_exported) continue;
         try symbols.append(data_export.symbol_name);
     }
     if (root_default_platform_backtrace) {
@@ -5634,7 +5662,7 @@ fn sharedLibraryAppExports(
         try symbols.append(entrypoint.symbol_name);
     }
     for (static_data_exports) |data_export| {
-        if (!data_export.is_global) continue;
+        if (!data_export.is_exported) continue;
         try symbols.append(data_export.symbol_name);
     }
 
@@ -5693,6 +5721,14 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
+fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
+    return switch (opt) {
+        .size => .size,
+        .speed => .speed,
+        .dev, .interpreter => .none,
+    };
+}
+
 fn stdTargetAbiForLlvmBuild(target: RocTarget) std.Target.Abi {
     return switch (target) {
         .x64musl, .arm64musl, .arm32musl => .musl,
@@ -5707,6 +5743,17 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
         .macos, .windows => false,
         else => true,
     };
+}
+
+fn llvmTargetHasNativeMemoryOps(target: RocTarget) bool {
+    return switch (target) {
+        .wasm32 => true,
+        else => false,
+    };
+}
+
+fn lowerMemoryIntrinsicsToLoopsForLlvmBuild(target: RocTarget) bool {
+    return noTargetLibcallsForLlvmBuild(target) and !llvmTargetHasNativeMemoryOps(target);
 }
 
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
@@ -5832,6 +5879,7 @@ fn compileLlvmAppObject(
         // through extern symbols, never through a RocOps parameter.
         .host_call_extern = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
+        .lower_memory_intrinsics_to_loops = lowerMemoryIntrinsicsToLoopsForLlvmBuild(target),
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
@@ -5925,6 +5973,7 @@ fn rocBuildWasmLlvm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    hosted_symbols: []const []const u8,
 ) anyerror!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -5957,7 +6006,7 @@ fn rocBuildWasmLlvm(
         const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = combined_obj;
-        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs, hosted_symbols);
 
         const link_config = linker.LinkConfig{
             .target_format = .wasm,
@@ -5974,7 +6023,10 @@ fn rocBuildWasmLlvm(
             .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
             .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
             .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
+            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+            .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .wasm_debug_info = args.debug,
+            .wasm_optimize = wasmOptimizeMode(args.opt),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .wasm_exports = wasm_exports,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -6006,7 +6058,7 @@ fn rocBuildWasmLlvm(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try exportConfiguredWasmEntrypoints(&wasm_module);
+    try exportConfiguredWasmEntrypoints(&wasm_module, hosted_symbols);
     wasm_module.removeMemoryAndTableImports();
 
     const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
@@ -6221,7 +6273,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    const static_data_exports = try compile.static_data_exports.buildProvidedDataExports(
+    const static_data_exports = try compile.static_data_exports.buildStaticDataExports(
         ctx.gpa,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
@@ -6230,7 +6282,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         &lowered,
         target,
     );
-    defer compile.static_data_exports.deinitProvidedDataExports(ctx.gpa, static_data_exports);
+    defer compile.static_data_exports.deinitStaticDataExports(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .Debug) {
@@ -6240,6 +6292,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 
     if (target == .wasm32) {
+        const hosted_table = try checkedHostedTable(ctx.arena, root_artifact, imported_artifacts, relation_artifacts);
         reporter.begin("Code Generation");
         try rocBuildWasmLlvm(
             ctx,
@@ -6251,6 +6304,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             &lowered,
             entrypoints,
             static_data_exports,
+            hosted_table.symbols,
         );
         reporter.end();
     } else {
@@ -6555,8 +6609,20 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
+    reporter.begin("Code Generation");
+    const static_data_exports = try compile.static_data_exports.buildStaticDataExports(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        &lowered,
+        target,
+    );
+    defer compile.static_data_exports.deinitStaticDataExports(ctx.gpa, static_data_exports);
+
     if (target_arch == .wasm32) {
-        reporter.begin("Code Generation");
+        const hosted_table = try checkedHostedTable(ctx.arena, root_artifact, imported_artifacts, relation_artifacts);
         try rocBuildWasmSurgical(
             ctx,
             args,
@@ -6568,6 +6634,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             resolved_targets_config,
             &lowered,
             entrypoints,
+            hosted_table.symbols,
+            static_data_exports,
         );
         reporter.end();
 
@@ -6584,18 +6652,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         }
         return;
     }
-
-    reporter.begin("Code Generation");
-    const static_data_exports = try compile.static_data_exports.buildProvidedDataExports(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        &lowered,
-        target,
-    );
-    defer compile.static_data_exports.deinitProvidedDataExports(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .Debug) {
@@ -6959,7 +7015,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
             .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
             .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
+            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+            .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .wasm_debug_info = args.debug,
+            .wasm_optimize = wasmOptimizeMode(args.opt),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .platform_files_dir = link_inputs.platform_files_dir,
             .scratch_dir = build_cache_dir,

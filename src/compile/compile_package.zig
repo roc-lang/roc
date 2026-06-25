@@ -1940,6 +1940,7 @@ pub const PackageEnv = struct {
         var seen = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(self.gpa);
         defer seen.deinit();
 
+        try pending.append(self.gpa, CheckedArtifact.importedView(&self.builtin_modules.checked_artifact));
         for (imported_artifacts) |imported| {
             try pending.append(self.gpa, imported.view);
         }
@@ -1951,10 +1952,10 @@ pub const PackageEnv = struct {
 
             try views.append(self.gpa, view);
 
-            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+            for (view.public_api_dependencies.artifacts) |dependency_key| {
                 const dependency = self.availableArtifactViewByKey(imported_artifacts, dependency_key) orelse {
                     if (builtin.mode == .Debug) {
-                        std.debug.panic("compile.PackageEnv missing type-owner dependency checked artifact", .{});
+                        std.debug.panic("compile.PackageEnv missing public API dependency checked artifact", .{});
                     }
                     unreachable;
                 };

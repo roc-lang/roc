@@ -268,6 +268,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .crash_statement_in_expr_position => "CRASH IN EXPRESSION",
         .return_outside_function => "RETURN OUTSIDE FUNCTION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
@@ -411,6 +412,18 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addText("Tip: ");
                 try report.document.addReflowingTextWithBackticks(tip);
             }
+        },
+        .crash_statement_in_expr_position => {
+            try report.document.addReflowingText("The `crash` keyword starts a statement, but this position needs an expression.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Wrap it in a block expression:");
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(
+                \\{
+                \\    crash "unreachable"
+                \\}
+            );
         },
         .return_outside_function => {
             try report.document.addText("The ");
@@ -720,6 +733,7 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
+        crash_statement_in_expr_position,
         return_outside_function,
         expected_expr_record_field_name,
         expected_ty_apply_close_round,
@@ -2672,6 +2686,7 @@ pub const WhereClause = union(enum) {
         name_tok: Token.Idx,
         args: Collection.Idx,
         ret_anno: TypeAnno.Idx,
+        effectful: bool,
         region: TokenizedRegion,
     },
 
@@ -2711,6 +2726,7 @@ pub const WhereClause = union(enum) {
                 // remove preceding dot
                 const method_name = ast.resolve(m.name_tok)[1..];
                 try tree.pushStringPair("name", method_name);
+                try tree.pushBoolPair("effectful", m.effectful);
                 const attrs = tree.beginNode();
 
                 const args_begin = tree.beginNode();

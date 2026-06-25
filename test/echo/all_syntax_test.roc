@@ -122,8 +122,12 @@ question_with_err_lambda = |strings| {
 
 # Use crash for placeholders you want to fill in later.
 implement_me_later : Str -> Str
-implement_me_later = |_str| {
-	crash "not implemented"
+implement_me_later = |str| {
+	if str == "" {
+		str
+	} else {
+		crash "not implemented"
+	}
 }
 
 # for loops can be easier to think about than List.fold (previously `List.walk`)

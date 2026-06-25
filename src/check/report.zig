@@ -78,6 +78,7 @@ const EffectfulExpect = problem_mod.EffectfulExpect;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
+const ComptimeDbg = problem_mod.ComptimeDbg;
 const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
 const ComptimeInvalidQuote = problem_mod.ComptimeInvalidQuote;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
@@ -866,6 +867,7 @@ pub const ReportBuilder = struct {
                 return self.buildPlatformDefNotFound(data);
             },
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
+            .comptime_dbg => |data| return self.buildComptimeDbgReport(data),
             .comptime_invalid_numeral => |data| return self.buildComptimeInvalidNumeralReport(data),
             .comptime_invalid_quote => |data| return self.buildComptimeInvalidQuoteReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
@@ -3801,6 +3803,43 @@ pub const ReportBuilder = struct {
             D.bytes("The"),
             D.bytes("crash").withAnnotation(.keyword),
             D.bytes("happened with this message:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_message);
+
+        return report;
+    }
+
+    fn buildComptimeDbgReport(self: *Self, data: ComptimeDbg) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "COMPTIME DBG", .info);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(
+            self.problems.getExtraString(data.message),
+        );
+
+        try D.renderSlice(&.{
+            D.bytes("This definition ran"),
+            D.bytes("dbg").withAnnotation(.keyword),
+            D.bytes("during compile-time evaluation:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .suggestion,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("The"),
+            D.bytes("dbg").withAnnotation(.keyword),
+            D.bytes("output was:"),
         }, self, &report);
         try report.document.addLineBreak();
         try report.document.addLineBreak();

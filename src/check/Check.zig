@@ -143,8 +143,28 @@ reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
 expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 /// Region of the expect body currently being checked, if any.
 current_expect_region: ?Region,
+/// Effect slots owned by the checker. These are sparse semantic slots, not a
+/// per-expression table.
+effect_slots: std.ArrayListUnmanaged(EffectSlot),
+/// Directed caller -> callee dependencies between effect slots.
+effect_edges: std.ArrayListUnmanaged(EffectEdge),
+/// Function binding patterns mapped to their checker-owned body effect slot.
+function_effect_slots_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, EffectSlotId),
+/// Function binding patterns whose checked body contains runtime-source-only work.
+function_runtime_source_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Stack of currently active effect slots.
+active_effect_slots: std.ArrayListUnmanaged(EffectSlotId),
+/// Static-dispatch function variables watched by active effect slots.
+dispatch_effect_watches: std.ArrayListUnmanaged(DispatchEffectWatch),
+/// Resolved static-dispatch function variables whose selected implementation
+/// contains runtime-source-only work.
+dispatch_runtime_source_fn_vars: std.AutoHashMapUnmanaged(Var, void),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// Final expression summaries for checked top-level values.
+top_level_check_summaries: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, ExprCheckResult),
+/// Final expression summaries for checked function/lambda bodies.
+function_body_check_summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, ExprCheckResult),
 /// Local block-statement (`s_decl`) function patterns whose body is currently
 /// being type-checked. Used to detect self-recursion (and references to an
 /// enclosing in-flight def) of LOCAL function defs so their recursive references
@@ -230,12 +250,30 @@ erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Scoped summaries for immutable local bindings. These are the only expression
+/// summaries kept after a child expression finishes, because later local lookups
+/// can consume them while the binding remains in scope.
+local_check_summaries: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, ExprCheckResult),
+/// Lexical scope stack for `local_check_summaries`.
+local_check_summary_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
 /// Stack of expressions currently being checked for top-level-equivalent
 /// compile-time hoisting. This is temporary checker state only.
 hoist_frames: std.ArrayListUnmanaged(HoistFrame),
+/// Frame-local selected-root dependencies discovered during the checker walk.
+/// Frame start indices make this a stack, not a permanent expression analysis.
+hoist_root_dependencies: std.ArrayListUnmanaged(u32),
+/// Frame-local local binders whose checked types must be concrete before the
+/// owning hoisted root can become stored static data.
+hoist_required_concrete_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
+/// Sparse metadata for expressions that actually became hoisted-root
+/// candidates. Root staging consumes this instead of walking CIR again.
+hoist_root_metadata_by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, HoistRootMetadata),
 /// Temporary maximal eligible expression roots that may become selected if an
 /// enclosing expression cannot cover them.
 hoist_expr_candidates: std.ArrayListUnmanaged(CIR.Expr.Idx),
+/// Parent roots waiting on delayed effect slots before deciding whether they
+/// replace or preserve their child candidate interval.
+hoist_delayed_roots: std.ArrayListUnmanaged(DelayedHoistRoot),
 /// Compile-time-known local dependencies encountered while checking a local
 /// binding RHS. They are selected only if that RHS cannot itself be hoisted, or
 /// later when a selected parent root recursively selects dependencies.
@@ -405,6 +443,155 @@ const LocalRecursiveRef = struct {
     def_name: ?Ident.Idx,
 };
 
+const EffectSlotId = enum(u32) { _ };
+
+const EffectSlotKind = union(enum) {
+    function_body: CIR.Expr.Idx,
+    top_level_value: CIR.Def.Idx,
+    expect_body: Region,
+    const_root_candidate: u32,
+};
+
+const EffectSlot = struct {
+    kind: EffectSlotKind,
+    direct_effect: bool = false,
+    resolved_effectful: ?bool = null,
+    reported: bool = false,
+};
+
+const EffectEdge = struct {
+    from: EffectSlotId,
+    to: EffectSlotId,
+};
+
+const DispatchEffectWatch = struct {
+    fn_var: Var,
+    slot: EffectSlotId,
+};
+
+const EffectDfsFrame = struct {
+    slot: u32,
+    next_child: usize,
+};
+
+const RuntimeDep = enum {
+    compile_time_known,
+    runtime_dependent,
+    poisoned,
+};
+
+const RootEffect = union(enum) {
+    effect_free,
+    effectful,
+    delayed: EffectSlotId,
+};
+
+const ExprCheckResult = struct {
+    runtime_dep: ?RuntimeDep = null,
+    root_effect: ?RootEffect = null,
+    has_runtime_source: bool = false,
+
+    fn fromResolvedEffect(is_effectful: bool) ExprCheckResult {
+        return .{
+            .root_effect = if (is_effectful) .effectful else .effect_free,
+        };
+    }
+
+    fn runtimeDependent() ExprCheckResult {
+        return .{
+            .runtime_dep = .runtime_dependent,
+        };
+    }
+
+    fn compileTimeKnown() ExprCheckResult {
+        return .{
+            .runtime_dep = .compile_time_known,
+        };
+    }
+
+    fn include(self: *ExprCheckResult, other: ExprCheckResult) void {
+        if (other.runtime_dep) |other_dep| {
+            switch (other_dep) {
+                .poisoned => self.runtime_dep = .poisoned,
+                .runtime_dependent => if (self.runtime_dep != .poisoned) {
+                    self.runtime_dep = .runtime_dependent;
+                },
+                .compile_time_known => if (self.runtime_dep == null) {
+                    self.runtime_dep = .compile_time_known;
+                },
+            }
+        }
+        self.has_runtime_source = self.has_runtime_source or other.has_runtime_source;
+
+        if (other.isKnownEffectful()) {
+            self.markEffectful();
+        } else if (self.root_effect == null) {
+            self.root_effect = other.root_effect;
+        }
+    }
+
+    fn markCompileTimeKnown(self: *ExprCheckResult) void {
+        if (self.runtime_dep == null) {
+            self.runtime_dep = .compile_time_known;
+        }
+    }
+
+    fn markRuntimeDependent(self: *ExprCheckResult) void {
+        if (self.runtime_dep != .poisoned) {
+            self.runtime_dep = .runtime_dependent;
+        }
+    }
+
+    fn markRuntimeSource(self: *ExprCheckResult) void {
+        self.markRuntimeDependent();
+        self.has_runtime_source = true;
+    }
+
+    fn markPoisoned(self: *ExprCheckResult) void {
+        self.runtime_dep = .poisoned;
+    }
+
+    fn markEffectful(self: *ExprCheckResult) void {
+        self.root_effect = .effectful;
+    }
+
+    fn isKnownEffectful(self: ExprCheckResult) bool {
+        if (self.root_effect) |root_effect| {
+            return root_effect == .effectful;
+        }
+        return false;
+    }
+};
+
+const HoistRootMetadata = struct {
+    dependencies: []const u32 = &.{},
+    required_concrete_patterns: []const CIR.Pattern.Idx = &.{},
+    deferred_binding_dependencies: []const CIR.Pattern.Idx = &.{},
+    has_runtime_source: bool = false,
+
+    fn deinit(self: *HoistRootMetadata, allocator: Allocator) void {
+        if (self.dependencies.len != 0) allocator.free(self.dependencies);
+        if (self.required_concrete_patterns.len != 0) allocator.free(self.required_concrete_patterns);
+        if (self.deferred_binding_dependencies.len != 0) allocator.free(self.deferred_binding_dependencies);
+        self.* = .{};
+    }
+
+    fn cloneDependencies(self: HoistRootMetadata, allocator: Allocator) Allocator.Error![]const u32 {
+        if (self.dependencies.len == 0) return &.{};
+        return try allocator.dupe(u32, self.dependencies);
+    }
+
+    fn cloneRequiredConcretePatterns(self: HoistRootMetadata, allocator: Allocator) Allocator.Error![]const CIR.Pattern.Idx {
+        if (self.required_concrete_patterns.len == 0) return &.{};
+        return try allocator.dupe(CIR.Pattern.Idx, self.required_concrete_patterns);
+    }
+
+    fn cloneDeferredBindingDependencies(self: HoistRootMetadata, allocator: Allocator) Allocator.Error![]const CIR.Pattern.Idx {
+        if (self.deferred_binding_dependencies.len == 0) return &.{};
+        return try allocator.dupe(CIR.Pattern.Idx, self.deferred_binding_dependencies);
+    }
+};
+
 const HoistFrame = struct {
     expr: CIR.Expr.Idx,
     suppressed: bool,
@@ -412,15 +599,36 @@ const HoistFrame = struct {
     binding_rhs: bool,
     binding_pattern: ?CIR.Pattern.Idx,
     candidate_start: usize,
+    delayed_start: usize,
+    dependency_start: usize,
+    required_concrete_start: usize,
     deferred_dependency_start: usize,
     has_runtime_dependency: bool = false,
     has_contextual_dependency: bool = false,
-    has_observable_effect: bool = false,
+    has_effectful_call: bool = false,
+    has_runtime_source: bool = false,
 
     fn eligible(self: @This()) bool {
         return !self.suppressed and
             !self.has_runtime_dependency and
-            !self.has_observable_effect;
+            !self.has_effectful_call;
+    }
+};
+
+const DelayedHoistRoot = struct {
+    expr: CIR.Expr.Idx,
+    pattern: ?CIR.Pattern.Idx,
+    effect_slot: EffectSlotId,
+    child_exprs: []CIR.Expr.Idx,
+    deferred_binding_dependencies: []CIR.Pattern.Idx,
+    child_delayed_start: usize,
+    child_delayed_end: usize,
+
+    fn deinit(self: *DelayedHoistRoot, allocator: Allocator) void {
+        allocator.free(self.child_exprs);
+        allocator.free(self.deferred_binding_dependencies);
+        self.child_exprs = &.{};
+        self.deferred_binding_dependencies = &.{};
     }
 };
 
@@ -428,7 +636,6 @@ const CompletedHoistResult = struct {
     expr: CIR.Expr.Idx,
     eligible: bool,
     top_level_equivalent: bool,
-    has_observable_effect: bool,
 };
 
 const HoistPatternExtraction = hoist_roots.PatternExtraction;
@@ -447,6 +654,7 @@ const HoistKnownUpdate = struct {
 
 const HoistSelectionAction = enum {
     suppress_children,
+    delay_current_root,
     cover_with_current_root,
     flush_child_candidates,
     drop_empty,
@@ -459,6 +667,49 @@ const HoistSelectionTransaction = struct {
     staged_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     known_updates: std.ArrayListUnmanaged(HoistKnownUpdate) = .empty,
     committed: bool = false,
+
+    const RootMetadataScratch = struct {
+        dependencies: std.ArrayListUnmanaged(u32) = .empty,
+        required_concrete_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
+        has_runtime_source: bool = false,
+
+        fn deinit(self: *RootMetadataScratch, allocator: Allocator) void {
+            self.dependencies.deinit(allocator);
+            self.required_concrete_patterns.deinit(allocator);
+        }
+
+        fn appendDependencyRoot(
+            self: *RootMetadataScratch,
+            allocator: Allocator,
+            root_index: u32,
+        ) Allocator.Error!void {
+            for (self.dependencies.items) |existing| {
+                if (existing == root_index) return;
+            }
+            try self.dependencies.append(allocator, root_index);
+        }
+
+        fn appendRequiredConcretePattern(
+            self: *RootMetadataScratch,
+            allocator: Allocator,
+            pattern: CIR.Pattern.Idx,
+        ) Allocator.Error!void {
+            for (self.required_concrete_patterns.items) |existing| {
+                if (existing == pattern) return;
+            }
+            try self.required_concrete_patterns.append(allocator, pattern);
+        }
+
+        fn cloneDependencies(self: *RootMetadataScratch, allocator: Allocator) Allocator.Error![]const u32 {
+            if (self.dependencies.items.len == 0) return &.{};
+            return try allocator.dupe(u32, self.dependencies.items);
+        }
+
+        fn cloneRequiredConcretePatterns(self: *RootMetadataScratch, allocator: Allocator) Allocator.Error![]const CIR.Pattern.Idx {
+            if (self.required_concrete_patterns.items.len == 0) return &.{};
+            return try allocator.dupe(CIR.Pattern.Idx, self.required_concrete_patterns.items);
+        }
+    };
 
     fn init(checker: *Self) HoistSelectionTransaction {
         return .{ .checker = checker };
@@ -553,13 +804,27 @@ const HoistSelectionTransaction = struct {
             return root_index;
         }
 
-        try self.stageExprDependencies(expr);
+        var root_metadata = RootMetadataScratch{};
+        defer root_metadata.deinit(self.checker.gpa);
+        try self.stageStoredRootMetadata(expr, &root_metadata);
+        const dependencies = try root_metadata.cloneDependencies(self.checker.gpa);
+        errdefer if (dependencies.len != 0) self.checker.gpa.free(dependencies);
+        const required_concrete_patterns = try root_metadata.cloneRequiredConcretePatterns(self.checker.gpa);
+        errdefer if (required_concrete_patterns.len != 0) self.checker.gpa.free(required_concrete_patterns);
 
         const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
         try self.staged_roots.append(self.checker.gpa, .{
             .expr = expr,
             .pattern = pattern,
+            .dependencies = dependencies,
+            .required_concrete_patterns = required_concrete_patterns,
+            .has_runtime_source = root_metadata.has_runtime_source,
         });
+        errdefer {
+            const root = &self.staged_roots.items[self.staged_roots.items.len - 1];
+            hoist_roots.deinitSelectedRoot(self.checker.gpa, root);
+            _ = self.staged_roots.pop();
+        }
         try self.staged_exprs.put(self.checker.gpa, expr, root_index);
         if (pattern) |pattern_idx| {
             try self.stageBindingAssociation(pattern_idx, root_index);
@@ -571,244 +836,101 @@ const HoistSelectionTransaction = struct {
         self: *HoistSelectionTransaction,
         pattern: CIR.Pattern.Idx,
         extraction: HoistPatternExtraction,
-    ) Allocator.Error!u32 {
+    ) Allocator.Error!?u32 {
         if (self.checker.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
         if (self.staged_bindings.get(pattern)) |root_index| return root_index;
 
-        try self.stageExprDependencies(extraction.base_expr);
+        var root_metadata = RootMetadataScratch{};
+        defer root_metadata.deinit(self.checker.gpa);
+        if (!try self.stagePatternExtractionBaseMetadata(extraction.base_expr, &root_metadata)) {
+            return null;
+        }
+        const dependencies = try root_metadata.cloneDependencies(self.checker.gpa);
+        errdefer if (dependencies.len != 0) self.checker.gpa.free(dependencies);
+        const required_concrete_patterns = try root_metadata.cloneRequiredConcretePatterns(self.checker.gpa);
+        errdefer if (required_concrete_patterns.len != 0) self.checker.gpa.free(required_concrete_patterns);
 
         const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
         try self.staged_roots.append(self.checker.gpa, .{
             .expr = extraction.base_expr,
             .pattern = pattern,
             .body = .{ .pattern_extraction = extraction },
+            .dependencies = dependencies,
+            .required_concrete_patterns = required_concrete_patterns,
+            .has_runtime_source = root_metadata.has_runtime_source,
         });
+        errdefer {
+            const root = &self.staged_roots.items[self.staged_roots.items.len - 1];
+            hoist_roots.deinitSelectedRoot(self.checker.gpa, root);
+            _ = self.staged_roots.pop();
+        }
         try self.stageBindingAssociation(pattern, root_index);
         return root_index;
+    }
+
+    fn stagePatternExtractionBaseMetadata(
+        self: *HoistSelectionTransaction,
+        expr: CIR.Expr.Idx,
+        root_metadata: *RootMetadataScratch,
+    ) Allocator.Error!bool {
+        switch (self.checker.cir.store.getExpr(expr)) {
+            .e_lookup_local => |lookup| {
+                if (self.checker.patternIsTopLevel(lookup.pattern_idx)) return true;
+                const root_index = try self.stageBindingRoot(lookup.pattern_idx) orelse return false;
+                try root_metadata.appendDependencyRoot(self.checker.gpa, root_index);
+                return true;
+            },
+            .e_lookup_external => return true,
+            else => {
+                try self.stageStoredRootMetadata(expr, root_metadata);
+                return true;
+            },
+        }
     }
 
     fn stageBindingRoot(
         self: *HoistSelectionTransaction,
         pattern: CIR.Pattern.Idx,
-    ) Allocator.Error!bool {
-        if (self.checker.hoist_selected_bindings.get(pattern) != null) return true;
-        if (self.staged_bindings.get(pattern) != null) return true;
-        const known = self.checker.hoist_known_values.get(pattern) orelse return false;
+    ) Allocator.Error!?u32 {
+        if (self.checker.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
+        if (self.staged_bindings.get(pattern)) |root_index| return root_index;
+        const known = self.checker.hoist_known_values.get(pattern) orelse return null;
         return switch (known) {
             .binding_rhs => |expr| {
                 const root_index = try self.stageExprRoot(expr, pattern);
                 try self.stageKnownUpdate(pattern, root_index);
-                return true;
+                return root_index;
             },
             .pattern_extraction => |extraction| {
-                const root_index = try self.stagePatternExtractionRoot(pattern, extraction);
+                const root_index = try self.stagePatternExtractionRoot(pattern, extraction) orelse return null;
                 try self.stageKnownUpdate(pattern, root_index);
-                return true;
+                return root_index;
             },
-            .selected_root => true,
-            .unavailable_runtime => false,
+            .selected_root => self.checker.hoist_selected_bindings.get(pattern),
+            .unavailable_runtime => null,
         };
     }
 
-    fn stageExprDependencies(self: *HoistSelectionTransaction, expr: CIR.Expr.Idx) Allocator.Error!void {
-        var context = HoistedDependencyContext{};
-        defer context.deinit(self.checker.gpa);
-        try self.stageExprDependenciesInternal(expr, &context);
-    }
-
-    fn stageExprDependenciesInternal(
+    fn stageStoredRootMetadata(
         self: *HoistSelectionTransaction,
         expr: CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
+        root_metadata: *RootMetadataScratch,
     ) Allocator.Error!void {
-        switch (self.checker.cir.store.getExpr(expr)) {
-            .e_lookup_local => |lookup| {
-                if (self.checker.patternIsTopLevel(lookup.pattern_idx)) return;
-                if (self.checker.hoist_selected_bindings.contains(lookup.pattern_idx)) return;
-                if (self.staged_bindings.contains(lookup.pattern_idx)) return;
-                if (context.contains(lookup.pattern_idx)) return;
-                _ = try self.stageBindingRoot(lookup.pattern_idx);
-            },
-            .e_lookup_external,
-            .e_lookup_required,
-            .e_str_segment,
-            .e_bytes_literal,
-            .e_num,
-            .e_num_from_numeral,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_empty_list,
-            .e_empty_record,
-            .e_zero_argument_tag,
-            .e_runtime_error,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_crash,
-            .e_closure,
-            .e_lambda,
-            .e_hosted_lambda,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
-            .e_for,
-            .e_return,
-            .e_break,
-            .e_run_low_level,
-            => {},
-            .e_str => |str| try self.stageExprSpanDependencies(str.span, context),
-            .e_list => |list| try self.stageExprSpanDependencies(list.elems, context),
-            .e_tuple => |tuple| try self.stageExprSpanDependencies(tuple.elems, context),
-            .e_block => |block| try self.stageBlockDependencies(block.stmts, block.final_expr, context),
-            .e_match => |match| try self.stageMatchDependencies(match, context),
-            .e_if => |if_expr| try self.stageIfDependencies(if_expr.branches, if_expr.final_else, context),
-            .e_call => |call| {
-                try self.stageExprDependenciesInternal(call.func, context);
-                try self.stageExprSpanDependencies(call.args, context);
-            },
-            .e_method_call => |call| {
-                try self.stageExprDependenciesInternal(call.receiver, context);
-                try self.stageExprSpanDependencies(call.args, context);
-            },
-            .e_dispatch_call => |call| {
-                try self.stageExprDependenciesInternal(call.receiver, context);
-                try self.stageExprSpanDependencies(call.args, context);
-            },
-            .e_record => |record| try self.stageRecordDependencies(record.fields, record.ext, context),
-            .e_tag => |tag| try self.stageExprSpanDependencies(tag.args, context),
-            .e_nominal => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
-            .e_nominal_external => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
-            .e_binop => |binop| {
-                try self.stageExprDependenciesInternal(binop.lhs, context);
-                try self.stageExprDependenciesInternal(binop.rhs, context);
-            },
-            .e_unary_minus => |unary| try self.stageExprDependenciesInternal(unary.expr, context),
-            .e_unary_not => |unary| try self.stageExprDependenciesInternal(unary.expr, context),
-            .e_field_access => |field| try self.stageExprDependenciesInternal(field.receiver, context),
-            .e_interpolation => |interpolation| {
-                try self.stageExprDependenciesInternal(interpolation.first, context);
-                try self.stageExprSpanDependencies(interpolation.parts, context);
-            },
-            .e_structural_eq => |eq| {
-                try self.stageExprDependenciesInternal(eq.lhs, context);
-                try self.stageExprDependenciesInternal(eq.rhs, context);
-            },
-            .e_structural_hash => |h| {
-                try self.stageExprDependenciesInternal(h.value, context);
-                try self.stageExprDependenciesInternal(h.hasher, context);
-            },
-            .e_method_eq => |eq| {
-                try self.stageExprDependenciesInternal(eq.lhs, context);
-                try self.stageExprDependenciesInternal(eq.rhs, context);
-            },
-            .e_type_method_call => |call| try self.stageExprSpanDependencies(call.args, context),
-            .e_type_dispatch_call => |call| try self.stageExprSpanDependencies(call.args, context),
-            .e_tuple_access => |access| try self.stageExprDependenciesInternal(access.tuple, context),
+        const stored = self.checker.hoist_root_metadata_by_expr.get(expr) orelse
+            hoistSelectionInvariant("selected hoisted root was missing checker-produced metadata");
+
+        for (stored.dependencies) |dependency| {
+            try root_metadata.appendDependencyRoot(self.checker.gpa, dependency);
         }
-    }
-
-    fn stageExprSpanDependencies(
-        self: *HoistSelectionTransaction,
-        span: CIR.Expr.Span,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        for (self.checker.cir.store.sliceExpr(span)) |child| {
-            try self.stageExprDependenciesInternal(child, context);
-        }
-    }
-
-    fn stageBlockDependencies(
-        self: *HoistSelectionTransaction,
-        statements: CIR.Statement.Span,
-        final_expr: CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        const mark = context.mark();
-        defer context.pop(mark);
-
-        for (self.checker.cir.store.sliceStatements(statements)) |statement| {
-            switch (self.checker.cir.store.getStatement(statement)) {
-                .s_decl => |decl| {
-                    try self.stageExprDependenciesInternal(decl.expr, context);
-                    try self.checker.appendHoistedDependencyPatternBinders(decl.pattern, context, .internal);
-                },
-                .s_expr => |expr_stmt| try self.stageExprDependenciesInternal(expr_stmt.expr, context),
-                .s_import,
-                .s_alias_decl,
-                .s_nominal_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_runtime_error,
-                => {},
+        for (stored.deferred_binding_dependencies) |dependency| {
+            if (try self.stageBindingRoot(dependency)) |root_index| {
+                try root_metadata.appendDependencyRoot(self.checker.gpa, root_index);
             }
         }
-        try self.stageExprDependenciesInternal(final_expr, context);
-    }
-
-    fn stageMatchDependencies(
-        self: *HoistSelectionTransaction,
-        match: CIR.Expr.Match,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        try self.stageExprDependenciesInternal(match.cond, context);
-        for (self.checker.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
-            const branch = self.checker.cir.store.getMatchBranch(branch_idx);
-            const mark = context.mark();
-            defer context.pop(mark);
-            for (self.checker.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-                const branch_pattern = self.checker.cir.store.getMatchBranchPattern(branch_pattern_idx);
-                try self.checker.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context, .contextual);
-            }
-            if (branch.guard) |guard| {
-                try self.stageExprDependenciesInternal(guard, context);
-            }
-            try self.stageExprDependenciesInternal(branch.value, context);
+        for (stored.required_concrete_patterns) |pattern| {
+            try root_metadata.appendRequiredConcretePattern(self.checker.gpa, pattern);
         }
-    }
-
-    fn stageIfDependencies(
-        self: *HoistSelectionTransaction,
-        branches: CIR.Expr.IfBranch.Span,
-        final_else: CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        for (self.checker.cir.store.sliceIfBranches(branches)) |branch_idx| {
-            const branch = self.checker.cir.store.getIfBranch(branch_idx);
-            try self.stageExprDependenciesInternal(branch.cond, context);
-            try self.stageExprDependenciesInternal(branch.body, context);
-        }
-        try self.stageExprDependenciesInternal(final_else, context);
-    }
-
-    fn stageRecordDependencies(
-        self: *HoistSelectionTransaction,
-        fields: CIR.RecordField.Span,
-        ext: ?CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        if (ext) |ext_expr| {
-            try self.stageExprDependenciesInternal(ext_expr, context);
-        }
-        for (self.checker.cir.store.sliceRecordFields(fields)) |field_idx| {
-            const field = self.checker.cir.store.getRecordField(field_idx);
-            try self.stageExprDependenciesInternal(field.value, context);
-        }
+        root_metadata.has_runtime_source = root_metadata.has_runtime_source or stored.has_runtime_source;
     }
 
     fn commit(self: *HoistSelectionTransaction) Allocator.Error!void {
@@ -860,8 +982,8 @@ const HoistFrameGuard = struct {
     expr: CIR.Expr.Idx,
     active: bool = true,
 
-    fn finish(self: *HoistFrameGuard, does_fx: bool) Allocator.Error!void {
-        try self.checker.finishHoistFrame(self.expr, does_fx);
+    fn finish(self: *HoistFrameGuard, check_result: ExprCheckResult) Allocator.Error!void {
+        try self.checker.finishHoistFrame(self.expr, check_result);
         self.active = false;
     }
 
@@ -1082,7 +1204,16 @@ fn initAssumePrepared(
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
+        .effect_slots = .empty,
+        .effect_edges = .empty,
+        .function_effect_slots_by_pattern = .{},
+        .function_runtime_source_patterns = .{},
+        .active_effect_slots = .empty,
+        .dispatch_effect_watches = .empty,
+        .dispatch_runtime_source_fn_vars = .{},
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
+        .top_level_check_summaries = .{},
+        .function_body_check_summaries = .{},
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
@@ -1091,8 +1222,14 @@ fn initAssumePrepared(
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
+        .local_check_summaries = .{},
+        .local_check_summary_scope_patterns = .empty,
         .hoist_frames = .empty,
+        .hoist_root_dependencies = .empty,
+        .hoist_required_concrete_patterns = .empty,
+        .hoist_root_metadata_by_expr = .{},
         .hoist_expr_candidates = .empty,
+        .hoist_delayed_roots = .empty,
         .hoist_deferred_binding_dependencies = .empty,
         .hoist_binding_candidates = .{},
         .hoist_binding_scope_patterns = .empty,
@@ -1180,8 +1317,21 @@ pub fn deinit(self: *Self) void {
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.local_check_summaries.deinit(self.gpa);
+    self.local_check_summary_scope_patterns.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
+    self.hoist_root_dependencies.deinit(self.gpa);
+    self.hoist_required_concrete_patterns.deinit(self.gpa);
+    var root_metadata_iter = self.hoist_root_metadata_by_expr.iterator();
+    while (root_metadata_iter.next()) |entry| {
+        entry.value_ptr.deinit(self.gpa);
+    }
+    self.hoist_root_metadata_by_expr.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
+    for (self.hoist_delayed_roots.items) |*root| {
+        root.deinit(self.gpa);
+    }
+    self.hoist_delayed_roots.deinit(self.gpa);
     self.hoist_deferred_binding_dependencies.deinit(self.gpa);
     self.hoist_binding_candidates.deinit(self.gpa);
     self.hoist_binding_scope_patterns.deinit(self.gpa);
@@ -1222,7 +1372,16 @@ pub fn deinit(self: *Self) void {
     self.interpolation_constraint_metadata.deinit(self.gpa);
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
+    self.effect_slots.deinit(self.gpa);
+    self.effect_edges.deinit(self.gpa);
+    self.function_effect_slots_by_pattern.deinit(self.gpa);
+    self.function_runtime_source_patterns.deinit(self.gpa);
+    self.active_effect_slots.deinit(self.gpa);
+    self.dispatch_effect_watches.deinit(self.gpa);
+    self.dispatch_runtime_source_fn_vars.deinit(self.gpa);
     self.top_level_ptrns.deinit();
+    self.top_level_check_summaries.deinit(self.gpa);
+    self.function_body_check_summaries.deinit(self.gpa);
     self.local_processing_ptrns.deinit(self.gpa);
     self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
@@ -1243,6 +1402,492 @@ pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoist
     return self.selected_hoisted_roots.items;
 }
 
+fn beginEffectSlot(self: *Self, kind: EffectSlotKind) Allocator.Error!EffectSlotId {
+    const id = try self.allocEffectSlot(kind);
+    try self.active_effect_slots.append(self.gpa, id);
+    return id;
+}
+
+fn allocEffectSlot(self: *Self, kind: EffectSlotKind) Allocator.Error!EffectSlotId {
+    const id: EffectSlotId = @enumFromInt(self.effect_slots.items.len);
+    try self.effect_slots.append(self.gpa, .{ .kind = kind });
+    return id;
+}
+
+fn endEffectSlot(self: *Self, slot: EffectSlotId) void {
+    if (self.active_effect_slots.items.len == 0) {
+        std.debug.panic("check invariant violated: ending effect slot with an empty active stack", .{});
+    }
+    const top = self.active_effect_slots.items[self.active_effect_slots.items.len - 1];
+    if (top != slot) {
+        std.debug.panic("check invariant violated: ending non-top effect slot", .{});
+    }
+    _ = self.active_effect_slots.pop();
+}
+
+fn currentEffectSlot(self: *const Self) ?EffectSlotId {
+    if (self.active_effect_slots.items.len == 0) return null;
+    return self.active_effect_slots.items[self.active_effect_slots.items.len - 1];
+}
+
+fn effectSlotPtr(self: *Self, slot: EffectSlotId) *EffectSlot {
+    return &self.effect_slots.items[@intFromEnum(slot)];
+}
+
+fn invalidateEffectSlotResolutions(self: *Self) void {
+    for (self.effect_slots.items) |*slot| {
+        slot.resolved_effectful = null;
+    }
+}
+
+fn resolveEffectSlots(self: *Self) Allocator.Error!void {
+    const slot_count = self.effect_slots.items.len;
+    if (slot_count == 0) return;
+
+    var outgoing = try self.gpa.alloc(std.ArrayListUnmanaged(u32), slot_count);
+    defer {
+        for (outgoing) |*edges| {
+            edges.deinit(self.gpa);
+        }
+        self.gpa.free(outgoing);
+    }
+    @memset(outgoing, .empty);
+
+    var incoming = try self.gpa.alloc(std.ArrayListUnmanaged(u32), slot_count);
+    defer {
+        for (incoming) |*edges| {
+            edges.deinit(self.gpa);
+        }
+        self.gpa.free(incoming);
+    }
+    @memset(incoming, .empty);
+
+    for (self.effect_edges.items) |edge| {
+        const from: u32 = @intFromEnum(edge.from);
+        const to: u32 = @intFromEnum(edge.to);
+        try outgoing[@intCast(from)].append(self.gpa, to);
+        try incoming[@intCast(to)].append(self.gpa, from);
+    }
+
+    var visited = try self.gpa.alloc(bool, slot_count);
+    defer self.gpa.free(visited);
+    @memset(visited, false);
+
+    var order: std.ArrayListUnmanaged(u32) = .empty;
+    defer order.deinit(self.gpa);
+
+    var dfs_stack: std.ArrayListUnmanaged(EffectDfsFrame) = .empty;
+    defer dfs_stack.deinit(self.gpa);
+
+    for (0..slot_count) |start_usize| {
+        const start: u32 = @intCast(start_usize);
+        if (visited[start_usize]) continue;
+
+        visited[start_usize] = true;
+        try dfs_stack.append(self.gpa, .{ .slot = start, .next_child = 0 });
+
+        while (dfs_stack.items.len > 0) {
+            const top_index = dfs_stack.items.len - 1;
+            const top_slot = dfs_stack.items[top_index].slot;
+            const top_slot_index: usize = @intCast(top_slot);
+            const next_child = dfs_stack.items[top_index].next_child;
+            const children = outgoing[top_slot_index].items;
+
+            if (next_child < children.len) {
+                dfs_stack.items[top_index].next_child = next_child + 1;
+                const child = children[next_child];
+                const child_index: usize = @intCast(child);
+                if (!visited[child_index]) {
+                    visited[child_index] = true;
+                    try dfs_stack.append(self.gpa, .{ .slot = child, .next_child = 0 });
+                }
+            } else {
+                try order.append(self.gpa, top_slot);
+                _ = dfs_stack.pop();
+            }
+        }
+    }
+
+    var component_by_slot = try self.gpa.alloc(u32, slot_count);
+    defer self.gpa.free(component_by_slot);
+    @memset(component_by_slot, std.math.maxInt(u32));
+
+    var assign_stack: std.ArrayListUnmanaged(u32) = .empty;
+    defer assign_stack.deinit(self.gpa);
+
+    var component_count: u32 = 0;
+    var order_index = order.items.len;
+    while (order_index > 0) {
+        order_index -= 1;
+        const start = order.items[order_index];
+        const start_index: usize = @intCast(start);
+        if (component_by_slot[start_index] != std.math.maxInt(u32)) continue;
+
+        component_by_slot[start_index] = component_count;
+        try assign_stack.append(self.gpa, start);
+
+        while (assign_stack.items.len > 0) {
+            const slot = assign_stack.pop().?;
+            const slot_index: usize = @intCast(slot);
+            for (incoming[slot_index].items) |next| {
+                const next_index: usize = @intCast(next);
+                if (component_by_slot[next_index] != std.math.maxInt(u32)) continue;
+                component_by_slot[next_index] = component_count;
+                try assign_stack.append(self.gpa, next);
+            }
+        }
+
+        component_count += 1;
+    }
+
+    const component_count_usize: usize = @intCast(component_count);
+    var component_effectful = try self.gpa.alloc(bool, component_count_usize);
+    defer self.gpa.free(component_effectful);
+    @memset(component_effectful, false);
+
+    for (self.effect_slots.items, 0..) |slot, slot_index| {
+        if (!slot.direct_effect) continue;
+        component_effectful[@intCast(component_by_slot[slot_index])] = true;
+    }
+
+    var component_dependents = try self.gpa.alloc(std.ArrayListUnmanaged(u32), component_count_usize);
+    defer {
+        for (component_dependents) |*dependents| {
+            dependents.deinit(self.gpa);
+        }
+        self.gpa.free(component_dependents);
+    }
+    @memset(component_dependents, .empty);
+
+    for (self.effect_edges.items) |edge| {
+        const caller_slot: usize = @intCast(@intFromEnum(edge.from));
+        const callee_slot: usize = @intCast(@intFromEnum(edge.to));
+        const caller_component = component_by_slot[caller_slot];
+        const callee_component = component_by_slot[callee_slot];
+        if (caller_component == callee_component) continue;
+        try component_dependents[@intCast(callee_component)].append(self.gpa, caller_component);
+    }
+
+    var worklist: std.ArrayListUnmanaged(u32) = .empty;
+    defer worklist.deinit(self.gpa);
+
+    for (component_effectful, 0..) |is_effectful, component_index| {
+        if (!is_effectful) continue;
+        try worklist.append(self.gpa, @intCast(component_index));
+    }
+
+    var worklist_index: usize = 0;
+    while (worklist_index < worklist.items.len) {
+        const component = worklist.items[worklist_index];
+        worklist_index += 1;
+
+        for (component_dependents[@intCast(component)].items) |dependent| {
+            if (component_effectful[@intCast(dependent)]) continue;
+            component_effectful[@intCast(dependent)] = true;
+            try worklist.append(self.gpa, dependent);
+        }
+    }
+
+    for (self.effect_slots.items, 0..) |*slot, slot_index| {
+        slot.resolved_effectful = component_effectful[@intCast(component_by_slot[slot_index])];
+    }
+}
+
+fn effectSlotIsEffectful(self: *Self, slot: EffectSlotId) Allocator.Error!bool {
+    const slot_ptr = self.effectSlotPtr(slot);
+    if (slot_ptr.resolved_effectful) |resolved| return resolved;
+    try self.resolveEffectSlots();
+    return self.effectSlotPtr(slot).resolved_effectful orelse false;
+}
+
+fn markActiveEffectSlotEffectful(self: *Self) void {
+    const slot = self.currentEffectSlot() orelse return;
+    const slot_ptr = self.effectSlotPtr(slot);
+    slot_ptr.direct_effect = true;
+    self.invalidateEffectSlotResolutions();
+}
+
+fn recordActiveEffectSlotDependency(self: *Self, callee_slot: EffectSlotId) Allocator.Error!void {
+    const caller_slot = self.currentEffectSlot() orelse return;
+    try self.recordEffectSlotDependency(caller_slot, callee_slot);
+}
+
+fn recordEffectSlotDependency(self: *Self, caller_slot: EffectSlotId, callee_slot: EffectSlotId) Allocator.Error!void {
+    try self.effect_edges.append(self.gpa, .{
+        .from = caller_slot,
+        .to = callee_slot,
+    });
+    self.invalidateEffectSlotResolutions();
+}
+
+fn recordFunctionEffectSlotForBinding(self: *Self, pattern: CIR.Pattern.Idx, slot: EffectSlotId) Allocator.Error!void {
+    try self.function_effect_slots_by_pattern.put(self.gpa, pattern, slot);
+}
+
+fn recordFunctionRuntimeSourceForBinding(self: *Self, pattern: CIR.Pattern.Idx, has_runtime_source: bool) Allocator.Error!void {
+    if (has_runtime_source) {
+        try self.function_runtime_source_patterns.put(self.gpa, pattern, {});
+    } else {
+        _ = self.function_runtime_source_patterns.remove(pattern);
+    }
+}
+
+fn recordDirectCalleeEffectDependency(self: *Self, callee: CIR.Expr.Idx) Allocator.Error!void {
+    switch (self.cir.store.getExpr(callee)) {
+        .e_lookup_local => |lookup| {
+            const callee_slot = self.function_effect_slots_by_pattern.get(lookup.pattern_idx) orelse return;
+            try self.recordActiveEffectSlotDependency(callee_slot);
+        },
+        else => {},
+    }
+}
+
+fn moduleNodeHasRuntimeSource(module: *const ModuleEnv, node_idx: CIR.Node.Idx) bool {
+    const dep = module.runtimeDependencySummaryForNode(node_idx) orelse return false;
+    return switch (dep) {
+        .compile_time_known => false,
+        .runtime_dependent,
+        .poisoned,
+        => true,
+    };
+}
+
+fn defHasRuntimeSource(module: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    const def = module.store.getDef(def_idx);
+    const def_expr = module.store.getExpr(def.expr);
+    const body_expr = switch (def_expr) {
+        .e_lambda => |lambda| lambda.body,
+        .e_closure => |closure| switch (module.store.getExpr(closure.lambda_idx)) {
+            .e_lambda => |lambda| lambda.body,
+            else => return moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.expr)) or
+                moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.pattern)),
+        },
+        else => return moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.expr)) or
+            moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.pattern)),
+    };
+    return moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(body_expr)) or
+        moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.expr)) or
+        moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(def.pattern));
+}
+
+fn importedModuleForImport(
+    self: *Self,
+    module: *const ModuleEnv,
+    import_idx: CIR.Import.Idx,
+) ?*const ModuleEnv {
+    const module_idx = module.imports.getResolvedModule(import_idx) orelse return null;
+    if (module_idx >= self.imported_modules.len) return null;
+    return self.imported_modules[module_idx];
+}
+
+fn topLevelDefForPattern(module: *const ModuleEnv, pattern: CIR.Pattern.Idx) ?CIR.Def.Idx {
+    return topLevelDefForNode(module, ModuleEnv.nodeIdxFrom(pattern));
+}
+
+fn topLevelDefForNode(module: *const ModuleEnv, node: CIR.Node.Idx) ?CIR.Def.Idx {
+    for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
+        const def = module.store.getDef(def_idx);
+        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.pattern) == node or ModuleEnv.nodeIdxFrom(def.expr) == node) {
+            return def_idx;
+        }
+    }
+    return null;
+}
+
+fn callableExprHasRuntimeSource(
+    self: *Self,
+    module: *const ModuleEnv,
+    callee: CIR.Expr.Idx,
+) bool {
+    return switch (module.store.getExpr(callee)) {
+        .e_lookup_local => |lookup| {
+            if (module == self.cir and self.function_runtime_source_patterns.contains(lookup.pattern_idx)) return true;
+            const def_idx = topLevelDefForPattern(module, lookup.pattern_idx) orelse return false;
+            return defHasRuntimeSource(module, def_idx);
+        },
+        .e_lookup_external => |external| {
+            const imported_module = self.importedModuleForImport(module, external.module_idx) orelse return false;
+            const def_idx = topLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx)) orelse return false;
+            return defHasRuntimeSource(imported_module, def_idx);
+        },
+        .e_closure => |closure| switch (module.store.getExpr(closure.lambda_idx)) {
+            .e_lambda => |lambda| moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(lambda.body)),
+            else => false,
+        },
+        .e_lambda => |lambda| moduleNodeHasRuntimeSource(module, ModuleEnv.nodeIdxFrom(lambda.body)),
+        else => false,
+    };
+}
+
+fn capturePatternIsCompileTimeKnownForHoist(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!bool {
+    if (self.patternIsTopLevel(pattern_idx)) return true;
+
+    const local_summary = self.local_check_summaries.get(pattern_idx);
+    const summary_says_compile_time_known = if (local_summary) |summary| known_summary: {
+        if (summary.runtime_dep) |dep| {
+            break :known_summary dep == .compile_time_known;
+        }
+        break :known_summary false;
+    } else false;
+
+    if (self.hoist_selection_suppressed_depth != 0) {
+        if (self.hoist_known_values.get(pattern_idx)) |known_value| {
+            switch (known_value) {
+                .pattern_extraction => {
+                    if (try self.ensureHoistedBindingRootIndex(pattern_idx)) |root_index| {
+                        try self.appendCurrentHoistDependencyRoot(root_index);
+                        return true;
+                    }
+                },
+                .binding_rhs,
+                .selected_root,
+                .unavailable_runtime,
+                => {},
+            }
+        }
+    }
+
+    if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(pattern_idx)) {
+        try self.hoist_deferred_binding_dependencies.append(self.gpa, pattern_idx);
+        return true;
+    }
+
+    if (try self.ensureHoistedBindingRootIndex(pattern_idx)) |root_index| {
+        try self.appendCurrentHoistDependencyRoot(root_index);
+        return true;
+    }
+
+    if (self.markHoistContextualDependencyForLookup(pattern_idx)) {
+        return summary_says_compile_time_known;
+    }
+
+    return summary_says_compile_time_known;
+}
+
+fn recordDispatchRuntimeSourceIfNeeded(
+    self: *Self,
+    constraint_fn_var: Var,
+    method_module: *const ModuleEnv,
+    method_def: CIR.Def.Idx,
+) Allocator.Error!void {
+    if (defHasRuntimeSource(method_module, method_def)) {
+        try self.dispatch_runtime_source_fn_vars.put(self.gpa, constraint_fn_var, {});
+    }
+}
+
+fn dispatchHasRuntimeSource(self: *Self, fn_var: Var) bool {
+    if (self.dispatch_runtime_source_fn_vars.count() == 0) return false;
+    if (self.dispatch_runtime_source_fn_vars.contains(fn_var)) return true;
+    const resolved = self.types.resolveVar(fn_var).var_;
+    return resolved != fn_var and self.dispatch_runtime_source_fn_vars.contains(resolved);
+}
+
+fn recordDispatchEffectWatch(self: *Self, fn_var: Var) Allocator.Error!void {
+    const slot = self.currentEffectSlot() orelse return;
+    try self.recordDispatchEffectWatchForSlot(fn_var, slot);
+}
+
+fn recordDispatchEffectWatchForSlot(self: *Self, fn_var: Var, slot: EffectSlotId) Allocator.Error!void {
+    try self.dispatch_effect_watches.append(self.gpa, .{
+        .fn_var = fn_var,
+        .slot = slot,
+    });
+}
+
+fn dispatchEffectIsDeferred(self: *Self, env: *const Env, fn_var: Var) bool {
+    for (env.deferred_static_dispatch_constraints.items.items) |deferred_constraint| {
+        for (self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints)) |constraint| {
+            if (constraint.fn_var == fn_var) return true;
+        }
+    }
+    return false;
+}
+
+fn markExprResultDelayedOnDispatch(
+    self: *Self,
+    result: *ExprCheckResult,
+    expr_idx: CIR.Expr.Idx,
+    fn_var: Var,
+    env: *const Env,
+) Allocator.Error!void {
+    if (!self.dispatchEffectIsDeferred(env, fn_var)) return;
+    try self.markExprResultDelayedOnDispatchSlot(result, expr_idx, fn_var);
+}
+
+fn markExprResultDelayedOnDispatchSlot(
+    self: *Self,
+    result: *ExprCheckResult,
+    expr_idx: CIR.Expr.Idx,
+    fn_var: Var,
+) Allocator.Error!void {
+    const slot = try self.allocEffectSlot(.{ .const_root_candidate = @intFromEnum(expr_idx) });
+    errdefer {
+        _ = self.effect_slots.pop();
+    }
+    if (result.root_effect) |existing_effect| {
+        switch (existing_effect) {
+            .delayed => |child_slot| try self.recordEffectSlotDependency(slot, child_slot),
+            .effect_free,
+            .effectful,
+            => {},
+        }
+    }
+    try self.recordDispatchEffectWatchForSlot(fn_var, slot);
+    result.root_effect = .{ .delayed = slot };
+}
+
+fn reportTopLevelEffectSlot(self: *Self, slot: EffectSlotId, env: ?*Env) Allocator.Error!void {
+    const slot_ptr = self.effectSlotPtr(slot);
+    const def_idx = switch (slot_ptr.kind) {
+        .top_level_value => |def_idx| def_idx,
+        .function_body,
+        .expect_body,
+        .const_root_candidate,
+        => return,
+    };
+    const def = self.cir.store.getDef(def_idx);
+    if (!slot_ptr.reported) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
+            .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
+        } });
+        slot_ptr.reported = true;
+    }
+    if (env) |active_env| {
+        try self.unifyWith(ModuleEnv.varFrom(def.expr), .err, active_env);
+    }
+}
+
+fn reportExpectEffectSlot(self: *Self, slot: EffectSlotId) Allocator.Error!bool {
+    const slot_ptr = self.effectSlotPtr(slot);
+    const region = switch (slot_ptr.kind) {
+        .expect_body => |region| region,
+        .function_body,
+        .top_level_value,
+        .const_root_candidate,
+        => return false,
+    };
+    if (!slot_ptr.reported) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+            .region = region,
+        } });
+        slot_ptr.reported = true;
+    }
+    return true;
+}
+
+fn markDispatchEffectWatchers(self: *Self, fn_var: Var) Allocator.Error!bool {
+    var reported_expect = false;
+    for (self.dispatch_effect_watches.items) |watch| {
+        if (watch.fn_var != fn_var) continue;
+        const slot_ptr = self.effectSlotPtr(watch.slot);
+        slot_ptr.direct_effect = true;
+        self.invalidateEffectSlotResolutions();
+        reported_expect = try self.reportExpectEffectSlot(watch.slot) or reported_expect;
+        try self.reportTopLevelEffectSlot(watch.slot, null);
+    }
+    return reported_expect;
+}
+
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator.Error!HoistFrameGuard {
     try self.hoist_frames.append(self.gpa, .{
         .expr = expr,
@@ -1251,6 +1896,9 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool) Allocator
         .binding_rhs = binding_rhs,
         .binding_pattern = if (binding_rhs) self.checking_binding_rhs_pattern else null,
         .candidate_start = self.hoist_expr_candidates.items.len,
+        .delayed_start = self.hoist_delayed_roots.items.len,
+        .dependency_start = self.hoist_root_dependencies.items.len,
+        .required_concrete_start = self.hoist_required_concrete_patterns.items.len,
         .deferred_dependency_start = self.hoist_deferred_binding_dependencies.items.len,
     });
     self.last_hoist_result = null;
@@ -1270,36 +1918,183 @@ fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
     }
     _ = self.hoist_frames.pop();
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
+    self.hoist_root_dependencies.shrinkRetainingCapacity(frame.dependency_start);
+    self.hoist_required_concrete_patterns.shrinkRetainingCapacity(frame.required_concrete_start);
+    for (self.hoist_delayed_roots.items[frame.delayed_start..]) |*root| {
+        root.deinit(self.gpa);
+    }
+    self.hoist_delayed_roots.shrinkRetainingCapacity(frame.delayed_start);
     if (frame.binding_rhs) {
         self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
     }
     self.last_hoist_result = null;
 }
 
-fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Error!void {
+fn currentHoistFrame(self: *Self) *HoistFrame {
+    if (self.hoist_frames.items.len == 0) {
+        std.debug.panic("check invariant violated: missing active hoist frame", .{});
+    }
+    return &self.hoist_frames.items[self.hoist_frames.items.len - 1];
+}
+
+fn appendCurrentHoistDependencyRoot(self: *Self, root_index: u32) Allocator.Error!void {
+    const frame = self.currentHoistFrame();
+    for (self.hoist_root_dependencies.items[frame.dependency_start..]) |existing| {
+        if (existing == root_index) return;
+    }
+    try self.hoist_root_dependencies.append(self.gpa, root_index);
+}
+
+fn appendCurrentHoistRequiredConcretePattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    const frame = self.currentHoistFrame();
+    for (self.hoist_required_concrete_patterns.items[frame.required_concrete_start..]) |existing| {
+        if (existing == pattern) return;
+    }
+    try self.hoist_required_concrete_patterns.append(self.gpa, pattern);
+}
+
+fn storeHoistRootMetadata(self: *Self, frame: HoistFrame) Allocator.Error!void {
+    var metadata = HoistRootMetadata{
+        .has_runtime_source = frame.has_runtime_source,
+    };
+    errdefer metadata.deinit(self.gpa);
+
+    if (self.hoist_root_dependencies.items.len != frame.dependency_start) {
+        metadata.dependencies = try self.gpa.dupe(u32, self.hoist_root_dependencies.items[frame.dependency_start..]);
+    }
+    if (self.hoist_required_concrete_patterns.items.len != frame.required_concrete_start) {
+        metadata.required_concrete_patterns = try self.gpa.dupe(CIR.Pattern.Idx, self.hoist_required_concrete_patterns.items[frame.required_concrete_start..]);
+    }
+    if (self.hoist_deferred_binding_dependencies.items.len != frame.deferred_dependency_start) {
+        metadata.deferred_binding_dependencies = try self.gpa.dupe(CIR.Pattern.Idx, self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]);
+    }
+
+    const entry = try self.hoist_root_metadata_by_expr.getOrPut(self.gpa, frame.expr);
+    if (entry.found_existing) {
+        entry.value_ptr.deinit(self.gpa);
+    }
+    entry.value_ptr.* = metadata;
+}
+
+fn appendCurrentHoistRequiredConcretePatternBinders(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    var bindings: std.ArrayList(PatternBinding) = .empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(pattern, &bindings);
+
+    for (bindings.items) |binding| {
+        try self.appendCurrentHoistRequiredConcretePattern(binding.pattern_idx);
+    }
+}
+
+fn appendDelayedHoistRoot(
+    self: *Self,
+    expr: CIR.Expr.Idx,
+    pattern: ?CIR.Pattern.Idx,
+    effect_slot: EffectSlotId,
+    child_exprs: []const CIR.Expr.Idx,
+    deferred_binding_dependencies: []const CIR.Pattern.Idx,
+    child_delayed_start: usize,
+    child_delayed_end: usize,
+) Allocator.Error!void {
+    const child_copy = try self.gpa.alloc(CIR.Expr.Idx, child_exprs.len);
+    errdefer self.gpa.free(child_copy);
+    @memcpy(child_copy, child_exprs);
+
+    const dependency_copy = try self.gpa.alloc(CIR.Pattern.Idx, deferred_binding_dependencies.len);
+    errdefer self.gpa.free(dependency_copy);
+    @memcpy(dependency_copy, deferred_binding_dependencies);
+
+    try self.hoist_delayed_roots.append(self.gpa, .{
+        .expr = expr,
+        .pattern = pattern,
+        .effect_slot = effect_slot,
+        .child_exprs = child_copy,
+        .deferred_binding_dependencies = dependency_copy,
+        .child_delayed_start = child_delayed_start,
+        .child_delayed_end = child_delayed_end,
+    });
+}
+
+fn finalizeDelayedHoistedRoots(self: *Self) Allocator.Error!void {
+    const delayed_count = self.hoist_delayed_roots.items.len;
+    const keep_delayed = try self.gpa.alloc(bool, delayed_count);
+    defer self.gpa.free(keep_delayed);
+    @memset(keep_delayed, true);
+
+    var delayed_index = delayed_count;
+    while (delayed_index > 0) {
+        delayed_index -= 1;
+        if (!keep_delayed[delayed_index]) continue;
+        const delayed = &self.hoist_delayed_roots.items[delayed_index];
+        var transaction = HoistSelectionTransaction.init(self);
+        defer transaction.deinit();
+
+        if (try self.effectSlotIsEffectful(delayed.effect_slot)) {
+            for (delayed.child_exprs) |child_expr| {
+                _ = try transaction.stageExprRoot(child_expr, null);
+            }
+            for (delayed.deferred_binding_dependencies) |dependency| {
+                _ = try transaction.stageBindingRoot(dependency);
+            }
+        } else {
+            for (delayed.child_delayed_start..delayed.child_delayed_end) |child_delayed_index| {
+                keep_delayed[child_delayed_index] = false;
+            }
+            _ = try transaction.stageExprRoot(delayed.expr, delayed.pattern);
+        }
+        try transaction.commit();
+    }
+
+    for (self.hoist_delayed_roots.items) |*delayed| {
+        delayed.deinit(self.gpa);
+    }
+    self.hoist_delayed_roots.clearRetainingCapacity();
+}
+
+fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, check_result: ExprCheckResult) Allocator.Error!void {
     if (self.hoist_frames.items.len == 0) {
         std.debug.panic("check invariant violated: missing hoist frame", .{});
     }
     const frame_index = self.hoist_frames.items.len - 1;
     var frame = self.hoist_frames.items[frame_index];
     std.debug.assert(frame.expr == expr);
-    if (does_fx) frame.has_observable_effect = true;
+    if (check_result.isKnownEffectful()) frame.has_effectful_call = true;
+    if (check_result.has_runtime_source) frame.has_runtime_source = true;
+    const delayed_effect_slot: ?EffectSlotId = if (check_result.root_effect) |root_effect| switch (root_effect) {
+        .delayed => |slot| slot,
+        .effect_free,
+        .effectful,
+        => null,
+    } else null;
+    if (check_result.runtime_dep) |runtime_dep| {
+        switch (runtime_dep) {
+            .compile_time_known => {},
+            .runtime_dependent,
+            .poisoned,
+            => frame.has_runtime_dependency = true,
+        }
+    }
 
     const semantically_eligible = frame.eligible();
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
-    const can_be_root = top_level_equivalent and self.exprCanBeHoistedRoot(expr);
-    const can_cover_children = top_level_equivalent and self.exprCanCoverHoistedChildren(expr);
+    const can_be_root = top_level_equivalent and self.exprCanBeStandaloneConstRoot(expr);
+    const can_cover_children = top_level_equivalent and self.exprCanCoverConstRootChildren(expr);
     const selection_suppressed = frame.suppressed or frame.selection_suppressed;
     const binding_rhs_can_cover_children = frame.binding_rhs and
         top_level_equivalent and
         !selection_suppressed and
-        self.exprCanBeHoistedBindingRoot(expr) and
+        self.exprCanBeBindingConstRoot(expr) and
         !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
         !self.varIsFunctionType(ModuleEnv.varFrom(expr));
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
     const has_child_candidates = self.hoist_expr_candidates.items.len > frame.candidate_start;
+    const has_deferred_binding_dependencies = frame.binding_rhs and
+        self.hoist_deferred_binding_dependencies.items.len > frame.deferred_dependency_start;
+    const should_delay_current_root = delayed_effect_slot != null and current_covers_children;
     const action: HoistSelectionAction = if (selection_suppressed)
         .suppress_children
+    else if (should_delay_current_root)
+        .delay_current_root
     else if (current_covers_children)
         .cover_with_current_root
     else if (has_child_candidates)
@@ -1313,10 +2108,30 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         try self.hoist_expr_candidates.ensureUnusedCapacity(self.gpa, 1);
     }
 
+    const should_store_root_metadata = !selection_suppressed and
+        (can_be_root or current_covers_children or should_delay_current_root);
+    if (should_store_root_metadata) {
+        try self.storeHoistRootMetadata(frame);
+    }
+
     const should_flush_deferred_binding_dependencies = frame.binding_rhs and
         !binding_rhs_can_cover_children and
         !selection_suppressed and
-        self.hoist_deferred_binding_dependencies.items.len > frame.deferred_dependency_start;
+        has_deferred_binding_dependencies;
+    if (action == .delay_current_root) {
+        try self.appendDelayedHoistRoot(
+            expr,
+            if (frame.binding_rhs) frame.binding_pattern else null,
+            delayed_effect_slot.?,
+            self.hoist_expr_candidates.items[frame.candidate_start..],
+            if (has_deferred_binding_dependencies)
+                self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]
+            else
+                &.{},
+            frame.delayed_start,
+            self.hoist_delayed_roots.items.len,
+        );
+    }
     if (should_flush_child_candidates or should_flush_deferred_binding_dependencies) {
         var transaction = HoistSelectionTransaction.init(self);
         defer transaction.deinit();
@@ -1337,6 +2152,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     if (builtin.mode == .Debug and has_child_candidates) {
         switch (action) {
             .suppress_children,
+            .delay_current_root,
             .cover_with_current_root,
             .flush_child_candidates,
             => {},
@@ -1344,6 +2160,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         }
     }
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
+    self.hoist_root_dependencies.shrinkRetainingCapacity(frame.dependency_start);
+    self.hoist_required_concrete_patterns.shrinkRetainingCapacity(frame.required_concrete_start);
 
     if (frame.binding_rhs) {
         self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
@@ -1353,7 +2171,6 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         .expr = expr,
         .eligible = semantically_eligible,
         .top_level_equivalent = top_level_equivalent,
-        .has_observable_effect = frame.has_observable_effect,
     };
     self.last_hoist_result = completed;
 
@@ -1361,7 +2178,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         const parent = &self.hoist_frames.items[frame_index - 1];
         if (!completed.eligible) {
             parent.has_runtime_dependency = true;
-        } else if (can_be_root and !frame.binding_rhs and !selection_suppressed) {
+        } else if (can_be_root and delayed_effect_slot == null and !frame.binding_rhs and !selection_suppressed) {
             self.hoist_expr_candidates.appendAssumeCapacity(expr);
         }
     }
@@ -1375,22 +2192,74 @@ fn markCurrentHoistRuntimeDependency(self: *Self) void {
     self.hoist_frames.items[self.hoist_frames.items.len - 1].has_runtime_dependency = true;
 }
 
-fn markCurrentHoistObservableEffect(self: *Self) void {
-    if (self.hoist_frames.items.len == 0) return;
-    self.hoist_frames.items[self.hoist_frames.items.len - 1].has_observable_effect = true;
-}
-
-fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!bool {
+fn checkExprWithHoistSelectionSuppressed(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!ExprCheckResult {
     self.hoist_selection_suppressed_depth += 1;
     defer self.hoist_selection_suppressed_depth -= 1;
     return try self.checkExpr(expr, env, expected);
 }
 
-fn checkedExprBlocksLaterHoists(self: *const Self, expr: CIR.Expr.Idx, does_fx: bool) bool {
-    if (does_fx) return true;
-    const completed = self.last_hoist_result orelse return false;
-    if (completed.expr != expr) return false;
-    return completed.has_observable_effect;
+fn checkExprWithDetachedHoistFrames(self: *Self, expr: CIR.Expr.Idx, env: *Env, expected: Expected) Allocator.Error!ExprCheckResult {
+    const saved_hoist_frames = self.hoist_frames;
+    const saved_hoist_expr_candidates = self.hoist_expr_candidates;
+    const saved_hoist_root_dependencies = self.hoist_root_dependencies;
+    const saved_hoist_required_concrete_patterns = self.hoist_required_concrete_patterns;
+    const saved_hoist_deferred_binding_dependencies = self.hoist_deferred_binding_dependencies;
+    const saved_hoist_contextual_bindings = self.hoist_contextual_bindings;
+    const saved_hoist_contextual_binding_scope_patterns = self.hoist_contextual_binding_scope_patterns;
+    const saved_last_hoist_result = self.last_hoist_result;
+
+    self.hoist_frames = .empty;
+    self.hoist_expr_candidates = .empty;
+    self.hoist_root_dependencies = .empty;
+    self.hoist_required_concrete_patterns = .empty;
+    self.hoist_deferred_binding_dependencies = .empty;
+    self.hoist_contextual_bindings = .{};
+    self.hoist_contextual_binding_scope_patterns = .empty;
+    self.last_hoist_result = null;
+    defer {
+        if (self.hoist_frames.items.len != 0 or
+            self.hoist_expr_candidates.items.len != 0 or
+            self.hoist_root_dependencies.items.len != 0 or
+            self.hoist_required_concrete_patterns.items.len != 0 or
+            self.hoist_deferred_binding_dependencies.items.len != 0 or
+            self.hoist_contextual_binding_scope_patterns.items.len != 0)
+        {
+            hoistSelectionInvariant("detached expression left hoist frame state behind");
+        }
+        self.hoist_frames.deinit(self.gpa);
+        self.hoist_expr_candidates.deinit(self.gpa);
+        self.hoist_root_dependencies.deinit(self.gpa);
+        self.hoist_required_concrete_patterns.deinit(self.gpa);
+        self.hoist_deferred_binding_dependencies.deinit(self.gpa);
+        self.hoist_contextual_bindings.deinit(self.gpa);
+        self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
+        self.hoist_frames = saved_hoist_frames;
+        self.hoist_expr_candidates = saved_hoist_expr_candidates;
+        self.hoist_root_dependencies = saved_hoist_root_dependencies;
+        self.hoist_required_concrete_patterns = saved_hoist_required_concrete_patterns;
+        self.hoist_deferred_binding_dependencies = saved_hoist_deferred_binding_dependencies;
+        self.hoist_contextual_bindings = saved_hoist_contextual_bindings;
+        self.hoist_contextual_binding_scope_patterns = saved_hoist_contextual_binding_scope_patterns;
+        self.last_hoist_result = saved_last_hoist_result;
+    }
+
+    const result = try self.checkExpr(expr, env, expected);
+    const selection_suppressed = self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0;
+    const has_delayed_effect = if (result.root_effect) |root_effect|
+        root_effect == .delayed
+    else
+        false;
+    if (!selection_suppressed and !has_delayed_effect) {
+        if (self.last_hoist_result) |completed| {
+            if (completed.expr == expr and completed.top_level_equivalent and self.exprCanBeStandaloneConstRoot(expr)) {
+                var transaction = HoistSelectionTransaction.init(self);
+                defer transaction.deinit();
+                _ = try transaction.stageExprRoot(expr, null);
+                try transaction.commit();
+            }
+        }
+    }
+    return result;
 }
 
 fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
@@ -1398,7 +2267,7 @@ fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
     if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
-    if (!self.exprCanBeHoistedBindingRoot(expr)) return;
+    if (!self.exprCanBeBindingConstRoot(expr)) return;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
 
@@ -1429,7 +2298,7 @@ fn recordHoistPatternProvenance(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR
     if (self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0) return;
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
-    if (!self.exprCanBeHoistedBindingRoot(expr)) return;
+    if (!self.exprCanBeBindingConstRoot(expr)) return;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
 
@@ -1547,6 +2416,18 @@ fn recordHoistMatchBranchContextualBindings(
     for (branch_patterns) |branch_pattern_idx| {
         const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
         try self.recordHoistContextualPatternBindings(branch_pattern.pattern, owner_frame_index);
+        try self.appendCurrentHoistRequiredConcretePatternBinders(branch_pattern.pattern);
+    }
+}
+
+fn recordMatchBranchSummaries(
+    self: *Self,
+    branch_patterns: []const CIR.Expr.Match.BranchPattern.Idx,
+    summary: ExprCheckResult,
+) Allocator.Error!void {
+    for (branch_patterns) |branch_pattern_idx| {
+        const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
+        try self.recordLocalCheckSummary(branch_pattern.pattern, summary);
     }
 }
 
@@ -1756,6 +2637,7 @@ fn currentHoistFrameIndexForExpr(self: *const Self, expr: CIR.Expr.Idx) usize {
 }
 
 const HoistLexicalScope = struct {
+    local_summary_start: usize,
     binding_candidate_start: usize,
     known_value_start: usize,
     contextual_binding_start: usize,
@@ -1763,6 +2645,7 @@ const HoistLexicalScope = struct {
 
 fn beginHoistLexicalScope(self: *const Self) HoistLexicalScope {
     return .{
+        .local_summary_start = self.local_check_summary_scope_patterns.items.len,
         .binding_candidate_start = self.hoist_binding_scope_patterns.items.len,
         .known_value_start = self.hoist_known_value_scope_patterns.items.len,
         .contextual_binding_start = self.hoist_contextual_binding_scope_patterns.items.len,
@@ -1773,6 +2656,51 @@ fn endHoistLexicalScope(self: *Self, scope: HoistLexicalScope) void {
     self.popHoistContextualBindingScope(scope.contextual_binding_start);
     self.popHoistKnownValueScope(scope.known_value_start);
     self.popHoistBindingCandidateScope(scope.binding_candidate_start);
+    self.popLocalCheckSummaryScope(scope.local_summary_start);
+}
+
+fn recordLocalCheckSummary(self: *Self, pattern: CIR.Pattern.Idx, summary: ExprCheckResult) Allocator.Error!void {
+    var bindings: std.ArrayList(PatternBinding) = .empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(pattern, &bindings);
+
+    for (bindings.items) |binding| {
+        const entry = try self.local_check_summaries.getOrPut(self.gpa, binding.pattern_idx);
+        if (!entry.found_existing) {
+            self.local_check_summary_scope_patterns.append(self.gpa, binding.pattern_idx) catch |err| {
+                _ = self.local_check_summaries.remove(binding.pattern_idx);
+                return err;
+            };
+        }
+        entry.value_ptr.* = summary;
+    }
+}
+
+fn moduleRuntimeDependency(dep: RuntimeDep) ModuleEnv.RuntimeDependency {
+    return switch (dep) {
+        .compile_time_known => .compile_time_known,
+        .runtime_dependent => .runtime_dependent,
+        .poisoned => .poisoned,
+    };
+}
+
+fn recordRuntimeDependencySummary(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    summary: ExprCheckResult,
+) Allocator.Error!void {
+    const dep: RuntimeDep = if (summary.has_runtime_source)
+        .runtime_dependent
+    else
+        .compile_time_known;
+    try self.cir.recordRuntimeDependencySummary(node_idx, moduleRuntimeDependency(dep));
+}
+
+fn popLocalCheckSummaryScope(self: *Self, start: usize) void {
+    for (self.local_check_summary_scope_patterns.items[start..]) |pattern| {
+        _ = self.local_check_summaries.remove(pattern);
+    }
+    self.local_check_summary_scope_patterns.shrinkRetainingCapacity(start);
 }
 
 fn deinitHoistKnownValue(_: *Self, value: HoistKnownValue) void {
@@ -1818,14 +2746,13 @@ fn popHoistKnownValueScope(self: *Self, start: usize) void {
     self.hoist_known_value_scope_patterns.shrinkRetainingCapacity(start);
 }
 
-fn ensureHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!bool {
-    if (self.hoist_selected_bindings.contains(pattern)) return true;
+fn ensureHoistedBindingRootIndex(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!?u32 {
+    if (self.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
     var transaction = HoistSelectionTransaction.init(self);
     defer transaction.deinit();
-    const selected = try transaction.stageBindingRoot(pattern);
-    if (!selected) return false;
+    const selected = try transaction.stageBindingRoot(pattern) orelse return null;
     try transaction.commit();
-    return true;
+    return selected;
 }
 
 fn hoistKnownBindingAvailable(self: *Self, pattern: CIR.Pattern.Idx) bool {
@@ -1856,7 +2783,8 @@ fn ensureHoistedPatternExtractionRoot(
     if (self.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
     var transaction = HoistSelectionTransaction.init(self);
     defer transaction.deinit();
-    const root_index = try transaction.stagePatternExtractionRoot(pattern, extraction);
+    const root_index = try transaction.stagePatternExtractionRoot(pattern, extraction) orelse
+        hoistSelectionInvariant("pattern extraction base could not be staged as a const root");
     try transaction.commit();
     return root_index;
 }
@@ -1912,9 +2840,21 @@ const HoistSelectionTestState = struct {
     fn init(allocator: Allocator) HoistSelectionTestState {
         var checker: Self = undefined;
         checker.gpa = allocator;
+        checker.effect_slots = .empty;
+        checker.effect_edges = .empty;
+        checker.dispatch_effect_watches = .empty;
+        checker.function_runtime_source_patterns = .{};
+        checker.dispatch_runtime_source_fn_vars = .{};
+        checker.top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(allocator);
         checker.hoist_frames = .empty;
+        checker.hoist_root_dependencies = .empty;
+        checker.hoist_required_concrete_patterns = .empty;
+        checker.hoist_root_metadata_by_expr = .{};
         checker.hoist_expr_candidates = .empty;
+        checker.hoist_delayed_roots = .empty;
         checker.hoist_deferred_binding_dependencies = .empty;
+        checker.local_check_summaries = .{};
+        checker.local_check_summary_scope_patterns = .empty;
         checker.hoist_binding_candidates = .{};
         checker.hoist_binding_scope_patterns = .empty;
         checker.hoist_known_values = .{};
@@ -1934,9 +2874,28 @@ const HoistSelectionTestState = struct {
     }
 
     fn deinit(self: *HoistSelectionTestState) void {
+        self.checker.effect_slots.deinit(self.allocator);
+        self.checker.effect_edges.deinit(self.allocator);
+        self.checker.dispatch_effect_watches.deinit(self.allocator);
+        self.checker.function_runtime_source_patterns.deinit(self.allocator);
+        self.checker.dispatch_runtime_source_fn_vars.deinit(self.allocator);
+        self.checker.top_level_ptrns.deinit();
         self.checker.hoist_frames.deinit(self.allocator);
+        self.checker.hoist_root_dependencies.deinit(self.allocator);
+        self.checker.hoist_required_concrete_patterns.deinit(self.allocator);
+        var root_metadata_iter = self.checker.hoist_root_metadata_by_expr.iterator();
+        while (root_metadata_iter.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.checker.hoist_root_metadata_by_expr.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
+        for (self.checker.hoist_delayed_roots.items) |*root| {
+            root.deinit(self.allocator);
+        }
+        self.checker.hoist_delayed_roots.deinit(self.allocator);
         self.checker.hoist_deferred_binding_dependencies.deinit(self.allocator);
+        self.checker.local_check_summaries.deinit(self.allocator);
+        self.checker.local_check_summary_scope_patterns.deinit(self.allocator);
         self.checker.hoist_binding_candidates.deinit(self.allocator);
         self.checker.hoist_binding_scope_patterns.deinit(self.allocator);
         var known_value_iter = self.checker.hoist_known_values.iterator();
@@ -1955,10 +2914,20 @@ const HoistSelectionTestState = struct {
         self.checker.selected_hoisted_roots.deinit(self.allocator);
     }
 
-    fn borrowCheckedContext(self: *HoistSelectionTestState, checked: *Self) error{ExpectedHoistSelectionTestExpr}!CIR.Expr.Idx {
+    fn borrowCheckedContext(self: *HoistSelectionTestState, checked: *Self) error{ ExpectedHoistSelectionTestExpr, OutOfMemory }!CIR.Expr.Idx {
         self.checker.cir = checked.cir;
         self.checker.types = checked.types;
-        return firstHoistSelectionTestExpr(checked);
+        const expr = try firstHoistSelectionTestExpr(checked);
+        try self.seedRootMetadata(expr);
+        return expr;
+    }
+
+    fn seedRootMetadata(self: *HoistSelectionTestState, expr: CIR.Expr.Idx) Allocator.Error!void {
+        const entry = try self.checker.hoist_root_metadata_by_expr.getOrPut(self.allocator, expr);
+        if (entry.found_existing) {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        entry.value_ptr.* = .{};
     }
 };
 
@@ -2032,6 +3001,21 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
     return error.ExpectedHoistSelectionTestExpr;
 }
 
+fn firstHoistSelectionTestExprByTag(
+    checker: *Self,
+    expected_tag: std.meta.Tag(CIR.Expr),
+) error{ExpectedHoistSelectionTestExpr}!CIR.Expr.Idx {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(checker.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        if (std.meta.activeTag(checker.cir.store.getExpr(expr_idx)) == expected_tag) return expr_idx;
+    }
+    return error.ExpectedHoistSelectionTestExpr;
+}
+
 test "hoist frame finish leaves child candidates unchanged when selection allocation fails" {
     const parent_expr: CIR.Expr.Idx = @enumFromInt(1);
     const TestEnv = @import("test/TestEnv.zig");
@@ -2053,7 +3037,7 @@ test "hoist frame finish leaves child candidates unchanged when selection alloca
     });
     state.checker.gpa = failing_allocator.allocator();
 
-    try std.testing.expectError(error.OutOfMemory, guard.finish(false));
+    try std.testing.expectError(error.OutOfMemory, guard.finish(ExprCheckResult.compileTimeKnown()));
     try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_frames.items.len);
     try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_expr_candidates.items.len);
     try std.testing.expectEqual(child_expr, state.checker.hoist_expr_candidates.items[0]);
@@ -2061,7 +3045,7 @@ test "hoist frame finish leaves child candidates unchanged when selection alloca
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_exprs.count());
 
     state.checker.gpa = std.testing.allocator;
-    try guard.finish(false);
+    try guard.finish(ExprCheckResult.compileTimeKnown());
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_frames.items.len);
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_expr_candidates.items.len);
     try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
@@ -2096,7 +3080,7 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
         });
         state.checker.gpa = failing_allocator.allocator();
 
-        guard.finish(false) catch |err| switch (err) {
+        guard.finish(ExprCheckResult.compileTimeKnown()) catch |err| switch (err) {
             error.OutOfMemory => {
                 if (fail_index > 0) saw_late_oom = true;
                 try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_frames.items.len);
@@ -2127,6 +3111,188 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
         try std.testing.expectEqual(dependency_pattern, state.checker.selected_hoisted_roots.items[0].pattern.?);
     }
     try std.testing.expect(saw_late_oom);
+}
+
+test "delayed dispatch root candidates allocate effect slots" {
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+
+    const fn_var: Var = @enumFromInt(42);
+    var result = ExprCheckResult.compileTimeKnown();
+    const child_slot = try state.checker.allocEffectSlot(.{ .const_root_candidate = 7 });
+    result.root_effect = .{ .delayed = child_slot };
+    const expr_idx: CIR.Expr.Idx = @enumFromInt(123);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&result, expr_idx, fn_var);
+    const parent_slot = switch (result.root_effect.?) {
+        .delayed => |slot| slot,
+        .effect_free,
+        .effectful,
+        => return error.ExpectedDelayedRootEffect,
+    };
+
+    try std.testing.expectEqual(@as(usize, 2), state.checker.effect_slots.items.len);
+    try std.testing.expectEqual(EffectSlotKind{ .const_root_candidate = 7 }, state.checker.effect_slots.items[@intCast(@intFromEnum(child_slot))].kind);
+    try std.testing.expectEqual(EffectSlotKind{ .const_root_candidate = 123 }, state.checker.effect_slots.items[@intCast(@intFromEnum(parent_slot))].kind);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.effect_edges.items.len);
+    try std.testing.expectEqual(parent_slot, state.checker.effect_edges.items[0].from);
+    try std.testing.expectEqual(child_slot, state.checker.effect_edges.items[0].to);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.dispatch_effect_watches.items.len);
+    try std.testing.expectEqual(fn_var, state.checker.dispatch_effect_watches.items[0].fn_var);
+    try std.testing.expectEqual(parent_slot, state.checker.dispatch_effect_watches.items[0].slot);
+}
+
+test "delayed hoist finalization keeps pure parent root" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("HoistSelection", "1.I64 + 2.I64");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    const child_expr = try state.borrowCheckedContext(&test_env.checker);
+    const parent_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_dispatch_call);
+
+    var guard = try state.checker.beginHoistFrame(parent_expr, false);
+    defer guard.deinit();
+    try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
+    const slot = try state.checker.allocEffectSlot(.{ .const_root_candidate = @intFromEnum(parent_expr) });
+    var result = ExprCheckResult.compileTimeKnown();
+    result.root_effect = .{ .delayed = slot };
+    try guard.finish(result);
+
+    try std.testing.expectEqual(@as(usize, 0), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_delayed_roots.items.len);
+
+    try state.checker.finalizeDelayedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_delayed_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(parent_expr, state.checker.selected_hoisted_roots.items[0].expr);
+}
+
+test "delayed hoist finalization preserves children for effectful parent" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("HoistSelection", "1.I64 + 2.I64");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    const child_expr = try state.borrowCheckedContext(&test_env.checker);
+    const parent_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_dispatch_call);
+
+    var guard = try state.checker.beginHoistFrame(parent_expr, false);
+    defer guard.deinit();
+    try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
+    const slot = try state.checker.allocEffectSlot(.{ .const_root_candidate = @intFromEnum(parent_expr) });
+    state.checker.effectSlotPtr(slot).direct_effect = true;
+    var result = ExprCheckResult.compileTimeKnown();
+    result.root_effect = .{ .delayed = slot };
+    try guard.finish(result);
+
+    try std.testing.expectEqual(@as(usize, 0), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_delayed_roots.items.len);
+
+    try state.checker.finalizeDelayedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_delayed_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(child_expr, state.checker.selected_hoisted_roots.items[0].expr);
+}
+
+test "nested delayed hoist finalization keeps pure outer parent root" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("HoistSelection",
+        \\main = |_| {
+        \\    x = 1.I64 + 2.I64
+        \\    x
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    const child_expr = try state.borrowCheckedContext(&test_env.checker);
+    const inner_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_dispatch_call);
+    const outer_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_block);
+
+    var outer_guard = try state.checker.beginHoistFrame(outer_expr, false);
+    defer outer_guard.deinit();
+
+    var inner_guard = try state.checker.beginHoistFrame(inner_expr, false);
+    defer inner_guard.deinit();
+    try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
+    var inner_result = ExprCheckResult.compileTimeKnown();
+    const inner_fn_var: Var = @enumFromInt(101);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&inner_result, inner_expr, inner_fn_var);
+    const inner_slot = switch (inner_result.root_effect.?) {
+        .delayed => |slot| slot,
+        .effect_free,
+        .effectful,
+        => return error.ExpectedDelayedRootEffect,
+    };
+    try inner_guard.finish(inner_result);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_delayed_roots.items.len);
+
+    var outer_result = ExprCheckResult.compileTimeKnown();
+    outer_result.root_effect = .{ .delayed = inner_slot };
+    const outer_fn_var: Var = @enumFromInt(102);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&outer_result, outer_expr, outer_fn_var);
+    try outer_guard.finish(outer_result);
+    try std.testing.expectEqual(@as(usize, 2), state.checker.hoist_delayed_roots.items.len);
+
+    try state.checker.finalizeDelayedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_delayed_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(outer_expr, state.checker.selected_hoisted_roots.items[0].expr);
+}
+
+test "nested delayed hoist finalization preserves children for effectful inner root" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("HoistSelection",
+        \\main = |_| {
+        \\    x = 1.I64 + 2.I64
+        \\    x
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    const child_expr = try state.borrowCheckedContext(&test_env.checker);
+    const inner_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_dispatch_call);
+    const outer_expr = try firstHoistSelectionTestExprByTag(&test_env.checker, .e_block);
+
+    var outer_guard = try state.checker.beginHoistFrame(outer_expr, false);
+    defer outer_guard.deinit();
+
+    var inner_guard = try state.checker.beginHoistFrame(inner_expr, false);
+    defer inner_guard.deinit();
+    try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
+    var inner_result = ExprCheckResult.compileTimeKnown();
+    const inner_fn_var: Var = @enumFromInt(201);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&inner_result, inner_expr, inner_fn_var);
+    const inner_slot = switch (inner_result.root_effect.?) {
+        .delayed => |slot| slot,
+        .effect_free,
+        .effectful,
+        => return error.ExpectedDelayedRootEffect,
+    };
+    state.checker.effectSlotPtr(inner_slot).direct_effect = true;
+    try inner_guard.finish(inner_result);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_delayed_roots.items.len);
+
+    var outer_result = ExprCheckResult.compileTimeKnown();
+    outer_result.root_effect = .{ .delayed = inner_slot };
+    const outer_fn_var: Var = @enumFromInt(202);
+    try state.checker.markExprResultDelayedOnDispatchSlot(&outer_result, outer_expr, outer_fn_var);
+    try outer_guard.finish(outer_result);
+    try std.testing.expectEqual(@as(usize, 2), state.checker.hoist_delayed_roots.items.len);
+
+    try state.checker.finalizeDelayedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_delayed_roots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
+    try std.testing.expectEqual(child_expr, state.checker.selected_hoisted_roots.items[0].expr);
 }
 
 test "hoisted binding root selection is atomic when binding map allocation fails" {
@@ -2231,6 +3397,191 @@ test "hoist lexical scope removes branch-local candidates and known values" {
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_known_value_scope_patterns.items.len);
 }
 
+test "local check summaries are scoped to lexical blocks" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("LocalSummary", "main = 1.I64");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const def_idx = test_env.module_env.store.defAt(test_env.module_env.all_defs, 0);
+    const pattern = test_env.module_env.store.getDef(def_idx).pattern;
+
+    var state = HoistSelectionTestState.init(std.testing.allocator);
+    defer state.deinit();
+    _ = try state.borrowCheckedContext(&test_env.checker);
+
+    const scope = state.checker.beginHoistLexicalScope();
+    try state.checker.recordLocalCheckSummary(pattern, ExprCheckResult.compileTimeKnown());
+
+    const stored = state.checker.local_check_summaries.get(pattern) orelse return error.ExpectedLocalCheckSummary;
+    try std.testing.expectEqual(RuntimeDep.compile_time_known, stored.runtime_dep.?);
+    try std.testing.expectEqual(@as(usize, 1), state.checker.local_check_summary_scope_patterns.items.len);
+
+    state.checker.endHoistLexicalScope(scope);
+
+    try std.testing.expect(!state.checker.local_check_summaries.contains(pattern));
+    try std.testing.expectEqual(@as(usize, 0), state.checker.local_check_summary_scope_patterns.items.len);
+}
+
+fn testDefByOrdinal(checker: *Self, ordinal: usize) anyerror!CIR.Def.Idx {
+    const defs = checker.cir.store.sliceDefs(checker.cir.all_defs);
+    if (ordinal < defs.len) return defs[ordinal];
+    return error.ExpectedDef;
+}
+
+fn expectTopLevelRuntimeDep(checker: *Self, ordinal: usize, expected: RuntimeDep) anyerror!void {
+    const def_idx = try testDefByOrdinal(checker, ordinal);
+    const def = checker.cir.store.getDef(def_idx);
+    const summary = checker.top_level_check_summaries.get(def.pattern) orelse return error.ExpectedTopLevelCheckSummary;
+    try std.testing.expectEqual(expected, summary.runtime_dep.?);
+}
+
+fn expectFirstFunctionBodyRuntimeDep(checker: *Self, expected: RuntimeDep) anyerror!void {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(checker.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        switch (checker.cir.store.getExpr(expr_idx)) {
+            .e_lambda => |lambda| {
+                const summary = checker.function_body_check_summaries.get(lambda.body) orelse continue;
+                try std.testing.expectEqual(expected, summary.runtime_dep.?);
+                return;
+            },
+            else => {},
+        }
+    }
+    return error.ExpectedFunctionBodyCheckSummary;
+}
+
+test "runtime dependency summaries classify compile-time-known lookups" {
+    const TestEnv = @import("test/TestEnv.zig");
+
+    {
+        const source =
+            \\value = 1.I64
+            \\main = value
+        ;
+        var test_env = try TestEnv.init("SummaryTopLevel", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, 1, .compile_time_known);
+    }
+
+    {
+        const source =
+            \\main = match 1 {
+            \\  x => x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryClosedMatch", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .compile_time_known);
+    }
+
+    {
+        const source =
+            \\main = {
+            \\  x = 1.I64
+            \\  x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryLocal", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .compile_time_known);
+    }
+
+    {
+        const source_a =
+            \\main! : I64 -> I64
+            \\main! = |x| x
+        ;
+        var test_env_a = try TestEnv.init("A", source_a);
+        defer test_env_a.deinit();
+        try test_env_a.assertNoErrors();
+
+        const source_b =
+            \\import A
+            \\
+            \\main = A.main!(1.I64)
+        ;
+        var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+        defer test_env_b.deinit();
+        try test_env_b.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env_b.checker, 0, .compile_time_known);
+    }
+}
+
+test "runtime dependency summaries classify runtime-bound lookups" {
+    const TestEnv = @import("test/TestEnv.zig");
+
+    {
+        const source =
+            \\main = |x| x
+        ;
+        var test_env = try TestEnv.init("SummaryLambda", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectFirstFunctionBodyRuntimeDep(&test_env.checker, .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = |arg| {
+            \\  x = arg
+            \\  x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryIndirectLambda", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectFirstFunctionBodyRuntimeDep(&test_env.checker, .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = |arg| match arg {
+            \\  x => x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryMatch", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectFirstFunctionBodyRuntimeDep(&test_env.checker, .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = {
+            \\  for x in [1] {
+            \\    x
+            \\  }
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryLoop", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .runtime_dependent);
+    }
+
+    {
+        const source =
+            \\main = {
+            \\  var x = 1.I64
+            \\  x = 2.I64
+            \\  x
+            \\}
+        ;
+        var test_env = try TestEnv.init("SummaryMutable", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        try expectTopLevelRuntimeDep(&test_env.checker, 0, .runtime_dependent);
+    }
+}
+
 test "hoist known value insertion leaves no state when map allocation fails" {
     const expr: CIR.Expr.Idx = @enumFromInt(1);
     const pattern: CIR.Pattern.Idx = @enumFromInt(2);
@@ -2271,206 +3622,57 @@ fn patternIsTopLevel(self: *Self, pattern: CIR.Pattern.Idx) bool {
     return self.top_level_ptrns.contains(pattern);
 }
 
-fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
+const HoistConstRootUse = enum {
+    standalone,
+    cover_children,
+    binding,
+};
+
+fn exprCanBeStandaloneConstRoot(self: *Self, expr: CIR.Expr.Idx) bool {
+    return self.exprCanBeStoredConstRoot(expr, .standalone);
+}
+
+fn exprCanCoverConstRootChildren(self: *Self, expr: CIR.Expr.Idx) bool {
+    return self.exprCanBeStoredConstRoot(expr, .cover_children);
+}
+
+fn exprCanBeBindingConstRoot(self: *Self, expr: CIR.Expr.Idx) bool {
+    return self.exprCanBeStoredConstRoot(expr, .binding);
+}
+
+fn exprCanBeStoredConstRoot(self: *Self, expr: CIR.Expr.Idx, root_use: HoistConstRootUse) bool {
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
     return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => false,
-        .e_lookup_external,
         .e_lookup_required,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
         .e_runtime_error,
         .e_ellipsis,
         .e_anno_only,
-        .e_crash,
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        => false,
-        .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_list,
-        .e_tuple,
-        .e_block,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_record,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
+        // Non-local control transfer is not a stored value root until the
+        // checked representation has an explicit continuation value.
         .e_return,
         .e_break,
-        .e_run_low_level,
-        => true,
-    };
-}
+        => false,
 
-/// True when this expression can replace already-bubbled child candidates with
-/// one larger stored data root. This is intentionally stricter than semantic
-/// eligibility: function/lambda/closure and observable expression frames may
-/// contain closed child work, but they cannot cover that work as data roots.
-fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
-    return switch (self.cir.store.getExpr(expr)) {
+        // Local and imported lookups are binding identities, not new
+        // standalone stored values. A binding whose RHS is a lookup may still
+        // keep that binding identity so later uses share the selected root.
         .e_lookup_local,
         .e_lookup_external,
-        .e_lookup_required,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_crash,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
-        .e_return,
-        .e_break,
-        .e_run_low_level,
-        => false,
-        .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_list,
-        .e_tuple,
-        .e_block,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_record,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        => true,
-    };
-}
+        => root_use == .binding,
 
-fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
-    return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => true,
-        .e_call,
-        .e_method_call,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_dispatch_call,
-        => true,
-        .e_for,
-        .e_run_low_level,
-        .e_lookup_required,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_crash,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_return,
-        .e_break,
-        => false,
-        .e_lookup_external,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_list,
-        .e_tuple,
-        .e_block,
-        .e_match,
-        .e_if,
-        .e_record,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_tuple_access,
-        => true,
-        .e_num,
-        .e_num_from_numeral,
-        .e_typed_num_from_numeral,
-        .e_str,
-        => !self.exprHasDedicatedLiteralConversionRoot(expr),
-    };
-}
+        // Low-level operations need explicit checked const-evaluation
+        // metadata before they can cover child roots as a stored value.
+        .e_run_low_level => false,
 
-fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
-    for (self.cir.store.sliceExpr(span)) |segment| {
-        if (self.cir.store.getExpr(segment) != .e_str_segment) return true;
-    }
-    return false;
+        // `expect_err` is a compile-time observable wrapper, but it is not a
+        // value aggregate that can safely subsume already selected children.
+        .e_expect_err => root_use != .cover_children,
+
+        else => true,
+    };
 }
 /// In debug builds, verifies that region and type arrays have matching lengths.
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
@@ -2986,6 +4188,7 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 }
 
 const BuiltinNominalDecl = union(enum) {
+    str,
     list,
     box,
     try_type,
@@ -3053,6 +4256,7 @@ fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind)
 
 fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
     return switch (decl) {
+        .str => self.cir.idents.builtin_str,
         .list => self.cir.idents.builtin_list,
         .box => self.cir.idents.builtin_box,
         .try_type => self.cir.idents.builtin_try,
@@ -3065,6 +4269,7 @@ fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
 
 fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
     return switch (decl) {
+        .str => "Str",
         .list => "List",
         .box => "Box",
         .try_type => "Try",
@@ -3124,6 +4329,7 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
         const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
+            .str => indices.str_type,
             .list => indices.list_type,
             .box => indices.box_type,
             .try_type => indices.try_type,
@@ -3283,8 +4489,21 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const before_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("before"));
+    const after_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("after"));
     const item_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("item"));
     const rest_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
+    const append_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
+    const append_record_fields = [_]types_mod.RecordField{
+        .{ .name = before_ident, .var_ = iter_var },
+        .{ .name = after_ident, .var_ = item_var },
+    };
+    const append_record_fields_range = try self.types.appendRecordFields(&append_record_fields);
+    const append_payload_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = append_record_fields_range,
+        .ext = append_record_ext,
+    } } }, env, Region.zero());
+
     const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const record_fields = [_]types_mod.RecordField{
         .{ .name = item_ident, .var_ = item_var },
@@ -3306,14 +4525,16 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
         .ext = skip_record_ext,
     } } }, env, Region.zero());
 
+    const append_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Append"));
     const done_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Done"));
     const one_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("One"));
     const skip_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Skip"));
 
     const tags = [_]types_mod.Tag{
-        try self.types.mkTag(done_ident, &.{}),
+        try self.types.mkTag(append_ident, &.{append_payload_record}),
         try self.types.mkTag(one_ident, &.{payload_record}),
         try self.types.mkTag(skip_ident, &.{skip_payload_record}),
+        try self.types.mkTag(done_ident, &.{}),
     };
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
     return try self.types.mkTagUnion(&tags, ext_var);
@@ -3393,6 +4614,7 @@ fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u
 
 fn builtinNominalDeclForIdentInEnv(source_env: *const ModuleEnv, type_ident: Ident.Idx) ?BuiltinNominalDecl {
     const common = source_env.idents;
+    if (type_ident.eql(common.str) or type_ident.eql(common.builtin_str)) return .str;
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
     if (type_ident.eql(common.@"try") or type_ident.eql(common.builtin_try)) return .try_type;
@@ -3423,6 +4645,7 @@ fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) 
     }
 
     const indices = self.builtin_ctx.builtin_indices orelse return null;
+    if (raw_decl == @intFromEnum(indices.str_type)) return .str;
     if (raw_decl == @intFromEnum(indices.list_type)) return .list;
     if (raw_decl == @intFromEnum(indices.box_type)) return .box;
     if (raw_decl == @intFromEnum(indices.try_type)) return .try_type;
@@ -4264,12 +5487,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         switch (stmt) {
             .s_expect => |expr_stmt| {
                 // Check the body expression
-                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
+                _ = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 // Unify with Bool (expects must be bool expressions)
@@ -4313,7 +5531,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         // After finalizing numeric defaults, resolve any remaining deferred
         // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
         if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-            try self.checkStaticDispatchConstraints(&env, true);
+            _ = try self.checkStaticDispatchConstraints(&env, true);
         }
     }
 
@@ -4363,27 +5581,30 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &external_pinnable);
     try self.reportAmbiguousStaticDispatch(&self.reported_dispatch_vars, &self.pinnable_vars);
 
-    try self.pruneSelectedHoistedRootsAfterSolving();
+    try self.reportNonExhaustiveLambdaParams(&env);
+
+    try self.finalizeDelayedHoistedRoots();
+    try self.filterSelectedHoistedRootsForConstStorage();
 }
 
-fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
+fn filterSelectedHoistedRootsForConstStorage(self: *Self) Allocator.Error!void {
     const root_count = self.selected_hoisted_roots.items.len;
     const keep_roots = try self.gpa.alloc(bool, root_count);
     defer self.gpa.free(keep_roots);
     @memset(keep_roots, false);
 
-    var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
-    defer keep_oracle.deinit(self.gpa);
-
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
     var kept_pattern_count: u32 = 0;
-    for (self.selected_hoisted_roots.items, 0..) |root, i| {
-        keep_oracle.current_root_index = i;
-        const intrinsic = try self.hoistedRootIsIntrinsicallyKept(root);
-        const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle);
-        if (!intrinsic) continue;
-        if (!deps) continue;
+    root_loop: for (self.selected_hoisted_roots.items, 0..) |root, i| {
+        if (root.has_runtime_source) continue;
+        for (root.dependencies) |dependency| {
+            const dependency_index: usize = @intCast(dependency);
+            if (dependency_index >= i) {
+                hoistSelectionInvariant("selected hoisted root depended on itself or a later selected root");
+            }
+            if (!keep_roots[dependency_index]) continue :root_loop;
+        }
 
         keep_roots[i] = true;
         kept_count += 1;
@@ -4409,6 +5630,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (kept != i) {
             self.selected_hoisted_roots.items[kept] = root.*;
             root.body = .expr;
+            root.dependencies = &.{};
+            root.required_concrete_patterns = &.{};
+            root.has_runtime_source = false;
         }
         const root_index: u32 = @intCast(kept);
         switch (self.selected_hoisted_roots.items[kept].body) {
@@ -4424,1043 +5648,13 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     std.debug.assert(kept == kept_count);
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
-    try self.debugVerifyKeptHoistedRootDependencies();
 }
-
-fn hoistedRootIsIntrinsicallyKept(
-    self: *Self,
-    root: hoist_roots.SelectedHoistedRoot,
-) Allocator.Error!bool {
-    const type_var = if (root.pattern) |pattern|
-        ModuleEnv.varFrom(pattern)
-    else
-        ModuleEnv.varFrom(root.expr);
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
-    if (self.varIsFunctionType(type_var)) return false;
-    return try self.varIsConcreteHoistedConstType(type_var);
-}
-
-fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
-    if (builtin.mode != .Debug) return;
-
-    const root_count = self.selected_hoisted_roots.items.len;
-    const keep_roots = try self.gpa.alloc(bool, root_count);
-    defer self.gpa.free(keep_roots);
-    @memset(keep_roots, true);
-
-    var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
-    defer keep_oracle.deinit(self.gpa);
-
-    for (self.selected_hoisted_roots.items, 0..) |root, i| {
-        keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) {
-            hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
-        }
-    }
-}
-
-fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varIsConcreteHoistedConstTypeInternal(var_, &self.var_set);
-}
-
-fn varIsConcreteHoistedConstTypeInternal(
-    self: *Self,
-    var_: Var,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return true;
-    try visited.put(resolved.var_, {});
-
-    return switch (resolved.desc.content) {
-        .err,
-        .flex,
-        .rigid,
-        => false,
-        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(self.types.sliceAliasArgs(alias), visited)) and
-            try self.varIsConcreteHoistedConstTypeInternal(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat| try self.flatTypeIsConcreteHoistedConst(flat, visited),
-    };
-}
-
-fn varsAreConcreteHoistedConstTypes(
-    self: *Self,
-    vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    for (vars) |var_| {
-        if (!try self.varIsConcreteHoistedConstTypeInternal(var_, visited)) return false;
-    }
-    return true;
-}
-
-fn flatTypeIsConcreteHoistedConst(
-    self: *Self,
-    flat: FlatType,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    return switch (flat) {
-        .empty_record,
-        .empty_tag_union,
-        => true,
-        .fn_pure,
-        .fn_effectful,
-        .fn_unbound,
-        => false,
-        .record => |record| blk: {
-            const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (!try self.varsAreConcreteHoistedConstTypes(fields.items(.var_), visited)) break :blk false;
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(record.ext, visited);
-        },
-        .record_unbound => |fields| blk: {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            break :blk try self.varsAreConcreteHoistedConstTypes(fields_slice.items(.var_), visited);
-        },
-        .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(self.types.sliceVars(tuple.elems), visited),
-        .tag_union => |tag_union| blk: {
-            const tags = self.types.getTagsSlice(tag_union.tags);
-            for (tags.items(.args)) |tag_args| {
-                if (!try self.varsAreConcreteHoistedConstTypes(self.types.sliceVars(tag_args), visited)) break :blk false;
-            }
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(tag_union.ext, visited);
-        },
-        .nominal_type => |nominal| blk: {
-            if (!try self.varsAreConcreteHoistedConstTypes(self.types.sliceNominalArgs(nominal), visited)) break :blk false;
-            if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| {
-                switch (builtin_decl) {
-                    .list,
-                    .box,
-                    .fields,
-                    .field,
-                    .num,
-                    => break :blk true,
-                    .try_type,
-                    .numeral,
-                    => {},
-                }
-            }
-            if (nominal.isOpaque()) break :blk true;
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(self.types.getNominalBackingVar(nominal), visited);
-        },
-    };
-}
-
-const HoistedDependencyBindingKind = enum {
-    internal,
-    contextual,
-};
-
-const HoistedDependencyBinding = struct {
-    pattern: CIR.Pattern.Idx,
-    kind: HoistedDependencyBindingKind,
-};
-
-const HoistedCallableKey = struct {
-    module_addr: usize,
-    def: CIR.Def.Idx,
-};
-
-const HoistedCallableState = enum {
-    visiting,
-    stable,
-    unstable,
-};
-
-const HoistedDependencyContext = struct {
-    bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
-    callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
-
-    fn deinit(self: *@This(), allocator: Allocator) void {
-        self.bindings.deinit(allocator);
-        self.callable_stability.deinit(allocator);
-    }
-
-    fn mark(self: *const @This()) usize {
-        return self.bindings.items.len;
-    }
-
-    fn pop(self: *@This(), start: usize) void {
-        self.bindings.shrinkRetainingCapacity(start);
-    }
-
-    fn contains(self: *const @This(), pattern: CIR.Pattern.Idx) bool {
-        for (self.bindings.items) |binding| {
-            if (binding.pattern == pattern) return true;
-        }
-        return false;
-    }
-
-    fn append(
-        self: *@This(),
-        allocator: Allocator,
-        pattern: CIR.Pattern.Idx,
-        kind: HoistedDependencyBindingKind,
-    ) Allocator.Error!void {
-        try self.bindings.append(allocator, .{
-            .pattern = pattern,
-            .kind = kind,
-        });
-    }
-};
 
 fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
     if (builtin.mode == .Debug) {
         std.debug.panic("check invariant violated: " ++ message, .{});
     }
     unreachable;
-}
-
-const HoistedRootKeepOracle = struct {
-    pattern_roots: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
-    expr_roots: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
-    keep_roots: []const bool,
-    current_root_index: usize = 0,
-
-    fn init(
-        allocator: Allocator,
-        roots: []const hoist_roots.SelectedHoistedRoot,
-        keep_roots: []const bool,
-    ) Allocator.Error!HoistedRootKeepOracle {
-        var oracle = HoistedRootKeepOracle{ .keep_roots = keep_roots };
-        errdefer oracle.deinit(allocator);
-        try oracle.pattern_roots.ensureTotalCapacity(allocator, @intCast(roots.len));
-        try oracle.expr_roots.ensureTotalCapacity(allocator, @intCast(roots.len));
-
-        for (roots, 0..) |root, i| {
-            const root_index: u32 = @intCast(i);
-            switch (root.body) {
-                .expr => {
-                    const entry = oracle.expr_roots.getOrPutAssumeCapacity(root.expr);
-                    if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted expression root");
-                    entry.value_ptr.* = root_index;
-                },
-                .pattern_extraction => {},
-            }
-            if (root.pattern) |pattern| {
-                const entry = oracle.pattern_roots.getOrPutAssumeCapacity(pattern);
-                if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted binding root");
-                entry.value_ptr.* = root_index;
-            }
-        }
-
-        return oracle;
-    }
-
-    fn deinit(self: *HoistedRootKeepOracle, allocator: Allocator) void {
-        self.pattern_roots.deinit(allocator);
-        self.expr_roots.deinit(allocator);
-    }
-
-    fn selectedPatternIsKept(self: *const HoistedRootKeepOracle, pattern: CIR.Pattern.Idx) ?bool {
-        const root_index = self.pattern_roots.get(pattern) orelse return null;
-        if (root_index >= self.current_root_index) {
-            hoistSelectionInvariant("selected hoisted root depended on a later selected root");
-        }
-        return self.keep_roots[root_index];
-    }
-};
-
-fn hoistedRootDependenciesAreKept(
-    self: *Self,
-    expr: CIR.Expr.Idx,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    var context = HoistedDependencyContext{};
-    defer context.deinit(self.gpa);
-    return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
-}
-
-fn hoistedRootDependenciesAreKeptInternal(
-    self: *Self,
-    expr: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
-
-    return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.patternIsTopLevel(lookup.pattern_idx) or
-            context.contains(lookup.pattern_idx) or
-            (keep_oracle.selectedPatternIsKept(lookup.pattern_idx) orelse false),
-        .e_lookup_external,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        => true,
-        .e_lookup_required,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_crash,
-        .e_closure,
-        .e_lambda,
-        .e_hosted_lambda,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
-        .e_return,
-        .e_break,
-        .e_run_low_level,
-        => false,
-        .e_str => |str| self.hoistedRootExprSpanDependenciesAreKept(str.span, context, keep_oracle),
-        .e_list => |list| self.hoistedRootExprSpanDependenciesAreKept(list.elems, context, keep_oracle),
-        .e_tuple => |tuple| self.hoistedRootExprSpanDependenciesAreKept(tuple.elems, context, keep_oracle),
-        .e_block => |block| self.hoistedRootBlockDependenciesAreKept(block.stmts, block.final_expr, context, keep_oracle),
-        .e_match => |match| self.hoistedRootMatchDependenciesAreKept(match, context, keep_oracle),
-        .e_if => |if_expr| self.hoistedRootIfDependenciesAreKept(if_expr.branches, if_expr.final_else, context, keep_oracle),
-        .e_call => |call| (try self.hoistedRootCalleeAllowsStoredConst(call.func, context)) and
-            (try self.hoistedRootDependenciesAreKeptInternal(call.func, context, keep_oracle)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_method_call => |call| (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context, keep_oracle)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_dispatch_call => |call| !self.varIsEffectfulFunction(call.constraint_fn_var) and
-            (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context, keep_oracle)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_record => |record| self.hoistedRootRecordDependenciesAreKept(record.fields, record.ext, context, keep_oracle),
-        .e_tag => |tag| self.hoistedRootExprSpanDependenciesAreKept(tag.args, context, keep_oracle),
-        .e_nominal => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
-        .e_nominal_external => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
-        .e_binop => |binop| (try self.hoistedRootDependenciesAreKeptInternal(binop.lhs, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(binop.rhs, context, keep_oracle),
-        .e_unary_minus => |unary| self.hoistedRootDependenciesAreKeptInternal(unary.expr, context, keep_oracle),
-        .e_unary_not => |unary| self.hoistedRootDependenciesAreKeptInternal(unary.expr, context, keep_oracle),
-        .e_field_access => |field| self.hoistedRootDependenciesAreKeptInternal(field.receiver, context, keep_oracle),
-        .e_interpolation => |interpolation| blk: {
-            if (interpolation.constraint_fn_var) |fn_var| {
-                if (self.varIsEffectfulFunction(fn_var)) break :blk false;
-            }
-            break :blk (try self.hoistedRootDependenciesAreKeptInternal(interpolation.first, context, keep_oracle)) and
-                try self.hoistedRootExprSpanDependenciesAreKept(interpolation.parts, context, keep_oracle);
-        },
-        .e_structural_eq => |eq| (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
-        .e_structural_hash => |h| (try self.hoistedRootDependenciesAreKeptInternal(h.value, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(h.hasher, context, keep_oracle),
-        .e_method_eq => |eq| !self.varIsEffectfulFunction(eq.constraint_fn_var) and
-            (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
-        .e_type_method_call => |call| self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_type_dispatch_call => |call| !self.varIsEffectfulFunction(call.constraint_fn_var) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_tuple_access => |access| self.hoistedRootDependenciesAreKeptInternal(access.tuple, context, keep_oracle),
-    };
-}
-
-const HoistedCallableDef = struct {
-    module: *const ModuleEnv,
-    def: CIR.Def.Idx,
-};
-
-fn hoistedRootCalleeAllowsStoredConst(
-    self: *Self,
-    callee: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    const callable_def = self.hoistedCallableDefForExpr(self.cir, callee) orelse return true;
-    return try self.hoistedCallableDefAllowsStoredConst(callable_def, context);
-}
-
-fn hoistedCallableDefAllowsStoredConst(
-    self: *Self,
-    callable_def: HoistedCallableDef,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    const key = HoistedCallableKey{
-        .module_addr = @intFromPtr(callable_def.module),
-        .def = callable_def.def,
-    };
-    if (context.callable_stability.get(key)) |state| {
-        return switch (state) {
-            .stable, .visiting => true,
-            .unstable => false,
-        };
-    }
-
-    try context.callable_stability.put(self.gpa, key, .visiting);
-    const def = callable_def.module.store.getDef(callable_def.def);
-    const stable = try self.hoistedExprAllowsStoredConst(callable_def.module, def.expr, context);
-    const state: HoistedCallableState = if (stable) .stable else .unstable;
-    context.callable_stability.getPtr(key).?.* = state;
-    return stable;
-}
-
-fn hoistedExprAllowsStoredConst(
-    self: *Self,
-    module: *const ModuleEnv,
-    expr: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    return switch (module.store.getExpr(expr)) {
-        .e_run_low_level => |run| run.op != .dict_pseudo_seed and
-            try self.hoistedExprSpanAllowsStoredConst(module, run.args, context),
-        .e_lookup_local,
-        .e_lookup_external,
-        .e_lookup_required,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_crash,
-        .e_hosted_lambda,
-        => true,
-        .e_str => |str| self.hoistedExprSpanAllowsStoredConst(module, str.span, context),
-        .e_list => |list| self.hoistedExprSpanAllowsStoredConst(module, list.elems, context),
-        .e_tuple => |tuple| self.hoistedExprSpanAllowsStoredConst(module, tuple.elems, context),
-        .e_block => |block| self.hoistedBlockAllowsStoredConst(module, block.stmts, block.final_expr, context),
-        .e_match => |match| self.hoistedMatchAllowsStoredConst(module, match, context),
-        .e_if => |if_expr| self.hoistedIfAllowsStoredConst(module, if_expr.branches, if_expr.final_else, context),
-        .e_call => |call| (try self.hoistedCalleeAllowsStoredConstInModule(module, call.func, context)) and
-            (try self.hoistedExprAllowsStoredConst(module, call.func, context)) and
-            try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
-        .e_method_call => |call| (try self.hoistedExprAllowsStoredConst(module, call.receiver, context)) and
-            try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
-        .e_dispatch_call => |call| (try self.hoistedExprAllowsStoredConst(module, call.receiver, context)) and
-            try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
-        .e_record => |record| self.hoistedRecordAllowsStoredConst(module, record.fields, record.ext, context),
-        .e_tag => |tag| self.hoistedExprSpanAllowsStoredConst(module, tag.args, context),
-        .e_nominal => |nominal| self.hoistedExprAllowsStoredConst(module, nominal.backing_expr, context),
-        .e_nominal_external => |nominal| self.hoistedExprAllowsStoredConst(module, nominal.backing_expr, context),
-        .e_binop => |binop| (try self.hoistedExprAllowsStoredConst(module, binop.lhs, context)) and
-            try self.hoistedExprAllowsStoredConst(module, binop.rhs, context),
-        .e_unary_minus => |unary| self.hoistedExprAllowsStoredConst(module, unary.expr, context),
-        .e_unary_not => |unary| self.hoistedExprAllowsStoredConst(module, unary.expr, context),
-        .e_field_access => |field| self.hoistedExprAllowsStoredConst(module, field.receiver, context),
-        .e_interpolation => |interpolation| (try self.hoistedExprAllowsStoredConst(module, interpolation.first, context)) and
-            try self.hoistedExprSpanAllowsStoredConst(module, interpolation.parts, context),
-        .e_structural_eq => |eq| (try self.hoistedExprAllowsStoredConst(module, eq.lhs, context)) and
-            try self.hoistedExprAllowsStoredConst(module, eq.rhs, context),
-        .e_structural_hash => |h| (try self.hoistedExprAllowsStoredConst(module, h.value, context)) and
-            try self.hoistedExprAllowsStoredConst(module, h.hasher, context),
-        .e_method_eq => |eq| (try self.hoistedExprAllowsStoredConst(module, eq.lhs, context)) and
-            try self.hoistedExprAllowsStoredConst(module, eq.rhs, context),
-        .e_type_method_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
-        .e_type_dispatch_call => |call| self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
-        .e_tuple_access => |access| self.hoistedExprAllowsStoredConst(module, access.tuple, context),
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_break,
-        => false,
-        .e_for => |for_expr| (try self.hoistedExprAllowsStoredConst(module, for_expr.expr, context)) and
-            try self.hoistedExprAllowsStoredConst(module, for_expr.body, context),
-        .e_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
-        .e_closure => |closure| self.hoistedExprAllowsStoredConst(module, closure.lambda_idx, context),
-        .e_lambda => |lambda| self.hoistedExprAllowsStoredConst(module, lambda.body, context),
-    };
-}
-
-fn hoistedCalleeAllowsStoredConstInModule(
-    self: *Self,
-    module: *const ModuleEnv,
-    callee: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    const callable_def = self.hoistedCallableDefForExpr(module, callee) orelse return true;
-    return try self.hoistedCallableDefAllowsStoredConst(callable_def, context);
-}
-
-fn hoistedCallableDefForExpr(
-    self: *Self,
-    module: *const ModuleEnv,
-    expr: CIR.Expr.Idx,
-) ?HoistedCallableDef {
-    return switch (module.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
-        .e_lookup_external => |external| blk: {
-            const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
-        },
-        .e_str,
-        .e_str_segment,
-        .e_bytes_literal,
-        .e_num,
-        .e_num_from_numeral,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_empty_list,
-        .e_empty_record,
-        .e_zero_argument_tag,
-        .e_lookup_required,
-        .e_list,
-        .e_tuple,
-        .e_record,
-        .e_block,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_closure,
-        .e_lambda,
-        .e_binop,
-        .e_unary_minus,
-        .e_unary_not,
-        .e_field_access,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_for,
-        .e_hosted_lambda,
-        .e_run_low_level,
-        .e_runtime_error,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_crash,
-        .e_return,
-        .e_break,
-        => null,
-    };
-}
-
-fn hoistedImportedModule(
-    self: *Self,
-    module: *const ModuleEnv,
-    import_idx: CIR.Import.Idx,
-) ?*const ModuleEnv {
-    const module_idx = module.imports.getResolvedModule(import_idx) orelse return null;
-    if (module_idx >= self.imported_modules.len) return null;
-    return self.imported_modules[module_idx];
-}
-
-fn hoistedTopLevelDefForPattern(
-    module: *const ModuleEnv,
-    pattern: CIR.Pattern.Idx,
-) ?HoistedCallableDef {
-    const pattern_node = ModuleEnv.nodeIdxFrom(pattern);
-    return hoistedTopLevelDefForNode(module, pattern_node);
-}
-
-fn hoistedTopLevelDefForNode(
-    module: *const ModuleEnv,
-    node: CIR.Node.Idx,
-) ?HoistedCallableDef {
-    for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
-        const def = module.store.getDef(def_idx);
-        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.pattern) == node or ModuleEnv.nodeIdxFrom(def.expr) == node) {
-            return .{ .module = module, .def = def_idx };
-        }
-    }
-    return null;
-}
-
-fn hoistedExprSpanAllowsStoredConst(
-    self: *Self,
-    module: *const ModuleEnv,
-    span: CIR.Expr.Span,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    for (module.store.sliceExpr(span)) |expr| {
-        if (!try self.hoistedExprAllowsStoredConst(module, expr, context)) return false;
-    }
-    return true;
-}
-
-fn hoistedBlockAllowsStoredConst(
-    self: *Self,
-    module: *const ModuleEnv,
-    statements: CIR.Statement.Span,
-    final_expr: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    for (module.store.sliceStatements(statements)) |statement| {
-        if (!try self.hoistedStatementAllowsStoredConst(module, statement, context)) return false;
-    }
-    return try self.hoistedExprAllowsStoredConst(module, final_expr, context);
-}
-
-fn hoistedStatementAllowsStoredConst(
-    self: *Self,
-    module: *const ModuleEnv,
-    statement: CIR.Statement.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    return switch (module.store.getStatement(statement)) {
-        .s_decl => |decl| self.hoistedExprAllowsStoredConst(module, decl.expr, context),
-        .s_var => |var_stmt| self.hoistedExprAllowsStoredConst(module, var_stmt.expr, context),
-        .s_reassign => |reassign| self.hoistedExprAllowsStoredConst(module, reassign.expr, context),
-        .s_expr => |expr_stmt| self.hoistedExprAllowsStoredConst(module, expr_stmt.expr, context),
-        .s_dbg,
-        .s_expect,
-        => false,
-        .s_for => |for_stmt| (try self.hoistedExprAllowsStoredConst(module, for_stmt.expr, context)) and
-            try self.hoistedExprAllowsStoredConst(module, for_stmt.body, context),
-        .s_while => |while_stmt| (try self.hoistedExprAllowsStoredConst(module, while_stmt.cond, context)) and
-            try self.hoistedExprAllowsStoredConst(module, while_stmt.body, context),
-        .s_infinite_loop => |loop_stmt| (try self.hoistedExprAllowsStoredConst(module, loop_stmt.cond, context)) and
-            try self.hoistedExprAllowsStoredConst(module, loop_stmt.body, context),
-        .s_breakable_loop => |loop_stmt| (try self.hoistedExprAllowsStoredConst(module, loop_stmt.cond, context)) and
-            try self.hoistedExprAllowsStoredConst(module, loop_stmt.body, context),
-        .s_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
-        .s_var_uninitialized,
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_crash,
-        .s_break,
-        .s_runtime_error,
-        => true,
-    };
-}
-
-fn hoistedRecordAllowsStoredConst(
-    self: *Self,
-    module: *const ModuleEnv,
-    fields: CIR.RecordField.Span,
-    ext: ?CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    if (ext) |ext_expr| {
-        if (!try self.hoistedExprAllowsStoredConst(module, ext_expr, context)) return false;
-    }
-    for (module.store.sliceRecordFields(fields)) |field_id| {
-        const field = module.store.getRecordField(field_id);
-        if (!try self.hoistedExprAllowsStoredConst(module, field.value, context)) return false;
-    }
-    return true;
-}
-
-fn hoistedMatchAllowsStoredConst(
-    self: *Self,
-    module: *const ModuleEnv,
-    match: CIR.Expr.Match,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    if (!try self.hoistedExprAllowsStoredConst(module, match.cond, context)) return false;
-    for (module.store.sliceMatchBranches(match.branches)) |branch_id| {
-        const branch = module.store.getMatchBranch(branch_id);
-        if (branch.guard) |guard| {
-            if (!try self.hoistedExprAllowsStoredConst(module, guard, context)) return false;
-        }
-        if (!try self.hoistedExprAllowsStoredConst(module, branch.value, context)) return false;
-    }
-    return true;
-}
-
-fn hoistedIfAllowsStoredConst(
-    self: *Self,
-    module: *const ModuleEnv,
-    branches: CIR.Expr.IfBranch.Span,
-    final_else: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    for (module.store.sliceIfBranches(branches)) |branch_id| {
-        const branch = module.store.getIfBranch(branch_id);
-        if (!try self.hoistedExprAllowsStoredConst(module, branch.cond, context)) return false;
-        if (!try self.hoistedExprAllowsStoredConst(module, branch.body, context)) return false;
-    }
-    return try self.hoistedExprAllowsStoredConst(module, final_else, context);
-}
-
-fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
-    const node = ModuleEnv.nodeIdxFrom(expr);
-    if (self.cir.numeralDispatchPlanForNode(node) != null) {
-        if (self.cir.numericSuffixTargetForNode(node)) |suffix_target| {
-            return switch (suffix_target.target()) {
-                .builtin => false,
-                .local,
-                .external,
-                => true,
-                .invalid => false,
-            };
-        }
-        return !self.varIsBuiltinLiteralTarget(ModuleEnv.varFrom(expr));
-    }
-    if (self.cir.quoteDispatchPlanForNode(node) != null and
-        !self.varIsBuiltinLiteralTarget(ModuleEnv.varFrom(expr)))
-    {
-        return true;
-    }
-    return false;
-}
-
-fn varIsBuiltinLiteralTarget(self: *Self, var_: Var) bool {
-    var current = var_;
-    while (true) {
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = self.types.getAliasBackingVar(alias);
-            },
-            .structure => |flat| return switch (flat) {
-                .nominal_type => |nominal| self.nominalIsBuiltinNumberType(nominal) or
-                    self.nominalIsBuiltinStrType(nominal),
-                .record,
-                .record_unbound,
-                .tuple,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                => false,
-            },
-            .err,
-            .flex,
-            .rigid,
-            => return false,
-        }
-    }
-}
-
-fn hoistedRootExprSpanDependenciesAreKept(
-    self: *Self,
-    span: CIR.Expr.Span,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    for (self.cir.store.sliceExpr(span)) |child| {
-        if (!try self.hoistedRootDependenciesAreKeptInternal(child, context, keep_oracle)) return false;
-    }
-    return true;
-}
-
-fn hoistedRootBlockDependenciesAreKept(
-    self: *Self,
-    statements: CIR.Statement.Span,
-    final_expr: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    const mark = context.mark();
-    defer context.pop(mark);
-
-    for (self.cir.store.sliceStatements(statements)) |statement| {
-        if (!try self.hoistedRootStatementDependenciesAreKept(statement, context, keep_oracle)) return false;
-    }
-    return try self.hoistedRootDependenciesAreKeptInternal(final_expr, context, keep_oracle);
-}
-
-fn hoistedRootStatementDependenciesAreKept(
-    self: *Self,
-    statement: CIR.Statement.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    return switch (self.cir.store.getStatement(statement)) {
-        .s_decl => |decl| blk: {
-            if (!try self.hoistedRootDependenciesAreKeptInternal(decl.expr, context, keep_oracle)) break :blk false;
-            if (!try self.hoistedRootPatternSelectedDependenciesAreKept(decl.pattern, keep_oracle)) break :blk false;
-            if (!try self.hoistedRootPatternBindersAreConcrete(decl.pattern)) break :blk false;
-            try self.appendHoistedDependencyPatternBinders(decl.pattern, context, .internal);
-            break :blk true;
-        },
-        .s_expr => |expr| self.hoistedRootDependenciesAreKeptInternal(expr.expr, context, keep_oracle),
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        => true,
-        .s_var,
-        .s_var_uninitialized,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_runtime_error,
-        => false,
-    };
-}
-
-fn hoistedRootMatchDependenciesAreKept(
-    self: *Self,
-    match: CIR.Expr.Match,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    if (!try self.hoistedRootDependenciesAreKeptInternal(match.cond, context, keep_oracle)) return false;
-    for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
-        const branch = self.cir.store.getMatchBranch(branch_idx);
-        const mark = context.mark();
-        defer context.pop(mark);
-        for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-            const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
-            if (!try self.hoistedRootPatternBindersAreConcrete(branch_pattern.pattern)) return false;
-            try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context, .contextual);
-        }
-        if (branch.guard) |guard| {
-            if (!try self.hoistedRootDependenciesAreKeptInternal(guard, context, keep_oracle)) return false;
-        }
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.value, context, keep_oracle)) return false;
-    }
-    return true;
-}
-
-fn hoistedRootPatternSelectedDependenciesAreKept(
-    self: *Self,
-    pattern: CIR.Pattern.Idx,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    if (keep_oracle.selectedPatternIsKept(pattern)) |kept| {
-        if (!kept) return false;
-    }
-
-    return switch (self.cir.store.getPattern(pattern)) {
-        .assign,
-        .underscore,
-        .runtime_error,
-        .num_literal,
-        .small_dec_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .str_literal,
-        => true,
-        .as => |as_pattern| try self.hoistedRootPatternSelectedDependenciesAreKept(as_pattern.pattern, keep_oracle),
-        .tuple => |tuple| blk: {
-            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(elem_pattern, keep_oracle)) break :blk false;
-            }
-            break :blk true;
-        },
-        .record_destructure => |destructure| blk: {
-            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
-                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(destruct.kind.toPatternIdx(), keep_oracle)) break :blk false;
-            }
-            break :blk true;
-        },
-        .applied_tag => |tag| blk: {
-            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(arg_pattern, keep_oracle)) break :blk false;
-            }
-            break :blk true;
-        },
-        .nominal => |nominal| try self.hoistedRootPatternSelectedDependenciesAreKept(nominal.backing_pattern, keep_oracle),
-        .nominal_external => |nominal| try self.hoistedRootPatternSelectedDependenciesAreKept(nominal.backing_pattern, keep_oracle),
-        .list => |list| blk: {
-            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(elem_pattern, keep_oracle)) break :blk false;
-            }
-            if (list.rest_info) |rest_info| {
-                if (rest_info.pattern) |rest_pattern| {
-                    if (!try self.hoistedRootPatternSelectedDependenciesAreKept(rest_pattern, keep_oracle)) break :blk false;
-                }
-            }
-            break :blk true;
-        },
-        .str_interpolation => |str| blk: {
-            var step_offset: u32 = 0;
-            while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
-                if (step.capture) |capture| {
-                    if (!try self.hoistedRootPatternSelectedDependenciesAreKept(capture, keep_oracle)) break :blk false;
-                }
-            }
-            break :blk true;
-        },
-    };
-}
-
-fn hoistedRootPatternBindersAreConcrete(
-    self: *Self,
-    pattern: CIR.Pattern.Idx,
-) Allocator.Error!bool {
-    return switch (self.cir.store.getPattern(pattern)) {
-        .assign => try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern)),
-        .as => |as_pattern| (try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) and
-            try self.hoistedRootPatternBindersAreConcrete(as_pattern.pattern),
-        .tuple => |tuple| blk: {
-            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                if (!try self.hoistedRootPatternBindersAreConcrete(elem_pattern)) break :blk false;
-            }
-            break :blk true;
-        },
-        .record_destructure => |destructure| blk: {
-            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
-                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                if (!try self.hoistedRootPatternBindersAreConcrete(destruct.kind.toPatternIdx())) break :blk false;
-            }
-            break :blk true;
-        },
-        .applied_tag => |tag| blk: {
-            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                if (!try self.hoistedRootPatternBindersAreConcrete(arg_pattern)) break :blk false;
-            }
-            break :blk true;
-        },
-        .nominal => |nominal| try self.hoistedRootPatternBindersAreConcrete(nominal.backing_pattern),
-        .nominal_external => |nominal| try self.hoistedRootPatternBindersAreConcrete(nominal.backing_pattern),
-        .list => |list| blk: {
-            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                if (!try self.hoistedRootPatternBindersAreConcrete(elem_pattern)) break :blk false;
-            }
-            if (list.rest_info) |rest_info| {
-                if (rest_info.pattern) |rest_pattern| {
-                    if (!try self.hoistedRootPatternBindersAreConcrete(rest_pattern)) break :blk false;
-                }
-            }
-            break :blk true;
-        },
-        .str_interpolation => |str| blk: {
-            var step_offset: u32 = 0;
-            while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
-                if (step.capture) |capture| {
-                    if (!try self.hoistedRootPatternBindersAreConcrete(capture)) break :blk false;
-                }
-            }
-            break :blk true;
-        },
-        .underscore,
-        .runtime_error,
-        .num_literal,
-        .small_dec_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .str_literal,
-        => true,
-    };
-}
-
-fn appendHoistedDependencyPatternBinders(
-    self: *Self,
-    pattern: CIR.Pattern.Idx,
-    context: *HoistedDependencyContext,
-    kind: HoistedDependencyBindingKind,
-) Allocator.Error!void {
-    switch (self.cir.store.getPattern(pattern)) {
-        .assign => {
-            try context.append(self.gpa, pattern, kind);
-        },
-        .as => |as_pattern| {
-            try context.append(self.gpa, pattern, kind);
-            try self.appendHoistedDependencyPatternBinders(as_pattern.pattern, context, kind);
-        },
-        .tuple => |tuple| {
-            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                try self.appendHoistedDependencyPatternBinders(elem_pattern, context, kind);
-            }
-        },
-        .record_destructure => |destructure| {
-            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
-                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                try self.appendHoistedDependencyPatternBinders(destruct.kind.toPatternIdx(), context, kind);
-            }
-        },
-        .applied_tag => |tag| {
-            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                try self.appendHoistedDependencyPatternBinders(arg_pattern, context, kind);
-            }
-        },
-        .nominal => |nominal| {
-            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context, kind);
-        },
-        .nominal_external => |nominal| {
-            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context, kind);
-        },
-        .list => |list| {
-            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                try self.appendHoistedDependencyPatternBinders(elem_pattern, context, kind);
-            }
-            if (list.rest_info) |rest_info| {
-                if (rest_info.pattern) |rest_pattern| {
-                    try self.appendHoistedDependencyPatternBinders(rest_pattern, context, kind);
-                }
-            }
-        },
-        .str_interpolation => |str| {
-            var step_offset: u32 = 0;
-            while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
-                if (step.capture) |capture| {
-                    try self.appendHoistedDependencyPatternBinders(capture, context, kind);
-                }
-            }
-        },
-        .underscore,
-        .runtime_error,
-        .num_literal,
-        .small_dec_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .str_literal,
-        => {},
-    }
-}
-
-fn hoistedRootIfDependenciesAreKept(
-    self: *Self,
-    branches: CIR.Expr.IfBranch.Span,
-    final_else: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    for (self.cir.store.sliceIfBranches(branches)) |branch_idx| {
-        const branch = self.cir.store.getIfBranch(branch_idx);
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.cond, context, keep_oracle)) return false;
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.body, context, keep_oracle)) return false;
-    }
-    return try self.hoistedRootDependenciesAreKeptInternal(final_else, context, keep_oracle);
-}
-
-fn hoistedRootRecordDependenciesAreKept(
-    self: *Self,
-    fields: CIR.RecordField.Span,
-    ext: ?CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    if (ext) |ext_expr| {
-        if (!try self.hoistedRootDependenciesAreKeptInternal(ext_expr, context, keep_oracle)) return false;
-    }
-    for (self.cir.store.sliceRecordFields(fields)) |field_idx| {
-        const field = self.cir.store.getRecordField(field_idx);
-        if (!try self.hoistedRootDependenciesAreKeptInternal(field.value, context, keep_oracle)) return false;
-    }
-    return true;
 }
 
 /// Populate `pinnable` with every resolved var that an outside caller can still
@@ -6043,7 +6237,7 @@ fn checkInstantiatedStaticDispatchConstraints(
     }
     if (env.deferred_static_dispatch_constraints.items.items.len == deferred_top) return;
 
-    try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
+    _ = try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
     try self.checkAllConstraints(env);
 }
 
@@ -6375,7 +6569,15 @@ fn checkExpectBody(
     self.current_expect_region = expect_region;
     defer self.current_expect_region = saved_expect_region;
 
-    return try self.checkExpr(body, env, expected);
+    const effect_slot = try self.beginEffectSlot(.{ .expect_body = expect_region });
+    defer self.endEffectSlot(effect_slot);
+
+    const body_is_effectful = (try self.checkExpr(body, env, expected)).isKnownEffectful();
+    const slot_is_effectful = try self.effectSlotIsEffectful(effect_slot);
+    if (slot_is_effectful) {
+        _ = try self.reportExpectEffectSlot(effect_slot);
+    }
+    return body_is_effectful or slot_is_effectful;
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -6817,7 +7019,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // After finalizing numeric defaults, resolve any remaining deferred
     // static dispatch constraints (e.g., Dec.not for !3).
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
+        _ = try self.checkStaticDispatchConstraints(&env, true);
     }
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
@@ -6890,7 +7092,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // the return type of methods on numerics stays an unconstrained flex var,
     // causing incorrect .zst layouts.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
+        _ = try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
     }
 
@@ -6919,6 +7121,57 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     defer trace.end();
 
     const def = self.cir.store.getDef(def_idx);
+    const is_module_level_def = self.top_level_ptrns.contains(def.pattern);
+    const detach_hoist_frames = is_module_level_def and self.hoist_frames.items.len != 0;
+
+    const saved_hoist_frames = self.hoist_frames;
+    const saved_hoist_expr_candidates = self.hoist_expr_candidates;
+    const saved_hoist_root_dependencies = self.hoist_root_dependencies;
+    const saved_hoist_required_concrete_patterns = self.hoist_required_concrete_patterns;
+    const saved_hoist_deferred_binding_dependencies = self.hoist_deferred_binding_dependencies;
+    const saved_last_hoist_result = self.last_hoist_result;
+    if (detach_hoist_frames) {
+        self.hoist_frames = .empty;
+        self.hoist_expr_candidates = .empty;
+        self.hoist_root_dependencies = .empty;
+        self.hoist_required_concrete_patterns = .empty;
+        self.hoist_deferred_binding_dependencies = .empty;
+        self.last_hoist_result = null;
+    }
+    defer {
+        if (detach_hoist_frames) {
+            if (self.hoist_frames.items.len != 0 or
+                self.hoist_expr_candidates.items.len != 0 or
+                self.hoist_root_dependencies.items.len != 0 or
+                self.hoist_required_concrete_patterns.items.len != 0 or
+                self.hoist_deferred_binding_dependencies.items.len != 0)
+            {
+                hoistSelectionInvariant("detached top-level def left hoist frame state behind");
+            }
+            self.hoist_frames.deinit(self.gpa);
+            self.hoist_expr_candidates.deinit(self.gpa);
+            self.hoist_root_dependencies.deinit(self.gpa);
+            self.hoist_required_concrete_patterns.deinit(self.gpa);
+            self.hoist_deferred_binding_dependencies.deinit(self.gpa);
+            self.hoist_frames = saved_hoist_frames;
+            self.hoist_expr_candidates = saved_hoist_expr_candidates;
+            self.hoist_root_dependencies = saved_hoist_root_dependencies;
+            self.hoist_required_concrete_patterns = saved_hoist_required_concrete_patterns;
+            self.hoist_deferred_binding_dependencies = saved_hoist_deferred_binding_dependencies;
+            self.last_hoist_result = saved_last_hoist_result;
+        }
+    }
+
+    const saved_hoist_suppressed_depth = self.hoist_suppressed_depth;
+    const saved_hoist_selection_suppressed_depth = self.hoist_selection_suppressed_depth;
+    if (is_module_level_def) {
+        self.hoist_suppressed_depth = 0;
+        self.hoist_selection_suppressed_depth = 0;
+    }
+    defer {
+        self.hoist_suppressed_depth = saved_hoist_suppressed_depth;
+        self.hoist_selection_suppressed_depth = saved_hoist_selection_suppressed_depth;
+    }
 
     if (self.top_level_ptrns.get(def.pattern)) |processing_def| {
         if (processing_def.status == .processed) {
@@ -6978,20 +7231,26 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Ordinary top-level constants are already compile-time roots, so nested
     // hoisted roots inside them would duplicate compile-time work. Top-level
     // functions are not evaluated as data constants, so their bodies may still
-    // contain top-level-equivalent local values.
-    const suppress_nested_hoists = !isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr));
+    // contain top-level-equivalent local values. Local definitions are checked for
+    // diagnostics and types, but only independent module-level definitions may
+    // publish sparse hoisted constants.
+    const suppress_nested_hoists = !is_module_level_def or
+        !isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr));
     if (suppress_nested_hoists) self.hoist_suppressed_depth += 1;
     defer {
         if (suppress_nested_hoists) self.hoist_suppressed_depth -= 1;
     }
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
-    const def_does_fx = try self.checkExpr(def.expr, env, expectation);
-    if (def_does_fx) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
-            .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
-        } });
-        try self.unifyWith(expr_var, .err, env);
+    const effect_slot = try self.beginEffectSlot(.{ .top_level_value = def_idx });
+    defer self.endEffectSlot(effect_slot);
+    const def_check_result = try self.checkExpr(def.expr, env, expectation);
+    try self.top_level_check_summaries.put(self.gpa, def.pattern, def_check_result);
+    try self.recordRuntimeDependencySummary(ModuleEnv.nodeIdxFrom(def.pattern), def_check_result);
+    try self.recordRuntimeDependencySummary(ModuleEnv.nodeIdxFrom(def.expr), def_check_result);
+    const def_is_effectful = def_check_result.isKnownEffectful();
+    if (def_is_effectful or try self.effectSlotIsEffectful(effect_slot)) {
+        try self.reportTopLevelEffectSlot(effect_slot, env);
     }
     if (def.annotation == null and self.exprAlwaysCrashes(def.expr)) {
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
@@ -7405,8 +7664,12 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
             try self.generateAnnoTypeInPlace(method.ret, env, .annotation);
             const ret_var = ModuleEnv.varFrom(method.ret);
 
-            // Create the function var
-            const func_content = try self.types.mkFuncUnbound(anno_arg_vars, ret_var);
+            // Create the function var. The where-clause arrow is explicit
+            // checked data; method names such as `foo!` do not determine effects.
+            const func_content = if (method.effectful)
+                try self.types.mkFuncEffectful(anno_arg_vars, ret_var)
+            else
+                try self.types.mkFuncPure(anno_arg_vars, ret_var);
             const func_var = try self.freshFromContent(func_content, env, where_region);
 
             // Add to scratch list
@@ -9009,7 +9272,7 @@ fn unifyMatchAltPatternBindings(
 
 // expr //
 
-fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -9103,7 +9366,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     };
 
-    var does_fx = false; // Does this expression potentially perform any side effects?
+    var check_result = ExprCheckResult{};
+    var delayed_dispatch_effect_fn_var: ?Var = null;
     self.checking_binding_rhs_pattern = binding_rhs_pattern;
     errdefer self.checking_binding_rhs_pattern = null;
     var hoist_frame = try self.beginHoistFrame(expr_idx, is_binding_rhs);
@@ -9134,11 +9398,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // String literal segments are already Str type
                 switch (seg_expr) {
                     .e_str_segment => {
-                        does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
+                        check_result.include(try self.checkExpr(seg_expr_idx, env, Expected.none()));
                     },
                     else => {
                         has_interpolation = true;
-                        does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
+                        check_result.include(try self.checkExpr(seg_expr_idx, env, Expected.none()));
                         const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
                         // Interpolated expressions must be of type Str
@@ -9383,13 +9647,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // constrain the rest of the list
 
                 // Check the first elem
-                does_fx = try self.checkExpr(elems[0], env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(elems[0], env, Expected.none()));
 
                 // Iterate over the remaining elements
                 const elem_var = ModuleEnv.varFrom(elems[0]);
                 var last_elem_expr_idx = elems[0];
                 for (elems[1..], 1..) |elem_expr_idx, i| {
-                    does_fx = try self.checkExpr(elem_expr_idx, env, Expected.none()) or does_fx;
+                    check_result.include(try self.checkExpr(elem_expr_idx, env, Expected.none()));
                     const cur_elem_var = ModuleEnv.varFrom(elem_expr_idx);
 
                     // Unify each element's var with the list's elem var
@@ -9403,7 +9667,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // to the elem_var to catch their individual errors
                     if (!result.isOk()) {
                         for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            does_fx = try self.checkExpr(remaining_elem_expr_idx, env, Expected.none()) or does_fx;
+                            check_result.include(try self.checkExpr(remaining_elem_expr_idx, env, Expected.none()));
                         }
 
                         // Break to avoid cascading errors
@@ -9423,7 +9687,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check tuple elements
             const elems_slice = self.cir.store.exprSlice(tuple.elems);
             for (elems_slice) |single_elem_expr_idx| {
-                does_fx = try self.checkExpr(single_elem_expr_idx, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(single_elem_expr_idx, env, Expected.none()));
             }
 
             // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
@@ -9436,7 +9700,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_tuple_access => |tuple_access| {
             // Check the tuple expression
-            does_fx = try self.checkExpr(tuple_access.tuple, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(tuple_access.tuple, env, Expected.none()));
 
             const tuple_var = ModuleEnv.varFrom(tuple_access.tuple);
             const resolved = self.types.resolveVar(tuple_var);
@@ -9533,7 +9797,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Create a record type in the type system and assign it the expr_var
 
                 // Check the record being updated
-                does_fx = try self.checkExpr(record_being_updated_expr, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(record_being_updated_expr, env, Expected.none()));
 
                 const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
                 const record_being_updated_name: ?Ident.Idx = self.getExprPatternIdent(record_being_updated_expr);
@@ -9543,7 +9807,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field = self.cir.store.getRecordField(field_idx);
 
                     // Check the field value expression
-                    does_fx = try self.checkExpr(field.value, env, Expected.none()) or does_fx;
+                    check_result.include(try self.checkExpr(field.value, env, Expected.none()));
 
                     // Create an unbound record with this field
                     const single_field_record = try self.freshFromContent(.{ .structure = .{
@@ -9574,7 +9838,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field = self.cir.store.getRecordField(field_idx);
 
                     // Check the field value expression
-                    does_fx = try self.checkExpr(field.value, env, Expected.none()) or does_fx;
+                    check_result.include(try self.checkExpr(field.value, env, Expected.none()));
 
                     // Append it to the scratch records array
                     try self.scratch_record_fields.append(types_mod.RecordField{
@@ -9619,7 +9883,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Process each tag arg
             const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
             for (arg_expr_idx_slice) |arg_expr_idx| {
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(arg_expr_idx, env, Expected.none()));
             }
 
             // Create the type
@@ -9634,7 +9898,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // nominal //
         .e_nominal => |nominal| {
             // Check the backing expression first
-            does_fx = try self.checkExpr(nominal.backing_expr, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(nominal.backing_expr, env, Expected.none()));
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Use shared nominal type checking logic
@@ -9649,7 +9913,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_nominal_external => |nominal| {
             // Check the backing expression first
-            does_fx = try self.checkExpr(nominal.backing_expr, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(nominal.backing_expr, env, Expected.none()));
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Resolve the external type declaration
@@ -9843,13 +10107,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 break :blk;
             }
 
+            const local_summary = self.local_check_summaries.get(lookup.pattern_idx);
+            if (local_summary) |summary| {
+                check_result.include(summary);
+            }
+            const summary_says_compile_time_known = if (local_summary) |summary| known_summary: {
+                if (summary.runtime_dep) |dep| {
+                    break :known_summary dep == .compile_time_known;
+                }
+                break :known_summary false;
+            } else false;
+
+            var lookup_has_runtime_dependency = false;
             const compile_time_known_binding = known: {
                 if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
                 if (self.hoist_selection_suppressed_depth != 0) {
                     if (self.hoist_known_values.get(lookup.pattern_idx)) |known_value| {
                         switch (known_value) {
                             .pattern_extraction => {
-                                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
+                                if (try self.ensureHoistedBindingRootIndex(lookup.pattern_idx)) |root_index| {
+                                    try self.appendCurrentHoistDependencyRoot(root_index);
+                                    break :known true;
+                                }
                             },
                             .binding_rhs,
                             .selected_root,
@@ -9862,11 +10141,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     try self.hoist_deferred_binding_dependencies.append(self.gpa, lookup.pattern_idx);
                     break :known true;
                 }
-                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
-                break :known self.markHoistContextualDependencyForLookup(lookup.pattern_idx);
+                if (try self.ensureHoistedBindingRootIndex(lookup.pattern_idx)) |root_index| {
+                    try self.appendCurrentHoistDependencyRoot(root_index);
+                    break :known true;
+                }
+                if (self.markHoistContextualDependencyForLookup(lookup.pattern_idx)) {
+                    if (summary_says_compile_time_known) break :known true;
+                    lookup_has_runtime_dependency = true;
+                    break :known true;
+                }
+                if (summary_says_compile_time_known) break :known true;
+                break :known false;
             };
             if (!compile_time_known_binding) {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
+            } else if (lookup_has_runtime_dependency) {
+                check_result.markRuntimeDependent();
+            } else {
+                check_result.markCompileTimeKnown();
             }
 
             // Instantiate if generalized, otherwise just use the pattern var
@@ -9882,6 +10175,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // With WaitingForDependencies phase, dependencies are guaranteed to be Done
             // before canonicalization, so target_node_idx is always valid.
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                check_result.markCompileTimeKnown();
                 const ext_instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
@@ -9889,11 +10183,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 );
                 _ = try self.unify(expr_var, ext_instantiated_var, env);
             } else {
+                check_result.markPoisoned();
                 try self.unifyWith(expr_var, .err, env);
             }
         },
         .e_lookup_required => |req| {
             self.markCurrentHoistRuntimeDependency();
+            check_result.markRuntimeDependent();
             // Look up the type from the platform's requires clause
             const requires_items = self.cir.requires_types.items.items;
             const idx = req.requires_idx.toU32();
@@ -9907,6 +10203,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 );
                 _ = try self.unify(expr_var, instantiated_var, env);
             } else {
+                check_result.markPoisoned();
                 try self.unifyWith(expr_var, .err, env);
             }
         },
@@ -9917,14 +10214,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check all statements in the block
             const stmt_result = try self.checkBlockStatements(block.stmts, env, expr_region);
-            does_fx = stmt_result.does_fx or does_fx;
+            var block_check = ExprCheckResult{};
+            block_check.include(stmt_result.check);
 
             // Check the final expression
-            const final_expr_does_fx = if (stmt_result.blocks_later_hoists)
-                try self.checkExprWithHoistSelectionSuppressed(block.final_expr, env, expected)
-            else
-                try self.checkExpr(block.final_expr, env, expected);
-            does_fx = final_expr_does_fx or does_fx;
+            block_check.include(try self.checkExpr(block.final_expr, env, expected));
+            check_result.include(block_check);
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
             // since the final expression is unreachable
@@ -9979,10 +10274,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
             defer arg_vars_alloc.free(arg_vars);
             const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
+            const arg_summary_start = self.local_check_summary_scope_patterns.items.len;
+            defer self.popLocalCheckSummaryScope(arg_summary_start);
             for (0..arg_count) |i| {
                 const pattern_idx = self.cir.store.patternAt(lambda.args, i);
                 arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
                 try self.checkPattern(pattern_idx, pattern_ctx, env);
+                try self.recordLocalCheckSummary(pattern_idx, ExprCheckResult.runtimeDependent());
             }
 
             // Now, check if we have an expected function to validate against
@@ -10065,16 +10363,32 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             self.empirical_exhaustiveness_depth = 0;
             defer self.empirical_exhaustiveness_depth = saved_empirical_exhaustiveness_depth;
 
-            const body_does_fx = if (mb_anno_func) |expected_func| blk: {
-                const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
+            const effect_slot = try self.beginEffectSlot(.{ .function_body = lambda.body });
+            defer self.endEffectSlot(effect_slot);
+            if (is_binding_rhs) {
+                if (binding_rhs_pattern) |pattern| {
+                    try self.recordFunctionEffectSlotForBinding(pattern, effect_slot);
+                }
+            }
+
+            const body_check_result = if (mb_anno_func) |expected_func| blk: {
+                const lambda_body_result = try self.checkExprWithDetachedHoistFrames(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
-                break :blk lambda_body_does_fx;
+                break :blk lambda_body_result;
             } else blk: {
-                const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none());
+                const lambda_body_result = try self.checkExprWithDetachedHoistFrames(lambda.body, env, Expected.none());
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
-                break :blk lambda_body_does_fx;
+                break :blk lambda_body_result;
             };
+            try self.function_body_check_summaries.put(self.gpa, lambda.body, body_check_result);
+            try self.recordRuntimeDependencySummary(ModuleEnv.nodeIdxFrom(lambda.body), body_check_result);
+            if (is_binding_rhs) {
+                if (binding_rhs_pattern) |pattern| {
+                    try self.recordFunctionRuntimeSourceForBinding(pattern, body_check_result.has_runtime_source);
+                }
+            }
+            const body_is_effectful = body_check_result.isKnownEffectful() or try self.effectSlotIsEffectful(effect_slot);
 
             // Process any pending return constraints (from early returns / ? operator) before
             // creating the function type. This must happen after the body is fully checked
@@ -10086,7 +10400,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.processReturnConstraints(env);
 
             // Create the function type
-            if (body_does_fx) {
+            if (body_is_effectful) {
                 try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
             } else {
                 try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
@@ -10111,7 +10425,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const saved_checking_call_arg = self.checking_call_arg;
             self.checking_call_arg = is_call_arg;
             defer self.checking_call_arg = saved_checking_call_arg;
-            does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
+            check_result.include(try self.checkExpr(closure.lambda_idx, env, expected));
+
+            for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
+                const capture = self.cir.store.getCapture(capture_idx);
+                if (!try self.capturePatternIsCompileTimeKnownForHoist(capture.pattern_idx)) {
+                    check_result.markRuntimeDependent();
+                    break;
+                }
+            }
+
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
             // For intermediate cycle participants, the inner lambda skipped
@@ -10141,7 +10464,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
                     self.checking_call_arg = true;
-                    does_fx = try self.checkExpr(call.func, env, Expected.none()) or does_fx;
+                    check_result.include(try self.checkExpr(call.func, env, Expected.none()));
                     const call_func_expr_var = ModuleEnv.varFrom(call.func);
 
                     // If the function was generalized (e.g. an immediately-invoked
@@ -10170,7 +10493,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
                     for (call_arg_expr_idxs) |call_arg_idx| {
                         self.checking_call_arg = true;
-                        does_fx = try self.checkExpr(call_arg_idx, env, Expected.none()) or does_fx;
+                        check_result.include(try self.checkExpr(call_arg_idx, env, Expected.none()));
 
                         // Check if this arg errored
                         did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(call_arg_idx)).desc.content == .err);
@@ -10209,10 +10532,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         };
                         const mb_func = if (mb_func_info) |info| info.func else null;
 
+                        try self.recordDirectCalleeEffectDependency(call.func);
+                        if (self.callableExprHasRuntimeSource(self.cir, call.func)) {
+                            check_result.markRuntimeSource();
+                        }
+
                         // If the function being called is effectful, mark this expression as effectful
                         if (mb_func_info) |info| {
                             if (info.is_effectful) {
-                                does_fx = true;
+                                self.markActiveEffectSlotEffectful();
+                                check_result.markEffectful();
                             }
                         }
 
@@ -10394,22 +10723,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_if => |if_expr| {
-            does_fx = try self.checkIfElseExpr(expr_idx, expr_region, env, if_expr, expected) or does_fx;
+            check_result.include(try self.checkIfElseExpr(expr_idx, expr_region, env, if_expr, expected));
         },
         .e_match => |match| {
-            does_fx = try self.checkMatchExpr(expr_idx, env, match, expected) or does_fx;
+            check_result.include(try self.checkMatchExpr(expr_idx, env, match, expected));
         },
         .e_binop => |binop| {
-            does_fx = try self.checkBinopExpr(expr_idx, expr_region, env, binop) or does_fx;
+            check_result.include(try self.checkBinopExpr(expr_idx, expr_region, env, binop));
         },
         .e_unary_minus => |unary| {
-            does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, env, unary) or does_fx;
+            check_result.include(try self.checkUnaryMinusExpr(expr_idx, expr_region, env, unary));
         },
         .e_unary_not => |unary| {
-            does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary) or does_fx;
+            check_result.include(try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary));
         },
         .e_field_access => |field_access| {
-            does_fx = try self.checkExpr(field_access.receiver, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(field_access.receiver, env, Expected.none()));
             const receiver_var = ModuleEnv.varFrom(field_access.receiver);
 
             const record_field_var = try self.fresh(env, expr_region);
@@ -10430,7 +10759,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_interpolation => |interpolation| {
             self.checking_call_arg = true;
-            does_fx = try self.checkExpr(interpolation.first, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(interpolation.first, env, Expected.none()));
             const first_var = ModuleEnv.varFrom(interpolation.first);
             const str_var = try self.freshStr(env, expr_region);
             _ = try self.unify(first_var, str_var, env);
@@ -10442,12 +10771,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var part_i: usize = 0;
             while (part_i < parts.len) : (part_i += 2) {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(parts[part_i], env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(parts[part_i], env, Expected.none()));
                 const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
                 did_err = did_err or (self.types.resolveVar(interpolated_var).desc.content == .err);
 
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(parts[part_i + 1], env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(parts[part_i + 1], env, Expected.none()));
                 const following_segment_var = ModuleEnv.varFrom(parts[part_i + 1]);
                 _ = try self.unify(str_var, following_segment_var, env);
                 did_err = did_err or (self.types.resolveVar(following_segment_var).desc.content == .err);
@@ -10484,6 +10813,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     interpolation.method_name_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 try self.cir.store.replaceExprWithInterpolationConstraint(
                     expr_idx,
                     interpolation.first,
@@ -10495,7 +10825,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_method_call => |method_call| {
-            does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(method_call.receiver, env, Expected.none()));
             const receiver_var = ModuleEnv.varFrom(method_call.receiver);
             var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
 
@@ -10507,7 +10837,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(arg_expr_idx, env, Expected.none()));
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
                 did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
@@ -10525,6 +10855,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.method_name_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 try self.cir.store.replaceExprWithDispatchCall(
                     expr_idx,
                     method_call.receiver,
@@ -10537,26 +10868,27 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_dispatch_call => |method_call| {
-            does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(method_call.receiver, env, Expected.none()));
             var did_err = self.types.resolveVar(ModuleEnv.varFrom(method_call.receiver)).desc.content == .err;
 
             for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(arg_expr_idx, env, Expected.none()));
                 did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
             }
 
             if (did_err) {
                 try self.unifyWith(expr_var, .err, env);
             }
+            delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
-                self.markCurrentHoistObservableEffect();
-                does_fx = true;
+                self.markActiveEffectSlotEffectful();
+                check_result.markEffectful();
             }
         },
         .e_structural_eq => |eq| {
-            does_fx = try self.checkExpr(eq.lhs, env, Expected.none()) or does_fx;
-            does_fx = try self.checkExpr(eq.rhs, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(eq.lhs, env, Expected.none()));
+            check_result.include(try self.checkExpr(eq.rhs, env, Expected.none()));
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             const rhs_var = ModuleEnv.varFrom(eq.rhs);
@@ -10564,8 +10896,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
         },
         .e_structural_hash => |h| {
-            does_fx = try self.checkExpr(h.value, env, Expected.none()) or does_fx;
-            does_fx = try self.checkExpr(h.hasher, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(h.value, env, Expected.none()));
+            check_result.include(try self.checkExpr(h.hasher, env, Expected.none()));
 
             // `to_hash : self, Hasher -> Hasher` threads the Hasher through, so the
             // result has the same type as the incoming Hasher argument.
@@ -10579,9 +10911,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             defer arg_vars_alloc.free(arg_vars);
 
             self.checking_call_arg = true;
-            does_fx = try self.checkExpr(eq.lhs, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(eq.lhs, env, Expected.none()));
             self.checking_call_arg = true;
-            does_fx = try self.checkExpr(eq.rhs, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExpr(eq.rhs, env, Expected.none()));
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             arg_vars[0] = ModuleEnv.varFrom(eq.rhs);
@@ -10599,6 +10931,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 self.cir.store.replaceExprWithMethodEq(
                     expr_idx,
                     eq.lhs,
@@ -10618,7 +10951,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var did_err = false;
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(arg_expr_idx, env, Expected.none()));
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
                 did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
@@ -10637,6 +10970,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.method_name_region,
                     expr_idx,
                 );
+                delayed_dispatch_effect_fn_var = constraint_fn_var;
                 try self.cir.store.replaceExprWithTypeDispatchCall(
                     expr_idx,
                     method_call.type_dispatch_stmt,
@@ -10651,44 +10985,35 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var did_err = false;
             for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(arg_expr_idx, env, Expected.none()));
                 did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
             }
 
             if (did_err) {
                 try self.unifyWith(expr_var, .err, env);
             }
+            delayed_dispatch_effect_fn_var = method_call.constraint_fn_var;
             if (self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
-                self.markCurrentHoistObservableEffect();
-                does_fx = true;
+                self.markActiveEffectSlotEffectful();
+                check_result.markEffectful();
             }
         },
         .e_crash => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_expect_err => |expect_err| {
-            self.markCurrentHoistObservableEffect();
             // The Err payload is consumed at runtime when the enclosing expect
             // fails; this expression itself never returns, so its type is free.
-            _ = try self.checkExpr(expect_err.expr, env, Expected.none());
+            check_result.include(try self.checkExpr(expect_err.expr, env, Expected.none()));
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_dbg => |dbg| {
-            self.markCurrentHoistObservableEffect();
             // dbg evaluates its inner expression but returns {} (like expect)
-            _ = try self.checkExpr(dbg.expr, env, Expected.none());
-            does_fx = false;
+            check_result.include(try self.checkExpr(dbg.expr, env, Expected.none()));
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_expect => |expect| {
-            self.markCurrentHoistObservableEffect();
-            const expect_does_fx = try self.checkExpectBody(expect.body, env, expected, expr_region);
-            if (expect_does_fx) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                    .region = expr_region,
-                } });
-            }
-            does_fx = expect_does_fx or does_fx;
+            check_result.include(ExprCheckResult.fromResolvedEffect(try self.checkExpectBody(expect.body, env, expected, expr_region)));
             const body_var = ModuleEnv.varFrom(expect.body);
 
             const bool_var = try self.freshBool(env, expr_region);
@@ -10697,15 +11022,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_for => |for_expr| {
-            self.markCurrentHoistObservableEffect();
-            does_fx = try self.checkIteratorForLoop(
+            check_result.include(try self.checkIteratorForLoop(
                 ModuleEnv.nodeIdxFrom(expr_idx),
                 for_expr.patt,
                 for_expr.expr,
                 for_expr.body,
                 env,
                 expr_region,
-            ) or does_fx;
+            ));
 
             // Like cor, loop bodies are ordinary expressions whose final value is
             // discarded by the loop construct itself. The loop expression still
@@ -10733,8 +11057,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_return => |ret| {
-            self.markCurrentHoistObservableEffect();
-            does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
+            self.markCurrentHoistRuntimeDependency();
+            check_result.markRuntimeDependent();
+            check_result.include(try self.checkExpr(ret.expr, env, Expected.none()));
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
             // Write down this constraint for later validation.
@@ -10757,11 +11082,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // This is so this expr can unify with anything (like {} in the an implicit `else` branch)
         },
         .e_break => {
+            self.markCurrentHoistRuntimeDependency();
+            check_result.markRuntimeDependent();
             // Nothing to do. `break` diverges, so this expression can unify with
             // any surrounding expected type.
         },
         .e_hosted_lambda => |lambda| {
-            self.markCurrentHoistObservableEffect();
             // Record the parameter span for the end-of-check pinnable
             // collection (see `checked_lambda_params`).
             try self.checked_lambda_params.append(self.gpa, lambda.args);
@@ -10784,11 +11110,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_run_low_level => |run_ll| {
-            self.markCurrentHoistObservableEffect();
             // Check each argument expression in the run_low_level node
             for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
                 self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_idx, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(arg_idx, env, Expected.none()));
+            }
+            if (run_ll.op == .dict_pseudo_seed) {
+                check_result.markRuntimeSource();
             }
         },
         .e_runtime_error => {
@@ -10823,15 +11151,27 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     }
 
-    self.var_set.clearRetainingCapacity();
-    if (mb_anno_vars == null) {
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    // Check any accumulated static dispatch constraints
+    const static_dispatch_had_problem = try self.checkStaticDispatchConstraints(env, false);
+    if (delayed_dispatch_effect_fn_var) |fn_var| {
+        if (self.varIsEffectfulFunction(fn_var)) {
+            self.markActiveEffectSlotEffectful();
+            if (self.current_expect_region == null) {
+                check_result.markEffectful();
+            }
+        } else {
+            try self.markExprResultDelayedOnDispatch(&check_result, expr_idx, fn_var, env);
         }
     }
 
-    // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env, false);
+    self.var_set.clearRetainingCapacity();
+    const expr_contains_error = try self.varContainsError(expr_var, &self.var_set);
+    if (expr_contains_error or static_dispatch_had_problem) {
+        check_result.markPoisoned();
+        if (mb_anno_vars == null) {
+            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        }
+    }
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
@@ -10891,8 +11231,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     }
 
-    try hoist_frame.finish(does_fx);
-    return does_fx;
+    check_result.markCompileTimeKnown();
+    try hoist_frame.finish(check_result);
+    return check_result;
 }
 
 fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
@@ -11631,12 +11972,80 @@ fn checkDestructureExhaustiveness(
     }
 }
 
+/// Run exhaustiveness analysis on every recorded lambda/function parameter
+/// pattern. A parameter pattern position is irrefutable: there is no alternate
+/// branch, so a refutable pattern there (e.g. `|[_, ..]|` or `|Ok(x)|`) that
+/// does not cover every value of its type is a runtime `pattern match failed`
+/// waiting to happen. Match expressions already get this analysis via
+/// `checkMatchExpr`; this closes the same gap for parameter patterns, which were
+/// previously type-checked but never checked for exhaustiveness.
+fn reportNonExhaustiveLambdaParams(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.checked_lambda_params.items) |arg_span| {
+        for (self.cir.store.slicePatterns(arg_span)) |pattern_idx| {
+            try self.checkParamPatternExhaustiveness(pattern_idx, env);
+        }
+    }
+}
+
+/// Exhaustiveness check for a single function/lambda parameter pattern. Unlike
+/// `checkDestructureExhaustiveness`, a parameter has no value expression, so the
+/// pattern's own type var is the scrutinee and there is no known-empty-payload
+/// information to collect (passed conservatively as empty / not-known).
+fn checkParamPatternExhaustiveness(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
+
+    const value_var = ModuleEnv.varFrom(pattern_idx);
+    const result = exhaustive.checkDestructure(
+        self.cir.gpa,
+        self.types,
+        &self.cir.store,
+        self.exhaustiveBuiltinIdents(),
+        pattern_idx,
+        value_var,
+        &.{},
+        false,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TypeError => return,
+    };
+    defer result.deinit(self.cir.gpa);
+
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
+    try self.closeExhaustiveVars(result, env, region);
+
+    if (result.is_exhaustive) return;
+
+    const value_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, value_var);
+    const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
+    for (result.missing_patterns) |pattern| {
+        const idx = try exhaustive.formatPattern(
+            &self.problems.extra_strings_backing,
+            &self.cir.common.idents,
+            &self.cir.common.strings,
+            pattern,
+        );
+        try self.problems.missing_patterns_backing.append(idx);
+    }
+    const missing_patterns_range = problem.MissingPatternsRange{
+        .start = missing_patterns_start,
+        .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
+    };
+    try self.problems.appendPendingStaticExhaustiveness(self.gpa, .destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, region, .{ .non_exhaustive_destructure = .{
+        .pattern = pattern_idx,
+        .value_snapshot = value_snapshot,
+        .missing_patterns = missing_patterns_range,
+    } });
+}
+
 // stmts //
 
 const BlockStatementsResult = struct {
-    does_fx: bool,
+    check: ExprCheckResult,
     diverges: bool,
-    blocks_later_hoists: bool,
 };
 
 /// Given a slice of stmts, type check each one
@@ -11645,9 +12054,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var does_fx = false;
+    var check_result = ExprCheckResult{};
     var diverges = false;
-    var blocks_later_hoists = false;
     var warn_unreachable = false;
     for (0..statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(statements, stmt_offset);
@@ -11663,13 +12071,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
         try self.setVarRank(stmt_var, env);
 
-        const suppress_statement_hoists = blocks_later_hoists;
-        if (suppress_statement_hoists) self.hoist_selection_suppressed_depth += 1;
-        defer {
-            if (suppress_statement_hoists) self.hoist_selection_suppressed_depth -= 1;
-        }
-
-        var statement_blocks_later_hoists = false;
         switch (stmt) {
             .s_decl => |decl_stmt| {
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
@@ -11712,9 +12113,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
-                const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
-                does_fx = decl_expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(decl_stmt.expr, decl_expr_does_fx);
+                const decl_expr_result = try self.checkExpr(decl_stmt.expr, env, expectation);
+                check_result.include(decl_expr_result);
+                try self.recordLocalCheckSummary(decl_stmt.pattern, decl_expr_result);
+                try self.appendCurrentHoistRequiredConcretePatternBinders(decl_stmt.pattern);
                 try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -11745,10 +12147,12 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
 
                 // Check the pattern
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                try self.recordLocalCheckSummary(var_stmt.pattern_idx, ExprCheckResult.runtimeDependent());
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // Check the annotation, if it exists. A mutable `var` never
@@ -11767,9 +12171,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
-                const var_expr_does_fx = try self.checkExpr(var_stmt.expr, env, expectation);
-                does_fx = var_expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(var_stmt.expr, var_expr_does_fx);
+                const var_expr_result = try self.checkExpr(var_stmt.expr, env, expectation);
+                check_result.include(var_expr_result);
                 self.discardHoistBindingCandidate(var_stmt.pattern_idx);
                 if (var_stmt.anno == null and self.erroneous_value_exprs.contains(var_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
@@ -11786,9 +12189,11 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_var_uninitialized => |var_stmt| {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                try self.recordLocalCheckSummary(var_stmt.pattern_idx, ExprCheckResult.runtimeDependent());
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // A mutable `var` never generalizes, so a type variable its
@@ -11810,6 +12215,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             },
             .s_reassign => |reassign| {
                 self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 // Reassignment patterns can mix existing mutable binders with
                 // fresh local binders, e.g. `(word, $index) = pair`.
                 // The pattern occurrence itself must therefore always be
@@ -11817,13 +12223,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // established explicitly before we unify it with the RHS.
                 const reassign_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(reassign.pattern_idx)) .match_branch else .bound;
                 try self.checkPattern(reassign.pattern_idx, reassign_pattern_ctx, env);
+                try self.recordLocalCheckSummary(reassign.pattern_idx, ExprCheckResult.runtimeDependent());
                 self.discardHoistBindingCandidate(reassign.pattern_idx);
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
-                const reassign_expr_does_fx = try self.checkExpr(reassign.expr, env, Expected.none());
-                does_fx = reassign_expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(reassign.expr, reassign_expr_does_fx);
+                const reassign_expr_result = try self.checkExpr(reassign.expr, env, Expected.none());
+                check_result.include(reassign_expr_result);
                 const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
                 try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
 
@@ -11840,27 +12246,23 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
             },
             .s_for => |for_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 const for_region = self.cir.store.getStatementRegion(stmt_idx);
-                does_fx = try self.checkIteratorForLoop(
+                check_result.include(try self.checkIteratorForLoop(
                     ModuleEnv.nodeIdxFrom(stmt_idx),
                     for_stmt.patt,
                     for_stmt.expr,
                     for_stmt.body,
                     env,
                     for_region,
-                ) or does_fx;
+                ));
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, for_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_while => |while_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
                 // Check the condition
                 // while $count < 10 {
                 //       ^^^^^^^^^^^
-                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.cond, env, Expected.none()));
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
@@ -11873,42 +12275,37 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 //     print!($count.toStr())  <<<<
                 //     $count = $count + 1
                 // }
-                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.body, env, Expected.none()));
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_breakable_loop => |while_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
-                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.cond, env, Expected.none()));
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.body, env, Expected.none()));
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_infinite_loop => |while_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
-                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.cond, env, Expected.none()));
                 const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
                 const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(while_stmt.body, env, Expected.none()));
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
             .s_expr => |expr| {
-                const expr_does_fx = try self.checkExpr(expr.expr, env, Expected.none());
-                does_fx = expr_does_fx or does_fx;
-                statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(expr.expr, expr_does_fx);
+                const expr_result = try self.checkExpr(expr.expr, env, Expected.none());
+                check_result.include(expr_result);
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 // Statements must evaluate to {}. Add a constraint to unify with empty record.
@@ -11924,23 +12321,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
             },
             .s_dbg => |expr| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
-                does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(expr.expr, env, Expected.none()));
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
             .s_expect => |expr_stmt| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
-                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
-                does_fx = expect_does_fx or does_fx;
+                check_result.include(ExprCheckResult.fromResolvedEffect(try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region)));
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 const bool_var = try self.freshBool(env, stmt_region);
@@ -11949,15 +12336,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
             .s_crash => {
-                statement_blocks_later_hoists = true;
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
             .s_return => |ret| {
-                self.markCurrentHoistObservableEffect();
-                statement_blocks_later_hoists = true;
+                self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 // Type check the return expression
-                does_fx = try self.checkExpr(ret.expr, env, Expected.none()) or does_fx;
+                check_result.include(try self.checkExpr(ret.expr, env, Expected.none()));
                 const ret_var = ModuleEnv.varFrom(ret.expr);
 
                 // Write down this constraint for later validation
@@ -11994,15 +12380,15 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .err, env);
             },
             .s_break => {
+                self.markCurrentHoistRuntimeDependency();
+                check_result.markRuntimeDependent();
                 diverges = true;
             },
         }
-        blocks_later_hoists = statement_blocks_later_hoists or blocks_later_hoists;
     }
     return .{
-        .does_fx = does_fx,
+        .check = check_result,
         .diverges = diverges,
-        .blocks_later_hoists = blocks_later_hoists,
     };
 }
 
@@ -12084,7 +12470,7 @@ fn checkIfElseExpr(
     env: *Env,
     if_: @FieldType(CIR.Expr, @tagName(.e_if)),
     expected: Expected,
-) std.mem.Allocator.Error!bool {
+) std.mem.Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
     const expected_branch_ret = expected.branch_result;
@@ -12104,13 +12490,16 @@ fn checkIfElseExpr(
     const first_branch = self.cir.store.getIfBranch(first_branch_idx);
 
     // Check the condition of the 1st branch
-    var does_fx = try self.checkExpr(first_branch.cond, env, Expected.none());
+    var check_result = try self.checkExpr(first_branch.cond, env, Expected.none());
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(env, expr_region);
     _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
 
-    // Then we check the 1st branch's body
-    does_fx = try self.checkExprWithHoistSelectionSuppressed(first_branch.body, env, expected.forBranchBody()) or does_fx;
+    // Branch bodies are control-dependent on the enclosing conditional. They
+    // still contribute summaries to the enclosing if root, but cannot become
+    // independent roots; otherwise an untaken branch with a crash/dbg/expect
+    // would run during checking.
+    check_result.include(try self.checkExprWithHoistSelectionSuppressed(first_branch.body, env, expected.forBranchBody()));
 
     if (expected_branch_ret) |expected_ret| {
         const branch_ctx = problem.Context{ .if_branch = .{
@@ -12134,13 +12523,13 @@ fn checkIfElseExpr(
         const branch = self.cir.store.getIfBranch(branch_idx);
 
         // Check the branches condition
-        does_fx = try self.checkExpr(branch.cond, env, Expected.none()) or does_fx;
+        check_result.include(try self.checkExpr(branch.cond, env, Expected.none()));
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
         const branch_bool_var = try self.freshBool(env, expr_region);
         _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
 
         // Check the branch body
-        does_fx = try self.checkExprWithHoistSelectionSuppressed(branch.body, env, expected.forBranchBody()) or does_fx;
+        check_result.include(try self.checkExprWithHoistSelectionSuppressed(branch.body, env, expected.forBranchBody()));
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
@@ -12167,13 +12556,13 @@ fn checkIfElseExpr(
                 for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
                     const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
 
-                    does_fx = try self.checkExpr(remaining_branch.cond, env, Expected.none()) or does_fx;
+                    check_result.include(try self.checkExpr(remaining_branch.cond, env, Expected.none()));
                     const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
                     const fresh_bool = try self.freshBool(env, expr_region);
                     _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
-                    does_fx = try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
+                    check_result.include(try self.checkExprWithHoistSelectionSuppressed(remaining_branch.body, env, expected.forBranchBody()));
                     try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
                 }
 
@@ -12186,7 +12575,7 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    does_fx = try self.checkExprWithHoistSelectionSuppressed(if_.final_else, env, expected.forBranchBody()) or does_fx;
+    check_result.include(try self.checkExprWithHoistSelectionSuppressed(if_.final_else, env, expected.forBranchBody()));
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
@@ -12222,7 +12611,7 @@ fn checkIfElseExpr(
         _ = try self.unify(if_expr_var, branch_var, env);
     }
 
-    return does_fx;
+    return check_result;
 }
 
 // match //
@@ -12234,7 +12623,7 @@ fn checkMatchExpr(
     env: *Env,
     match: CIR.Expr.Match,
     expected: Expected,
-) Allocator.Error!bool {
+) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -12247,7 +12636,8 @@ fn checkMatchExpr(
     const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
 
     // Check the match's condition
-    var does_fx = try self.checkExpr(match.cond, env, Expected.none());
+    const cond_check_result = try self.checkExpr(match.cond, env, Expected.none());
+    var check_result = cond_check_result;
     const cond_var = ModuleEnv.varFrom(match.cond);
     const cond_always_crashes = self.exprAlwaysCrashes(match.cond);
     if (!match.is_try_suffix) {
@@ -12327,17 +12717,18 @@ fn checkMatchExpr(
             try self.recordHoistSingleBranchMatchPatternProvenance(match, first_branch, first_branch_ptrn_idxs);
         }
         try self.recordHoistMatchBranchContextualBindings(first_branch_ptrn_idxs, match_hoist_owner);
+        try self.recordMatchBranchSummaries(first_branch_ptrn_idxs, cond_check_result);
 
         // Check guard if present
         if (first_branch.guard) |guard_idx| {
-            does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()));
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const guard_bool_var = try self.freshBool(env, expr_region);
             _ = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Check the first branch's value, then use that at the branch_var
-        does_fx = try self.checkExprWithHoistSelectionSuppressed(first_branch.value, env, expected.forBranchBody()) or does_fx;
+        check_result.include(try self.checkExprWithHoistSelectionSuppressed(first_branch.value, env, expected.forBranchBody()));
         val_var = ModuleEnv.varFrom(first_branch.value);
 
         // Check first branch body against expected return type
@@ -12382,17 +12773,18 @@ fn checkMatchExpr(
             had_type_error = true;
         }
         try self.recordHoistMatchBranchContextualBindings(branch_ptrn_idxs, match_hoist_owner);
+        try self.recordMatchBranchSummaries(branch_ptrn_idxs, cond_check_result);
 
         // Check guard if present
         if (branch.guard) |guard_idx| {
-            does_fx = try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()) or does_fx;
+            check_result.include(try self.checkExprWithHoistSelectionSuppressed(guard_idx, env, Expected.none()));
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
             _ = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Then, check the body
-        does_fx = try self.checkExprWithHoistSelectionSuppressed(branch.value, env, expected.forBranchBody()) or does_fx;
+        check_result.include(try self.checkExprWithHoistSelectionSuppressed(branch.value, env, expected.forBranchBody()));
 
         // Check branch body against expected return type BEFORE pairwise unification.
         // Pairwise unification poisons ALL connected vars via union-find on failure,
@@ -12439,9 +12831,10 @@ fn checkMatchExpr(
                         }
                     }
                     try self.recordHoistMatchBranchContextualBindings(other_branch_ptrn_idxs, match_hoist_owner);
+                    try self.recordMatchBranchSummaries(other_branch_ptrn_idxs, cond_check_result);
 
                     // Then check the other branch's exprs
-                    does_fx = try self.checkExprWithHoistSelectionSuppressed(other_branch.value, env, expected.forBranchBody()) or does_fx;
+                    check_result.include(try self.checkExprWithHoistSelectionSuppressed(other_branch.value, env, expected.forBranchBody()));
                     try self.unifyWith(ModuleEnv.varFrom(other_branch.value), .err, env);
                 }
 
@@ -12497,7 +12890,7 @@ fn checkMatchExpr(
                 // Type error in pattern - exhaustiveness checking can't proceed
                 // This is expected when there are polymorphic types or type mismatches
                 // Don't report exhaustiveness errors in this case
-                return does_fx;
+                return check_result;
             },
         };
         defer result.deinit(self.cir.gpa);
@@ -12548,21 +12941,21 @@ fn checkMatchExpr(
         }
     }
 
-    return does_fx;
+    return check_result;
 }
 
 // unary minus //
 
 /// Check the unary expr.
 /// Desugars `-a` to `a.negate() : a -> a`,
-fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = try self.checkExpr(unary.expr, env, Expected.none());
+    const check_result = try self.checkExpr(unary.expr, env, Expected.none());
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -12577,21 +12970,21 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
-    return does_fx;
+    return check_result;
 }
 
 // unary not //
 
 /// Check the unary expr.
 /// Desugars `!a` to `a.not() : a -> a`,
-fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
+fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryNot) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Check the operand expression
-    const does_fx = try self.checkExpr(unary.expr, env, Expected.none());
+    const check_result = try self.checkExpr(unary.expr, env, Expected.none());
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -12606,7 +12999,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
     // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
-    return does_fx;
+    return check_result;
 }
 
 // binop //
@@ -12618,7 +13011,7 @@ fn checkBinopExpr(
     expr_region: Region,
     env: *Env,
     binop: CIR.Expr.Binop,
-) Allocator.Error!bool {
+) Allocator.Error!ExprCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -12627,9 +13020,8 @@ fn checkBinopExpr(
     const rhs_var = @as(Var, ModuleEnv.varFrom(binop.rhs));
 
     // Check operands first
-    var does_fx = false;
-    does_fx = try self.checkExpr(binop.lhs, env, Expected.none()) or does_fx;
-    does_fx = try self.checkExpr(binop.rhs, env, Expected.none()) or does_fx;
+    var check_result = try self.checkExpr(binop.lhs, env, Expected.none());
+    check_result.include(try self.checkExpr(binop.rhs, env, Expected.none()));
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
@@ -12650,10 +13042,10 @@ fn checkBinopExpr(
             const rhs_is_from_numeral = self.varLiteralKind(rhs_var) == .numeral;
 
             if (lhs_is_from_numeral and try self.reportDefinitelyInvalidNumericBinopOperand(rhs_var, expr_var, expr_idx, binop.op, .rhs, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
             if (rhs_is_from_numeral and try self.reportDefinitelyInvalidNumericBinopOperand(lhs_var, expr_var, expr_idx, binop.op, .lhs, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // Eagerly unify the operands, but ONLY when the dispatcher's
@@ -12684,12 +13076,12 @@ fn checkBinopExpr(
                 const arg_unify_result = try self.unify(target, other, env);
                 if (!arg_unify_result.isOk()) {
                     try self.unifyWith(expr_var, .err, env);
-                    return does_fx;
+                    return check_result;
                 }
             }
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // Arithmetic binops are homogeneous in the RETURN only: the result
@@ -12726,7 +13118,7 @@ fn checkBinopExpr(
                 };
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // For comparison binops, lhs and rhs must have the same type.
@@ -12734,7 +13126,7 @@ fn checkBinopExpr(
 
             if (!arg_unify_result.isOk()) {
                 try self.unifyWith(expr_var, .err, env);
-                return does_fx;
+                return check_result;
             }
 
             const arg_var = rhs_var;
@@ -12756,13 +13148,13 @@ fn checkBinopExpr(
         },
         .eq => {
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
             if (!arg_unify_result.isOk()) {
                 try self.unifyWith(expr_var, .err, env);
-                return does_fx;
+                return check_result;
             }
 
             const eq_ret_var = try self.freshBool(env, expr_region);
@@ -12791,7 +13183,7 @@ fn checkBinopExpr(
             // should be a non-breaking change.
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
-                return does_fx;
+                return check_result;
             }
 
             // Unify lhs and rhs to ensure both operands have the same type
@@ -12800,7 +13192,7 @@ fn checkBinopExpr(
             // If unification failed, short-circuit and set the expression to error
             if (!arg_unify_result.isOk()) {
                 try self.unifyWith(expr_var, .err, env);
-                return does_fx;
+                return check_result;
             }
 
             // Get the eq method + ret var
@@ -12859,7 +13251,7 @@ fn checkBinopExpr(
         },
     }
 
-    return does_fx;
+    return check_result;
 }
 
 fn reportDefinitelyInvalidNumericBinopOperand(
@@ -12967,6 +13359,7 @@ fn reportMissingNominalMethodForBinopConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -13027,6 +13420,7 @@ fn mkBinopConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     // Create the static dispatch constraint
     const constraint = StaticDispatchConstraint{
@@ -13109,6 +13503,7 @@ fn mkUnaryOp(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     // Create the static dispatch constraint
     const constraint = StaticDispatchConstraint{
@@ -13163,13 +13558,11 @@ fn checkIteratorForLoop(
     body: CIR.Expr.Idx,
     env: *Env,
     loop_region: Region,
-) Allocator.Error!bool {
-    var does_fx = false;
-
+) Allocator.Error!ExprCheckResult {
     try self.checkPattern(pattern, .for_, env);
     const item_var: Var = ModuleEnv.varFrom(pattern);
 
-    does_fx = try self.checkExpr(iterable, env, Expected.none()) or does_fx;
+    var check_result = try self.checkExpr(iterable, env, Expected.none());
     const iterable_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(iterable));
     const iterable_var: Var = ModuleEnv.varFrom(iterable);
 
@@ -13197,8 +13590,12 @@ fn checkIteratorForLoop(
 
     try self.cir.recordForLoopDispatchPlan(loop_node, ModuleEnv.nodeIdxFrom(pattern), ModuleEnv.nodeIdxFrom(iterable), iter_fn_var, next_fn_var);
 
-    does_fx = try self.checkExpr(body, env, Expected.none()) or does_fx;
-    return does_fx;
+    const item_summary_start = self.local_check_summary_scope_patterns.items.len;
+    defer self.popLocalCheckSummaryScope(item_summary_start);
+    try self.recordLocalCheckSummary(pattern, ExprCheckResult.runtimeDependent());
+
+    check_result.include(try self.checkExpr(body, env, Expected.none()));
+    return check_result;
 }
 
 fn mkMethodCallConstraint(
@@ -13265,6 +13662,7 @@ fn mkReceiverDispatchConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -13305,6 +13703,7 @@ fn mkTypeMethodCallConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -13344,6 +13743,7 @@ fn mkInterpolationConstraint(
         .ret = ret_var,
         .needs_instantiation = false,
     } } }, env, region);
+    try self.recordDispatchEffectWatch(constraint_fn_var);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
@@ -13698,7 +14098,7 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 
     while (self.constraints.items.items.len > 0) {
         try self.checkConstraints(env);
-        try self.checkStaticDispatchConstraints(env, false);
+        _ = try self.checkStaticDispatchConstraints(env, false);
     }
 }
 
@@ -14281,7 +14681,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
 
         // --- 4. Cascade the dispatches the commits unblocked. ---
         while (self.anyDeferredDispatchReceiverResolved(env)) {
-            try self.checkStaticDispatchConstraints(env, true);
+            _ = try self.checkStaticDispatchConstraints(env, true);
         }
     }
 }
@@ -15263,9 +15663,10 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// non-terminating cycle, reported as an infinite type instead of hanging.
 const max_deferred_dispatch_iterations: usize = 1 << 14;
 
-fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
+fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
+    const problem_count_start = self.problems.problems.items.len;
 
     // During this pass, we want to hold onto any flex vars we encounter and
     // check them again later, when maybe they've been resolved
@@ -15380,7 +15781,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.unifyWith(resolved_func.ret, .err, env);
                         } else {
                             try self.linkConstraintMetadata(rigid_var, constraint.fn_var);
-                            try self.reportEffectfulDispatchInExpect(constraint);
+                            try self.reportEffectfulDispatch(constraint, rigid_var);
 
                             // The body provably forces this where-clause method: a
                             // body dispatch matched it and unified successfully. Mark
@@ -15680,7 +16081,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.reportEffectfulDispatch(constraint, method_var);
+                        try self.recordDispatchRuntimeSourceIfNeeded(constraint.fn_var, original_env, def_idx);
                     }
                 }
                 break :dispatch_resolution;
@@ -15923,7 +16325,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.reportEffectfulDispatch(constraint, method_var);
+                        try self.recordDispatchRuntimeSourceIfNeeded(constraint.fn_var, original_env, def_idx);
                     }
                 }
                 break :dispatch_resolution;
@@ -16084,17 +16487,26 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         self.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
+    return self.problems.problems.items.len > problem_count_start;
 }
 
-fn reportEffectfulDispatchInExpect(
+fn reportEffectfulDispatch(
     self: *Self,
     constraint: StaticDispatchConstraint,
+    selected_fn_var: Var,
 ) std.mem.Allocator.Error!void {
-    if (!self.varIsEffectfulFunction(constraint.fn_var)) return;
-    if (self.expect_region_by_constraint_fn_var.fetchRemove(constraint.fn_var)) |entry| {
-        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-            .region = entry.value,
-        } });
+    if (!self.varIsEffectfulFunction(constraint.fn_var) and
+        !self.varIsEffectfulFunction(selected_fn_var))
+    {
+        return;
+    }
+    const reported_expect = try self.markDispatchEffectWatchers(constraint.fn_var);
+    if (!reported_expect) {
+        if (self.expect_region_by_constraint_fn_var.fetchRemove(constraint.fn_var)) |entry| {
+            _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+                .region = entry.value,
+            } });
+        }
     }
 }
 

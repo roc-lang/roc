@@ -48,6 +48,10 @@ const ELF = struct {
     const STT_FUNC = 2;
     const STT_SECTION = 3;
 
+    // Symbol visibility
+    const STV_DEFAULT = 0;
+    const STV_HIDDEN = 2;
+
     // Special section indices
     const SHN_UNDEF = 0;
 
@@ -133,6 +137,7 @@ pub const Symbol = struct {
     size: u64,
     is_global: bool,
     is_function: bool,
+    is_hidden: bool = false,
 };
 
 /// Section types
@@ -458,7 +463,7 @@ pub const ElfWriter = struct {
             const elf_sym = Elf64_Sym{
                 .st_name = name_offset,
                 .st_info = st_info,
-                .st_other = 0,
+                .st_other = if (sym.is_hidden) ELF.STV_HIDDEN else ELF.STV_DEFAULT,
                 .st_shndx = st_shndx,
                 .st_value = sym.offset,
                 .st_size = sym.size,

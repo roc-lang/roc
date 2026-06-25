@@ -1047,6 +1047,45 @@ pub fn roc_builtins_list_free_with(
     }
 }
 
+/// Prepare a boxed payload allocation for replacement.
+///
+/// The returned pointer is unique for the caller. It is either the original
+/// payload pointer or a fresh payload copy whose nested refcounted children have
+/// been retained.
+pub fn roc_builtins_box_prepare_update(
+    payload_ptr: ?[*]u8,
+    payload_size: usize,
+    payload_alignment: u32,
+    payload_has_refcounted_children: bool,
+    payload_incref: ?RcIncFn,
+    payload_decref: ?RcDropFn,
+    update_mode: utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) ?[*]u8 {
+    if (payload_size == 0 or payload_ptr == null) {
+        return payload_ptr;
+    }
+
+    if (update_mode == .InPlace or utils.isUnique(payload_ptr, roc_ops)) {
+        return payload_ptr;
+    }
+
+    const fresh = allocateWithRefcountC(
+        payload_size,
+        payload_alignment,
+        payload_has_refcounted_children,
+        roc_ops,
+    );
+    @memcpy(fresh[0..payload_size], payload_ptr.?[0..payload_size]);
+
+    if (payload_has_refcounted_children) {
+        (payload_incref orelse unreachable)(fresh, 1, roc_ops);
+    }
+
+    roc_builtins_box_decref_with(payload_ptr, payload_alignment, payload_decref, roc_ops);
+    return fresh;
+}
+
 /// Decref a boxed payload and optionally run payload teardown when unique.
 pub fn roc_builtins_box_decref_with(
     payload_ptr: ?[*]u8,
@@ -1132,6 +1171,28 @@ pub fn roc_builtins_erased_callable_decref_single_thread(payload_ptr: ?[*]u8, ro
         payload_ptr,
         erased_callable.payload_alignment,
         erased_callable.allocation_has_refcounted_children,
+        roc_ops,
+    );
+}
+
+/// Repack a consumed boxed erased callable allocation for a same-layout
+/// replacement, reusing the old allocation when uniqueness permits.
+pub fn roc_builtins_erased_callable_repack(
+    reuse: ?[*]u8,
+    callable_fn_ptr: erased_callable.CallableFnPtr,
+    on_drop: ?erased_callable.OnDropFn,
+    capture_src: ?[*]const u8,
+    capture_size: usize,
+    update_mode: utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) [*]u8 {
+    return erased_callable.repack(
+        reuse,
+        callable_fn_ptr,
+        on_drop,
+        capture_src,
+        capture_size,
+        update_mode,
         roc_ops,
     );
 }

@@ -697,7 +697,19 @@ const Inserter = struct {
                     if (assign.capture) |capture| {
                         transfer_single = try self.singleTransfer(capture, assign.next, assign.target, &path.owned, path.options.loop_keep);
                     }
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    var reuse_unique = false;
+                    if (assign.reuse) |reuse| {
+                        const preserve_reuse = reuse != assign.target and try self.groupUsedInPath(assign.next, reuse, path.options.loop_keep);
+                        if (preserve_reuse or !self.ownsUnit(&path.owned, reuse)) {
+                            current_start = try self.retainLocalIfRc(reuse, current_start);
+                        } else {
+                            reuse_unique = self.localContainsRefcounted(reuse) and self.isLocalUniqueHere(reuse);
+                            self.unsetOwnedUnit(&path.owned, reuse);
+                        }
+                    }
+                    if (assign.reuse == null or assign.reuse.? != assign.target) {
+                        current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -707,6 +719,7 @@ const Inserter = struct {
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_single = transfer_single,
+                        .unique_args = if (reuse_unique) 1 else 0,
                         .post_release = try self.takePostReleases(&deaths),
                     });
                     path.cursor = assign.next;
@@ -804,6 +817,36 @@ const Inserter = struct {
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .store_struct => |assign| {
+                    const transfer_mask = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.dest, &path.owned, path.options.loop_keep);
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.fields, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_mask = transfer_mask,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
+                    path.cursor = assign.next;
+                },
+                .store_tag => |assign| {
+                    var transfer_single = false;
+                    if (assign.payload) |payload| {
+                        transfer_single = try self.singleTransfer(payload, assign.next, assign.dest, &path.owned, path.options.loop_keep);
+                    }
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
@@ -1083,6 +1126,8 @@ const Inserter = struct {
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
+                    .reuse = assign.reuse,
+                    .reuse_unique = (frame.unique_args & 1) != 0,
                     .next = next,
                 } });
             },
@@ -1126,6 +1171,30 @@ const Inserter = struct {
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = assign.target,
+                    .variant_index = assign.variant_index,
+                    .discriminant = assign.discriminant,
+                    .payload = assign.payload,
+                    .next = next,
+                } });
+            },
+            .store_struct => |assign| {
+                next = try self.retainSpanExcept(assign.fields, frame.transfer_mask, next);
+                cloned = try self.store.addCFStmt(.{ .store_struct = .{
+                    .dest = assign.dest,
+                    .struct_layout = assign.struct_layout,
+                    .fields = assign.fields,
+                    .next = next,
+                } });
+            },
+            .store_tag => |assign| {
+                if (assign.payload) |payload| {
+                    if (!frame.transfer_single) {
+                        next = try self.retainLocalIfRc(payload, next);
+                    }
+                }
+                cloned = try self.store.addCFStmt(.{ .store_tag = .{
+                    .dest = assign.dest,
+                    .tag_layout = assign.tag_layout,
                     .variant_index = assign.variant_index,
                     .discriminant = assign.discriminant,
                     .payload = assign.payload,
@@ -1816,6 +1885,13 @@ const Inserter = struct {
                     if (assign.capture) |capture| {
                         _ = try self.singleTransfer(capture, assign.next, assign.target, &path.owned, path.loop_keep);
                     }
+                    if (assign.reuse) |reuse| {
+                        if (reuse != assign.target and try self.groupUsedInPath(assign.next, reuse, path.loop_keep)) {
+                            // Mirrors the rewrite path's pre-statement retain.
+                        } else if (self.ownsUnit(&path.owned, reuse)) {
+                            self.unsetOwnedUnit(&path.owned, reuse);
+                        }
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
@@ -1862,6 +1938,19 @@ const Inserter = struct {
                     }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .store_struct => |assign| {
+                    _ = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.dest, &path.owned, path.loop_keep);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.fields, assign.next, path.loop_keep, null);
+                    path.cursor = assign.next;
+                },
+                .store_tag => |assign| {
+                    if (assign.payload) |payload| {
+                        _ = try self.singleTransfer(payload, assign.next, assign.dest, &path.owned, path.loop_keep);
+                    }
+                    const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
@@ -2540,6 +2629,8 @@ const Inserter = struct {
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
+                .store_struct,
+                .store_tag,
                 .set_local,
                 .debug,
                 .expect,
@@ -2772,6 +2863,8 @@ const Inserter = struct {
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
                 .set_local => |assign| try stack.append(self.store.allocator, assign.next),
                 .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
                 .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
@@ -2870,6 +2963,8 @@ const Inserter = struct {
                 .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
+                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
                 .set_local => |assign| try stack.append(self.store.allocator, assign.next),
                 .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
                 .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
@@ -3083,6 +3178,7 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.reuse) |reuse| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, reuse);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -3104,6 +3200,16 @@ const Inserter = struct {
                 .assign_tag => |assign| {
                     if (assign.payload) |payload| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, payload);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .store_struct => |assign| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.fields);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .store_tag => |assign| {
+                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.dest);
+                    if (assign.payload) |payload| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, payload);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .set_local => |assign| {
@@ -3326,6 +3432,7 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and assign.capture.? == needle) return true;
+                    if (assign.reuse != null and assign.reuse.? == needle) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -3347,6 +3454,14 @@ const Inserter = struct {
                 .assign_tag => |assign| {
                     if (assign.payload != null and assign.payload.? == needle) return true;
                     if (assign.target == needle) continue;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .store_struct => |assign| {
+                    if (assign.dest == needle or self.spanUsesLocal(assign.fields, needle)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .store_tag => |assign| {
+                    if (assign.dest == needle or (assign.payload != null and assign.payload.? == needle)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .set_local => |assign| {
@@ -3527,6 +3642,7 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and needles.contains(assign.capture.?)) return true;
+                    if (assign.reuse != null and needles.contains(assign.reuse.?)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
@@ -3543,6 +3659,14 @@ const Inserter = struct {
                 },
                 .assign_tag => |assign| {
                     if (assign.payload != null and needles.contains(assign.payload.?)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .store_struct => |assign| {
+                    if (needles.contains(assign.dest) or self.spanUsesAny(assign.fields, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .store_tag => |assign| {
+                    if (needles.contains(assign.dest) or (assign.payload != null and needles.contains(assign.payload.?))) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .set_local => |assign| {
@@ -3997,6 +4121,14 @@ const ArcTest = struct {
         } });
     }
 
+    fn assignStaticData(self: *ArcTest, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .static_data = @enumFromInt(0) },
+            .next = next,
+        } });
+    }
+
     fn assignList(self: *ArcTest, target: LIR.LocalId, elems: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_list = .{
             .target = target,
@@ -4079,6 +4211,25 @@ const ArcTest = struct {
             .op = .list_append_unsafe,
             .rc_effect = rc_effect,
             .args = try self.span(args),
+            .next = next,
+        } });
+    }
+
+    fn assignPackedErased(
+        self: *ArcTest,
+        target: LIR.LocalId,
+        capture: LIR.LocalId,
+        capture_layout: layout_mod.Idx,
+        reuse: ?LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+            .target = target,
+            .proc = try self.addBodylessProc(.i64),
+            .capture = capture,
+            .capture_layout = capture_layout,
+            .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = capture_layout } },
+            .reuse = reuse,
             .next = next,
         } });
     }
@@ -4274,7 +4425,7 @@ const ArcTest = struct {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -4332,6 +4483,8 @@ const ArcTest = struct {
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
                 .assign_tag => |assign| cursor = assign.next,
+                .store_struct => |assign| cursor = assign.next,
+                .store_tag => |assign| cursor = assign.next,
                 .set_local => |assign| cursor = assign.next,
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
@@ -4384,6 +4537,8 @@ const ArcTest = struct {
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
                 .assign_tag => |assign| cursor = assign.next,
+                .store_struct => |assign| cursor = assign.next,
+                .store_tag => |assign| cursor = assign.next,
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
@@ -5415,6 +5570,96 @@ test "uniqueness: freshly built list consumed by a checked op elides the check" 
     // The list is born unique and its single unit moves into the op, so the
     // op's runtime count check on argument 0 is redundant.
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: static data list consumed by a checked op keeps the runtime check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const list_assign = try f.assignStaticData(list, append);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: freshly packed erased callable repack elides the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_capture = try f.local(f.list_i64);
+    const new_capture = try f.local(f.list_i64);
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+
+    const ret = try f.ret(new_callable);
+    const new_pack = try f.assignPackedErased(new_callable, new_capture, f.list_i64, old_callable, ret);
+    const new_capture_assign = try f.assignList(new_capture, &.{}, new_pack);
+    const old_pack = try f.assignPackedErased(old_callable, old_capture, f.list_i64, null, new_capture_assign);
+    const old_capture_assign = try f.assignList(old_capture, &.{}, old_pack);
+    _ = try f.addProc(&.{}, old_capture_assign, erased_callable);
+
+    try f.run();
+
+    var saw_repack = false;
+    var saw_unique = false;
+    for (f.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_packed_erased_fn => |assign| {
+                if (assign.target == new_callable and assign.reuse == old_callable) {
+                    saw_repack = true;
+                    saw_unique = saw_unique or assign.reuse_unique;
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expect(saw_repack);
+    try testing.expect(saw_unique);
+}
+
+test "uniqueness: erased callable repack keeps the check when old value is used later" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_capture = try f.local(f.list_i64);
+    const new_capture = try f.local(f.list_i64);
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+
+    const ret = try f.ret(new_callable);
+    const use_old = try f.expectStmt(old_callable, ret);
+    const new_pack = try f.assignPackedErased(new_callable, new_capture, f.list_i64, old_callable, use_old);
+    const new_capture_assign = try f.assignList(new_capture, &.{}, new_pack);
+    const old_pack = try f.assignPackedErased(old_callable, old_capture, f.list_i64, null, new_capture_assign);
+    const old_capture_assign = try f.assignList(old_capture, &.{}, old_pack);
+    _ = try f.addProc(&.{}, old_capture_assign, erased_callable);
+
+    try f.run();
+
+    var saw_repack = false;
+    var saw_unique = false;
+    for (f.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_packed_erased_fn => |assign| {
+                if (assign.target == new_callable and assign.reuse == old_callable) {
+                    saw_repack = true;
+                    saw_unique = saw_unique or assign.reuse_unique;
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expect(saw_repack);
+    try testing.expect(!saw_unique);
 }
 
 test "uniqueness: list held by a struct keeps its runtime check" {

@@ -12,6 +12,9 @@ const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
 const Trmc = @import("trmc.zig");
+const BoxReuse = @import("box_reuse.zig");
+const ReturnSlot = @import("return_slot.zig");
+const StrAppend = @import("str_append.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
@@ -208,7 +211,11 @@ pub fn lowerCheckedModulesToLir(
         allocator,
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
-        .{ .proc_debug_names = target.proc_debug_names },
+        .{
+            .proc_debug_names = target.proc_debug_names,
+            .static_data_literals = target.checked_module_state == .complete and roots.include_static_data_exports,
+            .target_usize = target.target_usize,
+        },
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -247,6 +254,9 @@ pub fn lowerCheckedModulesToLir(
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try BoxReuse.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try StrAppend.run(&lowered.lir_result.store);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
@@ -380,7 +390,10 @@ fn collectStaticDataRequests(
         switch (provided) {
             .data => |data| {
                 if (try checkedTypeContainsFunction(allocator, root.checked_types.view(), data.checked_type)) {
-                    try requests.append(allocator, .{ .data = data });
+                    try requests.append(allocator, .{
+                        .const_ref = data.const_ref,
+                        .checked_type = data.checked_type,
+                    });
                 }
             },
             .procedure => {},

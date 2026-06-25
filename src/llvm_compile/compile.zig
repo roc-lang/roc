@@ -118,9 +118,11 @@ pub const CompileOptions = struct {
     /// builtin bitcode payload before retargeting the merged LLVM module.
     target_ptr_width_bits: u8,
     /// Treat the target as freestanding for LLVM object emission: optimization
-    /// cannot assume target library functions, and memory intrinsics are lowered
-    /// to explicit loops before codegen.
+    /// cannot assume target library functions.
     no_target_libcalls: bool = false,
+    /// Lower LLVM memory intrinsics to explicit loops before codegen. Callers set
+    /// this for targets that cannot use libcalls or native memory operations.
+    lower_memory_intrinsics_to_loops: bool = false,
 };
 
 fn valueName(value: *bindings.Value) []const u8 {
@@ -179,6 +181,7 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc__num_mul_with_overflow_i8", {} },
     .{ "roc__num_sub_with_overflow_i128", {} },
     .{ "roc_builtins_allocate_with_refcount", {} },
+    .{ "roc_builtins_box_prepare_update", {} },
     .{ "roc_builtins_box_decref_with", {} },
     .{ "roc_builtins_box_decref_with_single_thread", {} },
     .{ "roc_builtins_box_free_with", {} },
@@ -567,6 +570,7 @@ fn emitMergedBitcodeToObjectFile(
         .bitcode_filename = null,
         .coverage = default_coverage,
         .no_target_libcalls = options.no_target_libcalls,
+        .lower_memory_intrinsics_to_loops = options.lower_memory_intrinsics_to_loops,
     };
 
     // Emit merged module to object file
@@ -628,6 +632,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
         .macos, .windows => false,
         else => true,
     };
+    pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
     try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
 

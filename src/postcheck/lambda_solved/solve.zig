@@ -141,6 +141,7 @@ const Solver = struct {
                 .checked_type = request.checked_type,
                 .ty = ty,
                 .fn_id = request.fn_id,
+                .static_data = request.static_data,
             });
         }
 
@@ -378,11 +379,15 @@ const Solver = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .static_data,
             .uninitialized,
             .uninitialized_payload,
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
+            .static_data_candidate => |candidate| {
+                _ = try self.expectExpr(candidate.fallback, expected);
+            },
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
                 for (self.program.lifted.exprSpan(items)) |child| {
@@ -700,7 +705,8 @@ const Solver = struct {
         const ty = switch (expr.data) {
             .local => |local| self.localTy(local),
             .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
-            else => expected,
+            .call_proc => |call| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(Lifted.callProcCallee(call))])).ret,
+            else => try self.lowerTypeFresh(expr.ty),
         };
         try self.unify(ty, expected);
         self.expr_tys[index] = ty;

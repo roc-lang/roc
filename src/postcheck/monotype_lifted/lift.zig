@@ -50,10 +50,14 @@ pub fn run(
     owned.if_branches = .empty;
     var string_literals = owned.string_literals;
     owned.string_literals = .empty;
+    var local_proc_contexts = owned.local_proc_contexts;
+    owned.local_proc_contexts = .empty;
     var proc_debug_names = owned.proc_debug_names;
     owned.proc_debug_names = Mono.ProcDebugNameMap.init(allocator);
     var runtime_schema_requests = owned.runtime_schema_requests;
     owned.runtime_schema_requests = .empty;
+    var static_data_values = owned.static_data_values;
+    owned.static_data_values = .empty;
     var comptime_sites = owned.comptime_sites;
     owned.comptime_sites = .empty;
     var source_files = owned.source_files;
@@ -87,6 +91,7 @@ pub fn run(
         branches,
         if_branches,
         string_literals,
+        local_proc_contexts,
         proc_debug_names,
         source_files,
         expr_locs,
@@ -94,6 +99,7 @@ pub fn run(
         stmt_locs,
         stmt_regions,
         local_names,
+        static_data_values,
         comptime_sites,
         owned.next_symbol,
     );
@@ -112,6 +118,7 @@ pub fn run(
     branches = undefined;
     if_branches = undefined;
     string_literals = undefined;
+    local_proc_contexts = undefined;
     proc_debug_names = undefined;
     source_files = undefined;
     expr_locs = undefined;
@@ -119,6 +126,7 @@ pub fn run(
     stmt_locs = undefined;
     stmt_regions = undefined;
     local_names = undefined;
+    static_data_values = undefined;
     comptime_sites = undefined;
     program.runtime_schema_requests = runtime_schema_requests;
     runtime_schema_requests = undefined;
@@ -268,6 +276,7 @@ const Lifter = struct {
                 .checked_type = request.checked_type,
                 .ty = request.ty,
                 .fn_id = fn_id,
+                .static_data = request.static_data,
             });
         }
     }
@@ -340,12 +349,14 @@ const Lifter = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .static_data,
             .uninitialized,
             .uninitialized_payload,
             .crash,
             .comptime_exhaustiveness_failed,
             .fn_ref,
             => {},
+            .static_data_candidate => |candidate| try self.rewriteExpr(candidate.fallback),
             .list,
             .tuple,
             => |items| for (self.output.exprSpan(items)) |child| try self.rewriteExpr(child),
@@ -737,12 +748,14 @@ const CaptureSet = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .static_data,
             .uninitialized,
             .uninitialized_payload,
             .def_ref,
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
+            .static_data_candidate => |candidate| try self.collectExpr(candidate.fallback, bound),
             .fn_ref => |fn_id| try self.collectFnCaptures(fn_id, bound),
             .fn_def => |fn_id| try self.collectFnCaptures(self.lifter.liftedFn(fn_id), bound),
             .list,

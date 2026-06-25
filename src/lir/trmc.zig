@@ -440,7 +440,7 @@ const Detection = struct {
                     }
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
@@ -508,7 +508,7 @@ const Detection = struct {
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try self.appendSharedSuccessor(work, s.next);
             },
         }
@@ -704,6 +704,8 @@ const Detection = struct {
             .assign_list => |s| self.spanTouchesChain(s.elems, c),
             .assign_struct => |s| self.spanTouchesChain(s.fields, c),
             .assign_tag => |s| if (s.payload) |payload| c.chainContains(payload) else false,
+            .store_struct => |s| c.chainContains(s.dest) or self.spanTouchesChain(s.fields, c),
+            .store_tag => |s| c.chainContains(s.dest) or if (s.payload) |payload| c.chainContains(payload) else false,
             // Reading the value is a use; overwriting a tracked local would
             // corrupt the chain, so treat that as disqualifying too.
             .set_local => |s| c.chainContains(s.value) or c.chainContains(s.target),

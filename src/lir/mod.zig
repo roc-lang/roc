@@ -17,6 +17,12 @@ pub const Hosted = core.Hosted;
 pub const Program = core.Program;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
+/// Direct boxed update wrapper rewrite before ARC.
+pub const BoxReuse = @import("box_reuse.zig");
+/// Internal aggregate return-slot variants before ARC.
+pub const ReturnSlot = @import("return_slot.zig");
+/// Internal append-into-string variants before ARC.
+pub const StrAppend = @import("str_append.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
@@ -50,6 +56,8 @@ pub const LocalSpan = LIR.LocalSpan;
 pub const JoinPointId = LIR.JoinPointId;
 /// Literal RHS values assignable in statement-only LIR.
 pub const LiteralValue = LIR.LiteralValue;
+/// Identifier for a materialized readonly static-data value.
+pub const StaticDataId = LIR.StaticDataId;
 /// Platform-hosted proc metadata.
 pub const HostedProc = LIR.HostedProc;
 /// Ref-producing operations lowerable by `assign_ref`.
@@ -84,6 +92,9 @@ test "lir tests" {
     std.testing.refAllDecls(Program);
     std.testing.refAllDecls(ReachableProcs);
     std.testing.refAllDecls(CheckedPipeline);
+    std.testing.refAllDecls(BoxReuse);
+    std.testing.refAllDecls(ReturnSlot);
+    std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(Arc);

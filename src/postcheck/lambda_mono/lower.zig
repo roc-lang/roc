@@ -43,6 +43,10 @@ pub fn run(
     string_literals = undefined;
     program.source_files = owned.lifted.source_files;
     owned.lifted.source_files = .empty;
+    program.static_data_values = owned.lifted.static_data_values;
+    owned.lifted.static_data_values = .empty;
+    program.local_proc_contexts = owned.lifted.local_proc_contexts;
+    owned.lifted.local_proc_contexts = .empty;
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program, options);
@@ -230,6 +234,7 @@ const Lowerer = struct {
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
+                .static_data = request.static_data,
             });
         }
 
@@ -482,6 +487,11 @@ const Lowerer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .static_data => |value| .{ .static_data = value },
+            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
+                .static_data = candidate.static_data,
+                .fallback = try self.lowerExpr(candidate.fallback),
+            } },
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
                 .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys.items[@intFromEnum(payload.condition)])),
@@ -909,19 +919,13 @@ const Lowerer = struct {
         if (self.type_map.get(root)) |cached| return cached;
 
         const content = self.solved.types.get(root);
-
-        switch (content) {
-            .func => |func| return try self.lowerType(func.callable),
-            else => {},
-        }
-
         const reserved = try self.program.types.add(.zst);
         try self.type_map.put(root, reserved);
-        self.program.types.set(reserved, try self.lowerTypeContent(content));
+        self.program.types.set(reserved, try self.lowerTypeContent(root, content));
         return reserved;
     }
 
-    fn lowerTypeContent(self: *Lowerer, content: SolvedType.Content) Allocator.Error!Type.Content {
+    fn lowerTypeContent(self: *Lowerer, root: SolvedType.TypeVarId, content: SolvedType.Content) Allocator.Error!Type.Content {
         return switch (content) {
             .link => Common.invariant("Lambda Mono type lowering saw an unresolved Lambda Solved link"),
             .unbound, .forall => Common.invariant("Lambda Mono type lowering saw an unresolved Lambda Solved type"),
@@ -931,7 +935,7 @@ const Lowerer = struct {
                 .source_fn_ty = erased.source_fn_ty,
                 .members = try self.lowerFnMembers(erased.members, .erased),
             } },
-            .func => |func| return self.program.types.get(try self.lowerType(func.callable)),
+            .func => |func| try self.lowerCallableContentForFunction(root, func.callable, .finite),
             .list => |elem| .{ .list = try self.lowerType(elem) },
             .box => |elem| .{ .box = try self.lowerType(elem) },
             .tuple => |items| blk: {
@@ -983,6 +987,22 @@ const Lowerer = struct {
         };
     }
 
+    fn lowerCallableContentForFunction(
+        self: *Lowerer,
+        solved_fn_ty: SolvedType.TypeVarId,
+        callable_ty: SolvedType.TypeVarId,
+        abi: CaptureAbi,
+    ) Allocator.Error!Type.Content {
+        return switch (self.solved.types.rootContent(callable_ty)) {
+            .lambda_set => |members| .{ .callable = try self.lowerFnMembersWithType(members, abi, solved_fn_ty) },
+            .erased => |erased| .{ .erased_fn = .{
+                .source_fn_ty = erased.source_fn_ty,
+                .members = try self.lowerFnMembersWithType(erased.members, .erased, solved_fn_ty),
+            } },
+            else => Common.invariant("function callable slot resolved to a non-callable type"),
+        };
+    }
+
     /// Re-materializes a nominal record's declared field order from the Lambda
     /// Solved store into the Lambda Mono store. Named entries copy the shared
     /// field-name id; padding entries re-lower their reserved type.
@@ -1001,6 +1021,15 @@ const Lowerer = struct {
     }
 
     fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Allocator.Error!Type.Span {
+        return try self.lowerFnMembersWithType(members, abi, null);
+    }
+
+    fn lowerFnMembersWithType(
+        self: *Lowerer,
+        members: SolvedType.Span,
+        abi: CaptureAbi,
+        maybe_solved_fn_ty: ?SolvedType.TypeVarId,
+    ) Allocator.Error!Type.Span {
         const solved_members = self.solved.types.memberSpan(members);
         const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
         defer self.allocator.free(variants);
@@ -1009,7 +1038,7 @@ const Lowerer = struct {
             const source = self.sourceFnForSymbol(member.lambda);
             const target = try self.ensureFnSpec(
                 source,
-                self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(source)]),
+                maybe_solved_fn_ty orelse self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(source)]),
                 abi,
                 member.captures,
             );

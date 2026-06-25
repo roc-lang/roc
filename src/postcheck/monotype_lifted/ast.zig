@@ -38,6 +38,7 @@ pub const ComptimeSiteId = Mono.ComptimeSiteId;
 pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
 /// Compile-time site metadata shared with Monotype IR.
 pub const ComptimeSite = Mono.ComptimeSite;
+pub const LocalProcContext = Mono.LocalProcContext;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;
 /// Record destructuring field pattern.
@@ -106,10 +107,13 @@ pub const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
     fn_id: ?FnId = null,
+    static_data: ?Common.StaticDataRequest = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
 pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
+/// Checked value requested as readonly static data.
+pub const StaticDataValue = Mono.StaticDataValue;
 
 /// Return the lifted function id for a direct call after Monotype lifting.
 pub fn callProcCallee(call: Mono.CallProc) FnId {
@@ -140,10 +144,12 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
+    local_proc_contexts: std.ArrayList(LocalProcContext),
     proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    static_data_values: std.ArrayList(StaticDataValue),
     comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: std.ArrayList([]const u8),
@@ -182,6 +188,7 @@ pub const Program = struct {
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
         string_literals: std.ArrayList(Mono.StringLiteral),
+        local_proc_contexts: std.ArrayList(LocalProcContext),
         proc_debug_names: ProcDebugNameMap,
         source_files: std.ArrayList([]const u8),
         expr_locs: std.ArrayList(base.SourceLoc),
@@ -189,6 +196,7 @@ pub const Program = struct {
         stmt_locs: std.ArrayList(base.SourceLoc),
         stmt_regions: std.ArrayList(base.Region),
         local_names: std.ArrayList([]const u8),
+        static_data_values: std.ArrayList(StaticDataValue),
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
     ) Program {
@@ -212,10 +220,12 @@ pub const Program = struct {
             .branches = branches,
             .if_branches = if_branches,
             .string_literals = string_literals,
+            .local_proc_contexts = local_proc_contexts,
             .proc_debug_names = proc_debug_names,
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .static_data_values = static_data_values,
             .comptime_sites = comptime_sites,
             .source_files = source_files,
             .expr_locs = expr_locs,
@@ -243,10 +253,12 @@ pub const Program = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
+        self.local_proc_contexts.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -279,6 +291,10 @@ pub const Program = struct {
 
     pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
         return self.proc_debug_names.get(symbol);
+    }
+
+    pub fn localProcContextSpan(self: *const Program, span: Span(LocalProcContext)) []const LocalProcContext {
+        return self.local_proc_contexts.items[span.start .. span.start + span.len];
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {

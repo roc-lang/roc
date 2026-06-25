@@ -81,6 +81,331 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
+## Checking Effects And Const Roots
+
+Checking owns Roc effect validation, compile-time evaluation eligibility, and
+compile-time root selection. These are checked-stage responsibilities, not
+post-check repairs. The checker must finish with explicit outputs for function
+effect kinds, top-level effect errors, effectful `expect` errors, compile-time
+diagnostics, and selected compile-time roots. Later stages consume those
+outputs directly.
+
+The pre-check CIR producer outputs CIR and checked identity inputs; it does not
+own compile-time root selection. Root selection happens during checking because
+checking already walks every expression, resolves local identity, computes
+types, validates function effects, and receives static-dispatch results. The
+checker must not perform a later whole-module expression walk merely to decide
+which expressions are roots, and later stages must not recreate those answers.
+
+The question "can this expression be evaluated at compile time?" depends only
+on checked data dependency, checked control reachability, and effectfulness. It
+does not depend on whether a call was direct or static-dispatch syntax, whether
+an expression is a leaf, whether a value was written inline or named at the top
+level, or whether the expression contains `crash`, `dbg`, or `expect`. Those
+constructs are compile-time observable, and evaluating them at compile time is
+required when the surrounding expression has no runtime data dependency, no
+runtime control dependency, and no effectful call.
+
+Control reachability is checked data, not source-shape guessing. An expression
+can be a standalone compile-time root only when the source meaning evaluates it
+unconditionally whenever the root is needed. Branch bodies, match
+guards, and match branch values are control-dependent on the enclosing
+conditional or match. They may contribute summaries to an enclosing `if` or
+`match` root, but they must not add independent selected roots while their
+enclosing control decision can be made at runtime. Otherwise an untaken branch
+containing `crash`, `dbg`, or `expect` would run during `roc check`, which
+would change the program's observable behavior. If the whole enclosing control
+expression is compile-time-known and effect-free, the enclosing expression may
+be selected as the root and the evaluator follows the same branch choices as
+the source program.
+
+Non-local control-transfer expressions such as `return` and `break` are not
+standalone value roots and cannot cover child candidates by themselves. Their
+payloads may still contribute to an enclosing eligible root or be selected as
+ordinary child expressions when they are reached through checked control data.
+Making the control-transfer expression itself a root would require an explicit
+checked continuation representation; until that exists, selecting it as a
+stored constant is a compiler bug, not an optimization choice.
+
+An effectful call is one of:
+
+- a direct call to a checked effectful function
+- a call through a function-typed value whose checked function type is effectful
+- a static-dispatch call whose selected implementation is checked effectful
+
+Creating a function value is not an effectful call, even when that function's
+body is effectful. The effect propagates only when the function value is called.
+Negative effect answers are not durable until the relevant slot has finalized;
+static dispatch can still turn an apparently pure call site into an effectful
+call before checked output is produced.
+
+### Effect Slots
+
+Roc effect propagation is a directed dataflow problem over function bodies and
+call sites. It must not be represented by one early boolean that is finalized
+before static dispatch has resolved. The checker maintains sparse effect slots
+for the places where effectfulness is part of the checked result:
+
+- function and lambda bodies
+- top-level value right-hand sides
+- `expect` bodies
+- compile-time root candidates whose effectfulness may depend on delayed
+  dispatch
+
+An effect slot becomes effectful when it contains a direct call to an effectful
+function, when a delayed static-dispatch call watched by the slot resolves to an
+effectful function, or when it calls another slot that is effectful. Ordinary
+calls add directed dependencies from caller slot to callee slot. Static-dispatch
+calls add watcher entries from the dispatch function variable to the active
+slot. When static-dispatch resolution later proves the selected method is
+effectful, the watcher marks or connects the owning slot before any checked
+output is finalized.
+
+Effect dependencies are directed. A caller depending on a callee must not be
+represented as equality. Strongly connected recursive groups may be condensed
+for solving, but unrelated caller and callee slots must remain one-way
+dependencies.
+
+Effects are not inferred from source spelling alone. A `!` name contributes to
+identifier parsing and annotations, but the checked source of truth is the
+resolved function type and dispatch result. A method call whose syntax appears
+inside a pure-looking expression can still make that expression effectful after
+dispatch resolution. Conversely, `crash`, `dbg`, and `expect` are not real
+effectful calls. They must never be used as reasons to reject a compile-time
+root.
+
+Effect finalization runs after ordinary type constraints, literal defaulting,
+and static-dispatch constraints for the relevant boundary have settled. It
+computes final slot effectfulness with directed graph propagation. After
+finalization, the checker uses the slot results to select `fn_pure`,
+`fn_effectful`, or the equivalent checked function kind, to report invalid pure
+annotations, to report effectful top-level values, and to report effectful
+`expect` bodies. Checked module output must not contain unresolved effect
+kinds.
+
+The effect solver may cache positive effectfulness immediately. It must not
+treat an unresolved negative answer as final while dispatch watchers or callee
+slots can still change. Recursive groups are solved by directed propagation:
+strongly connected groups can be condensed, marked effectful if any member is
+effectful, and then propagated to callers. Ordinary caller-to-callee edges must
+remain one-way.
+
+Every static-dispatch call that is not resolved when the expression frame
+finishes is represented by explicit checked state. The active effect slot owns
+the watcher for that dispatch function variable. If the same expression is also
+a compile-time root candidate, the root candidate records that it is waiting on
+the same slot. When the dispatch result arrives, effect finalization updates the
+slot once, and both the function-effect answer and the root-selection answer
+consume that finalized slot. Root selection must not infer delayed dispatch by
+re-reading syntax or by searching for unresolved method names.
+
+### Root Selection During Checking
+
+Compile-time root selection uses the same checker traversal that already walks
+checked CIR expressions. There is no separate root-selection walk over every
+expression. While checking an expression, the checker returns a small
+transient summary to its parent:
+
+```text
+runtime dependency status
+control reachability status
+effect slot or delayed-effect status when needed
+candidate stack interval owned by this expression frame
+```
+
+The summary is stack-local for ordinary nested expressions. The checker stores
+only data needed after the current expression finishes: summaries for bindings
+that later lookups may read, effect slots and dispatch watchers, tentative root
+candidates, and final selected roots. It must not allocate a permanent
+per-expression table merely to answer root eligibility.
+
+Runtime dependency is computed bottom-up from checked CIR identity. Lambda
+arguments, match-bound values, loop-bound values, mutable variables, and
+reassignments are runtime-dependent. Immutable local definitions store the
+summary of their right-hand side; later local lookups consume that stored
+summary. Top-level checked values and imported checked values are checked
+binding identities at the use site. Looking up a module-level binding is
+compile-time-known as a reference to that checked binding; the initializer's
+own evaluation, diagnostics, reachability, and static storage are handled by
+the module-level checked outputs, not by replaying the initializer summary into
+each lookup expression. Parent expressions combine child summaries directly.
+
+The expression summary is not a second effect system. Effect slots remain the
+owner of effectfulness. The expression summary only says whether the expression
+is already known effect-free, already known effectful, or waiting on an effect
+slot that can still be marked by delayed dispatch or callee propagation.
+
+An expression that already produced a checking problem is poisoned for
+compile-time root selection. Poison is not runtime dependency and it is not an
+effect. It only prevents an erroneous parent value from becoming a selected
+root while preserving the original diagnostic ownership, so a bad child reports
+once instead of being hidden by hoisting or reported again by a parent root.
+Static-dispatch failures, type errors, and other checker-owned problems must
+feed this poison result explicitly through the same expression summary path.
+Poison is local to the expression or dependency region that owns the checking
+problem. It propagates only through explicit checked dependencies, such as a
+lookup of an erroneous local or top-level value. It must never become a module,
+package, or program flag. A checked module or checked program may contain
+user-facing diagnostics and still produce hoisted roots for every independent
+expression whose own dependency region is resolved and otherwise eligible. This
+is required for Roc's recover-and-continue behavior: `roc check`, tests, and
+program execution must keep doing all valid work that does not depend on the
+erroneous code path.
+No downstream compile-time-evaluation step may use a checked artifact's
+nonempty diagnostic list as a reason to skip independent roots; it must consume
+the explicit root list and the per-root poisoned/dependency state produced by
+checking.
+Compiler implementation gaps are not poison. Once checking has accepted an
+eligible expression, failure to evaluate, store, restore, or emit it correctly
+is a compiler bug with a regression test, not a reason to demote the expression
+from compile-time evaluation.
+
+Root selection keeps maximal eligible expressions. Each expression frame
+records the root-candidate stack length at entry. If the expression finishes as
+compile-time-known, unconditionally reachable, and effect-free, it removes
+child candidates added inside the frame and adds itself. If the expression is
+not eligible because of runtime data dependency or effectfulness, its eligible
+unconditionally reached child candidates remain. If the expression is not
+eligible because it is control-dependent on a runtime branch or match decision,
+children inside that conditional region do not add standalone selected roots;
+they are evaluated only if an enclosing eligible control expression is
+selected. If the expression has delayed effect sources, the checker stores a
+tentative parent over its child candidates; effect finalization later keeps the
+parent and drops the children when the parent resolves effect-free, or drops
+the parent and keeps the children when the parent resolves effectful. This is
+the only parent-child replacement rule. There are no special cases for leaves,
+strings, numbers, empty lists, records, loops, or other data-expression shapes.
+Control-transfer expressions and conditionally evaluated branch regions are
+handled by explicit checked control reachability, not by pruning arbitrary
+source shapes.
+
+Delayed parents form intervals over the candidate stack, not source-tree
+queries. Nested delayed parents finalize from explicit interval ownership: when
+an outer delayed parent is kept, every child candidate in its interval is
+removed, including delayed children. When an outer delayed parent is discarded,
+the candidates in its interval keep their own finalized results. This preserves
+the maximal-root rule without a second walk and without special pruning rules.
+
+Root selection must be independent of how the source was arranged. A named
+top-level value, a closed immutable local value, and an equivalent inline
+expression must produce equivalent selected roots once checked dependencies,
+checked control reachability, and effects are the same. Selecting a parent root
+is the only reason to discard an already selected child root from an
+unconditionally evaluated region; rejecting a parent for runtime data
+dependency or effectfulness must preserve those eligible children. A
+runtime-controlled branch body is different: its contents are not
+unconditionally evaluated, so they cannot be selected independently without
+explicit checked proof that doing so preserves compile-time observables.
+
+### Checker Implementation Contract
+
+The checker has one authoritative state for effect propagation and compile-time
+root selection. This state is owned by checking, updated during the existing
+`checkExpr` traversal, finalized before checked module output, and exported as
+explicit checked data. Canonicalization may produce stable identities and source
+structure, but it must not select compile-time roots or decide final
+effectfulness. Post-check stages may consume checked roots and evaluated
+constants, but they must not repair or reinterpret root eligibility.
+
+Checking a module-level definition as a dependency is not a child expression of
+the lookup that forced it. If a forward reference causes a different
+module-level definition to be checked while an expression frame is active, the
+checker detaches the root-frame and candidate stacks for that definition. The
+definition still writes to the module's shared selected-root, delayed-root,
+known-binding, effect-slot, and checked-output state, but its transient
+expression frames must not bubble runtime dependency, child candidates, or
+last-expression metadata into the forcing lookup. This keeps the result
+independent of whether an equivalent top-level constant was checked before or
+after the use site.
+
+Each expression frame records the current root-candidate stack length when the
+frame begins. The frame receives child expression summaries as checking
+progresses and returns one transient summary to its parent. The summary records
+only the data needed by the parent: runtime data dependency, checked control
+reachability, and effect state. Ordinary summaries are stack-local. A summary is
+stored past the current expression only when a later checked local lookup needs
+it, when an effect slot or dispatch watcher must finalize later, or when a
+tentative root candidate has been selected.
+
+Effect propagation uses directed slots and edges:
+
+- checking a function body, top-level value, `expect` body, or delayed root
+  candidate creates an effect slot when that boundary needs a checked effect
+  answer
+- a direct call to a known effectful function marks the active slot effectful
+- a direct call to a local function with its own slot adds a caller-to-callee
+  edge
+- a call through a function-typed value consumes the checked function effect
+  kind
+- an unresolved static-dispatch call records a watcher from the dispatch
+  variable to the active slot
+- dispatch resolution updates the watched slot from the selected checked method
+  effect
+
+Those edges are dependencies, not equality. Recursive groups may be condensed
+while solving, but unrelated caller and callee slots must remain one-way. A
+slot whose callees and dispatch watchers have not finalized cannot be reported
+as definitely pure. Finalization runs after the relevant ordinary type,
+literal-defaulting, and static-dispatch constraints have settled; checked
+module output must not contain unresolved effect slots or unresolved root
+candidates.
+
+Root selection uses the same expression frames. When a frame finishes as
+compile-time-known, unconditionally reached, and effect-free, it replaces the
+candidate interval added by its children with the parent candidate. When a
+frame finishes as runtime-dependent or effectful, it leaves eligible
+unconditionally reached children in place. When a frame is in a branch body,
+match guard, or match branch value controlled by a runtime decision, it does
+not publish independent candidates from that conditional region. The enclosing
+`if` or `match` may still be selected if the whole control expression becomes
+compile-time-known and effect-free.
+
+Delayed root candidates are tied to effect slots. The candidate stores the
+owned interval of child candidates and is finalized from the slot result. If
+the slot resolves effect-free, the parent candidate is kept and the child
+interval is removed. If the slot resolves effectful, the parent candidate is
+discarded and finalized children remain. This interval rule is the only
+subsumption rule; implementation must not add leaf filters, observable-effect
+filters, or source-shape pruning.
+
+Compile-time observables are not effect blockers. `crash`, `dbg`, and `expect`
+must be represented as ordinary checked expressions for root selection. When
+their enclosing selected root is evaluated during checking, they run and report
+their diagnostics. An untaken runtime-controlled branch containing those
+constructs must not be independently selected, because that would change source
+behavior by running compile-time observables that the program would not
+evaluate.
+
+### Compile-Time Evaluation And Static Storage
+
+Compile-time evaluation must evaluate every checked top-level expression and
+every selected compile-time root that can be evaluated without effectful calls
+or runtime data. It must run `crash`, `dbg`, and `expect` during that
+evaluation and output their diagnostics during `roc check`.
+
+Evaluation and static storage are separate checked outputs. Unreachable
+top-level values are still evaluated when eligible so their `crash`, `dbg`, and
+`expect` behavior is reported, but successfully evaluated unreachable data does
+not need to be stored in checked module data or target static data. Reachable
+evaluated values that have a static representation should be stored once and
+shared. Records that contain static lists should point at shared static list
+bytes; equivalent named and inline constants should produce equivalent static
+data.
+
+Compile-time evaluation is allowed to fail with user diagnostics only during
+checking. After checking, stored constant data is ordinary checked output. A
+target static-data builder may decide which reachable evaluated values have a
+target representation, but it consumes the checked roots and evaluated values
+directly; it must not scan checked CIR or generated code to rediscover root
+eligibility.
+
+If a reachable evaluated value cannot yet be represented as target static data,
+the missing representation is a compiler bug. The checked output or static-data
+builder must make the missing explicit data assertable and testable; it must
+not silently demote the value from compile-time evaluation. No backend may
+rediscover or guess root eligibility by scanning source syntax, function
+bodies, object symbols, or generated code.
+
 ## Backend Builtins
 
 Backend builtin linking is part of backend code generation, not a later repair
@@ -110,10 +435,10 @@ payload architecture-specific again. The payloads are built as freestanding
 LLVM bitcode so compile-time OS and CPU branches cannot bake a native
 platform's syscalls, inline assembly, or runtime support into a module that will
 later be retargeted. LLVM object emission for targets that are not required to
-link a platform C runtime disables target-library assumptions and lowers LLVM
-memory intrinsics to explicit loops before target code generation. macOS and
-Windows keep target library calls available because their final links include
-the platform runtime libraries.
+link a platform C runtime disables target-library assumptions. Targets that
+also lack native memory operations lower LLVM memory intrinsics to explicit
+loops before target code generation. macOS and Windows keep target library calls
+available because their final links include the platform runtime libraries.
 
 Builtin definitions in the merged LLVM module are real definitions. They must
 not be marked `available_externally`, because there is no later builtin object
@@ -742,12 +1067,27 @@ or canonicalization guesses. Allowed dependencies include literals, already
 known compile-time constants, selected hoisted constants, imported constants
 whose checked modules have stored values, and pure checked callables whose
 captures are themselves compile-time-known. Rejected dependencies include
-function arguments, runtime pattern binders, mutable locals, effectful calls,
-host calls, platform requirements whose values are not available during checking
-finalization, and any static dispatch whose checked plan does not identify a
-pure compile-time-evaluable operation. Low-level operations may participate only
-through explicit checked purity and totality metadata; they must never be
-allowed by whitelist, name, or backend knowledge.
+function arguments, runtime pattern binders, mutable locals, runtime control
+decisions, effectful calls, host calls, platform requirements whose values are
+not available during checking finalization, and any static dispatch whose
+checked plan does not identify a pure compile-time-evaluable operation.
+Low-level operations may participate only through explicit checked purity and
+totality metadata; they must never be allowed by whitelist, name, or backend
+knowledge.
+
+Checking errors are dependency-local for hoistability. A malformed expression,
+unresolved static-dispatch call, type error, or other checker-owned diagnostic
+poisons the expression that owns the error and any expression that explicitly
+depends on it. It does not poison sibling definitions, unrelated top-level
+values, unrelated imported modules, or the checked program as a whole. A checked
+artifact that carries diagnostics is still a valid input to every independent
+compile-time-evaluation decision whose expression/dependency region is
+well-checked. If one definition is erroneous and another definition is
+independently compile-time-known, the independent definition must still be
+evaluated during checking and, when reachable, emitted as static data.
+The checked artifact must therefore be able to contain both diagnostics and
+successful compile-time root requests. The presence of diagnostics is not an
+artifact-level root-selection failure.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
@@ -3598,6 +3938,94 @@ walks live values — `crash` is fatal and leaks by design — and the loop
 itself is the only holder of the buffer (the runtime count of 1 proved
 there were no other counted handles, and a live borrow of the list would
 have forced the copy path through an owned capture's incref).
+
+### Destination-Passing Results and Allocation Reuse
+
+Large result values should be lowered by destination demand rather than by
+building a temporary value and then copying it into its final storage. A
+destination demand is explicit LIR producer input, not backend policy. It
+describes where a result should be written and which existing allocation, if
+any, may be reused when ARC proves or checks uniqueness. Backends, the
+interpreter, and LirImage consume the resulting LIR mechanically.
+
+The direct LIR builder may create a small bounded set of result variants for a
+proc:
+
+- `return_slot(T)`: write a by-memory result into caller-provided `ptr(T)`.
+- `reuse_box(T)`: consume `Box(T)` and use its payload storage as the result
+  destination when uniqueness permits.
+- `reuse_erased_callable`: consume an erased callable allocation and overwrite
+  its function pointer, drop callback, and capture bytes when uniqueness and
+  payload layout permit.
+- `append_into(Str)` / `append_into(List(T))`: build a returned string or list
+  by appending into a caller-provided unique accumulator.
+
+These variants are keyed by proc id, result demand, and committed layouts.
+Identical keys share one variant. Root procs and ABI-pinned procs keep their
+ordinary signature; wrappers may call an internal destination variant, but the
+ABI-facing signature is not changed by this optimization.
+
+`return_slot(T)` is selected by layout representation, not by source syntax.
+Scalar, pointer, and zero-sized result layouts keep ordinary returns.
+By-memory result layouts may be emitted as `proc(out: ptr(T), args...) -> {}`
+inside the LIR program. Existing ABI lowering remains responsible for adapting
+that internal shape to whatever a target ABI requires at roots and host
+boundaries.
+
+`reuse_box(T)` models the common shape:
+
+```roc
+Box.box(f(Box.unbox(boxed)))
+```
+
+as an allocation-reuse operation over one consumed `Box(T)`. The operation's
+RC metadata consumes the box argument, may runtime-check its uniqueness, and
+returns the same outer allocation on the reuse path. ARC may set the statement's
+`unique_args` bit when the runtime check is proven redundant by the existing
+born-unique and no-live-borrow rules. When the check is not redundant, the
+runtime check remains. If the box is not unique at runtime, the operation takes
+the defined copy path and returns a fresh box. The payload move, replacement,
+and old-payload release are all explicit in LIR or in the low-level operation's
+documented RC effect; no backend may infer them from `Box` names or pointer
+shapes.
+
+`reuse_erased_callable` is the erased-callable counterpart. Erased callables are
+not ordinary `Box(T)` payloads; their allocation stores a callable entry, an
+optional drop callback, and inline capture bytes. Reuse is allowed only when:
+
+- the old erased callable is consumed and unique, or its runtime uniqueness
+  check succeeds
+- the new callable payload has the same committed payload size and alignment
+  class as the old allocation, in the initial design
+- the old capture payload is released by the old drop callback before the
+  allocation is overwritten
+- the new callable entry, new drop callback, and new capture bytes are written
+  before the result is returned
+
+The first implementation should require same-size/same-alignment erased
+callable payloads. Broader reuse across different capture layouts requires an
+explicit capacity or size input; it must not be guessed from the erased function
+type alone, because an arbitrary `Box(a -> b)` value does not identify the
+stored capture layout.
+
+Destination-aware aggregate construction is required for the full benefit of
+box reuse. A record update or tag construction whose result is demanded in a
+slot should write fields and discriminants into that slot rather than first
+forming a whole temporary aggregate. If the destination aliases a consumed
+input, lowering must preserve read-before-overwrite order: fields needed later
+are moved or copied to temporaries before their slots are overwritten, and every
+refcounted field is moved, retained, or released exactly once. This ordering is
+part of LIR construction and ARC emission, not backend cleanup.
+
+Append destinations are result demands for producer functions that return
+`Str` or `List(T)`. Under `append_into(Str)`, string literals, string slices,
+string concatenations, and direct calls to append-capable producers write into
+the supplied unique string accumulator. Any expression that cannot append
+directly is first lowered to an ordinary result and then appended as an
+explicit step. `append_into(List(T))` follows the same rule for list builders.
+These variants are created only for realized demands and are keyed by result
+kind and element layout, so specialization is bounded by the distinct demands
+the program actually uses.
 
 Each stage fully replaces the previous behavior when it lands; there are no
 parallel insertion paths at any point:

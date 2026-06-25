@@ -10,6 +10,7 @@ const eval = @import("eval");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 
+const static_data_exports = @import("../static_data_exports.zig");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
@@ -30,6 +31,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\top_a = 40.I64
         \\top_b = top_a + 1.I64
         \\
+        \\top_callable : I64 -> I64
         \\top_callable = if 1.I64 == 1.I64 {
         \\    |n| n + 1.I64
         \\} else {
@@ -156,12 +158,6 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    if (coord.hasUserErrors()) {
-        var debug_reports = coord.iterReports();
-        while (debug_reports.next()) |entry| {
-            std.debug.print("pre-finalize report: {s} in {s}\n", .{ entry.report.title, entry.module_name });
-        }
-    }
     try std.testing.expect(!coord.hasUserErrors());
 
     try coord.finalizeExecutableArtifacts();
@@ -172,15 +168,6 @@ test "hoisted local constants are finalized and restored during runtime lowering
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const root_view = check.CheckedArtifact.importedView(root);
-    const app = if (root_view.hoisted_constants.entries.len >= 2)
-        root_view
-    else
-        findHoistedArtifact(imports, 2) orelse
-            findHoistedArtifact(relations, 2) orelse
-            return error.AppHoistedConstantsNotFound;
-
-    try expectCompileTimeRootKindsPresent(app);
     try expectCompileTimeRootKindsPresent(app_view);
     try expectExportedRuntimeEntrypoint(app_artifact);
 
@@ -362,6 +349,1427 @@ test "imported checked bodies restore their module's hoisted constants" {
         .{ .target_usize = base.target.TargetUsize.native },
     );
     defer lowered.deinit();
+}
+
+test "reachable top-level data lowers to internal static data exports" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\top_bytes : List(U8)
+        \\top_bytes = [17, 34, 51, 68, 85, 102]
+        \\
+        \\top_record = { data: top_bytes, width: 3.U32, height: 2.U32 }
+        \\other_record = { data: top_bytes, width: 6.U32, height: 1.U32 }
+        \\
+        \\unused_bytes : List(U8)
+        \\unused_bytes = [201, 202, 203, 204, 205, 206]
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % 6
+        \\    reachable = match List.get(top_record.data, index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    other_index = (index + 1) % 6
+        \\    other = match List.get(other_record.data, other_index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = reachable + other
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_view = check.CheckedArtifact.importedView(app_artifact);
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    try std.testing.expect(countStoredHoistedListLength(app_view, 6) >= 1);
+    try std.testing.expectEqual(@as(usize, 1), countStoredTopLevelListU8(app_view, &.{ 17, 34, 51, 68, 85, 102 }));
+    try std.testing.expectEqual(@as(usize, 1), countStoredTopLevelListU8(app_view, &.{ 201, 202, 203, 204, 205, 206 }));
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(lowered.lir_result.static_data_values.items.len >= 1);
+    try std.testing.expect(countStaticDataLiteralAssignments(&lowered.lir_result.store) >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataValuesContainingListU8(root_view, imports, &lowered, &.{ 201, 202, 203, 204, 205, 206 }));
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignmentsToListU8(root_view, imports, &lowered, &.{ 201, 202, 203, 204, 205, 206 }));
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
+    try expectInternalStaticValueExportsAreLinkableOnly(exports);
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68, 85, 102 }) orelse return error.SharedStaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68, 85, 102 }));
+    try std.testing.expect(countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name) >= 2);
+    try std.testing.expect(!exportsContainSequence(exports, &.{ 201, 202, 203, 204, 205, 206 }));
+}
+
+test "effectful parent still emits independent static child data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\tick! : {} => I64
+        \\tick! = |_| 7
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % 4
+        \\    record = { data: [17.U8, 34.U8, 51.U8, 68.U8], tick: tick!({}) }
+        \\    byte_value = match List.get(record.data, index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = byte_value + record.tick
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.StaticChildPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
+}
+
+test "parent static root does not emit removed child root data" {
+    const gpa = std.testing.allocator;
+
+    const exports = try buildStaticDataExportsForAppSource(gpa,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % 4
+        \\    record = { data: [17.U8, 34.U8, 51.U8, 68.U8], width: 4.U64 }
+        \\    byte_value = match List.get(record.data, index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = byte_value + record.width.to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.StaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueExports(exports));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name));
+}
+
+test "nominal record backed by static data emits through checked output" {
+    const gpa = std.testing.allocator;
+
+    const exports = try buildStaticDataExportsForAppSource(gpa,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\Token := { raw : List(U8), width : U64 }.{
+        \\    bytes : Token -> List(U8)
+        \\    bytes = |token| token.raw
+        \\
+        \\    width : Token -> U64
+        \\    width = |token| token.width
+        \\}
+        \\
+        \\token : Token
+        \\token = Token.{ raw: [17.U8, 34.U8, 51.U8, 68.U8], width: 4 }
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % Token.width(token)
+        \\    byte_value = match List.get(Token.bytes(token), index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = byte_value
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.StaticNominalPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueExports(exports));
+    try std.testing.expectEqual(@as(usize, 1), countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name));
+}
+
+test "tuple and tag static data share named and inline list payloads" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\top_bytes : List(U8)
+        \\top_bytes = [17, 34, 51, 68]
+        \\
+        \\top_scalar = 123.I64
+        \\top_empty : List(U8)
+        \\top_empty = []
+        \\
+        \\named_tuple = (top_bytes, 4.U32)
+        \\named_tag = Frame(top_bytes, 4.U32)
+        \\
+        \\unused_tuple = ([201.U8, 202.U8, 203.U8, 204.U8], 4.U32)
+        \\unused_tag = Frame([211.U8, 212.U8, 213.U8, 214.U8], 4.U32)
+        \\
+        \\read_tuple = |pair, index| {
+        \\    (data, _) = pair
+        \\    match List.get(data, index) {
+        \\        Ok(byte) => byte.to_i64()
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\read_tag = |frame, index| {
+        \\    match frame {
+        \\        Frame(data, _) => match List.get(data, index) {
+        \\            Ok(byte) => byte.to_i64()
+        \\            Err(_) => 0
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main! = |args| {
+        \\    index = List.len(args) % 4
+        \\    named_tuple_value = read_tuple(named_tuple, index)
+        \\    inline_tuple_value = read_tuple(([17.U8, 34.U8, 51.U8, 68.U8], 4.U32), index)
+        \\    named_tag_value = read_tag(named_tag, index)
+        \\    inline_tag_value = read_tag(Frame([17.U8, 34.U8, 51.U8, 68.U8], 4.U32), index)
+        \\    scalar_value = top_scalar + List.len(top_empty).to_i64_wrap()
+        \\    _ = named_tuple_value + inline_tuple_value + named_tag_value + inline_tag_value + scalar_value
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(countStaticDataLiteralAssignments(&lowered.lir_result.store) >= 4);
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.SharedStaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expect(countInternalStaticValueRelocationsTo(exports, shared_payload.symbol_name) >= 4);
+    try expectAllInternalStaticValueExportsRelocateTo(exports, shared_payload.symbol_name);
+    try std.testing.expect(!exportsContainSequence(exports, &.{ 201, 202, 203, 204 }));
+    try std.testing.expect(!exportsContainSequence(exports, &.{ 211, 212, 213, 214 }));
+}
+
+test "reachable function-valued constant restores without static data literal" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\add_one = |n| n + 1.I64
+        \\add_two = |n| n + 2.I64
+        \\
+        \\chosen = if 1.I64 == 1.I64 {
+        \\    add_one
+        \\} else {
+        \\    add_two
+        \\}
+        \\
+        \\main! = |args| {
+        \\    value = chosen(List.len(args).to_i64_wrap())
+        \\    _ = value
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), lowered.lir_result.static_data_values.items.len);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
+}
+
+test "reachable scalar aggregate constant restores without static data literal" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\point = { x: 11.I64, y: 22.I64 }
+        \\
+        \\main! = |args| {
+        \\    runtime_point = point
+        \\    total = runtime_point.x + runtime_point.y + List.len(args).to_i64_wrap()
+        \\    _ = total
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), lowered.lir_result.static_data_values.items.len);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignments(&lowered.lir_result.store));
+}
+
+test "large string constant uses static data while small string stays direct" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\small_text = "small direct"
+        \\large_text = "abcdefghijklmnopqrstuvwxyzabcdef"
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!(small_text)
+        \\    Echo.line!(large_text)
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(countStaticDataValuesContainingStr(root_view, imports, &lowered, "abcdefghijklmnopqrstuvwxyzabcdef") >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataValuesContainingStr(root_view, imports, &lowered, "small direct"));
+    try std.testing.expect(countStaticDataLiteralAssignmentsToStr(root_view, imports, &lowered, "abcdefghijklmnopqrstuvwxyzabcdef") >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countStaticDataLiteralAssignmentsToStr(root_view, imports, &lowered, "small direct"));
+}
+
+test "provided boxed erased callable captures static list data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_box_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!, boxed] { pf: platform "./.roc_box_platform/main.roc" }
+        \\
+        \\main! = || {}
+        \\
+        \\boxed : Box((I64 -> I64))
+        \\boxed = {
+        \\    base = [1.I64, 2.I64]
+        \\    Box.box(|value|
+        \\        match List.get(base, 0) {
+        \\            Ok(first) => value + first
+        \\            Err(_) => value
+        \\        }
+        \\    )
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_box_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : () => {}, boxed : Box((I64 -> I64)) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host!, "roc_boxed": boxed_for_host }
+        \\
+        \\main_for_host! : () => {}
+        \\main_for_host! = main!
+        \\
+        \\boxed_for_host : Box((I64 -> I64))
+        \\boxed_for_host = boxed
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const captured_list_payload = [_]u8{
+        1, 0, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0, 0, 0,
+    };
+    const shared_payload = findExportContainingSequence(exports, &captured_list_payload) orelse return error.CapturedListPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &captured_list_payload));
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
+    _ = findExportWithFunctionPointerAndRelocationTo(exports, shared_payload.symbol_name) orelse return error.ErasedCallableAllocationNotFound;
+    try std.testing.expect(countFunctionPointerRelocations(exports) >= 1);
+}
+
+test "provided finite callable static data covers capture shapes" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_callable_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!, zero, scalar, callable, nested, multi] { pf: platform "./.roc_callable_platform/main.roc" }
+        \\
+        \\main! = || {}
+        \\
+        \\zero : { run : (I64 -> I64) }
+        \\zero = { run: |value| value }
+        \\
+        \\scalar : { run : (I64 -> I64) }
+        \\scalar = {
+        \\    bonus = 72623859790382856.I64
+        \\    { run: |_value| bonus }
+        \\}
+        \\
+        \\callable : { run : (I64 -> List(I64)) }
+        \\callable = {
+        \\    items = [1.I64, 2.I64]
+        \\    { run: |_value| items }
+        \\}
+        \\
+        \\nested : { run : (I64 -> I64) }
+        \\nested = {
+        \\    inner_bonus = 1230066625199609624.I64
+        \\    inner = |_value| inner_bonus
+        \\    { run: |value| inner(value) }
+        \\}
+        \\
+        \\multi : { run : (I64 -> I64) }
+        \\multi = {
+        \\    selected = 2387509390608836392.I64
+        \\    inactive = 3544952156018063160.I64
+        \\    { run: if 1.I64 == 1.I64 {
+        \\        |_value| selected
+        \\    } else {
+        \\        |_value| inactive
+        \\    } }
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_callable_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : () => {}, zero : { run : (I64 -> I64) }, scalar : { run : (I64 -> I64) }, callable : { run : (I64 -> List(I64)) }, nested : { run : (I64 -> I64) }, multi : { run : (I64 -> I64) } }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host!, "roc_zero": zero_for_host, "roc_scalar": scalar_for_host, "roc_callable": callable_for_host, "roc_nested": nested_for_host, "roc_multi": multi_for_host }
+        \\
+        \\main_for_host! : () => {}
+        \\main_for_host! = main!
+        \\
+        \\zero_for_host : { run : (I64 -> I64) }
+        \\zero_for_host = zero
+        \\
+        \\scalar_for_host : { run : (I64 -> I64) }
+        \\scalar_for_host = scalar
+        \\
+        \\callable_for_host : { run : (I64 -> List(I64)) }
+        \\callable_for_host = callable
+        \\
+        \\nested_for_host : { run : (I64 -> I64) }
+        \\nested_for_host = nested
+        \\
+        \\multi_for_host : { run : (I64 -> I64) }
+        \\multi_for_host = multi
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const captured_list_payload = [_]u8{
+        1, 0, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0, 0, 0,
+    };
+    const scalar_capture_payload = [_]u8{ 8, 7, 6, 5, 4, 3, 2, 1 };
+    const nested_capture_payload = [_]u8{ 24, 23, 22, 21, 20, 19, 18, 17 };
+    const selected_multi_payload = [_]u8{ 40, 39, 38, 37, 36, 35, 34, 33 };
+    const inactive_multi_payload = [_]u8{ 56, 55, 54, 53, 52, 51, 50, 49 };
+    const shared_payload = findExportContainingSequence(exports, &captured_list_payload) orelse return error.FiniteCallableCapturedListPayloadNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_zero") orelse return error.ZeroCaptureFiniteCallableExportNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_scalar") orelse return error.ScalarCaptureFiniteCallableExportNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_nested") orelse return error.NestedFiniteCallableExportNotFound;
+    _ = findStaticDataExportBySymbol(exports, "roc_multi") orelse return error.MultiVariantFiniteCallableExportNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &captured_list_payload));
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &scalar_capture_payload));
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &nested_capture_payload));
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &selected_multi_payload));
+    try std.testing.expectEqual(@as(usize, 0), countExportsContainingSequence(exports, &inactive_multi_payload));
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 1);
+}
+
+test "reachable local List.iter hoist stores iterator const data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\main! = |args| {
+        \\    base = [{ x: 1.I64, y: 2.I64 }, { x: 3.I64, y: 4.I64 }].iter()
+        \\    total = Iter.fold(base, 0.I64, |acc, point| acc + point.x + point.y + List.len(args).to_i64_wrap())
+        \\    Err(Exit(total.to_i8_wrap()))
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_view = check.CheckedArtifact.importedView(app_artifact);
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const root_const_view = check.CheckedArtifact.importedView(root_view.module);
+    const stored_list_count =
+        countStoredHoistedListLength(app_view, 2) +
+        countStoredHoistedListLength(root_const_view, 2) +
+        countStoredHoistedListLengthInModules(root_view.relation_modules, 2) +
+        countStoredHoistedListLengthInModules(imports, 2);
+    const stored_fn_count =
+        countStoredHoistedFnValue(app_view) +
+        countStoredHoistedFnValue(root_const_view) +
+        countStoredHoistedFnValueInModules(root_view.relation_modules) +
+        countStoredHoistedFnValueInModules(imports);
+    const stored_fn_context_count =
+        countStoredHoistedFnContext(app_view) +
+        countStoredHoistedFnContext(root_const_view) +
+        countStoredHoistedFnContextInModules(root_view.relation_modules) +
+        countStoredHoistedFnContextInModules(imports);
+    const stored_iter_root_count =
+        countStoredHoistedListLengthAndFnValue(app_view, 2) +
+        countStoredHoistedListLengthAndFnValue(root_const_view, 2) +
+        countStoredHoistedListLengthAndFnValueInModules(root_view.relation_modules, 2) +
+        countStoredHoistedListLengthAndFnValueInModules(imports, 2);
+    try std.testing.expect(stored_list_count >= 1);
+    try std.testing.expect(stored_fn_count >= 1);
+    try std.testing.expect(stored_fn_context_count >= 1);
+    try std.testing.expect(stored_iter_root_count >= 1);
+    try std.testing.expect(countSelectedHoistedConstResolvedRefs(app_view) >= 1);
+    try std.testing.expect(countSelectedHoistedConstResolvedRefsWithListAndFn(app_view, 2) >= 1);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(countStaticDataLiteralAssignmentsToListLength(root_view, imports, &lowered, 2) >= 1);
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const point_payload_bytes = [_]u8{
+        1, 0, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0, 0, 0,
+        3, 0, 0, 0, 0, 0, 0, 0,
+        4, 0, 0, 0, 0, 0, 0, 0,
+    };
+    _ = findExportContainingSequence(exports, &point_payload_bytes) orelse return error.PointListStaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &point_payload_bytes));
+}
+
+test "reachable local List.iter append hoist stores iterator const data" {
+    const gpa = std.testing.allocator;
+
+    const exports = try buildStaticDataExportsForAppSource(gpa,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\main! = |args| {
+        \\    base_points = [
+        \\        { x: 11.I64, y: 2.I64 },
+        \\        { x: 9.I64, y: 13.I64 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        base_points
+        \\            .append({ x: 2.I64, y: 1.I64 })
+        \\            .append({ x: 7.I64, y: 1.I64 })
+        \\
+        \\    total = Iter.fold(collision_points, 0.I64, |acc, point| acc + point.x + point.y + List.len(args).to_i64_wrap())
+        \\    Err(Exit(total.to_i8_wrap()))
+        \\}
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const base_point_payload_bytes = [_]u8{
+        11, 0, 0, 0, 0, 0, 0, 0,
+        2,  0, 0, 0, 0, 0, 0, 0,
+        9,  0, 0, 0, 0, 0, 0, 0,
+        13, 0, 0, 0, 0, 0, 0, 0,
+    };
+    _ = findExportContainingSequence(exports, &base_point_payload_bytes) orelse return error.IterAppendBasePointListStaticPayloadNotFound;
+}
+
+test "inline sub_or_crash cells inside runtime record become shared static data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\Sprite : {
+        \\    data : List(U8),
+        \\    region : { src_x : U64, src_y : U64, width : U64, height : U64 },
+        \\}
+        \\
+        \\Cell : { frames : U64, sprite : Sprite }
+        \\
+        \\sheet : Sprite
+        \\sheet = {
+        \\    data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\    region: { src_x: 0, src_y: 0, width: 2, height: 2 },
+        \\}
+        \\
+        \\other_sheet : Sprite
+        \\other_sheet = {
+        \\    data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\    region: { src_x: 0, src_y: 0, width: 2, height: 2 },
+        \\}
+        \\
+        \\sub : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Try(Sprite, {})
+        \\sub = |sprite, region| Ok({ ..sprite, region })
+        \\
+        \\sub_or_crash : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Sprite
+        \\sub_or_crash = |sprite, region|
+        \\    match sub(sprite, region) {
+        \\        Ok(sub_sprite) => sub_sprite
+        \\        Err(_) => {
+        \\            crash "bad sprite"
+        \\        }
+        \\    }
+        \\
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    cells: [
+        \\        { frames: 5.U64, sprite: sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 6.U64, sprite: sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 7.U64, sprite: sub_or_crash(other_sheet, { src_x: 0, src_y: 1, width: 1, height: 1 }) },
+        \\    ],
+        \\}
+        \\
+        \\main! = |args| {
+        \\    anim = make_anim(List.len(args))
+        \\    first_x = match List.get(anim.cells, 0) {
+        \\        Ok(cell) => cell.sprite.region.src_x.to_i64_wrap()
+        \\        Err(_) => 0
+        \\    }
+        \\    _ = first_x + anim.last_updated.to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildProvidedDataExports(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer static_data_exports.deinitProvidedDataExports(gpa, exports);
+
+    const shared_payload = findExportContainingSequence(exports, &.{ 17, 34, 51, 68 }) orelse return error.SharedStaticPayloadNotFound;
+    try std.testing.expectEqual(@as(usize, 1), countExportsContainingSequence(exports, &.{ 17, 34, 51, 68 }));
+    try std.testing.expect(countInternalStaticValueExports(exports) >= 1);
+    try std.testing.expect(countStaticDataRelocationsTo(exports, shared_payload.symbol_name) >= 3);
+}
+
+test "named and inline animation cells emit equivalent static data" {
+    const gpa = std.testing.allocator;
+
+    const common_prefix =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\Sprite : {
+        \\    data : List(U8),
+        \\    region : { src_x : U64, src_y : U64, width : U64, height : U64 },
+        \\}
+        \\
+        \\Cell : { frames : U64, sprite : Sprite }
+        \\
+        \\sheet : Sprite
+        \\sheet = {
+        \\    data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\    region: { src_x: 0, src_y: 0, width: 2, height: 2 },
+        \\}
+        \\
+        \\sub : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Try(Sprite, {})
+        \\sub = |sprite, region| Ok({ ..sprite, region })
+        \\
+        \\sub_or_crash : Sprite, { src_x : U64, src_y : U64, width : U64, height : U64 } -> Sprite
+        \\sub_or_crash = |sprite, region|
+        \\    match sub(sprite, region) {
+        \\        Ok(sub_sprite) => sub_sprite
+        \\        Err(_) => {
+        \\            crash "bad sprite"
+        \\        }
+        \\    }
+        \\
+    ;
+
+    const named_suffix =
+        \\named_cells : List(Cell)
+        \\named_cells = [
+        \\    { frames: 5.U64, sprite: sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\    { frames: 6.U64, sprite: sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\]
+        \\
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    cells: named_cells,
+        \\}
+        \\
+        \\main! = |args| {
+        \\    anim = make_anim(List.len(args))
+        \\    _ = match List.get(anim.cells, 0) {
+        \\        Ok(cell) => cell.sprite.region.src_x.to_i64_wrap()
+        \\        Err(_) => 0
+        \\    }
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    ;
+    const inline_suffix =
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    cells: [
+        \\        { frames: 5.U64, sprite: sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 6.U64, sprite: sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\    ],
+        \\}
+        \\
+        \\main! = |args| {
+        \\    anim = make_anim(List.len(args))
+        \\    _ = match List.get(anim.cells, 0) {
+        \\        Ok(cell) => cell.sprite.region.src_x.to_i64_wrap()
+        \\        Err(_) => 0
+        \\    }
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        \\
+    ;
+
+    const named_source = try std.mem.concat(gpa, u8, &.{ common_prefix, named_suffix });
+    defer gpa.free(named_source);
+    const inline_source = try std.mem.concat(gpa, u8, &.{ common_prefix, inline_suffix });
+    defer gpa.free(inline_source);
+
+    const named_exports = try buildStaticDataExportsForAppSource(gpa, named_source);
+    defer static_data_exports.deinitProvidedDataExports(gpa, named_exports);
+    const inline_exports = try buildStaticDataExportsForAppSource(gpa, inline_source);
+    defer static_data_exports.deinitProvidedDataExports(gpa, inline_exports);
+
+    try expectStaticDataExportsEquivalent(gpa, named_exports, inline_exports);
+}
+
+test "inline imported opaque cells through boxed model become static data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeBoxedSpritePlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Sprite
+        \\
+        \\Model : [Running({ frame_count : U64, anim : Animation })]
+        \\
+        \\main = { init!, update! }
+        \\
+        \\init! : () => Model
+        \\init! = || Running({ frame_count: 0, anim: make_anim(0) })
+        \\
+        \\update! : Model => Model
+        \\update! = |model|
+        \\    match model {
+        \\        Running(state) =>
+        \\            Running({
+        \\                frame_count: state.frame_count + 1,
+        \\                anim: make_anim(state.frame_count),
+        \\            })
+        \\    }
+        \\
+        \\AnimationState : [Completed, RunOnce, Loop]
+        \\
+        \\Animation : {
+        \\    last_updated : U64,
+        \\    index : U64,
+        \\    cells : List(Cell),
+        \\    state : AnimationState,
+        \\}
+        \\
+        \\Cell : { frames : U64, sprite : Sprite }
+        \\
+        \\sheet : Sprite
+        \\sheet =
+        \\    Sprite.new({
+        \\        data: [17.U8, 34.U8, 51.U8, 68.U8],
+        \\        bpp: BPP2,
+        \\        width: 2,
+        \\        height: 2,
+        \\    })
+        \\
+        \\make_anim : U64 -> Animation
+        \\make_anim = |frame_count| {
+        \\    last_updated: frame_count,
+        \\    index: 0,
+        \\    state: Loop,
+        \\    cells: [
+        \\        { frames: 5.U64, sprite: Sprite.sub_or_crash(sheet, { src_x: 0, src_y: 0, width: 1, height: 1 }) },
+        \\        { frames: 6.U64, sprite: Sprite.sub_or_crash(sheet, { src_x: 1, src_y: 0, width: 1, height: 1 }) },
+        \\    ],
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+    const root_list_count = countStoredHoistedListLength(check.CheckedArtifact.importedView(root_view.module), 2);
+    const relation_list_count = countStoredHoistedListLengthInModules(root_view.relation_modules, 2);
+    const import_list_count = countStoredHoistedListLengthInModules(imports, 2);
+    try std.testing.expect(root_list_count >= 1 or relation_list_count >= 1 or import_list_count >= 1);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expect(countStaticDataLiteralAssignmentsToListLength(root_view, imports, &lowered, 2) >= 1);
 }
 
 test "hoisted constant crash reports original source region" {
@@ -559,6 +1967,865 @@ test "inlined hoisted constant crash reports hoisted source region" {
         try std.testing.expectEqualStrings("main", entry.module_name);
     }
     try std.testing.expect(found);
+}
+
+test "unreachable top-level dbg reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\unused = {
+        \\    dbg "unreachable top-level"
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        found = true;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "\"unreachable top-level\"");
+    }
+    try std.testing.expect(found);
+}
+
+test "unreachable imported top-level dbg reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\import Helper
+        \\
+        \\main! = |_args| {
+        \\    _ = Helper.value
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "Helper.roc",
+        .data =
+        \\module [value]
+        \\
+        \\unused = {
+        \\    dbg "unreachable imported top-level"
+        \\    41.I64
+        \\}
+        \\
+        \\value = 1.I64
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        found = true;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("Helper", entry.module_name);
+        try expectReportContains(gpa, entry.report, "\"unreachable imported top-level\"");
+    }
+    try std.testing.expect(found);
+}
+
+test "top-level expect failure reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\expect 1.I64 == 2.I64
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
+test "unreachable top-level crash reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\unused = {
+        \\    crash "unreachable top-level crash"
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME CRASH")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "unreachable top-level crash");
+    }
+    try std.testing.expect(found);
+}
+
+test "unreachable top-level expect failure reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\unused = {
+        \\    expect 1.I64 == 2.I64
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
+test "reachable selected-root dbg reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = {
+        \\        dbg "reachable selected root"
+        \\        41.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        found = true;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "\"reachable selected root\"");
+    }
+    try std.testing.expect(found);
+}
+
+test "reachable selected-root expect failure reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = {
+        \\        expect 1.I64 == 2.I64
+        \\        41.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
+test "selected compile-time branch crash reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = if True {
+        \\        crash "selected compile-time branch crash"
+        \\    } else {
+        \\        41.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME CRASH")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "selected compile-time branch crash");
+    }
+    try std.testing.expect(found);
+}
+
+test "selected compile-time branch dbg reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = if True {
+        \\        dbg "selected compile-time branch"
+        \\        41.I64
+        \\    } else {
+        \\        42.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        found = true;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "\"selected compile-time branch\"");
+    }
+    try std.testing.expect(found);
+}
+
+test "selected compile-time branch expect failure reports during compile-time evaluation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    value = if True {
+        \\        expect 1.I64 == 2.I64
+        \\        41.I64
+        \\    } else {
+        \\        42.I64
+        \\    }
+        \\    _ = value + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        found = true;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+    }
+    try std.testing.expect(found);
+}
+
+test "top-level value shared with selected root reports compile-time dbg once" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\shared = {
+        \\    dbg "shared top-level root"
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |args| {
+        \\    _ = shared + List.len(args).to_i64_wrap()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var matching_dbg_reports: usize = 0;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        try std.testing.expectEqual(@import("reporting").Severity.info, entry.report.severity);
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        if (try reportContains(gpa, entry.report, "\"shared top-level root\"")) {
+            matching_dbg_reports += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), matching_dbg_reports);
+}
+
+test "effectful top-level call is rejected before compile-time dbg can run" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\tick! : {} => Str
+        \\tick! = |_| "effectful debug should not run"
+        \\
+        \\bad = {
+        \\    dbg tick!({})
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found_effectful = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "EFFECTFUL TOP-LEVEL VALUE")) {
+            found_effectful = true;
+            try std.testing.expectEqualStrings("main", entry.module_name);
+        }
+        if (std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) {
+            try expectReportDoesNotContain(gpa, entry.report, "\"effectful debug should not run\"");
+        }
+    }
+    try std.testing.expect(found_effectful);
+}
+
+test "effectful selected-root candidate is not evaluated by compile-time finalization" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\tick! : {} => Str
+        \\tick! = |_| "effectful debug should not run"
+        \\
+        \\sentinel = {
+        \\    dbg "compile-time finalizer ran"
+        \\    41.I64
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    _ = dbg tick!({})
+        \\    _ = sentinel
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var saw_sentinel = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME DBG")) continue;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportDoesNotContain(gpa, entry.report, "\"effectful debug should not run\"");
+        if (try reportContains(gpa, entry.report, "\"compile-time finalizer ran\"")) {
+            saw_sentinel = true;
+        }
+    }
+    try std.testing.expect(saw_sentinel);
 }
 
 test "hoisted pattern extraction failure reports original destructure region" {
@@ -1384,11 +3651,182 @@ fn writeEchoPlatform(dir: anytype) anyerror!void {
     });
 }
 
+fn writeBoxedSpritePlatform(dir: anytype) anyerror!void {
+    try dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {
+        \\        [Model : model] for main : { init! : () => model, update! : model => model }
+        \\    }
+        \\    exposes [Sprite]
+        \\    packages {}
+        \\    provides { "init_for_host": init_for_host!, "update_for_host": update_for_host! }
+        \\    hosted {}
+        \\
+        \\import Sprite
+        \\
+        \\init_for_host! : () => Box(Model)
+        \\init_for_host! = || {
+        \\    init_fn! = main.init!
+        \\    Box.box(init_fn!())
+        \\}
+        \\
+        \\update_for_host! : Box(Model) => Box(Model)
+        \\update_for_host! = |boxed| {
+        \\    update_fn! = main.update!
+        \\    Box.box(update_fn!(Box.unbox(boxed)))
+        \\}
+        ,
+    });
+    try dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Sprite.roc",
+        .data =
+        \\Sprite := {
+        \\    data : List(U8),
+        \\    bpp : [BPP1, BPP2],
+        \\    stride : U32,
+        \\    region : { src_x : U32, src_y : U32, width : U32, height : U32 },
+        \\}.{
+        \\    SubRegion : { src_x : U32, src_y : U32, width : U32, height : U32 }
+        \\
+        \\    new : { data : List(U8), bpp : [BPP1, BPP2], width : U32, height : U32 } -> Sprite
+        \\    new = |{ data, bpp, width, height }| {
+        \\        data,
+        \\        bpp,
+        \\        stride: width,
+        \\        region: { src_x: 0, src_y: 0, width, height },
+        \\    }
+        \\
+        \\    sub : Sprite, SubRegion -> Try(Sprite, [OutOfBounds])
+        \\    sub = |sprite, sub_region| {
+        \\        current_region = sprite.region
+        \\        out_of_bound_x = sub_region.src_x + sub_region.width > current_region.width
+        \\        out_of_bound_y = sub_region.src_y + sub_region.height > current_region.height
+        \\
+        \\        if out_of_bound_x or out_of_bound_y {
+        \\            Err(OutOfBounds)
+        \\        } else {
+        \\            Ok({
+        \\                ..sprite,
+        \\                region: {
+        \\                    src_x: current_region.src_x + sub_region.src_x,
+        \\                    src_y: current_region.src_y + sub_region.src_y,
+        \\                    width: sub_region.width,
+        \\                    height: sub_region.height,
+        \\                },
+        \\            })
+        \\        }
+        \\    }
+        \\
+        \\    sub_or_crash : Sprite, SubRegion -> Sprite
+        \\    sub_or_crash = |sprite, sub_region|
+        \\        match Sprite.sub(sprite, sub_region) {
+        \\            Ok(sub_sprite) => sub_sprite
+        \\            Err(OutOfBounds) => {
+        \\                crash "bad sprite"
+        \\            }
+        \\        }
+        \\}
+        ,
+    });
+}
+
+fn buildStaticDataExportsForAppSource(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+) anyerror![]@import("backend").StaticDataExport {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = source,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(allocator, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root_view = check.CheckedArtifact.loweringViewWithRelations(root, relations);
+
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, root.root_requests.runtime_requests);
+    defer allocator.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        .{ .requests = lir_roots, .include_static_data_exports = true },
+        .{ .target_usize = base.target.TargetUsize.native },
+    );
+    defer lowered.deinit();
+
+    return try static_data_exports.buildProvidedDataExports(
+        allocator,
+        .{
+            .root = root_view,
+            .imports = imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+    );
+}
+
 fn expectReportDoesNotContain(
     allocator: std.mem.Allocator,
     report: *const @import("reporting").Report,
     needle: []const u8,
 ) anyerror!void {
+    try std.testing.expect(!try reportContains(allocator, report, needle));
+}
+
+fn expectReportContains(
+    allocator: std.mem.Allocator,
+    report: *const @import("reporting").Report,
+    needle: []const u8,
+) anyerror!void {
+    try std.testing.expect(try reportContains(allocator, report, needle));
+}
+
+fn reportContains(
+    allocator: std.mem.Allocator,
+    report: *const @import("reporting").Report,
+    needle: []const u8,
+) anyerror!bool {
     var rendered = std.array_list.Managed(u8).init(allocator);
     defer rendered.deinit();
 
@@ -1404,7 +3842,568 @@ fn expectReportDoesNotContain(
         => return error.OutOfMemory,
     };
 
-    try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) == null);
+    return std.mem.find(u8, writer_alloc.written(), needle) != null;
+}
+
+fn countStaticDataLiteralAssignments(store: *const lir.LirStore) usize {
+    var count: usize = 0;
+    for (store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => count += 1,
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countStaticDataLiteralAssignmentsToListLength(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    len: usize,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => |id| {
+                    const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
+                    if (constNodeContainsListLength(node.module, node.id, len)) count += 1;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countStaticDataValuesContainingListU8(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    bytes: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.static_data_values.items) |static_data| {
+        const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
+        if (constNodeContainsListU8(node.module, node.id, bytes)) count += 1;
+    }
+    return count;
+}
+
+fn countStaticDataValuesContainingStr(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    text: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.static_data_values.items) |static_data| {
+        const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
+        if (constNodeContainsStr(node.module, node.id, text)) count += 1;
+    }
+    return count;
+}
+
+fn countStaticDataLiteralAssignmentsToListU8(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    bytes: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => |id| {
+                    const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
+                    if (constNodeContainsListU8(node.module, node.id, bytes)) count += 1;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countStaticDataLiteralAssignmentsToStr(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    text: []const u8,
+) usize {
+    var count: usize = 0;
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => |id| {
+                    const static_data = lowered.lir_result.static_data_values.items[@intFromEnum(id)];
+                    const node = constNodeForStaticData(root, imports, static_data.const_ref, static_data.node);
+                    if (constNodeContainsStr(node.module, node.id, text)) count += 1;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+const StaticConstModule = struct {
+    templates: *const check.CheckedArtifact.ConstTemplateTable,
+    store: *const check.CheckedArtifact.ConstStore,
+};
+
+const StaticConstNode = struct {
+    module: StaticConstModule,
+    id: check.CheckedArtifact.ConstNodeId,
+};
+
+fn constNodeForStaticData(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    const_ref: check.CheckedArtifact.ConstId,
+    node: ?check.CheckedArtifact.ConstNodeId,
+) StaticConstNode {
+    const module = constModuleForStaticData(root, imports, const_ref);
+    if (node) |id| return .{ .module = module, .id = id };
+    const template = module.templates.get(const_ref);
+    return switch (template.state) {
+        .stored_const => |stored| .{ .module = module, .id = stored.node },
+        .reserved,
+        .eval_template,
+        => @panic("static data literal referenced an unstored const"),
+    };
+}
+
+fn constModuleForStaticData(
+    root: check.CheckedArtifact.LoweringModuleView,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    const_ref: check.CheckedArtifact.ConstId,
+) StaticConstModule {
+    if (moduleKeyEqual(root.module.key, const_ref.artifact)) return .{
+        .templates = &root.module.const_templates,
+        .store = &root.module.const_store,
+    };
+    for (root.relation_modules) |relation| {
+        if (moduleKeyEqual(relation.key, const_ref.artifact)) return .{
+            .templates = relation.const_templates,
+            .store = relation.const_store,
+        };
+    }
+    for (imports) |imported| {
+        if (moduleKeyEqual(imported.key, const_ref.artifact)) return .{
+            .templates = imported.const_templates,
+            .store = imported.const_store,
+        };
+    }
+    @panic("static data literal referenced a const outside the lowering module set");
+}
+
+fn constNodeContainsListLength(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, len: usize) bool {
+    return switch (module.store.get(node)) {
+        .list => |items| {
+            if (items.len == len) return true;
+            for (items) |item| {
+                if (constNodeContainsListLength(module, item, len)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsListLength(module, payload, len),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsListLength(module, item, len)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsListLength(module, item, len)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsListLength(module, payload, len)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsListLength(module, nominal.backing, len),
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsListLength(module, capture.value, len)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn constNodeContainsListU8(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, bytes: []const u8) bool {
+    return switch (module.store.get(node)) {
+        .list => |items| {
+            if (constNodeIsListU8Items(module, items, bytes)) return true;
+            for (items) |item| {
+                if (constNodeContainsListU8(module, item, bytes)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsListU8(module, payload, bytes),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsListU8(module, item, bytes)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsListU8(module, item, bytes)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsListU8(module, payload, bytes)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsListU8(module, nominal.backing, bytes),
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsListU8(module, capture.value, bytes)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn constNodeContainsStr(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, text: []const u8) bool {
+    return switch (module.store.get(node)) {
+        .str => |str| std.mem.eql(u8, module.store.strBytes(str), text),
+        .list => |items| {
+            for (items) |item| {
+                if (constNodeContainsStr(module, item, text)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsStr(module, payload, text),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsStr(module, item, text)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsStr(module, item, text)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsStr(module, payload, text)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsStr(module, nominal.backing, text),
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsStr(module, capture.value, text)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn constNodeIsListU8(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId, bytes: []const u8) bool {
+    return switch (module.store.get(node)) {
+        .list => |items| constNodeIsListU8Items(module, items, bytes),
+        .nominal => |nominal| constNodeIsListU8(module, nominal.backing, bytes),
+        else => false,
+    };
+}
+
+fn constNodeIsListU8Items(module: StaticConstModule, items: []const check.CheckedArtifact.ConstNodeId, bytes: []const u8) bool {
+    if (items.len != bytes.len) return false;
+    for (items, bytes) |item, expected| {
+        const actual = switch (module.store.get(item)) {
+            .scalar => |scalar| switch (scalar) {
+                .u8 => |byte| byte,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (actual != expected) return false;
+    }
+    return true;
+}
+
+fn constNodeContainsFnValue(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId) bool {
+    return switch (module.store.get(node)) {
+        .fn_value => true,
+        .list => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnValue(module, item)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsFnValue(module, payload),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnValue(module, item)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnValue(module, item)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsFnValue(module, payload)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsFnValue(module, nominal.backing),
+        else => false,
+    };
+}
+
+fn constNodeContainsFnContext(module: StaticConstModule, node: check.CheckedArtifact.ConstNodeId) bool {
+    return switch (module.store.get(node)) {
+        .fn_value => |fn_id| {
+            const fn_value = module.store.getFn(fn_id);
+            if (fn_value.local_proc_contexts.len > 0) return true;
+            for (fn_value.captures) |capture| {
+                if (constNodeContainsFnContext(module, capture.value)) return true;
+            }
+            return false;
+        },
+        .list => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnContext(module, item)) return true;
+            }
+            return false;
+        },
+        .box => |payload| constNodeContainsFnContext(module, payload),
+        .tuple => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnContext(module, item)) return true;
+            }
+            return false;
+        },
+        .record => |items| {
+            for (items) |item| {
+                if (constNodeContainsFnContext(module, item)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsFnContext(module, payload)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| constNodeContainsFnContext(module, nominal.backing),
+        else => false,
+    };
+}
+
+fn moduleKeyEqual(a: check.CheckedArtifact.CheckedModuleArtifactKey, b: check.CheckedArtifact.CheckedModuleArtifactKey) bool {
+    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+}
+
+fn countInternalStaticValueExports(exports: []const @import("backend").StaticDataExport) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        if (std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn expectInternalStaticValueExportsAreLinkableOnly(exports: []const @import("backend").StaticDataExport) anyerror!void {
+    var found = false;
+    for (exports) |static_export| {
+        if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) continue;
+
+        found = true;
+        try std.testing.expect(static_export.is_global);
+        try std.testing.expect(!static_export.is_exported);
+    }
+    try std.testing.expect(found);
+}
+
+fn exportsContainSequence(exports: []const @import("backend").StaticDataExport, sequence: []const u8) bool {
+    return countExportsContainingSequence(exports, sequence) != 0;
+}
+
+fn findExportContainingSequence(exports: []const @import("backend").StaticDataExport, sequence: []const u8) ?@import("backend").StaticDataExport {
+    for (exports) |static_export| {
+        if (std.mem.find(u8, static_export.bytes, sequence) != null) return static_export;
+    }
+    return null;
+}
+
+fn countExportsContainingSequence(exports: []const @import("backend").StaticDataExport, sequence: []const u8) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        if (std.mem.find(u8, static_export.bytes, sequence) != null) count += 1;
+    }
+    return count;
+}
+
+fn expectStaticDataExportsEquivalent(
+    allocator: std.mem.Allocator,
+    left: []const @import("backend").StaticDataExport,
+    right: []const @import("backend").StaticDataExport,
+) anyerror!void {
+    try std.testing.expectEqual(left.len, right.len);
+
+    const matched = try allocator.alloc(bool, right.len);
+    defer allocator.free(matched);
+    @memset(matched, false);
+
+    for (left) |left_export| {
+        var found = false;
+        for (right, matched) |right_export, *is_matched| {
+            if (is_matched.*) continue;
+            if (!staticDataExportEquivalentIgnoringSymbolNames(left, right, left_export, right_export)) continue;
+            is_matched.* = true;
+            found = true;
+            break;
+        }
+        try std.testing.expect(found);
+    }
+}
+
+fn staticDataExportEquivalentIgnoringSymbolNames(
+    left_exports: []const @import("backend").StaticDataExport,
+    right_exports: []const @import("backend").StaticDataExport,
+    left: @import("backend").StaticDataExport,
+    right: @import("backend").StaticDataExport,
+) bool {
+    if (left.symbol_offset != right.symbol_offset) return false;
+    if (left.alignment != right.alignment) return false;
+    if (left.is_global != right.is_global) return false;
+    if (left.is_exported != right.is_exported) return false;
+    if (!std.mem.eql(u8, left.bytes, right.bytes)) return false;
+    if (left.relocations.len != right.relocations.len) return false;
+
+    for (left.relocations, right.relocations) |left_relocation, right_relocation| {
+        if (left_relocation.offset != right_relocation.offset) return false;
+        if (left_relocation.addend != right_relocation.addend) return false;
+        if (left_relocation.kind != right_relocation.kind) return false;
+
+        const left_target = findStaticDataExportBySymbol(left_exports, left_relocation.target_symbol_name);
+        const right_target = findStaticDataExportBySymbol(right_exports, right_relocation.target_symbol_name);
+        if (left_target == null or right_target == null) {
+            if (!std.mem.eql(u8, left_relocation.target_symbol_name, right_relocation.target_symbol_name)) return false;
+            continue;
+        }
+        if (!staticDataRelocationTargetsEquivalent(left_target.?, right_target.?)) return false;
+    }
+
+    return true;
+}
+
+fn staticDataRelocationTargetsEquivalent(
+    left: @import("backend").StaticDataExport,
+    right: @import("backend").StaticDataExport,
+) bool {
+    return left.symbol_offset == right.symbol_offset and
+        left.alignment == right.alignment and
+        left.is_global == right.is_global and
+        left.is_exported == right.is_exported and
+        std.mem.eql(u8, left.bytes, right.bytes);
+}
+
+fn findStaticDataExportBySymbol(
+    exports: []const @import("backend").StaticDataExport,
+    symbol_name: []const u8,
+) ?@import("backend").StaticDataExport {
+    for (exports) |static_export| {
+        if (std.mem.eql(u8, static_export.symbol_name, symbol_name)) return static_export;
+    }
+    return null;
+}
+
+fn findExportWithFunctionPointerAndRelocationTo(
+    exports: []const @import("backend").StaticDataExport,
+    symbol_name: []const u8,
+) ?@import("backend").StaticDataExport {
+    for (exports) |static_export| {
+        var has_function_pointer = false;
+        var has_symbol_relocation = false;
+        for (static_export.relocations) |relocation| {
+            if (relocation.kind == .function_pointer) has_function_pointer = true;
+            if (std.mem.eql(u8, relocation.target_symbol_name, symbol_name)) has_symbol_relocation = true;
+        }
+        if (has_function_pointer and has_symbol_relocation) return static_export;
+    }
+    return null;
+}
+
+fn countFunctionPointerRelocations(exports: []const @import("backend").StaticDataExport) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        for (static_export.relocations) |relocation| {
+            if (relocation.kind == .function_pointer) count += 1;
+        }
+    }
+    return count;
+}
+
+fn countInternalStaticValueRelocationsTo(exports: []const @import("backend").StaticDataExport, symbol_name: []const u8) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) continue;
+        for (static_export.relocations) |relocation| {
+            if (std.mem.eql(u8, relocation.target_symbol_name, symbol_name)) count += 1;
+        }
+    }
+    return count;
+}
+
+fn countStaticDataRelocationsTo(exports: []const @import("backend").StaticDataExport, symbol_name: []const u8) usize {
+    var count: usize = 0;
+    for (exports) |static_export| {
+        for (static_export.relocations) |relocation| {
+            if (std.mem.eql(u8, relocation.target_symbol_name, symbol_name)) count += 1;
+        }
+    }
+    return count;
+}
+
+fn expectAllInternalStaticValueExportsRelocateTo(exports: []const @import("backend").StaticDataExport, symbol_name: []const u8) anyerror!void {
+    var found = false;
+    for (exports) |static_export| {
+        if (!std.mem.startsWith(u8, static_export.symbol_name, "roc__static_const_value_")) continue;
+        found = true;
+        var relocates_to_symbol = false;
+        for (static_export.relocations) |relocation| {
+            if (std.mem.eql(u8, relocation.target_symbol_name, symbol_name)) {
+                relocates_to_symbol = true;
+            }
+        }
+        try std.testing.expect(relocates_to_symbol);
+    }
+    try std.testing.expect(found);
 }
 
 fn findStoredCompileTimeRootI64(
@@ -1442,6 +4441,173 @@ fn countStoredHoistedI64(
         if (storedI64(artifact, entry)) |actual| {
             if (actual == expected) count += 1;
         } else |_| {}
+    }
+    return count;
+}
+
+fn countStoredHoistedListLength(artifact: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        if (constNodeContainsListLength(.{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        }, node, len)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredTopLevelListU8(artifact: anytype, bytes: []const u8) usize {
+    var count: usize = 0;
+    const module = StaticConstModule{
+        .templates = artifact.const_templates,
+        .store = artifact.const_store,
+    };
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .constant) continue;
+        const node = switch (root.payload) {
+            .const_node => |const_node| const_node,
+            .pending,
+            .fn_value,
+            .expect,
+            => continue,
+        };
+        if (constNodeIsListU8(module, node, bytes)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredHoistedListLengthInModules(artifacts: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedListLength(artifact, len);
+    }
+    return count;
+}
+
+fn countStoredHoistedFnValue(artifact: anytype) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        if (constNodeContainsFnValue(.{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        }, node)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredHoistedFnValueInModules(artifacts: anytype) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedFnValue(artifact);
+    }
+    return count;
+}
+
+fn countStoredHoistedFnContext(artifact: anytype) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        if (constNodeContainsFnContext(.{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        }, node)) count += 1;
+    }
+    return count;
+}
+
+fn countStoredHoistedFnContextInModules(artifacts: anytype) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedFnContext(artifact);
+    }
+    return count;
+}
+
+fn countStoredHoistedListLengthAndFnValue(artifact: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        const template = artifact.const_templates.get(entry.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        const module = StaticConstModule{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        };
+        if (constNodeContainsListLength(module, node, len) and
+            constNodeContainsFnValue(module, node))
+        {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn countStoredHoistedListLengthAndFnValueInModules(artifacts: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifacts) |artifact| {
+        count += countStoredHoistedListLengthAndFnValue(artifact, len);
+    }
+    return count;
+}
+
+fn countSelectedHoistedConstResolvedRefs(artifact: anytype) usize {
+    var count: usize = 0;
+    for (artifact.resolved_value_refs.records) |record| {
+        switch (record.ref) {
+            .selected_hoisted_const => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countSelectedHoistedConstResolvedRefsWithListAndFn(artifact: anytype, len: usize) usize {
+    var count: usize = 0;
+    for (artifact.resolved_value_refs.records) |record| {
+        const selected = switch (record.ref) {
+            .selected_hoisted_const => |selected| selected,
+            else => continue,
+        };
+        const template = artifact.const_templates.get(selected.const_use.const_ref);
+        const node = switch (template.state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => continue,
+        };
+        const module = StaticConstModule{
+            .templates = artifact.const_templates,
+            .store = artifact.const_store,
+        };
+        if (constNodeContainsListLength(module, node, len) and
+            constNodeContainsFnValue(module, node))
+        {
+            count += 1;
+        }
     }
     return count;
 }
@@ -1552,9 +4718,68 @@ test "issue 9733: nested expect statements are collected as test roots" {
     // https://github.com/roc-lang/roc/issues/9733
     // The module has two `expect`s: the outer one and the one nested inside its
     // block body. Both must be collected as compile-time `expect` roots so that
-    // `roc test` evaluates the nested `expect 3 == 4` (which must fail). Today
-    // only the top-level expect is collected, so this count is 1 and `roc test`
-    // wrongly reports "All (1) tests passed".
+    // `roc check` evaluates the nested expect instead of only the outer one.
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\expect {
+        \\    expect 3.I64 == 3.I64
+        \\    5.I64 == 5.I64
+        \\}
+        \\
+        \\main! = |_args| Ok({})
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_artifact = coord.rootCheckedArtifact("app");
+
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        countCompileTimeRootKind(app_artifact, .expect),
+    );
+}
+
+test "nested expect failure is reported once" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1602,15 +4827,15 @@ test "issue 9733: nested expect statements are collected as test roots" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    try std.testing.expect(!coord.hasUserErrors());
+    try std.testing.expect(coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
-    try std.testing.expect(!coord.hasUserErrors());
-
-    const app_artifact = coord.rootCheckedArtifact("app");
-
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        countCompileTimeRootKind(app_artifact, .expect),
-    );
+    var failures: usize = 0;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (!std.mem.eql(u8, entry.report.title, "COMPTIME EXPECT FAILED")) continue;
+        failures += 1;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try expectReportContains(gpa, entry.report, "expect failed");
+    }
+    try std.testing.expectEqual(@as(usize, 1), failures);
 }

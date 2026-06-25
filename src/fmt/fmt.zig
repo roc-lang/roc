@@ -2721,12 +2721,14 @@ const Formatter = struct {
                             if (multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
                                 fmt.curr_indent += 1;
                                 try fmt.pushIndent();
-                                try fmt.pushAll("->");
+                                try fmt.pushAll(if (c.effectful) "=>" else "->");
                             } else {
-                                try fmt.pushAll(" ->");
+                                try fmt.pushAll(if (c.effectful) " =>" else " ->");
                             }
                         }
                     }
+                } else if (c.effectful) {
+                    try fmt.pushAll(" () =>");
                 }
                 if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
                     fmt.curr_indent += 1;
@@ -3513,6 +3515,19 @@ test "issue 8894: typed frac literal formats correctly" {
     const result = try moduleFmtsStable(std.testing.allocator, "x = 3.14.F64", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("x = 3.14.F64\n", result);
+}
+
+test "effectful where-clause method arrows are preserved" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\uses_tick : a => U64 where [a.tick! : a => U64, a.next! : () => U64]
+        \\uses_tick = |x| x.tick!()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        \\uses_tick : a => U64 where [a.tick! : a => U64, a.next! : () => U64]
+        \\uses_tick = |x| x.tick!()
+        \\
+    , result);
 }
 
 test "issue 9646: multiline method chain keeps short args inline without trailing comma" {

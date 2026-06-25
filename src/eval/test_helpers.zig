@@ -901,6 +901,30 @@ pub fn publishProgramForComptimeProblems(
         .comptime_problems;
 }
 
+/// Publish a program with compile-time evaluation problems routed into each
+/// module's checker problem store and return the full resources for tests that
+/// need to inspect which module received which diagnostic. Unlike
+/// `publishProgramForComptimeProblems`, this only returns resources when
+/// publishing completes without a blocking compile-time problem; crashing roots
+/// and failed expects still return `error.CompileTimeProblem`.
+pub fn publishProgramKeepingReportedComptimeProblems(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .published_roots_only,
+        null,
+        .report_comptime_problems,
+    );
+}
+
 const PublishedRootMode = union(enum) {
     eval_root: bool,
     published_roots_only,
@@ -1084,6 +1108,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         extra_modules.items,
         &builtin_module_owned_by_artifact,
         pre_published_builtin,
+        problem_reporting,
     );
     errdefer {
         for (import_artifacts) |*artifact| artifact.deinit(allocator);
@@ -1386,6 +1411,7 @@ fn publishImportArtifacts(
     extra_modules: []CheckedModule,
     builtin_module_owned_by_artifact: *bool,
     pre_published_builtin: ?PrePublishedBuiltin,
+    problem_reporting: ComptimeProblemReporting,
 ) anyerror![]check.CheckedArtifact.CheckedModuleArtifact {
     const extra_module_count = extra_modules.len;
     var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
@@ -1456,6 +1482,10 @@ fn publishImportArtifacts(
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
                     .imports = published_keys.items,
                     .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+                    .problem_store = switch (problem_reporting) {
+                        .ignore_comptime_problems => null,
+                        .report_comptime_problems => &extra_modules[extra_i].checker.problems,
+                    },
                 },
             );
             extra_modules[extra_i].published_owns_module_env = true;

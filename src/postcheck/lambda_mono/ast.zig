@@ -33,6 +33,8 @@ pub const StringLiteralId = Lifted.StringLiteralId;
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
+pub const LocalProcContext = Mono.LocalProcContext;
+
 /// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -179,6 +181,13 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// A restored compile-time value that may lower to static data once the final
+/// LIR const plan and target layout are known.
+pub const StaticDataCandidate = struct {
+    static_data: Common.StaticDataId,
+    fallback: ExprId,
+};
+
 /// Lambda Mono expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
@@ -188,6 +197,8 @@ pub const ExprData = union(enum) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
+    static_data: Common.StaticDataId,
+    static_data_candidate: StaticDataCandidate,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
@@ -388,6 +399,7 @@ pub const Root = struct {
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
     ty: Type.TypeId,
+    static_data: ?Common.StaticDataRequest = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -395,6 +407,9 @@ pub const RuntimeSchemaRequest = struct {
     def: MonoType.TypeDef,
     ty: Type.TypeId,
 };
+
+/// Request to make a Lambda Mono value available as static data.
+pub const StaticDataValue = Common.StaticDataRequest;
 
 /// Complete Lambda Mono program plus side arrays.
 pub const Program = struct {
@@ -417,10 +432,12 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
+    local_proc_contexts: std.ArrayList(LocalProcContext),
     proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    static_data_values: std.ArrayList(StaticDataValue),
     comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
@@ -467,10 +484,12 @@ pub const Program = struct {
             .branches = .empty,
             .if_branches = .empty,
             .string_literals = string_literals,
+            .local_proc_contexts = .empty,
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .static_data_values = .empty,
             .comptime_sites = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
@@ -498,10 +517,12 @@ pub const Program = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
+        self.local_proc_contexts.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -726,6 +747,10 @@ pub const Program = struct {
 
     pub fn stringLiteral(self: *const Program, id: StringLiteralId) Mono.StringLiteral {
         return self.string_literals.items[@intFromEnum(id)];
+    }
+
+    pub fn localProcContextSpan(self: *const Program, span: Mono.Span(LocalProcContext)) []const LocalProcContext {
+        return self.local_proc_contexts.items[span.start .. span.start + span.len];
     }
 };
 

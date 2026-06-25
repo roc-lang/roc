@@ -1,4 +1,4 @@
-//! Target-layout readonly data symbols for provided non-function constants.
+//! Target-layout readonly data symbols for compile-time constants.
 //!
 //! Static data exports are materialized from checked `ConstStore` nodes and the
 //! layout/const plans output by direct LIR lowering.
@@ -17,12 +17,13 @@ const CanonicalNameStore = check.CanonicalNames.CanonicalNameStore;
 const Checked = check.CheckedArtifact;
 const CheckedModule = check.CheckedModule;
 const ConstFn = check.ConstStore.ConstFn;
+const ConstFnDef = check.ConstStore.FnDef;
 const ConstStrDataId = check.ConstStore.ConstStrDataId;
 const ConstValue = CheckedModule.ConstValue;
 const StaticDataExport = backend.StaticDataExport;
 const StaticDataRelocation = backend.StaticDataRelocation;
 
-/// Checked modules whose provided data exports can become static data.
+/// Checked modules whose constants can become static data.
 pub const ModuleViews = struct {
     root: ?Checked.LoweringModuleView = null,
     imports: []const Checked.ImportedModuleView = &.{},
@@ -43,6 +44,14 @@ const MaterializedValue = struct {
     relocations: []StaticDataRelocation,
 };
 
+const StaticAllocationRecord = struct {
+    symbol_name: []const u8,
+    data_offset: u32,
+    alignment: u32,
+    bytes: []const u8,
+    relocations: []const StaticDataRelocation,
+};
+
 const ConstModule = struct {
     key: CheckedModule.CheckedModuleArtifactKey,
     names: *const CanonicalNameStore,
@@ -60,8 +69,13 @@ const ConstStrDataSite = struct {
     data: u32,
 };
 
-/// Build readonly data exports for provided constants.
-pub fn buildProvidedDataExports(
+const ConstNodeSite = struct {
+    store_address: usize,
+    node: u32,
+};
+
+/// Build readonly data exports for provided constants and internal hoisted constants.
+pub fn buildStaticDataExports(
     allocator: Allocator,
     modules: ModuleViews,
     lowered: ?*const lir.CheckedPipeline.LoweredProgram,
@@ -72,7 +86,7 @@ pub fn buildProvidedDataExports(
         return try allocator.alloc(StaticDataExport, 0);
     };
     const lowered_program = lowered orelse {
-        if (moduleHasProvidedData(root.module)) staticDataInvariant("provided data exports require LIR layout output");
+        if (moduleHasProvidedData(root.module)) staticDataInvariant("static data exports require LIR layout output");
         return try allocator.alloc(StaticDataExport, 0);
     };
 
@@ -82,7 +96,7 @@ pub fn buildProvidedDataExports(
     return try builder.build();
 }
 
-pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExport) void {
+pub fn deinitStaticDataExports(allocator: Allocator, exports: []StaticDataExport) void {
     for (exports) |static_export| {
         allocator.free(static_export.symbol_name);
         allocator.free(static_export.bytes);
@@ -90,6 +104,20 @@ pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExpo
         allocator.free(static_export.relocations);
     }
     allocator.free(exports);
+}
+
+/// Build static data exports for provided data roots that have stored values.
+pub fn buildProvidedDataExports(
+    allocator: Allocator,
+    modules: ModuleViews,
+    lowered: ?*const lir.CheckedPipeline.LoweredProgram,
+    target: roc_target.RocTarget,
+) MaterializationError![]StaticDataExport {
+    return buildStaticDataExports(allocator, modules, lowered, target);
+}
+
+pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExport) void {
+    deinitStaticDataExports(allocator, exports);
 }
 
 fn deinitRelocationSlice(allocator: Allocator, relocations: []const StaticDataRelocation) void {
@@ -111,7 +139,9 @@ const StaticDataBuilder = struct {
     target_usize: @import("base").target.TargetUsize,
     word_size: u32,
     nodes: std.ArrayList(StaticDataExport),
+    static_allocations: std.ArrayList(StaticAllocationRecord),
     str_allocations: std.AutoHashMap(ConstStrDataSite, PointerTarget),
+    list_allocations: std.AutoHashMap(ConstNodeSite, PointerTarget),
     local_symbol_ordinal: u32,
 
     fn init(
@@ -134,12 +164,16 @@ const StaticDataBuilder = struct {
             .target_usize = target_usize,
             .word_size = target_usize.size(),
             .nodes = .empty,
+            .static_allocations = .empty,
             .str_allocations = std.AutoHashMap(ConstStrDataSite, PointerTarget).init(allocator),
+            .list_allocations = std.AutoHashMap(ConstNodeSite, PointerTarget).init(allocator),
             .local_symbol_ordinal = 0,
         };
     }
 
     fn deinitScratch(self: *StaticDataBuilder) void {
+        self.static_allocations.deinit(self.allocator);
+        self.list_allocations.deinit();
         self.str_allocations.deinit();
     }
 
@@ -152,8 +186,8 @@ const StaticDataBuilder = struct {
                 .procedure => continue,
             };
 
-            const const_node = self.constNode(data.const_ref);
-            const request = self.requestedLayout(data.checked_type);
+            const const_node = self.constNode(data.const_ref, null);
+            const request = self.requestedLayout(data);
             const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
             const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
             errdefer self.allocator.free(symbol_name);
@@ -166,6 +200,25 @@ const StaticDataBuilder = struct {
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
                 .is_global = true,
+                .is_exported = true,
+                .relocations = materialized.relocations,
+            });
+        }
+
+        for (self.lowered.lir_result.static_data_values.items, 0..) |value, index| {
+            const const_node = self.constNode(value.const_ref, value.node);
+            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, @enumFromInt(@as(u32, @intCast(index))));
+            errdefer self.allocator.free(symbol_name);
+
+            const materialized = try self.materializeValue(const_node, value.plan, value.layout_idx);
+            errdefer self.deinitMaterialized(materialized);
+
+            try self.nodes.append(self.allocator, .{
+                .symbol_name = symbol_name,
+                .bytes = materialized.bytes,
+                .alignment = materialized.alignment,
+                .is_global = true,
+                .is_exported = false,
                 .relocations = materialized.relocations,
             });
         }
@@ -189,8 +242,9 @@ const StaticDataBuilder = struct {
         self.allocator.free(value.relocations);
     }
 
-    fn constNode(self: *StaticDataBuilder, ref: CheckedModule.ConstRef) ConstNode {
+    fn constNode(self: *StaticDataBuilder, ref: CheckedModule.ConstId, node: ?CheckedModule.ConstNodeId) ConstNode {
         const module = self.moduleForConst(ref);
+        if (node) |id| return .{ .module = module, .id = id };
         const template = module.templates.get(ref);
         return switch (template.state) {
             .stored_const => |stored| .{ .module = module, .id = stored.node },
@@ -200,13 +254,28 @@ const StaticDataBuilder = struct {
         };
     }
 
-    fn moduleForConst(self: *StaticDataBuilder, ref: CheckedModule.ConstRef) ConstModule {
+    fn constNodeSite(node: ConstNode) ConstNodeSite {
+        return .{
+            .store_address = @intFromPtr(node.module.store),
+            .node = @intFromEnum(node.id),
+        };
+    }
+
+    fn moduleForConst(self: *StaticDataBuilder, ref: CheckedModule.ConstId) ConstModule {
         if (moduleBytesEqual(self.root.module.key.bytes, ref.artifact.bytes)) return .{
             .key = self.root.module.key,
             .names = &self.root.module.canonical_names,
             .templates = &self.root.module.const_templates,
             .store = &self.root.module.const_store,
         };
+        for (self.root.relation_modules) |relation| {
+            if (moduleBytesEqual(relation.key.bytes, ref.artifact.bytes)) return .{
+                .key = relation.key,
+                .names = relation.canonical_names,
+                .templates = relation.const_templates,
+                .store = relation.const_store,
+            };
+        }
         for (self.imports) |imported| {
             if (moduleBytesEqual(imported.key.bytes, ref.artifact.bytes)) return .{
                 .key = imported.key,
@@ -215,14 +284,31 @@ const StaticDataBuilder = struct {
                 .store = imported.const_store,
             };
         }
-        staticDataInvariant("provided data export referenced a const outside the lowering module set");
+        for (self.root.relation_modules) |relation| {
+            if (moduleBytesEqual(relation.key.bytes, ref.artifact.bytes)) return .{
+                .key = relation.key,
+                .names = relation.canonical_names,
+                .templates = relation.const_templates,
+                .store = relation.const_store,
+            };
+        }
+        staticDataInvariant("static data export referenced a const outside the lowering module set");
     }
 
-    fn requestedLayout(self: *StaticDataBuilder, checked_type: CheckedModule.CheckedTypeId) lir.Program.RequestedLayout {
+    fn requestedLayout(self: *StaticDataBuilder, data: CheckedModule.ProvidedDataExport) lir.Program.RequestedLayout {
+        var type_only: ?lir.Program.RequestedLayout = null;
+        var saw_value_specific = false;
         for (self.lowered.lir_result.requested_layouts.items) |request| {
-            if (request.checked_type == checked_type) return request;
+            if (request.checked_type != data.checked_type) continue;
+            if (request.const_ref) |const_ref| {
+                saw_value_specific = true;
+                if (std.meta.eql(const_ref, data.const_ref) and request.node == null) return request;
+                continue;
+            }
+            if (type_only == null) type_only = request;
         }
-        staticDataInvariant("provided data export had no LIR layout request");
+        if (saw_value_specific) staticDataInvariant("provided data export had no matching value-specific LIR layout request");
+        return type_only orelse staticDataInvariant("provided data export had no LIR layout request");
     }
 
     fn materializeValue(
@@ -241,11 +327,37 @@ const StaticDataBuilder = struct {
             self.allocator.free(bytes);
         }
 
-        try self.writeValue(bytes, &relocations, 0, node.module, node.module.store.get(node.id), plan, layout_idx);
+        try self.writeValue(bytes, &relocations, 0, node, plan, layout_idx);
 
         return .{
             .bytes = bytes,
             .alignment = @intCast(layout_value.alignment(self.target_usize).toByteUnits()),
+            .relocations = try relocations.toOwnedSlice(self.allocator),
+        };
+    }
+
+    fn materializeTagPayloads(
+        self: *StaticDataBuilder,
+        source: ConstModule,
+        payload_nodes: []const CheckedModule.ConstNodeId,
+        payload_plans: []const lir.Program.ConstFieldPlan,
+        payload_layout_idx: layout.Idx,
+    ) MaterializationError!MaterializedValue {
+        const payload_layout = self.layoutValue(payload_layout_idx);
+        const bytes = try self.allocator.alloc(u8, self.layouts().layoutSize(payload_layout));
+        @memset(bytes, 0);
+
+        var relocations = std.ArrayList(StaticDataRelocation).empty;
+        errdefer {
+            deinitRelocationList(self.allocator, &relocations);
+            self.allocator.free(bytes);
+        }
+
+        try self.writeTagPayloads(bytes, &relocations, 0, source, payload_nodes, payload_plans, payload_layout_idx);
+
+        return .{
+            .bytes = bytes,
+            .alignment = @intCast(payload_layout.alignment(self.target_usize).toByteUnits()),
             .relocations = try relocations.toOwnedSlice(self.allocator),
         };
     }
@@ -255,12 +367,47 @@ const StaticDataBuilder = struct {
         bytes: []u8,
         relocations: *std.ArrayList(StaticDataRelocation),
         base_offset: u32,
-        source: ConstModule,
-        value: ConstValue,
+        node: ConstNode,
         plan_id: lir.Program.ConstPlanId,
         layout_idx: layout.Idx,
     ) MaterializationError!void {
+        const value = node.module.store.get(node.id);
         const plan = self.constPlan(plan_id);
+        if (value == .nominal) {
+            switch (plan) {
+                .named => {},
+                .pending,
+                .zst,
+                .scalar,
+                .str,
+                .list,
+                .box,
+                .tuple,
+                .record,
+                .tag_union,
+                .fn_value,
+                .erased_fn,
+                => {
+                    try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = value.nominal.backing }, plan_id, layout_idx);
+                    return;
+                },
+            }
+        }
+        switch (plan) {
+            .named => |named| {
+                const backing_node = switch (value) {
+                    .nominal => |nominal| ConstNode{ .module = node.module, .id = nominal.backing },
+                    else => node,
+                };
+                try self.writeValue(bytes, relocations, base_offset, backing_node, named.backing, named.backing_layout_idx);
+                return;
+            },
+            else => {},
+        }
+        if (self.layoutWrapsLogicalValue(layout_idx, plan)) {
+            try self.writeLayoutBoxedValue(bytes, relocations, base_offset, node, plan_id, layout_idx);
+            return;
+        }
         switch (plan) {
             .pending => staticDataInvariant("pending const plan reached static data export"),
             .zst => switch (value) {
@@ -268,22 +415,29 @@ const StaticDataBuilder = struct {
                 else => staticDataInvariant("ZST const plan received non-ZST ConstStore node"),
             },
             .scalar => self.writeScalar(bytes, base_offset, value, layout_idx),
-            .str => try self.writeStr(bytes, relocations, base_offset, source, value),
-            .list => |elem_plan| try self.writeList(bytes, relocations, base_offset, source, value, elem_plan, layout_idx),
-            .box => |payload_plan| try self.writeBox(bytes, relocations, base_offset, source, value, payload_plan, layout_idx),
-            .tuple => |items| try self.writeTuple(bytes, relocations, base_offset, source, value, items, layout_idx),
-            .record => |fields| try self.writeRecord(bytes, relocations, base_offset, source, value, fields, layout_idx),
-            .tag_union => |variants| try self.writeTagUnion(bytes, relocations, base_offset, source, value, variants, layout_idx),
-            .named => |named| {
-                const backing = switch (value) {
-                    .nominal => |nominal| nominal.backing,
-                    else => staticDataInvariant("named const plan received non-nominal ConstStore node"),
-                };
-                try self.writeValue(bytes, relocations, base_offset, source, source.store.get(backing), named.backing, layout_idx);
-            },
-            .fn_value => staticDataInvariant("provided function-valued data export reached finite callable static materialization"),
-            .erased_fn => |set| try self.writeErasedFn(bytes, relocations, base_offset, source, value, set, layout_idx),
+            .str => try self.writeStr(bytes, relocations, base_offset, node.module, value),
+            .list => |elem_plan| try self.writeList(bytes, relocations, base_offset, node, value, elem_plan, layout_idx),
+            .box => |payload_plan| try self.writeBox(bytes, relocations, base_offset, node, value, payload_plan, layout_idx),
+            .tuple => |items| try self.writeTuple(bytes, relocations, base_offset, node, value, items, layout_idx),
+            .record => |fields| try self.writeRecord(bytes, relocations, base_offset, node, value, fields, layout_idx),
+            .tag_union => |variants| try self.writeTagUnion(bytes, relocations, base_offset, node, value, variants, layout_idx),
+            .named => staticDataInvariant("named const plan was not unwrapped before static data export"),
+            .fn_value => |set| try self.writeFnValue(bytes, relocations, base_offset, node.module, value, set, layout_idx),
+            .erased_fn => |set| try self.writeErasedFn(bytes, relocations, base_offset, node.module, value, set, layout_idx),
         }
+    }
+
+    fn layoutWrapsLogicalValue(
+        self: *StaticDataBuilder,
+        layout_idx: layout.Idx,
+        plan: lir.Program.ConstPlan,
+    ) bool {
+        switch (plan) {
+            .box => return false,
+            else => {},
+        }
+        const layout_value = self.layoutValue(layout_idx);
+        return layout_value.tag == .box or layout_value.tag == .box_of_zst;
     }
 
     fn writeScalar(self: *StaticDataBuilder, bytes: []u8, base_offset: u32, value: ConstValue, layout_idx: layout.Idx) void {
@@ -402,7 +556,7 @@ const StaticDataBuilder = struct {
         bytes: []u8,
         relocations: *std.ArrayList(StaticDataRelocation),
         base_offset: u32,
-        source: ConstModule,
+        node: ConstNode,
         value: ConstValue,
         elem_plan: lir.Program.ConstPlanId,
         list_layout_idx: layout.Idx,
@@ -415,6 +569,12 @@ const StaticDataBuilder = struct {
         self.writeTargetWord(bytes, base_offset + self.word_size, @intCast(items.len));
         self.writeTargetWord(bytes, base_offset + self.word_size * 2, self.encodeRocListCapacity(items.len));
         if (items.len == 0) return;
+
+        const site = constNodeSite(node);
+        if (self.list_allocations.get(site)) |target| {
+            try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+            return;
+        }
 
         const list_layout = self.layoutValue(list_layout_idx);
         const abi = self.layouts().builtinListAbi(list_layout_idx);
@@ -442,8 +602,7 @@ const StaticDataBuilder = struct {
                     payload,
                     &payload_relocs,
                     @as(u32, @intCast(i * abi.elem_size)),
-                    source,
-                    source.store.get(item),
+                    .{ .module = node.module, .id = item },
                     elem_plan,
                     elem_layout_idx,
                 );
@@ -460,6 +619,7 @@ const StaticDataBuilder = struct {
             payload_relocations,
         );
         payload_consumed = true;
+        try self.list_allocations.put(site, target);
         try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
     }
 
@@ -468,7 +628,7 @@ const StaticDataBuilder = struct {
         bytes: []u8,
         relocations: *std.ArrayList(StaticDataRelocation),
         base_offset: u32,
-        source: ConstModule,
+        node: ConstNode,
         value: ConstValue,
         payload_plan: lir.Program.ConstPlanId,
         box_layout_idx: layout.Idx,
@@ -483,13 +643,45 @@ const StaticDataBuilder = struct {
             return;
         }
         if (box_layout.tag == .erased_callable) {
-            try self.writeValue(bytes, relocations, base_offset, source, source.store.get(payload_node), payload_plan, box_layout_idx);
+            try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = payload_node }, payload_plan, box_layout_idx);
             return;
         }
         if (box_layout.tag != .box) staticDataInvariant("Box const plan had non-box layout");
 
         const abi = self.layouts().builtinBoxAbi(box_layout_idx);
-        const payload = try self.materializeValue(.{ .module = source, .id = payload_node }, payload_plan, abi.elem_layout_idx orelse layout.Idx.zst);
+        const payload = try self.materializeValue(.{ .module = node.module, .id = payload_node }, payload_plan, abi.elem_layout_idx orelse layout.Idx.zst);
+        var payload_consumed = false;
+        errdefer if (!payload_consumed) self.deinitMaterialized(payload);
+
+        const target = try self.addStaticAllocationWithRelocs(
+            payload.bytes,
+            abi.elem_alignment,
+            abi.contains_refcounted,
+            null,
+            payload.relocations,
+        );
+        payload_consumed = true;
+        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+    }
+
+    fn writeLayoutBoxedValue(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        node: ConstNode,
+        plan_id: lir.Program.ConstPlanId,
+        box_layout_idx: layout.Idx,
+    ) MaterializationError!void {
+        const box_layout = self.layoutValue(box_layout_idx);
+        if (box_layout.tag == .box_of_zst) {
+            self.writeTargetWord(bytes, base_offset, 0);
+            return;
+        }
+        if (box_layout.tag != .box) staticDataInvariant("layout-boxed const value had non-box layout");
+
+        const abi = self.layouts().builtinBoxAbi(box_layout_idx);
+        const payload = try self.materializeValue(node, plan_id, abi.elem_layout_idx orelse layout.Idx.zst);
         var payload_consumed = false;
         errdefer if (!payload_consumed) self.deinitMaterialized(payload);
 
@@ -509,9 +701,9 @@ const StaticDataBuilder = struct {
         bytes: []u8,
         relocations: *std.ArrayList(StaticDataRelocation),
         base_offset: u32,
-        source: ConstModule,
+        node: ConstNode,
         value: ConstValue,
-        item_plans: []const lir.Program.ConstPlanId,
+        item_plans: []const lir.Program.ConstFieldPlan,
         tuple_layout_idx: layout.Idx,
     ) MaterializationError!void {
         const items = switch (value) {
@@ -521,14 +713,23 @@ const StaticDataBuilder = struct {
         if (item_plans.len != items.len) staticDataInvariant("tuple const plan length differed from ConstStore node");
         const tuple_layout = self.layoutValue(tuple_layout_idx);
         if (tuple_layout.tag == .zst) return;
-        if (tuple_layout.tag != .struct_) staticDataInvariant("tuple const plan had non-struct layout");
+        if (tuple_layout.tag != .struct_) {
+            var runtime_child_count: usize = 0;
+            for (item_plans, 0..) |item_plan, i| {
+                if (self.isZeroSizedLayout(item_plan.layout_idx)) continue;
+                runtime_child_count += 1;
+                try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = items[i] }, item_plan.plan, tuple_layout_idx);
+            }
+            if (runtime_child_count != 1) staticDataInvariant("compact tuple layout did not have one runtime field");
+            return;
+        }
 
         for (item_plans, 0..) |item_plan, i| {
             const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(tuple_layout.getStruct().idx, @intCast(i));
             const field_layout = self.layoutValue(field_layout_idx);
             if (self.layouts().layoutSize(field_layout) == 0) continue;
             const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(tuple_layout.getStruct().idx, @intCast(i));
-            try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(items[i]), item_plan, field_layout_idx);
+            try self.writeValue(bytes, relocations, base_offset + field_offset, .{ .module = node.module, .id = items[i] }, item_plan.plan, field_layout_idx);
         }
     }
 
@@ -537,9 +738,9 @@ const StaticDataBuilder = struct {
         bytes: []u8,
         relocations: *std.ArrayList(StaticDataRelocation),
         base_offset: u32,
-        source: ConstModule,
+        node: ConstNode,
         value: ConstValue,
-        field_plans: []const lir.Program.ConstPlanId,
+        field_plans: []const lir.Program.ConstFieldPlan,
         record_layout_idx: layout.Idx,
     ) MaterializationError!void {
         const fields = switch (value) {
@@ -549,14 +750,23 @@ const StaticDataBuilder = struct {
         if (field_plans.len != fields.len) staticDataInvariant("record const plan length differed from ConstStore node");
         const record_layout = self.layoutValue(record_layout_idx);
         if (record_layout.tag == .zst) return;
-        if (record_layout.tag != .struct_) staticDataInvariant("record const plan had non-struct layout");
+        if (record_layout.tag != .struct_) {
+            var runtime_child_count: usize = 0;
+            for (field_plans, 0..) |field_plan, i| {
+                if (self.isZeroSizedLayout(field_plan.layout_idx)) continue;
+                runtime_child_count += 1;
+                try self.writeValue(bytes, relocations, base_offset, .{ .module = node.module, .id = fields[i] }, field_plan.plan, record_layout_idx);
+            }
+            if (runtime_child_count != 1) staticDataInvariant("compact record layout did not have one runtime field");
+            return;
+        }
 
         for (field_plans, 0..) |field_plan, i| {
             const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, @intCast(i));
             const field_layout = self.layoutValue(field_layout_idx);
             if (self.layouts().layoutSize(field_layout) == 0) continue;
             const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, @intCast(i));
-            try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(fields[i]), field_plan, field_layout_idx);
+            try self.writeValue(bytes, relocations, base_offset + field_offset, .{ .module = node.module, .id = fields[i] }, field_plan.plan, field_layout_idx);
         }
     }
 
@@ -565,7 +775,7 @@ const StaticDataBuilder = struct {
         bytes: []u8,
         relocations: *std.ArrayList(StaticDataRelocation),
         base_offset: u32,
-        source: ConstModule,
+        node: ConstNode,
         value: ConstValue,
         variants: []const lir.Program.ConstTagVariant,
         tag_union_layout_idx: layout.Idx,
@@ -580,38 +790,187 @@ const StaticDataBuilder = struct {
 
         const tag_layout = self.layoutValue(tag_union_layout_idx);
         if (tag_layout.tag == .zst) return;
-        if (tag_layout.tag != .tag_union) staticDataInvariant("tag-union const plan had non-tag-union layout");
+        if (tag_layout.tag == .box) {
+            if (self.variantRuntimePayloadCount(variant) == 0) {
+                self.writeTargetWord(bytes, base_offset, 0);
+                return;
+            }
+
+            const payload_layout_idx = tag_layout.getIdx();
+            const payload = try self.materializeTagPayloads(
+                node.module,
+                tag.payloads,
+                variant.payloads,
+                payload_layout_idx,
+            );
+            var payload_consumed = false;
+            errdefer if (!payload_consumed) self.deinitMaterialized(payload);
+
+            const payload_layout = self.layoutValue(payload_layout_idx);
+            const target = try self.addStaticAllocationWithRelocs(
+                payload.bytes,
+                payload.alignment,
+                self.layouts().layoutContainsRefcounted(payload_layout),
+                null,
+                payload.relocations,
+            );
+            payload_consumed = true;
+            try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+            return;
+        }
+        if (tag_layout.tag != .tag_union) {
+            if (variants.len != 1) staticDataInvariant("layout-unwrapped tag const plan had multiple variants");
+            try self.writeTagPayloads(
+                bytes,
+                relocations,
+                base_offset,
+                node.module,
+                tag.payloads,
+                variant.payloads,
+                tag_union_layout_idx,
+            );
+            return;
+        }
 
         const tag_info = self.layouts().getTagUnionInfo(tag_layout);
         const active_payload_layout_idx = tag_info.variants.get(@intCast(variant.discriminant)).payload_layout;
-        for (variant.payloads, 0..) |payload_plan, payload_index| {
-            const payload_layout_idx = payloadLayoutForTagArg(
-                self.layouts(),
-                active_payload_layout_idx,
-                variant.payloads.len,
-                @intCast(payload_index),
-            );
-            const payload_layout = self.layoutValue(payload_layout_idx);
-            if (self.layouts().layoutSize(payload_layout) == 0) continue;
-            const payload_offset = payloadOffsetForTagArg(
-                self.layouts(),
-                active_payload_layout_idx,
-                variant.payloads.len,
-                @intCast(payload_index),
-            );
-            try self.writeValue(
-                bytes,
-                relocations,
-                base_offset + payload_offset,
-                source,
-                source.store.get(tag.payloads[payload_index]),
-                payload_plan,
-                payload_layout_idx,
-            );
-        }
+        try self.writeTagPayloads(
+            bytes,
+            relocations,
+            base_offset,
+            node.module,
+            tag.payloads,
+            variant.payloads,
+            active_payload_layout_idx,
+        );
 
         const tag_data = self.layouts().getTagUnionData(tag_layout.getTagUnion().idx);
         tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant);
+    }
+
+    fn writeTagPayloads(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        source: ConstModule,
+        payload_nodes: []const CheckedModule.ConstNodeId,
+        payload_plans: []const lir.Program.ConstFieldPlan,
+        payload_layout_idx: layout.Idx,
+    ) MaterializationError!void {
+        if (payload_plans.len != payload_nodes.len) staticDataInvariant("tag payload const plan length differed from ConstStore node");
+        if (payload_plans.len == 0) return;
+        if (payload_plans.len == 1) {
+            if (self.isZeroSizedLayout(payload_layout_idx)) return;
+            try self.writeValue(
+                bytes,
+                relocations,
+                base_offset,
+                .{ .module = source, .id = payload_nodes[0] },
+                payload_plans[0].plan,
+                payload_layout_idx,
+            );
+            return;
+        }
+
+        const payload_layout = self.layoutValue(payload_layout_idx);
+        if (payload_layout.tag == .zst) return;
+        if (payload_layout.tag != .struct_) {
+            var runtime_child_count: usize = 0;
+            for (payload_plans, 0..) |payload_plan, i| {
+                if (self.isZeroSizedLayout(payload_plan.layout_idx)) continue;
+                runtime_child_count += 1;
+                try self.writeValue(bytes, relocations, base_offset, .{ .module = source, .id = payload_nodes[i] }, payload_plan.plan, payload_layout_idx);
+            }
+            if (runtime_child_count != 1) staticDataInvariant("compact tag payload layout did not have one runtime field");
+            return;
+        }
+
+        for (payload_plans, 0..) |payload_plan, payload_index| {
+            const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, @intCast(payload_index));
+            if (self.isZeroSizedLayout(field_layout_idx)) continue;
+            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout.getStruct().idx, @intCast(payload_index));
+            try self.writeValue(
+                bytes,
+                relocations,
+                base_offset + field_offset,
+                .{ .module = source, .id = payload_nodes[payload_index] },
+                payload_plan.plan,
+                field_layout_idx,
+            );
+        }
+    }
+
+    fn writeFnValue(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        source: ConstModule,
+        value: ConstValue,
+        set_id: lir.Program.FnSetId,
+        callable_layout_idx: layout.Idx,
+    ) MaterializationError!void {
+        const fn_id = switch (value) {
+            .fn_value => |fn_id| fn_id,
+            else => staticDataInvariant("finite callable const plan received non-function ConstStore node"),
+        };
+        const raw = @intFromEnum(fn_id);
+        if (raw >= source.store.fns.items.len) staticDataInvariant("ConstStore function id is out of range");
+        const fn_value = source.store.getFn(@enumFromInt(raw));
+        const set = self.lowered.lir_result.fn_sets.items[@intFromEnum(set_id)];
+        if (set.layout != callable_layout_idx) {
+            staticDataInvariant("finite callable const plan layout differed from requested static data layout");
+        }
+        const variant = fnVariantForConstFn(set, fn_value);
+
+        const callable_layout = self.layoutValue(callable_layout_idx);
+        if (callable_layout.tag == .zst) {
+            if (self.layouts().layoutSize(self.layoutValue(variant.payload_layout)) != 0) {
+                staticDataInvariant("ZST finite callable layout had non-ZST capture payload");
+            }
+            return;
+        }
+
+        if (callable_layout.tag == .tag_union) {
+            const tag_info = self.layouts().getTagUnionInfo(callable_layout);
+            const active_payload_layout_idx = tag_info.variants.get(@intCast(variant.discriminant)).payload_layout;
+            if (active_payload_layout_idx != variant.payload_layout) {
+                staticDataInvariant("finite callable variant payload layout differed from committed tag-union payload layout");
+            }
+            try self.writeCaptures(
+                bytes,
+                relocations,
+                base_offset,
+                source,
+                fn_value,
+                variant.captures,
+                active_payload_layout_idx,
+            );
+            const tag_data = self.layouts().getTagUnionData(callable_layout.getTagUnion().idx);
+            tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant);
+            return;
+        }
+
+        try self.writeCaptures(
+            bytes,
+            relocations,
+            base_offset,
+            source,
+            fn_value,
+            variant.captures,
+            callable_layout_idx,
+        );
+    }
+
+    fn fnVariantForConstFn(
+        set: lir.Program.FnSet,
+        fn_value: ConstFn,
+    ) lir.Program.FnVariant {
+        for (set.variants) |variant| {
+            if (sameFnTemplate(fn_value, variant.template)) return variant;
+        }
+        staticDataInvariant("finite callable ConstStore function was absent from LIR callable variants");
     }
 
     fn writeErasedFn(
@@ -728,17 +1087,34 @@ const StaticDataBuilder = struct {
             for (slots) |slot| {
                 const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(capture_layout.getStruct().idx, slot.slot);
                 const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(capture_layout.getStruct().idx, slot.slot);
+                if (self.isZeroSizedLayout(field_layout)) continue;
                 const capture_node = self.captureNode(fn_value, slot.id);
-                try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(capture_node), slot.plan, field_layout);
+                try self.writeValue(bytes, relocations, base_offset + field_offset, .{ .module = source, .id = capture_node }, slot.plan, field_layout);
             }
             return;
         }
         if (slots.len == 1) {
             const capture_node = self.captureNode(fn_value, slots[0].id);
-            try self.writeValue(bytes, relocations, base_offset, source, source.store.get(capture_node), slots[0].plan, capture_layout_idx);
+            try self.writeValue(bytes, relocations, base_offset, .{ .module = source, .id = capture_node }, slots[0].plan, capture_layout_idx);
             return;
         }
-        staticDataInvariant("multi-capture erased callable did not use a struct capture layout");
+
+        var runtime_capture_count: usize = 0;
+        for (slots) |slot| {
+            if (self.isZeroSizedLayout(slot.layout_idx)) continue;
+            runtime_capture_count += 1;
+            const capture_node = self.captureNode(fn_value, slot.id);
+            try self.writeValue(bytes, relocations, base_offset, .{ .module = source, .id = capture_node }, slot.plan, capture_layout_idx);
+        }
+        if (runtime_capture_count != 1) staticDataInvariant("compact capture layout did not have one runtime field");
+    }
+
+    fn variantRuntimePayloadCount(self: *StaticDataBuilder, variant: lir.Program.ConstTagVariant) usize {
+        var count: usize = 0;
+        for (variant.payloads) |payload| {
+            if (!self.isZeroSizedLayout(payload.layout_idx)) count += 1;
+        }
+        return count;
     }
 
     fn captureNode(
@@ -791,10 +1167,6 @@ const StaticDataBuilder = struct {
             }
         }
 
-        const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__static_const_{d}", .{self.local_symbol_ordinal});
-        self.local_symbol_ordinal += 1;
-        errdefer self.allocator.free(symbol_name);
-
         const data_offset = staticDataPtrOffset(self.word_size, payload_alignment, contains_refcounted);
         const bytes = try self.allocator.alloc(u8, data_offset + payload.len);
         errdefer self.allocator.free(bytes);
@@ -825,11 +1197,31 @@ const StaticDataBuilder = struct {
         self.allocator.free(payload_relocations);
         payload_relocations_owned = false;
 
+        const alignment = @max(payload_alignment, self.word_size);
+        if (self.findStaticAllocation(bytes, relocations, data_offset, alignment)) |target| {
+            self.allocator.free(bytes);
+            deinitRelocationSlice(self.allocator, relocations);
+            self.allocator.free(relocations);
+            return target;
+        }
+
+        const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__static_const_{d}", .{self.local_symbol_ordinal});
+        self.local_symbol_ordinal += 1;
+        errdefer self.allocator.free(symbol_name);
+
+        try self.static_allocations.append(self.allocator, .{
+            .symbol_name = symbol_name,
+            .data_offset = data_offset,
+            .alignment = alignment,
+            .bytes = bytes,
+            .relocations = relocations,
+        });
         try self.nodes.append(self.allocator, .{
             .symbol_name = symbol_name,
             .bytes = bytes,
-            .alignment = @max(payload_alignment, self.word_size),
+            .alignment = alignment,
             .is_global = false,
+            .is_exported = false,
             .relocations = relocations,
         });
 
@@ -837,6 +1229,26 @@ const StaticDataBuilder = struct {
             .symbol_name = symbol_name,
             .addend = @intCast(data_offset),
         };
+    }
+
+    fn findStaticAllocation(
+        self: *StaticDataBuilder,
+        bytes: []const u8,
+        relocations: []const StaticDataRelocation,
+        data_offset: u32,
+        alignment: u32,
+    ) ?PointerTarget {
+        for (self.static_allocations.items) |allocation| {
+            if (allocation.data_offset != data_offset) continue;
+            if (allocation.alignment != alignment) continue;
+            if (!std.mem.eql(u8, allocation.bytes, bytes)) continue;
+            if (!sameRelocations(allocation.relocations, relocations)) continue;
+            return .{
+                .symbol_name = allocation.symbol_name,
+                .addend = @intCast(allocation.data_offset),
+            };
+        }
+        return null;
     }
 
     fn constPlan(self: *StaticDataBuilder, plan: lir.Program.ConstPlanId) lir.Program.ConstPlan {
@@ -849,6 +1261,11 @@ const StaticDataBuilder = struct {
 
     fn layoutValue(self: *StaticDataBuilder, layout_idx: layout.Idx) layout.Layout {
         return self.layouts().getLayout(layout_idx);
+    }
+
+    fn isZeroSizedLayout(self: *StaticDataBuilder, layout_idx: layout.Idx) bool {
+        const layout_value = self.layoutValue(layout_idx);
+        return self.layouts().layoutSize(layout_value) == 0;
     }
 
     fn writePointerRelocation(
@@ -984,14 +1401,51 @@ fn staticDataPtrOffset(word_size: u32, element_alignment: u32, contains_refcount
 }
 
 fn sameFnTemplate(fn_value: ConstFn, template: lir.Program.FnTemplate) bool {
-    return std.meta.eql(fn_value.fn_def, template.fn_def) and
+    return sameFnDef(fn_value.fn_def, template.fn_def) and
         fn_value.source_fn_ty == template.source_fn_ty and
         std.mem.eql(u8, fn_value.source_fn_key.bytes[0..], template.source_fn_key.bytes[0..]);
+}
+
+fn sameFnDef(a: ConstFnDef, b: ConstFnDef) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .local_template => |template| sameProcTemplate(template, b.local_template),
+        .imported_template => |template| sameProcTemplate(template, b.imported_template),
+        // ConstStore and post-check callable sets can carry different owner
+        // context keys for the same nested source site. The function's own
+        // checked source type key is compared by sameFnTemplate.
+        .nested => |nested| sameProcTemplate(nested.owner, b.nested.owner) and
+            nested.site == b.nested.site,
+        .local_hosted => |template| sameProcTemplate(template, b.local_hosted),
+        .imported_hosted => |template| sameProcTemplate(template, b.imported_hosted),
+        .checked_generated => |template| sameProcTemplate(template, b.checked_generated),
+        .parser_runtime => |runtime| sameProcTemplate(runtime.owner, b.parser_runtime.owner) and
+            runtime.expr == b.parser_runtime.expr,
+        .encode_to_runtime => |runtime| sameProcTemplate(runtime.owner, b.encode_to_runtime.owner) and
+            runtime.expr == b.encode_to_runtime.expr,
+    };
+}
+
+fn sameProcTemplate(a: check.CanonicalNames.ProcTemplate, b: check.CanonicalNames.ProcTemplate) bool {
+    return std.mem.eql(u8, a.artifact.bytes[0..], b.artifact.bytes[0..]) and
+        a.proc_base == b.proc_base and
+        a.template == b.template;
 }
 
 fn alignForwardU32(value: u32, alignment: u32) u32 {
     std.debug.assert(alignment != 0);
     return @intCast(std.mem.alignForward(usize, value, alignment));
+}
+
+fn sameRelocations(a: []const StaticDataRelocation, b: []const StaticDataRelocation) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left.offset != right.offset) return false;
+        if (left.addend != right.addend) return false;
+        if (left.kind != right.kind) return false;
+        if (!std.mem.eql(u8, left.target_symbol_name, right.target_symbol_name)) return false;
+    }
+    return true;
 }
 
 fn staticDataInvariant(comptime message: []const u8) noreturn {

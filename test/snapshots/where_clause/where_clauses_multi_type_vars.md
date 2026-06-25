@@ -29,11 +29,11 @@ EndOfFile,
 				(ty-var (raw "b"))
 				(ty-var (raw "c")))
 			(where
-				(method (module-of "a") (name "convert")
+				(method (module-of "a") (name "convert") (effectful false)
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "c")))
-				(method (module-of "b") (name "transform")
+				(method (module-of "b") (name "transform") (effectful false)
 					(args
 						(ty-var (raw "b")))
 					(ty-var (raw "c")))))
@@ -65,11 +65,11 @@ NO CHANGE
 				(ty-rigid-var (name "b"))
 				(ty-rigid-var (name "c")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "c"))))
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "transform")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "transform") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "c"))))))))

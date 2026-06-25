@@ -258,6 +258,8 @@ rc_helper_table_indices: std.AutoHashMap(u64, u32),
 proc_table_indices: std.AutoHashMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
 static_str_offsets: std.AutoHashMap(u32, DataAddress),
+/// Map from LIR static-data id -> undefined/defined wasm data symbol.
+static_data_symbols: std.AutoHashMap(u32, SymbolIndex),
 /// Owned names used by generated data segments and local data symbols.
 static_data_names: std.ArrayList([]u8),
 static_data_name_counter: u32 = 0,
@@ -472,6 +474,7 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
         .rc_helper_table_indices = std.AutoHashMap(u64, u32).init(allocator),
         .proc_table_indices = std.AutoHashMap(u32, u32).init(allocator),
         .static_str_offsets = std.AutoHashMap(u32, DataAddress).init(allocator),
+        .static_data_symbols = std.AutoHashMap(u32, SymbolIndex).init(allocator),
         .static_data_names = .empty,
         .func_type_cache = std.StringHashMap(u32).init(allocator),
         .func_type_key_scratch = .empty,
@@ -533,6 +536,7 @@ pub fn deinit(self: *Self) void {
     self.rc_helper_table_indices.deinit();
     self.proc_table_indices.deinit();
     self.static_str_offsets.deinit();
+    self.static_data_symbols.deinit();
     for (self.static_data_names.items) |name| {
         self.allocator.free(name);
     }
@@ -1075,6 +1079,36 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
             @intCast(@as(i64, @intCast(address.offset)) + @as(i64, addend)),
         ) catch return error.OutOfMemory;
     }
+}
+
+fn staticDataSymbol(self: *Self, id: LIR.StaticDataId) Allocator.Error!SymbolIndex {
+    const raw_id: u32 = @intFromEnum(id);
+    if (self.static_data_symbols.get(raw_id)) |symbol| return symbol;
+
+    const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+    errdefer self.allocator.free(symbol_name);
+
+    const symbol = if (self.module.findSymbolByNameAndKind(symbol_name, .data)) |existing|
+        SymbolIndex.fromRaw(existing)
+    else
+        try self.module.addUndefinedDataSymbol(symbol_name);
+
+    try self.static_data_names.append(self.allocator, symbol_name);
+    try self.static_data_symbols.put(raw_id, symbol);
+    return symbol;
+}
+
+fn emitStaticDataAddressConst(self: *Self, id: LIR.StaticDataId, addend: i32) Allocator.Error!void {
+    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    const code_pos: u32 = @intCast(self.currentCode().items.len);
+    try self.currentBody().addOffsetRelocation(
+        self.allocator,
+        .memory_addr_sleb,
+        code_pos,
+        try self.staticDataSymbol(id),
+        addend,
+    );
+    WasmModule.appendPaddedI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 }
 
 fn emitCallIndirect(self: *Self, type_idx: u32) Allocator.Error!void {
@@ -3273,6 +3307,7 @@ fn collectProcLocals(
             .assign_packed_erased_fn => |assign| {
                 try recordProcLocal(locals, assign.target);
                 if (assign.capture) |capture| try recordProcLocal(locals, capture);
+                if (assign.reuse) |reuse| try recordProcLocal(locals, reuse);
                 try work.append(wa, assign.next);
             },
             .assign_low_level => |assign| {
@@ -3295,6 +3330,16 @@ fn collectProcLocals(
                 if (assign.payload) |payload| {
                     try recordProcLocal(locals, payload);
                 }
+                try work.append(wa, assign.next);
+            },
+            .store_struct => |assign| {
+                try recordProcLocal(locals, assign.dest);
+                for (self.store.getLocalSpan(assign.fields)) |field| try recordProcLocal(locals, field);
+                try work.append(wa, assign.next);
+            },
+            .store_tag => |assign| {
+                try recordProcLocal(locals, assign.dest);
+                if (assign.payload) |payload| try recordProcLocal(locals, payload);
                 try work.append(wa, assign.next);
             },
             .set_local => |assign| {
@@ -7342,7 +7387,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .assign_literal => |assign| {
-            try self.generateLiteral(assign.value);
+            try self.generateLiteral(assign.value, self.procLocalLayoutIdx(assign.target));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -7374,6 +7419,8 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .target_layout = self.procLocalLayoutIdx(assign.target),
                 .capture_layout = assign.capture_layout,
                 .on_drop = assign.on_drop,
+                .reuse = assign.reuse,
+                .reuse_unique = assign.reuse_unique,
             });
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -7412,6 +7459,24 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .payload = assign.payload,
             });
             try self.bindAssignedLocal(assign.target);
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .store_struct => |assign| {
+            try self.generateStoreStruct(.{
+                .dest = assign.dest,
+                .fields = assign.fields,
+                .struct_layout = assign.struct_layout,
+            });
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .store_tag => |assign| {
+            try self.generateStoreTag(.{
+                .dest = assign.dest,
+                .union_layout = assign.tag_layout,
+                .variant_index = assign.variant_index,
+                .discriminant = assign.discriminant,
+                .payload = assign.payload,
+            });
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .set_local => |assign| {
@@ -7724,7 +7789,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
     }
 }
 
-fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
+fn generateLiteral(self: *Self, value: LIR.LiteralValue, target_layout: layout.Idx) Allocator.Error!void {
     switch (value) {
         .i64_literal => |lit| {
             switch (try self.resolveValType(lit.layout_idx)) {
@@ -7754,6 +7819,7 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
         },
         .dec_literal => |lit| try self.generateI128Literal(lit),
         .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+        .static_data => |id| try self.generateStaticDataLiteral(id, target_layout),
         .null_ptr => {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
@@ -7787,6 +7853,37 @@ fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx)
             .f32, .f64 => unreachable,
         },
         .stack_memory => try self.generateI128Literal(value),
+    }
+}
+
+fn generateStaticDataLiteral(self: *Self, id: LIR.StaticDataId, target_layout: layout.Idx) Allocator.Error!void {
+    const runtime_layout = self.runtimeRepresentationLayoutIdx(target_layout);
+    const size = try self.layoutStorageByteSize(runtime_layout);
+    if (size == 0) {
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        return;
+    }
+
+    const repr = try WasmLayout.wasmReprWithStore(runtime_layout, self.getLayoutStore());
+    switch (repr) {
+        .primitive => |vt| {
+            try self.emitStaticDataAddressConst(id, 0);
+            try self.emitLoadOpSized(vt, size, 0);
+        },
+        .stack_memory => {
+            const slot = try self.allocStackMemory(size, try self.layoutStorageByteAlign(runtime_layout));
+            const dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(slot);
+            try self.emitLocalSet(dst);
+
+            const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitStaticDataAddressConst(id, 0);
+            try self.emitLocalSet(src);
+
+            try self.emitMemCopy(dst, 0, src, size);
+            try self.emitLocalGet(dst);
+        },
     }
 }
 
@@ -8298,14 +8395,56 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
             }
         }
     }
-    const payload_size = builtins.erased_callable.payloadSize(capture_size);
-    try self.emitHeapAllocWithRefcountConst(
-        @intCast(payload_size),
-        builtins.erased_callable.payload_alignment,
-        builtins.erased_callable.allocation_has_refcounted_children,
-    );
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(payload_ptr);
+    if (c.reuse) |reuse| {
+        try self.emitProcLocal(reuse);
+        const reuse_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalSet(reuse_ptr);
+
+        if (c.reuse_unique) {
+            try self.emitLocalGet(reuse_ptr);
+            try self.emitLocalSet(payload_ptr);
+            try self.emitErasedCallableOnDrop(payload_ptr);
+        } else {
+            const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLoadI32AtPtrOffset(reuse_ptr, -4, rc_val);
+
+            try self.emitLocalGet(rc_val);
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+            try self.emitLocalGet(reuse_ptr);
+            try self.emitLocalSet(payload_ptr);
+            try self.emitErasedCallableOnDrop(payload_ptr);
+
+            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+            const payload_size = builtins.erased_callable.payloadSize(capture_size);
+            try self.emitHeapAllocWithRefcountConst(
+                @intCast(payload_size),
+                builtins.erased_callable.payload_alignment,
+                builtins.erased_callable.allocation_has_refcounted_children,
+            );
+            try self.emitLocalSet(payload_ptr);
+            try self.emitDataPtrDecref(
+                reuse_ptr,
+                builtins.erased_callable.payload_alignment,
+                builtins.erased_callable.allocation_has_refcounted_children,
+            );
+
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        }
+    } else {
+        const payload_size = builtins.erased_callable.payloadSize(capture_size);
+        try self.emitHeapAllocWithRefcountConst(
+            @intCast(payload_size),
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+        );
+        try self.emitLocalSet(payload_ptr);
+    }
 
     const proc_key: u32 = @intFromEnum(c.proc);
     const table_idx = self.proc_table_indices.get(proc_key) orelse {
@@ -9035,6 +9174,57 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     // Push base pointer
     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_local) catch return error.OutOfMemory;
+}
+
+fn generateStoreStruct(self: *Self, s: anytype) Allocator.Error!void {
+    try self.generateStoreAggregateValue(s.dest, s.struct_layout, .{ .struct_ = .{
+        .fields = s.fields,
+        .struct_layout = s.struct_layout,
+    } });
+}
+
+fn generateStoreTag(self: *Self, t: anytype) Allocator.Error!void {
+    try self.generateStoreAggregateValue(t.dest, t.union_layout, .{ .tag = .{
+        .union_layout = t.union_layout,
+        .variant_index = t.variant_index,
+        .discriminant = t.discriminant,
+        .payload = t.payload,
+    } });
+}
+
+fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: layout.Idx, value: union(enum) {
+    struct_: struct {
+        fields: ProcLocalSpan,
+        struct_layout: layout.Idx,
+    },
+    tag: struct {
+        union_layout: layout.Idx,
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?ProcLocalId,
+    },
+}) Allocator.Error!void {
+    const value_size = try self.layoutByteSize(value_layout);
+
+    try self.emitProcLocal(dest);
+    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(ptr_local);
+
+    if (value_size == 0) return;
+
+    switch (value) {
+        .struct_ => |s| try self.generateStruct(s),
+        .tag => |t| try self.generateTag(t),
+    }
+
+    if (try self.isCompositeLayout(value_layout)) {
+        const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalSet(src_local);
+        try self.emitMemCopy(ptr_local, 0, src_local, value_size);
+    } else {
+        const value_vt = try self.resolveValType(value_layout);
+        try self.emitStoreToMemSized(ptr_local, 0, value_vt, value_size);
+    }
 }
 
 /// Generate a discriminant switch expression.
@@ -11167,6 +11357,90 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                             try self.emitLocalGet(temp_ptr);
                             try self.emitLoadOpSized(result_vt, result_size, 0);
                         }
+                    }
+                }
+            }
+        },
+        .box_prepare_update => {
+            // box_prepare_update(box_ptr) -> box_ptr
+            // Return a unique payload allocation, copying and retaining nested
+            // payload children when the consumed box was shared or static.
+            const box_expr = args[0];
+            const ls = self.getLayoutStore();
+            const ret_layout = ls.getLayout(ll.ret_layout);
+
+            if (ret_layout.tag == .box_of_zst) {
+                _ = try self.emitProcLocal(box_expr);
+                self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                try self.emitI32Const(0);
+            } else {
+                const box_abi = ls.builtinBoxAbi(ll.ret_layout);
+                const elem_size = box_abi.elem_size;
+                if (elem_size == 0) {
+                    _ = try self.emitProcLocal(box_expr);
+                    self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                    try self.emitI32Const(0);
+                } else {
+                    try self.emitProcLocal(box_expr);
+                    const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitLocalSet(box_ptr);
+
+                    if ((ll.unique_args & 1) != 0) {
+                        try self.emitLocalGet(box_ptr);
+                    } else {
+                        const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+                        try self.emitLocalGet(box_ptr);
+                        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+                        try self.emitI32Const(0);
+                        try self.emitLocalSet(result_ptr);
+                        self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+                        const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        try self.emitLocalGet(box_ptr);
+                        try self.emitI32Const(-4);
+                        self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                        try self.emitLocalSet(masked_ptr);
+                        try self.emitLocalGet(masked_ptr);
+                        try self.emitI32Const(-4);
+                        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                        try self.emitLocalSet(rc_ptr);
+                        try self.emitLoadI32AtPtrOffset(rc_ptr, 0, rc_val);
+
+                        try self.emitLocalGet(rc_val);
+                        try self.emitI32Const(1);
+                        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+                        try self.emitLocalGet(box_ptr);
+                        try self.emitLocalSet(result_ptr);
+                        self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+                        try self.emitHeapAllocWithRefcountConst(elem_size, box_abi.elem_alignment, box_abi.contains_refcounted);
+                        const fresh_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        try self.emitLocalSet(fresh_ptr);
+                        try self.emitMemCopy(fresh_ptr, 0, box_ptr, elem_size);
+
+                        if (box_abi.contains_refcounted) {
+                            if (box_abi.elem_layout_idx) |elem_layout_idx| {
+                                const helper_key = RcHelperKey{ .op = .incref, .layout_idx = elem_layout_idx };
+                                if (ls.rcHelperPlan(helper_key) != .noop) {
+                                    try self.emitExplicitRcHelperCallForValuePtr(helper_key, .atomic, fresh_ptr, 1);
+                                }
+                            }
+                        }
+
+                        try self.emitDataPtrDecref(box_ptr, box_abi.elem_alignment, box_abi.contains_refcounted);
+                        try self.emitLocalGet(fresh_ptr);
+                        try self.emitLocalSet(result_ptr);
+
+                        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                        try self.emitLocalGet(result_ptr);
                     }
                 }
             }

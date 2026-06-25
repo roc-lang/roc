@@ -28,7 +28,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty-var (raw "b")))
 			(where
-				(method (module-of "a") (name "to_b")
+				(method (module-of "a") (name "to_b") (effectful false)
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "b")))))
@@ -64,7 +64,7 @@ NO CHANGE
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_b")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_b") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))

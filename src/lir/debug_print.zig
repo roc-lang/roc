@@ -91,6 +91,7 @@ const Printer = struct {
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),
                         .str_literal => try writer.writeAll("literal str"),
+                        .static_data => |id| try writer.print("literal static_data s{d}", .{@intFromEnum(id)}),
                         .null_ptr => try writer.writeAll("literal null_ptr"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@intFromEnum(p)}),
                     }
@@ -120,7 +121,12 @@ const Printer = struct {
                 },
                 .assign_packed_erased_fn => |s| {
                     try self.writeTarget(s.target, indent, writer);
-                    try writer.print("packed_erased_fn p{d}\n", .{@intFromEnum(s.proc)});
+                    try writer.print("packed_erased_fn p{d}", .{@intFromEnum(s.proc)});
+                    if (s.reuse) |reuse| {
+                        try writer.print(" reuse=l{d}", .{@intFromEnum(reuse)});
+                        if (s.reuse_unique) try writer.writeAll(" unique");
+                    }
+                    try writer.writeByte('\n');
                     current = s.next;
                 },
                 .assign_low_level => |s| {
@@ -147,6 +153,24 @@ const Printer = struct {
                 .assign_tag => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("tag v{d} d{d}", .{ s.variant_index, s.discriminant });
+                    if (s.payload) |payload| try writer.print(" (l{d})", .{@intFromEnum(payload)});
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
+                .store_struct => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("store_struct l{d} layout=", .{@intFromEnum(s.dest)});
+                    try writeLayout(self.layouts, s.struct_layout, writer);
+                    try writer.writeAll("(");
+                    try self.writeLocals(s.fields, writer);
+                    try writer.writeAll(")\n");
+                    current = s.next;
+                },
+                .store_tag => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("store_tag l{d} layout=", .{@intFromEnum(s.dest)});
+                    try writeLayout(self.layouts, s.tag_layout, writer);
+                    try writer.print(" v{d} d{d}", .{ s.variant_index, s.discriminant });
                     if (s.payload) |payload| try writer.print(" (l{d})", .{@intFromEnum(payload)});
                     try writer.writeAll("\n");
                     current = s.next;

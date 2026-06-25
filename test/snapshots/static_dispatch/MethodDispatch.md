@@ -126,7 +126,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty (name "Str")))
 			(where
-				(method (module-of "a") (name "get_value")
+				(method (module-of "a") (name "get_value") (effectful false)
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))
@@ -147,7 +147,7 @@ EndOfFile,
 					(ty (name "Str")))
 				(ty-var (raw "a")))
 			(where
-				(method (module-of "a") (name "transform")
+				(method (module-of "a") (name "transform") (effectful false)
 					(args
 						(ty-var (raw "a"))
 						(ty-fn
@@ -281,7 +281,7 @@ NO CHANGE
 				(ty-rigid-var (name "a"))
 				(ty-lookup (name "Str") (builtin)))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "get_value")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "get_value") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(ty-lookup (name "Str") (builtin))))))
@@ -307,7 +307,7 @@ NO CHANGE
 						(ty-lookup (name "Str") (builtin))))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "transform")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "transform") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-parens

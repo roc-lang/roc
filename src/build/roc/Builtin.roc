@@ -514,19 +514,19 @@ Builtin :: [].{
 	Iter(item) :: {
 		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
 		len_if_known : [Known(U64), Unknown],
-		step : () -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
+		step : () -> [Append({ before : Iter(item), after : item }), One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
 	}.{
 		# The general unfold. `advance` maps a seed to either the next item paired with the
 		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
 		# seed type stays hidden inside the step closure and never appears in `Iter(item)`.
 		custom : state, [Known(U64), Unknown], (state -> Try((item, state), [NoMore])) -> Iter(item)
-		custom = |seed, len_if_known, advance| {
-			len_if_known,
-			step: ||
-				match advance(seed) {
-					Ok((item, next_seed)) =>
-						One(
-							{
+		custom = |seed, len_if_known, advance|
+			iter_from_step(
+				len_if_known,
+				||
+					match advance(seed) {
+						Ok((item, next_seed)) =>
+							One({
 								item,
 								rest: Iter.custom(
 									next_seed,
@@ -536,11 +536,10 @@ Builtin :: [].{
 									},
 									advance,
 								),
-							},
-						)
-					Err(NoMore) => Done
-				},
-		}
+							})
+						Err(NoMore) => Done
+					},
+			)
 
 		## Iterator over `num` values from `start` up to but not including `end`.
 		## Returns an empty iterator if `start >= end`. This is what `start..<end` desugars to.
@@ -551,12 +550,12 @@ Builtin :: [].{
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 				num.steps_between : num, num -> [Known(U64), Unknown],
 			]
-		exclusive_range = |start, end| {
-			len_if_known: start.steps_between(end),
-			step: ||
-				if start < end {
-					One(
-						{
+		exclusive_range = |start, end|
+			iter_from_step(
+				start.steps_between(end),
+				||
+					if start < end {
+						One({
 							item: start,
 							rest: match start.add_try(1) {
 								Ok(next) => if next < end {
@@ -566,12 +565,11 @@ Builtin :: [].{
 								}
 								Err(Overflow) => range_done()
 							},
-						},
-					)
-				} else {
-					Done
-				},
-		}
+						})
+					} else {
+						Done
+					},
+			)
 
 		## Iterator over `num` values from `start` up to and including `end`.
 		## Returns an empty iterator if `start > end`. This is what `start..=end` desugars to.
@@ -582,22 +580,22 @@ Builtin :: [].{
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 				num.steps_between : num, num -> [Known(U64), Unknown],
 			]
-		inclusive_range = |start, end| {
-			len_if_known: if start <= end {
-				match start.steps_between(end) {
-					Known(n) => match n.add_try(1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-					Unknown => Unknown
-				}
-			} else {
-				Known(0)
-			},
-			step: ||
+		inclusive_range = |start, end|
+			iter_from_step(
 				if start <= end {
-					One(
-						{
+					match start.steps_between(end) {
+						Known(n) => match n.add_try(1) {
+							Ok(len) => Known(len)
+							Err(Overflow) => Unknown
+						}
+						Unknown => Unknown
+					}
+				} else {
+					Known(0)
+				},
+				||
+					if start <= end {
+						One({
 							item: start,
 							rest: match start.add_try(1) {
 								Ok(next) => if next <= end {
@@ -607,12 +605,11 @@ Builtin :: [].{
 								}
 								Err(Overflow) => range_done()
 							},
-						},
-					)
-				} else {
-					Done
-				},
-		}
+						})
+					} else {
+						Done
+					},
+			)
 
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
@@ -622,10 +619,10 @@ Builtin :: [].{
 		## expect Iter.fold(Iter.single(42.I64), [], |acc, item| acc.append(item)) == [42]
 		## ```
 		single : item -> Iter(item)
-		single = |item| {
-			len_if_known: Known(1),
-			step: || One({ item, rest: range_done() }),
-		}
+		single = |item| iter_from_step(
+			Known(1),
+			|| One({ item, rest: range_done() }),
+		)
 
 		## Returns an iterator that yields the given item first, followed by
 		## everything the given iterator yields.
@@ -636,13 +633,14 @@ Builtin :: [].{
 		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
 		prepended : Iter(item), item -> Iter(item)
-		prepended = |rest, item| {
-			len_if_known: match rest.len_if_known {
-				Known(n) => Known(n + 1)
-				Unknown => Unknown
-			},
-			step: || One({ item, rest }),
-		}
+		prepended = |rest, item|
+			iter_from_step(
+				match rest.len_if_known {
+					Known(n) => Known(n + 1)
+					Unknown => Unknown
+				},
+				|| One({ item, rest }),
+			)
 
 		## Returns an iterator that yields all items from the first iterator,
 		## then all items from the second iterator.
@@ -651,23 +649,34 @@ Builtin :: [].{
 		## ```
 		concat : Iter(item), Iter(item) -> Iter(item)
 		concat = |first, second| {
-			len_if_known: match first.len_if_known {
-				Known(first_len) => match second.len_if_known {
-					Known(second_len) => if second_len > 18446744073709551615 - first_len {
-						Unknown
-					} else {
-						Known(first_len + second_len)
-					}
-					Unknown => Unknown
-				}
-				Unknown => Unknown
-			},
-			step: ||
-				match Iter.next(first) {
-					Done => Iter.next(second)
-					Skip({ rest }) => Skip({ rest: Iter.concat(rest, second) })
-					One({ item, rest }) => One({ item, rest: Iter.concat(rest, second) })
-				},
+			make = |remaining_first, remaining_second|
+				iter_from_step(
+					match remaining_first.len_if_known {
+						Known(first_len) => match remaining_second.len_if_known {
+							Known(second_len) => if second_len > 18446744073709551615 - first_len {
+								Unknown
+							} else {
+								Known(first_len + second_len)
+							}
+							Unknown => Unknown
+						}
+						Unknown => Unknown
+					},
+					||
+						match Iter.next(remaining_first) {
+							Done => match Iter.next(remaining_second) {
+								Done => Done
+								Append({ before, after }) => Skip({ rest: make(before, Iter.single(after)) })
+								Skip({ rest }) => Skip({ rest: make(range_done(), rest) })
+								One({ item, rest }) => One({ item, rest: make(range_done(), rest) })
+							}
+							Append({ before, after }) => Skip({ rest: make(before, Iter.prepended(remaining_second, after)) })
+							Skip({ rest }) => Skip({ rest: make(rest, remaining_second) })
+							One({ item, rest }) => One({ item, rest: make(rest, remaining_second) })
+						},
+				)
+
+			make(first, second)
 		}
 
 		## Returns an iterator that yields everything from the given iterator,
@@ -676,84 +685,86 @@ Builtin :: [].{
 		## expect Iter.fold([1.I64, 2].iter().append(3), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
 		append : Iter(item), item -> Iter(item)
-		append = |iterator, last| {
-			len_if_known: match iterator.len_if_known {
-				Known(len) => if len == 18446744073709551615 {
-					Unknown
-				} else {
-					Known(len + 1)
-				}
-				Unknown => Unknown
-			},
-			step: ||
-				match Iter.next(iterator) {
-					Done => One({ item: last, rest: range_done() })
-					Skip({ rest }) => Skip({ rest: Iter.append(rest, last) })
-					One({ item, rest }) => One({ item, rest: Iter.append(rest, last) })
+		append = |iterator, last|
+			iter_from_step(
+				match iterator.len_if_known {
+					Known(len) =>
+						if len == 18446744073709551615 {
+							Unknown
+						} else {
+							Known(len + 1)
+						}
+					Unknown => Unknown
 				},
-		}
+				|| Append({ before: iterator, after: last }),
+			)
 
-		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
-		next = |iterator| (iterator.step)()
+		next : Iter(item) -> [Append({ before : Iter(item), after : item }), One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
+		next = |iterator|
+			match (iterator.step)() {
+				Done => Done
+				Append({ before, after }) => Append({ before: before, after: after })
+				Skip({ rest }) => Skip({ rest: rest })
+				One({ item, rest }) => One({ item: item, rest: rest })
+			}
 
 		map : Iter(a), (a -> b) -> Iter(b)
 		map = |iterator, transform|
 			match iterator {
-				{ len_if_known, step } => {
-					len_if_known,
-					step: ||
-						match step() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Iter.map(rest, transform) })
-							One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
-						},
+				{ len_if_known, .. } =>
+					iter_from_step(
+						len_if_known,
+						||
+							match Iter.next(iterator) {
+								Done => Done
+								Append({ before, after }) => Skip({ rest: Iter.concat(Iter.map(before, transform), Iter.map(Iter.single(after), transform)) })
+								Skip({ rest }) => Skip({ rest: Iter.map(rest, transform) })
+								One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
+							},
+					)
 				}
-			}
 
 		keep_if : Iter(a), (a -> Bool) -> Iter(a)
 		keep_if = |iterator, predicate|
-			match iterator {
-				{ step, .. } => {
-					len_if_known: Unknown,
-					step: || {
-						match step() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Iter.keep_if(rest, predicate) })
-							One({ item, rest }) =>
-								if predicate(item) {
-									One({ item, rest: Iter.keep_if(rest, predicate) })
-								} else {
-									Skip({ rest: Iter.keep_if(rest, predicate) })
-								}
+			iter_from_step(
+				Unknown,
+				||
+					match Iter.next(iterator) {
+						Done => Done
+						Append({ before, after }) => Skip({ rest: Iter.keep_if(Iter.concat(before, Iter.single(after)), predicate) })
+						Skip({ rest }) => Skip({ rest: Iter.keep_if(rest, predicate) })
+						One({ item, rest }) =>
+							if predicate(item) {
+								One({ item, rest: Iter.keep_if(rest, predicate) })
+							} else {
+								Skip({ rest: Iter.keep_if(rest, predicate) })
 							}
-					},
-				}
-			}
+						},
+			)
 
 		drop_if : Iter(a), (a -> Bool) -> Iter(a)
 		drop_if = |iterator, predicate|
-			match iterator {
-				{ step, .. } => {
-					len_if_known: Unknown,
-					step: || {
-						match step() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Iter.drop_if(rest, predicate) })
-							One({ item, rest }) =>
-								if predicate(item) {
-									Skip({ rest: Iter.drop_if(rest, predicate) })
-								} else {
-									One({ item, rest: Iter.drop_if(rest, predicate) })
-								}
+			iter_from_step(
+				Unknown,
+				||
+					match Iter.next(iterator) {
+						Done => Done
+						Append({ before, after }) => Skip({ rest: Iter.drop_if(Iter.concat(before, Iter.single(after)), predicate) })
+						Skip({ rest }) => Skip({ rest: Iter.drop_if(rest, predicate) })
+						One({ item, rest }) =>
+							if predicate(item) {
+								Skip({ rest: Iter.drop_if(rest, predicate) })
+							} else {
+								One({ item, rest: Iter.drop_if(rest, predicate) })
 							}
-					},
-				}
-			}
+						},
+			)
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
 		fold = |iterator, acc, step|
 			match Iter.next(iterator) {
 				Done => acc
+				Append({ before, after }) => step(Iter.fold(before, acc, step), after)
 				Skip({ rest }) => Iter.fold(rest, acc, step)
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
@@ -791,25 +802,27 @@ Builtin :: [].{
 				range_done()
 			} else {
 				match iterator {
-					{ len_if_known, step } => {
-						len_if_known: match len_if_known {
-							Known(len) => Known(
-								if len < n {
-									len
-								} else {
-									n
-								},
-							)
-							Unknown => Unknown
-						},
-						step: ||
-							match step() {
-								Done => Done
-								Skip({ rest }) => Skip({ rest: Iter.take_first(rest, n) })
-								One({ item, rest }) => One({ item, rest: Iter.take_first(rest, n - 1) })
+					{ len_if_known, .. } =>
+						iter_from_step(
+							match len_if_known {
+								Known(len) => Known(
+									if len < n {
+										len
+									} else {
+										n
+									},
+								)
+								Unknown => Unknown
 							},
+							||
+								match Iter.next(iterator) {
+									Done => Done
+									Append({ before, after }) => Skip({ rest: Iter.take_first(Iter.concat(before, Iter.single(after)), n) })
+									Skip({ rest }) => Skip({ rest: Iter.take_first(rest, n) })
+									One({ item, rest }) => One({ item, rest: Iter.take_first(rest, n - 1) })
+								},
+						)
 					}
-				}
 			}
 
 		## Returns an iterator that skips the first `n` items of this iterator.
@@ -825,25 +838,27 @@ Builtin :: [].{
 				iterator
 			} else {
 				match iterator {
-					{ len_if_known, step } => {
-						len_if_known: match len_if_known {
-							Known(len) => Known(
-								if len < n {
-									0
-								} else {
-									len - n
-								},
-							)
-							Unknown => Unknown
-						},
-						step: ||
-							match step() {
-								Done => Done
-								Skip({ rest }) => Skip({ rest: Iter.drop_first(rest, n) })
-								One({ item: _, rest }) => Skip({ rest: Iter.drop_first(rest, n - 1) })
+					{ len_if_known, .. } =>
+						iter_from_step(
+							match len_if_known {
+								Known(len) => Known(
+									if len < n {
+										0
+									} else {
+										len - n
+									},
+								)
+								Unknown => Unknown
 							},
+							||
+								match Iter.next(iterator) {
+									Done => Done
+									Append({ before, after }) => Skip({ rest: Iter.drop_first(Iter.concat(before, Iter.single(after)), n) })
+									Skip({ rest }) => Skip({ rest: Iter.drop_first(rest, n) })
+									One({ item: _, rest }) => Skip({ rest: Iter.drop_first(rest, n - 1) })
+								},
+						)
 					}
-				}
 			}
 
 		## Returns an iterator that yields the last `n` items of this iterator.
@@ -908,25 +923,27 @@ Builtin :: [].{
 				range_done()
 			} else {
 				match iterator {
-					{ len_if_known, step } => {
-						len_if_known: match len_if_known {
-							Known(len) => Known(
-								if len == 0 {
-									0
-								} else {
-									(len - 1) / n + 1
-								},
-							)
-							Unknown => Unknown
-						},
-						step: ||
-							match step() {
-								Done => Done
-								Skip({ rest }) => Skip({ rest: Iter.step_by(rest, n) })
-								One({ item, rest }) => One({ item, rest: Iter.step_by(Iter.drop_first(rest, n - 1), n) })
+					{ len_if_known, .. } =>
+						iter_from_step(
+							match len_if_known {
+								Known(len) => Known(
+									if len == 0 {
+										0
+									} else {
+										(len - 1) / n + 1
+									},
+								)
+								Unknown => Unknown
 							},
+							||
+								match Iter.next(iterator) {
+									Done => Done
+									Append({ before, after }) => Skip({ rest: Iter.step_by(Iter.concat(before, Iter.single(after)), n) })
+									Skip({ rest }) => Skip({ rest: Iter.step_by(rest, n) })
+									One({ item, rest }) => One({ item, rest: Iter.step_by(Iter.drop_first(rest, n - 1), n) })
+								},
+						)
 					}
-				}
 			}
 
 		## Returns an iterator that yields this iterator's items in reverse order.
@@ -963,6 +980,7 @@ Builtin :: [].{
 				step!: ||
 					match Iter.next(iterator) {
 						Done => Done
+						Append({ before, after }) => Skip({ rest: Stream.from_iter(Iter.concat(before, Iter.single(after))) })
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
 					},
@@ -1071,15 +1089,15 @@ Builtin :: [].{
 			make = |index| {
 				len = List.len(list)
 
-				{
-					len_if_known: Known(len - index),
-					step: ||
+				iter_from_step(
+					Known(len - index),
+					||
 						if index == len {
 							Done
 						} else {
 							One({ item: list_get_unsafe(list, index), rest: make(index + 1) })
 						},
-				}
+				)
 			}
 
 			make(0)
@@ -1108,6 +1126,9 @@ Builtin :: [].{
 				match Iter.next($rest) {
 					Done => {
 						break
+					}
+					Append({ before, after }) => {
+						$rest = Iter.concat(before, Iter.single(after))
 					}
 					Skip({ rest }) => {
 						$rest = rest
@@ -1238,6 +1259,16 @@ Builtin :: [].{
 			reserved = List.reserve(list, 1)
 			list_append_unsafe(reserved, item)
 		}
+
+		## Add the `Ok` payload to the end of a list, or leave the list unchanged
+		## if the value is `Err`.
+		## ```roc
+		## expect List.append_if_ok([1, 2], Ok(3)) == [1, 2, 3]
+		##
+		## expect List.append_if_ok([1, 2], Err(NotFound)) == [1, 2]
+		## ```
+		append_if_ok : List(a), Try(a, err) -> List(a)
+		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
 
 		## Add a single element to the beginning of a list.
 		## ```roc
@@ -1957,12 +1988,10 @@ Builtin :: [].{
 			where [a.is_eq : a, a -> Bool]
 		split_first = |list, delim|
 			match list->find_first_index(|x| x == delim) {
-				Ok(index) => Ok(
-					{
-						before: list.sublist({ start: 0, len: index }),
-						after: list.drop_first(index + 1),
-					},
-				)
+				Ok(index) => Ok({
+					before: list.sublist({ start: 0, len: index }),
+					after: list.drop_first(index + 1),
+				})
 				Err(NotFound) => Err(NotFound)
 			}
 
@@ -1974,12 +2003,10 @@ Builtin :: [].{
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim|
 			match list->find_last_index(|x| x == delim) {
-				Ok(index) => Ok(
-					{
-						before: list.sublist({ start: 0, len: index }),
-						after: list.drop_first(index + 1),
-					},
-				)
+				Ok(index) => Ok({
+					before: list.sublist({ start: 0, len: index }),
+					after: list.drop_first(index + 1),
+				})
 				Err(NotFound) => Err(NotFound)
 			}
 
@@ -2375,14 +2402,12 @@ Builtin :: [].{
 		with_capacity : U64 -> Dict(_k, _v)
 		with_capacity = |requested| {
 			metadata = dict_allocate_buckets_for_capacity(requested)
-			HashMap(
-				{
-					entries: List.with_capacity(requested),
-					buckets: metadata.buckets,
-					max_entries_before_grow: metadata.max_entries_before_grow,
-					shifts: metadata.shifts,
-				},
-			)
+			HashMap({
+				entries: List.with_capacity(requested),
+				buckets: metadata.buckets,
+				max_entries_before_grow: metadata.max_entries_before_grow,
+				shifts: metadata.shifts,
+			})
 		}
 
 		## Returns the number of entries the dictionary can hold before growing.
@@ -2420,14 +2445,12 @@ Builtin :: [].{
 		clear : Dict(k, v) -> Dict(k, v)
 		clear = |dict| match dict {
 			HashMap(data) => {
-				HashMap(
-					{
-						entries: List.take_first(data.entries, 0),
-						buckets: List.map(data.buckets, |_| dict_empty_bucket),
-						max_entries_before_grow: data.max_entries_before_grow,
-						shifts: data.shifts,
-					},
-				)
+				HashMap({
+					entries: List.take_first(data.entries, 0),
+					buckets: List.map(data.buckets, |_| dict_empty_bucket),
+					max_entries_before_grow: data.max_entries_before_grow,
+					shifts: data.shifts,
+				})
 			}
 		}
 
@@ -3515,16 +3538,16 @@ Builtin :: [].{
 			## expect Iter.fold(U8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U8, U8 -> Iter(U8)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(U8.to_u64(end) - U8.to_u64(start) + 1)
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						Known(U8.to_u64(end) - U8.to_u64(start) + 1)
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match U8.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -3534,12 +3557,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `U8` and ending with the other `U8` minus one.
 			## (Use [U8.to] instead to end with the other `U8` exactly, instead of minus one.)
@@ -3552,16 +3574,16 @@ Builtin :: [].{
 			## expect Iter.fold(U8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U8, U8 -> Iter(U8)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(U8.to_u64(end) - U8.to_u64(start))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						Known(U8.to_u64(end) - U8.to_u64(start))
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match U8.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -3571,12 +3593,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 
@@ -4148,16 +4169,16 @@ Builtin :: [].{
 			## expect Iter.fold(I8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I8, I8 -> Iter(I8)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1))
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1))
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match I8.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -4167,12 +4188,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8` minus one.
 			## (Use [I8.to] instead to end with the other `I8` exactly, instead of minus one.)
@@ -4185,16 +4205,16 @@ Builtin :: [].{
 			## expect Iter.fold(I8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I8, I8 -> Iter(I8)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match I8.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -4204,12 +4224,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4802,16 +4821,16 @@ Builtin :: [].{
 			## expect Iter.fold(U16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U16, U16 -> Iter(U16)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(U16.to_u64(end) - U16.to_u64(start) + 1)
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						Known(U16.to_u64(end) - U16.to_u64(start) + 1)
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match U16.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -4821,12 +4840,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `U16` and ending with the other `U16` minus one.
 			## (Use [U16.to] instead to end with the other `U16` exactly, instead of minus one.)
@@ -4839,16 +4857,16 @@ Builtin :: [].{
 			## expect Iter.fold(U16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U16, U16 -> Iter(U16)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(U16.to_u64(end) - U16.to_u64(start))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						Known(U16.to_u64(end) - U16.to_u64(start))
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match U16.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -4858,12 +4876,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5494,16 +5511,16 @@ Builtin :: [].{
 			## expect Iter.fold(I16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I16, I16 -> Iter(I16)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1))
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1))
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match I16.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -5513,12 +5530,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `I16` and ending with the other `I16` minus one.
 			## (Use [I16.to] instead to end with the other `I16` exactly, instead of minus one.)
@@ -5531,16 +5547,16 @@ Builtin :: [].{
 			## expect Iter.fold(I16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I16, I16 -> Iter(I16)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match I16.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -5550,12 +5566,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build an [I16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6163,16 +6178,16 @@ Builtin :: [].{
 			## expect Iter.fold(U32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U32, U32 -> Iter(U32)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(U32.to_u64(end) - U32.to_u64(start) + 1)
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						Known(U32.to_u64(end) - U32.to_u64(start) + 1)
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match U32.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -6182,12 +6197,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32` minus one.
 			## (Use [U32.to] instead to end with the other `U32` exactly, instead of minus one.)
@@ -6200,16 +6214,16 @@ Builtin :: [].{
 			## expect Iter.fold(U32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U32, U32 -> Iter(U32)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(U32.to_u64(end) - U32.to_u64(start))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						Known(U32.to_u64(end) - U32.to_u64(start))
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match U32.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -6219,12 +6233,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6887,16 +6900,16 @@ Builtin :: [].{
 			## expect Iter.fold(I32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I32, I32 -> Iter(I32)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1))
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1))
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match I32.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -6906,12 +6919,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `I32` and ending with the other `I32` minus one.
 			## (Use [I32.to] instead to end with the other `I32` exactly, instead of minus one.)
@@ -6924,16 +6936,16 @@ Builtin :: [].{
 			## expect Iter.fold(I32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I32, I32 -> Iter(I32)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match I32.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -6943,12 +6955,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build an [I32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -7573,19 +7584,19 @@ Builtin :: [].{
 			## expect Iter.fold(U64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U64, U64 -> Iter(U64)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match U64.add_try(end - start, 1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						match U64.add_try(end - start, 1) {
+							Ok(len) => Known(len)
+							Err(Overflow) => Unknown
+						}
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match U64.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -7595,12 +7606,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64` minus one.
 			## (Use [U64.to] instead to end with the other `U64` exactly, instead of minus one.)
@@ -7613,16 +7623,16 @@ Builtin :: [].{
 			## expect Iter.fold(U64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U64, U64 -> Iter(U64)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(end - start)
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						Known(end - start)
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match U64.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -7632,12 +7642,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -8336,22 +8345,22 @@ Builtin :: [].{
 			## expect Iter.fold(I64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I64, I64 -> Iter(I64)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match I64.sub_try(end, start) {
-						Ok(diff) => match I64.add_try(diff, 1) {
-							Ok(d1) => Known(I64.to_u64_wrap(d1))
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						match I64.sub_try(end, start) {
+							Ok(diff) => match I64.add_try(diff, 1) {
+								Ok(d1) => Known(I64.to_u64_wrap(d1))
+								Err(Overflow) => Unknown
+							}
 							Err(Overflow) => Unknown
 						}
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match I64.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -8361,12 +8370,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `I64` and ending with the other `I64` minus one.
 			## (Use [I64.to] instead to end with the other `I64` exactly, instead of minus one.)
@@ -8379,19 +8387,19 @@ Builtin :: [].{
 			## expect Iter.fold(I64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I64, I64 -> Iter(I64)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					match I64.sub_try(end, start) {
-						Ok(diff) => Known(I64.to_u64_wrap(diff))
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						match I64.sub_try(end, start) {
+							Ok(diff) => Known(I64.to_u64_wrap(diff))
+							Err(Overflow) => Unknown
+						}
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match I64.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -8401,12 +8409,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build an [I64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -9047,22 +9054,22 @@ Builtin :: [].{
 			## expect Iter.fold(U128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U128, U128 -> Iter(U128)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match U128.to_u64_try(end - start) {
-						Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						match U128.to_u64_try(end - start) {
+							Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
+								Ok(len) => Known(len)
+								Err(Overflow) => Unknown
+							}
+							Err(OutOfRange) => Unknown
 						}
-						Err(OutOfRange) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match U128.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -9072,12 +9079,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128` minus one.
 			## (Use [U128.to] instead to end with the other `U128` exactly, instead of minus one.)
@@ -9090,19 +9096,19 @@ Builtin :: [].{
 			## expect Iter.fold(U128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U128, U128 -> Iter(U128)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					match U128.to_u64_try(end - start) {
-						Ok(len) => Known(len)
-						Err(OutOfRange) => Unknown
-					}
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						match U128.to_u64_try(end - start) {
+							Ok(len) => Known(len)
+							Err(OutOfRange) => Unknown
+						}
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match U128.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -9112,12 +9118,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -9852,25 +9857,25 @@ Builtin :: [].{
 			## expect Iter.fold(I128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I128, I128 -> Iter(I128)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match I128.sub_try(end, start) {
-						Ok(diff) => match I128.to_u64_try(diff) {
-							Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
-								Ok(len) => Known(len)
-								Err(Overflow) => Unknown
+			to = |start, end|
+				iter_from_step(
+					if start > end {
+						Known(0)
+					} else {
+						match I128.sub_try(end, start) {
+							Ok(diff) => match I128.to_u64_try(diff) {
+								Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
+									Ok(len) => Known(len)
+									Err(Overflow) => Unknown
+								}
+								Err(OutOfRange) => Unknown
 							}
-							Err(OutOfRange) => Unknown
+							Err(Overflow) => Unknown
 						}
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
+					},
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match I128.add_try(start, 1) {
 									Ok(next) => if next <= end {
@@ -9880,12 +9885,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128` minus one.
 			## (Use [I128.to] instead to end with the other `I128` exactly, instead of minus one.)
@@ -9898,22 +9902,22 @@ Builtin :: [].{
 			## expect Iter.fold(I128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I128, I128 -> Iter(I128)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					match I128.sub_try(end, start) {
-						Ok(diff) => match I128.to_u64_try(diff) {
-							Ok(len) => Known(len)
-							Err(OutOfRange) => Unknown
+			until = |start, end|
+				iter_from_step(
+					if start >= end {
+						Known(0)
+					} else {
+						match I128.sub_try(end, start) {
+							Ok(diff) => match I128.to_u64_try(diff) {
+								Ok(len) => Known(len)
+								Err(OutOfRange) => Unknown
+							}
+							Err(Overflow) => Unknown
 						}
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start < end {
-						One(
-							{
+					},
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match I128.add_try(start, 1) {
 									Ok(next) => if next < end {
@@ -9923,12 +9927,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -11028,12 +11031,12 @@ Builtin :: [].{
 			## expect Iter.fold(Dec.to(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : Dec, Dec -> Iter(Dec)
-			to = |start, end| {
-				len_if_known: Unknown,
-				step: ||
-					if start <= end {
-						One(
-							{
+			to = |start, end|
+				iter_from_step(
+					Unknown,
+					||
+						if start <= end {
+							One({
 								item: start,
 								rest: match Dec.add_try(start, 1.0) {
 									Ok(next) => if next <= end {
@@ -11043,12 +11046,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Iterator of decimals beginning with this `Dec` and ending with the
 			## other `Dec` minus one, stepping by `1.0`. (Use [Dec.to] instead to
@@ -11063,12 +11065,12 @@ Builtin :: [].{
 			## expect Iter.fold(Dec.until(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : Dec, Dec -> Iter(Dec)
-			until = |start, end| {
-				len_if_known: Unknown,
-				step: ||
-					if start < end {
-						One(
-							{
+			until = |start, end|
+				iter_from_step(
+					Unknown,
+					||
+						if start < end {
+							One({
 								item: start,
 								rest: match Dec.add_try(start, 1.0) {
 									Ok(next) => if next < end {
@@ -11078,12 +11080,11 @@ Builtin :: [].{
 									}
 									Err(Overflow) => range_done()
 								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
+							})
+						} else {
+							Done
+						},
+				)
 
 			## Encode a Dec using a format that provides encode_dec
 			encode : Dec, fmt -> Try(encoded, err)
@@ -13053,12 +13054,10 @@ Builtin :: [].{
 				Missing({ bucket_index: 0, dist_and_fingerprint: 0 })
 			} else {
 				hash = dict_hash_key(key)
-				Missing(
-					{
-						bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
-						dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
-					},
-				)
+				Missing({
+					bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
+					dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
+				})
 			}
 		} else if List.is_empty(data.buckets) {
 			crash "Dict invariant violated: entries without buckets"
@@ -13933,6 +13932,13 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 			}
 		}
 
+list_append_if_ok : List(a), Try(a, err) -> List(a)
+list_append_if_ok = |list, maybe_item|
+	match maybe_item {
+		Ok(item) => List.append(list, item)
+		Err(_) => list
+	}
+
 unsigned_minus_saturated : item, item, item -> item
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
 unsigned_minus_saturated = |zero, a, b|
@@ -14092,11 +14098,17 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 
 numeric_compare : item, item -> [LT, EQ, GT]
 
-range_done : () -> Iter(item)
-range_done = || {
-	len_if_known: Known(0),
-	step: || Done,
+iter_from_step : [Known(U64), Unknown], (() -> [Append({ before : Iter(item), after : item }), One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
+iter_from_step = |len_if_known, step| {
+	len_if_known,
+	step,
 }
+
+range_done : () -> Iter(item)
+range_done = || iter_from_step(
+	Known(0),
+	|| Done,
+)
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item

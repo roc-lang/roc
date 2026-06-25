@@ -389,7 +389,7 @@ EndOfFile,
 				(ty-var (raw "c"))
 				(ty-var (raw "d")))
 			(where
-				(method (module-of "a") (name "map")
+				(method (module-of "a") (name "map") (effectful false)
 					(args
 						(ty-var (raw "a"))
 						(ty-fn
@@ -988,7 +988,7 @@ main = {
 				(ty-rigid-var (name "c"))
 				(ty-rigid-var (name "d")))
 			(where
-				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "map")
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "map") (effectful false)
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-parens

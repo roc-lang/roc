@@ -139,6 +139,11 @@ pub const StrLiteral = struct {
     len: u32,
 };
 
+/// Identifier for one readonly data object emitted by static-data materialization.
+pub const StaticDataId = enum(u32) {
+    _,
+};
+
 /// How a string interpolation pattern must finish after its last step.
 pub const StrPatternEnd = enum {
     exact,
@@ -267,6 +272,7 @@ pub const LiteralValue = union(enum) {
     f32_literal: f32,
     dec_literal: i128,
     str_literal: StrLiteral,
+    static_data: StaticDataId,
     null_ptr,
     proc_ref: LirProcSpecId,
 };
@@ -423,6 +429,15 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
+        /// Optional consumed erased callable allocation to repack.
+        ///
+        /// When present, this statement returns a unique erased callable with
+        /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
+        /// consumed allocation is uniquely owned at the statement. Otherwise,
+        /// consumers must runtime-check uniqueness and take the fresh allocate
+        /// path when the old allocation is shared.
+        reuse: ?LocalId = null,
+        reuse_unique: bool = false,
         next: CFStmtId,
     },
     assign_low_level: struct {
@@ -452,6 +467,20 @@ pub const CFStmt = union(enum) {
     },
     assign_tag: struct {
         target: LocalId,
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?LocalId,
+        next: CFStmtId,
+    },
+    store_struct: struct {
+        dest: LocalId,
+        struct_layout: layout.Idx,
+        fields: LocalSpan,
+        next: CFStmtId,
+    },
+    store_tag: struct {
+        dest: LocalId,
+        tag_layout: layout.Idx,
         variant_index: u16,
         discriminant: u16,
         payload: ?LocalId,

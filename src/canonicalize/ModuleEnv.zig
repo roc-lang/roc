@@ -576,6 +576,20 @@ pub const NumericSuffixTarget = extern struct {
     }
 };
 
+pub const RuntimeDependency = enum(u8) {
+    compile_time_known,
+    runtime_dependent,
+    poisoned,
+};
+
+pub const RuntimeDependencySummary = extern struct {
+    node_idx: u32,
+    dependency: RuntimeDependency,
+    _padding: [3]u8 = .{ 0, 0, 0 },
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -668,6 +682,10 @@ numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
 quote_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
+/// Final checked runtime-dependency summaries for exported/importable values
+/// and callable bodies. Checking writes these; later checkers consume imported
+/// summaries directly instead of re-reading imported CIR bodies.
+runtime_dependency_summaries: RuntimeDependencySummary.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -826,6 +844,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
+        .runtime_dependency_summaries = try RuntimeDependencySummary.SafeList.initCapacity(gpa, 16),
     };
 }
 
@@ -848,6 +867,7 @@ pub fn deinit(self: *Self) void {
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
+    self.runtime_dependency_summaries.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -889,11 +909,41 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
+    self.runtime_dependency_summaries.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
     // and will only free if memory was actually allocated (not for pure cached data).
     self.common.idents.interner.deinit(self.gpa);
+}
+
+pub fn recordRuntimeDependencySummary(
+    self: *Self,
+    node_idx: Node.Idx,
+    dependency: RuntimeDependency,
+) Allocator.Error!void {
+    const raw_node_idx: u32 = @intFromEnum(node_idx);
+    for (self.runtime_dependency_summaries.items.items) |*summary| {
+        if (summary.node_idx == raw_node_idx) {
+            summary.dependency = dependency;
+            return;
+        }
+    }
+    _ = try self.runtime_dependency_summaries.append(self.gpa, .{
+        .node_idx = raw_node_idx,
+        .dependency = dependency,
+    });
+}
+
+pub fn runtimeDependencySummaryForNode(
+    self: *const Self,
+    node_idx: Node.Idx,
+) ?RuntimeDependency {
+    const raw_node_idx: u32 = @intFromEnum(node_idx);
+    for (self.runtime_dependency_summaries.items.items) |summary| {
+        if (summary.node_idx == raw_node_idx) return summary.dependency;
+    }
+    return null;
 }
 
 // Module compilation functionality
@@ -3173,6 +3223,7 @@ pub const Serialized = extern struct {
     numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
+    runtime_dependency_summaries: RuntimeDependencySummary.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3236,6 +3287,7 @@ pub const Serialized = extern struct {
         try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
         try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
+        try self.runtime_dependency_summaries.serialize(&env.runtime_dependency_summaries, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3290,6 +3342,7 @@ pub const Serialized = extern struct {
             .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
             .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
+            .runtime_dependency_summaries = self.runtime_dependency_summaries.deserializeInto(base_addr),
         };
 
         return env;
@@ -3347,6 +3400,7 @@ pub const Serialized = extern struct {
             .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
+            .runtime_dependency_summaries = try self.runtime_dependency_summaries.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;

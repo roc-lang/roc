@@ -328,7 +328,7 @@ test "fx platform boxed erased callable host boundary (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
-test "provided static data exports are host-linkable readonly constants" {
+test "provided and hoisted static data are host-linkable readonly constants" {
     const allocator = testing.allocator;
 
     const run_result = try buildAndRunDevBackendApp(
@@ -505,9 +505,6 @@ test "fx platform dbg missing return value (interpreter)" {
     defer allocator.free(run_result.stderr);
 
     try util.checkSuccess(run_result);
-
-    // Verify that the dbg output was printed
-    try testing.expect(std.mem.find(u8, run_result.stderr, "this should work now") != null);
 }
 
 test "fx platform dbg missing return value (dev backend)" {
@@ -518,9 +515,6 @@ test "fx platform dbg missing return value (dev backend)" {
     defer allocator.free(run_result.stderr);
 
     try util.checkSuccess(run_result);
-
-    // Verify that the dbg output was printed
-    try testing.expect(std.mem.find(u8, run_result.stderr, "this should work now") != null);
 }
 
 test "fx platform check unused state var reports correct errors" {
@@ -1246,9 +1240,8 @@ test "fx platform runtime division by zero" {
 }
 
 test "fx platform inline expect fails as expected (interpreter)" {
-    // Regression test: inline expect inside main! should fail via the
-    // normal crash handler (Roc crashed: ...) instead of overflowing
-    // the stack and triggering the stack overflow handler.
+    // Regression test: inline expect inside main! should fail during
+    // compile-time evaluation instead of overflowing the stack.
     const allocator = testing.allocator;
     const run_result = try util.runRoc(std.testing.io, allocator, &.{"--opt=interpreter"}, "test/fx/issue8517.roc");
     defer allocator.free(run_result.stdout);
@@ -1259,9 +1252,8 @@ test "fx platform inline expect fails as expected (interpreter)" {
 
     const stderr = run_result.stderr;
 
-    // The platform receives failed expectations through the expect-failed host
-    // callback, not through the crash callback.
-    try testing.expect(std.mem.find(u8, stderr, "Expect failed: expect failed") != null);
+    try testing.expect(std.mem.find(u8, stderr, "COMPTIME EXPECT FAILED") != null);
+    try testing.expect(std.mem.find(u8, stderr, "expect failed") != null);
 }
 
 test "fx platform inline expect fails as expected (dev backend)" {
@@ -1281,46 +1273,17 @@ test "fx platform inline expect succeeds as expected" {
 
 test "fx platform inline expect fails in dev backend binary" {
     // Regression test for #9261: the dev backend (object file compilation) must
-    // evaluate inline expect expressions. Previously, lowered `s_expect`
-    // statements did not wrap the condition in an .expect node, causing the dev
-    // backend to silently skip the assertion.
+    // evaluate inline expect expressions before producing a binary.
     const allocator = testing.allocator;
 
     // Build with dev backend to produce a native binary
     const build_result = try util.runRoc(std.testing.io, allocator, &.{ "build", "--opt=dev" }, "test/fx/issue8517.roc");
     defer allocator.free(build_result.stdout);
     defer allocator.free(build_result.stderr);
-    try util.checkSuccess(build_result);
 
-    // Run the built binary
-    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{"./issue8517"}, .{
-        .max_output_bytes = 10 * 1024 * 1024,
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    // Should exit with non-zero code (expect failure)
-    switch (run_result.term) {
-        .exited => |code| {
-            if (code == 0) {
-                std.debug.print("ERROR: dev backend binary exited with 0 but expect 1 == 2 should fail\n", .{});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.UnexpectedSuccess;
-            }
-        },
-        .signal => |sig| {
-            std.debug.print("ERROR: dev backend binary crashed with signal {} instead of clean expect failure\n", .{sig});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.SegFault;
-        },
-        else => {
-            std.debug.print("ERROR: dev backend binary terminated abnormally: {}\n", .{run_result.term});
-            return error.RunFailed;
-        },
-    }
-
-    // Should report the failing inline expect via roc_expect_failed
-    try testing.expect(std.mem.find(u8, run_result.stderr, "Expect failed") != null);
+    try util.checkFailure(build_result);
+    try testing.expect(std.mem.find(u8, build_result.stderr, "COMPTIME EXPECT FAILED") != null);
+    try testing.expect(std.mem.find(u8, build_result.stderr, "expect failed") != null);
 }
 
 test "fx platform index out of bounds in instantiate regression" {
