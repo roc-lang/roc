@@ -35,9 +35,14 @@ pub const Options = struct {
     /// Restore stored constants as readonly static-data values when their
     /// ConstStore shape requires runtime storage.
     static_data_literals: bool = false,
-    /// Lower recognized builtin iterator producers directly into private
-    /// cursor plans for optimized consumers.
+    /// Lower recognized builtin iterator consumers directly into private
+    /// cursor loops in the source shapes that are already supported.
     iterator_plans: bool = false,
+    /// Lower recognized builtin iterator producers into first-class plan
+    /// expressions. This must stay separate until iterator normalization
+    /// consumes common plans directly instead of materializing them back to
+    /// the public `Iter` representation.
+    iterator_producer_plans: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
 };
 
@@ -372,6 +377,7 @@ const Builder = struct {
     proc_debug_names: bool,
     static_data_literals: bool,
     iterator_plans: bool,
+    iterator_producer_plans: bool,
     target_usize: base.target.TargetUsize,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
@@ -407,6 +413,7 @@ const Builder = struct {
             .proc_debug_names = options.proc_debug_names,
             .static_data_literals = options.static_data_literals,
             .iterator_plans = options.iterator_plans,
+            .iterator_producer_plans = options.iterator_producer_plans,
             .target_usize = options.target_usize,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
@@ -10335,10 +10342,14 @@ const BodyContext = struct {
         if (expected_ret_ty) |expected| {
             if (!self.sameType(expected, fn_data.ret)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
         }
+        const lowered_call = try self.lowerResolvedDispatchCall(plan, resolved, target_mono_ty, self, pre_lowered);
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self, pre_lowered),
+            .data = lowered_call.exprData(),
         });
+        if (try self.lowerIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, call_expr)) |plan_expr| {
+            return try self.applyDispatchResultMode(plan.result_mode, plan_expr, fn_data.ret);
+        }
         return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
     }
 
@@ -10410,9 +10421,10 @@ const BodyContext = struct {
         }
 
         const fn_data = self.builder.functionShape(target_mono_ty, "checked from_numeral target had a non-function type");
+        const lowered_call = try self.lowerResolvedDispatchCall(plan, resolved, target_mono_ty, self, null);
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self, null),
+            .data = lowered_call.exprData(),
         });
         return .{ .call = call_expr, .try_ty = fn_data.ret };
     }
@@ -10931,20 +10943,32 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerResolvedDispatch(
+    const LoweredResolvedDispatchCall = struct {
+        callee: Ast.FnId,
+        args: Ast.Span(Ast.ExprId),
+
+        fn exprData(self: LoweredResolvedDispatchCall) Ast.ExprData {
+            return .{ .call_proc = .{
+                .callee = .{ .func = self.callee },
+                .args = self.args,
+            } };
+        }
+    };
+
+    fn lowerResolvedDispatchCall(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         lookup: MethodLookup,
         callable_mono_ty: Type.TypeId,
         arg_ctx: *BodyContext,
         pre_lowered: ?PreLoweredOperand,
-    ) Allocator.Error!Ast.ExprData {
+    ) Allocator.Error!LoweredResolvedDispatchCall {
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
         const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.argsSlice(self.view.static_dispatch_plans), self.builder.program.types.span(fn_data.args), pre_lowered);
-        return .{ .call_proc = .{
-            .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+        return .{
+            .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
             .args = args,
-        } };
+        };
     }
 
     fn lowerStructuralEquality(
@@ -13979,6 +14003,64 @@ const BodyContext = struct {
         item_ty: Type.TypeId,
         iterator_ty: Type.TypeId,
     };
+
+    fn lowerIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: Type.TypeId,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!?Ast.ExprId {
+        if (!self.builder.iterator_producer_plans) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!self.methodNameIs(plan.method, "iter")) return null;
+        if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => return null,
+        };
+        if (plan_args.len != 1 or receiver_index >= plan_args.len) {
+            Common.invariant("checked List.iter dispatch plan had an unexpected argument shape");
+        }
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered List.iter call argument count differed from its dispatch plan");
+        }
+
+        const item_ty = switch (self.builder.shapeContent(dispatcher_ty)) {
+            .list => |elem_ty| elem_ty,
+            else => Common.invariant("builtin List owner lowered to non-list Monotype content"),
+        };
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const list_expr = lowered_args[receiver_index];
+        const index_expr = try self.builder.intLiteralExpr(0, u64_ty);
+        const len_expr = try self.builder.lowLevelExpr(.list_len, &.{list_expr}, u64_ty);
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = item_ty,
+            .length = .{ .known = len_expr },
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .materialized = materialized,
+            .data = .{ .list = .{
+                .list = list_expr,
+                .index = index_expr,
+                .len = len_expr,
+            } },
+        });
+
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+        return try self.builder.program.addExpr(.{
+            .ty = materialized_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
 
     fn lowerIteratorFor(
         self: *BodyContext,

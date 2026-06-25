@@ -485,13 +485,13 @@ const Pass = struct {
             .dec_lit,
             .str_lit,
             .static_data,
+            .iter_plan,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
             => {},
-            .iter_plan => |plan_id| try self.markArgUsesInIterPlan(fn_id, plan_id, changed),
             .static_data_candidate => |candidate| try self.markArgUsesInExpr(fn_id, candidate.fallback, changed),
             .list,
             .tuple,
@@ -590,55 +590,6 @@ const Pass = struct {
         }
     }
 
-    fn markArgUsesInIterPlan(self: *Pass, fn_id: Ast.FnId, plan_id: Ast.IterPlanId, changed: *bool) Allocator.Error!void {
-        const raw = @intFromEnum(plan_id);
-        if (raw >= self.program.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan during specialization arg-use scan");
-        const plan = self.program.iter_plans.items[raw];
-        if (plan.materialized) |expr| try self.markArgUsesInExpr(fn_id, expr, changed);
-        switch (plan.length) {
-            .known => |expr| try self.markArgUsesInExpr(fn_id, expr, changed),
-            .unknown => {},
-        }
-        switch (plan.data) {
-            .list => |list| {
-                try self.markArgUsesInExpr(fn_id, list.list, changed);
-                try self.markArgUsesInExpr(fn_id, list.index, changed);
-                try self.markArgUsesInExpr(fn_id, list.len, changed);
-            },
-            .range => |range| {
-                try self.markArgUsesInExpr(fn_id, range.current, changed);
-                try self.markArgUsesInExpr(fn_id, range.end, changed);
-                try self.markArgUsesInExpr(fn_id, range.step, changed);
-            },
-            .unbounded_range => |range| {
-                try self.markArgUsesInExpr(fn_id, range.current, changed);
-                try self.markArgUsesInExpr(fn_id, range.step, changed);
-            },
-            .single => |single| try self.markArgUsesInExpr(fn_id, single.item, changed),
-            .append => |append| {
-                try self.markArgUsesInIterPlan(fn_id, append.before, changed);
-                try self.markArgUsesInExpr(fn_id, append.after, changed);
-            },
-            .concat => |concat| {
-                try self.markArgUsesInIterPlan(fn_id, concat.first, changed);
-                try self.markArgUsesInIterPlan(fn_id, concat.second, changed);
-            },
-            .map => |map| {
-                try self.markArgUsesInIterPlan(fn_id, map.source, changed);
-                try self.markArgUsesInExpr(fn_id, map.mapping_fn, changed);
-            },
-            .filter => |filter| {
-                try self.markArgUsesInIterPlan(fn_id, filter.source, changed);
-                try self.markArgUsesInExpr(fn_id, filter.predicate_fn, changed);
-            },
-            .custom => |custom| {
-                try self.markArgUsesInExpr(fn_id, custom.state, changed);
-                try self.markArgUsesInExpr(fn_id, custom.step_fn, changed);
-            },
-            .public => |public| try self.markArgUsesInExpr(fn_id, public.iter_value, changed),
-        }
-    }
-
     fn markArgUsesInStmt(self: *Pass, fn_id: Ast.FnId, stmt_id: Ast.StmtId, changed: *bool) Allocator.Error!void {
         switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| try self.markArgUsesInExpr(fn_id, let_.value, changed),
@@ -677,13 +628,13 @@ const Pass = struct {
             .dec_lit,
             .str_lit,
             .static_data,
+            .iter_plan,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
             => {},
-            .iter_plan => |plan_id| try self.collectCallPatternsInIterPlan(owner, plan_id),
             .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.fallback),
             .list,
             .tuple,
@@ -758,55 +709,6 @@ const Pass = struct {
                 try self.collectCallPatternsInExpr(owner, sequence.try_expr);
                 try self.collectCallPatternsInExpr(owner, sequence.ok_body);
             },
-        }
-    }
-
-    fn collectCallPatternsInIterPlan(self: *Pass, owner: Ast.FnId, plan_id: Ast.IterPlanId) Allocator.Error!void {
-        const raw = @intFromEnum(plan_id);
-        if (raw >= self.program.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan during call-pattern collection");
-        const plan = self.program.iter_plans.items[raw];
-        if (plan.materialized) |expr| try self.collectCallPatternsInExpr(owner, expr);
-        switch (plan.length) {
-            .known => |expr| try self.collectCallPatternsInExpr(owner, expr),
-            .unknown => {},
-        }
-        switch (plan.data) {
-            .list => |list| {
-                try self.collectCallPatternsInExpr(owner, list.list);
-                try self.collectCallPatternsInExpr(owner, list.index);
-                try self.collectCallPatternsInExpr(owner, list.len);
-            },
-            .range => |range| {
-                try self.collectCallPatternsInExpr(owner, range.current);
-                try self.collectCallPatternsInExpr(owner, range.end);
-                try self.collectCallPatternsInExpr(owner, range.step);
-            },
-            .unbounded_range => |range| {
-                try self.collectCallPatternsInExpr(owner, range.current);
-                try self.collectCallPatternsInExpr(owner, range.step);
-            },
-            .single => |single| try self.collectCallPatternsInExpr(owner, single.item),
-            .append => |append| {
-                try self.collectCallPatternsInIterPlan(owner, append.before);
-                try self.collectCallPatternsInExpr(owner, append.after);
-            },
-            .concat => |concat| {
-                try self.collectCallPatternsInIterPlan(owner, concat.first);
-                try self.collectCallPatternsInIterPlan(owner, concat.second);
-            },
-            .map => |map| {
-                try self.collectCallPatternsInIterPlan(owner, map.source);
-                try self.collectCallPatternsInExpr(owner, map.mapping_fn);
-            },
-            .filter => |filter| {
-                try self.collectCallPatternsInIterPlan(owner, filter.source);
-                try self.collectCallPatternsInExpr(owner, filter.predicate_fn);
-            },
-            .custom => |custom| {
-                try self.collectCallPatternsInExpr(owner, custom.state);
-                try self.collectCallPatternsInExpr(owner, custom.step_fn);
-            },
-            .public => |public| try self.collectCallPatternsInExpr(owner, public.iter_value),
         }
     }
 
@@ -1002,13 +904,13 @@ const Pass = struct {
             .dec_lit,
             .str_lit,
             .static_data,
+            .iter_plan,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
             => {},
-            .iter_plan => |plan_id| try self.rewriteCallsInIterPlan(plan_id, done),
             .static_data_candidate => |candidate| try self.rewriteCallsInExpr(candidate.fallback, done),
             .list,
             .tuple,
@@ -1080,55 +982,6 @@ const Pass = struct {
                 try self.rewriteCallsInExpr(sequence.try_expr, done);
                 try self.rewriteCallsInExpr(sequence.ok_body, done);
             },
-        }
-    }
-
-    fn rewriteCallsInIterPlan(self: *Pass, plan_id: Ast.IterPlanId, done: []bool) Allocator.Error!void {
-        const raw = @intFromEnum(plan_id);
-        if (raw >= self.program.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan during call-pattern rewrite");
-        const plan = self.program.iter_plans.items[raw];
-        if (plan.materialized) |expr| try self.rewriteCallsInExpr(expr, done);
-        switch (plan.length) {
-            .known => |expr| try self.rewriteCallsInExpr(expr, done),
-            .unknown => {},
-        }
-        switch (plan.data) {
-            .list => |list| {
-                try self.rewriteCallsInExpr(list.list, done);
-                try self.rewriteCallsInExpr(list.index, done);
-                try self.rewriteCallsInExpr(list.len, done);
-            },
-            .range => |range| {
-                try self.rewriteCallsInExpr(range.current, done);
-                try self.rewriteCallsInExpr(range.end, done);
-                try self.rewriteCallsInExpr(range.step, done);
-            },
-            .unbounded_range => |range| {
-                try self.rewriteCallsInExpr(range.current, done);
-                try self.rewriteCallsInExpr(range.step, done);
-            },
-            .single => |single| try self.rewriteCallsInExpr(single.item, done),
-            .append => |append| {
-                try self.rewriteCallsInIterPlan(append.before, done);
-                try self.rewriteCallsInExpr(append.after, done);
-            },
-            .concat => |concat| {
-                try self.rewriteCallsInIterPlan(concat.first, done);
-                try self.rewriteCallsInIterPlan(concat.second, done);
-            },
-            .map => |map| {
-                try self.rewriteCallsInIterPlan(map.source, done);
-                try self.rewriteCallsInExpr(map.mapping_fn, done);
-            },
-            .filter => |filter| {
-                try self.rewriteCallsInIterPlan(filter.source, done);
-                try self.rewriteCallsInExpr(filter.predicate_fn, done);
-            },
-            .custom => |custom| {
-                try self.rewriteCallsInExpr(custom.state, done);
-                try self.rewriteCallsInExpr(custom.step_fn, done);
-            },
-            .public => |public| try self.rewriteCallsInExpr(public.iter_value, done),
         }
     }
 
@@ -3504,13 +3357,13 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .dec_lit,
         .str_lit,
         .static_data,
+        .iter_plan,
         .uninitialized,
         .uninitialized_payload,
         .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
         => false,
-        .iter_plan => |plan_id| iterPlanContainsReturn(program, plan_id),
         .static_data_candidate => |candidate| exprContainsReturn(program, candidate.fallback),
         .list,
         .tuple,
@@ -3572,39 +3425,6 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
     };
 }
 
-fn iterPlanContainsReturn(program: *const Ast.Program, plan_id: Ast.IterPlanId) bool {
-    const raw = @intFromEnum(plan_id);
-    if (raw >= program.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan during return scan");
-    const plan = program.iter_plans.items[raw];
-    if (plan.materialized) |expr| if (exprContainsReturn(program, expr)) return true;
-    switch (plan.length) {
-        .known => |expr| if (exprContainsReturn(program, expr)) return true,
-        .unknown => {},
-    }
-    return switch (plan.data) {
-        .list => |list| exprContainsReturn(program, list.list) or
-            exprContainsReturn(program, list.index) or
-            exprContainsReturn(program, list.len),
-        .range => |range| exprContainsReturn(program, range.current) or
-            exprContainsReturn(program, range.end) or
-            exprContainsReturn(program, range.step),
-        .unbounded_range => |range| exprContainsReturn(program, range.current) or
-            exprContainsReturn(program, range.step),
-        .single => |single| exprContainsReturn(program, single.item),
-        .append => |append| iterPlanContainsReturn(program, append.before) or
-            exprContainsReturn(program, append.after),
-        .concat => |concat| iterPlanContainsReturn(program, concat.first) or
-            iterPlanContainsReturn(program, concat.second),
-        .map => |map| iterPlanContainsReturn(program, map.source) or
-            exprContainsReturn(program, map.mapping_fn),
-        .filter => |filter| iterPlanContainsReturn(program, filter.source) or
-            exprContainsReturn(program, filter.predicate_fn),
-        .custom => |custom| exprContainsReturn(program, custom.state) or
-            exprContainsReturn(program, custom.step_fn),
-        .public => |public| exprContainsReturn(program, public.iter_value),
-    };
-}
-
 fn exprSpanContainsReturn(program: *const Ast.Program, span: Ast.Span(Ast.ExprId)) bool {
     for (program.exprSpan(span)) |expr_id| {
         if (exprContainsReturn(program, expr_id)) return true;
@@ -3643,13 +3463,13 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .dec_lit,
         .str_lit,
         .static_data,
+        .iter_plan,
         .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
         => 0,
-        .iter_plan => |plan_id| localUseCountInIterPlan(program, local, plan_id),
         .static_data_candidate => |candidate| localUseCountInExpr(program, local, candidate.fallback),
         .list,
         .tuple,
@@ -3716,41 +3536,6 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
     };
 }
 
-fn localUseCountInIterPlan(program: *const Ast.Program, local: Ast.LocalId, plan_id: Ast.IterPlanId) usize {
-    const raw = @intFromEnum(plan_id);
-    if (raw >= program.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan during local-use scan");
-    const plan = program.iter_plans.items[raw];
-    var count: usize = 0;
-    if (plan.materialized) |expr| count += localUseCountInExpr(program, local, expr);
-    switch (plan.length) {
-        .known => |expr| count += localUseCountInExpr(program, local, expr),
-        .unknown => {},
-    }
-    count += switch (plan.data) {
-        .list => |list| localUseCountInExpr(program, local, list.list) +
-            localUseCountInExpr(program, local, list.index) +
-            localUseCountInExpr(program, local, list.len),
-        .range => |range| localUseCountInExpr(program, local, range.current) +
-            localUseCountInExpr(program, local, range.end) +
-            localUseCountInExpr(program, local, range.step),
-        .unbounded_range => |range| localUseCountInExpr(program, local, range.current) +
-            localUseCountInExpr(program, local, range.step),
-        .single => |single| localUseCountInExpr(program, local, single.item),
-        .append => |append| localUseCountInIterPlan(program, local, append.before) +
-            localUseCountInExpr(program, local, append.after),
-        .concat => |concat| localUseCountInIterPlan(program, local, concat.first) +
-            localUseCountInIterPlan(program, local, concat.second),
-        .map => |map| localUseCountInIterPlan(program, local, map.source) +
-            localUseCountInExpr(program, local, map.mapping_fn),
-        .filter => |filter| localUseCountInIterPlan(program, local, filter.source) +
-            localUseCountInExpr(program, local, filter.predicate_fn),
-        .custom => |custom| localUseCountInExpr(program, local, custom.state) +
-            localUseCountInExpr(program, local, custom.step_fn),
-        .public => |public| localUseCountInExpr(program, local, public.iter_value),
-    };
-    return count;
-}
-
 fn localUseCountInExprSpan(program: *const Ast.Program, local: Ast.LocalId, span: Ast.Span(Ast.ExprId)) usize {
     var count: usize = 0;
     for (program.exprSpan(span)) |expr| count += localUseCountInExpr(program, local, expr);
@@ -3801,11 +3586,11 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .dec_lit,
         .str_lit,
         .static_data,
+        .iter_plan,
         .fn_ref,
         .uninitialized,
         .uninitialized_payload,
         => {},
-        .iter_plan => |plan_id| scanLocalUseInIterPlan(program, local, plan_id, scan),
         .static_data_candidate => |candidate| scanLocalUseInExpr(program, local, candidate.fallback, scan),
         .crash, .comptime_exhaustiveness_failed => scan.seen_effect = true,
         .list,
@@ -3936,55 +3721,6 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
             }
             scan.seen_effect = true;
         },
-    }
-}
-
-fn scanLocalUseInIterPlan(program: *const Ast.Program, local: Ast.LocalId, plan_id: Ast.IterPlanId, scan: *LocalUseScan) void {
-    const raw = @intFromEnum(plan_id);
-    if (raw >= program.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan during local-use effect scan");
-    const plan = program.iter_plans.items[raw];
-    if (plan.materialized) |expr| scanLocalUseInExpr(program, local, expr, scan);
-    switch (plan.length) {
-        .known => |expr| scanLocalUseInExpr(program, local, expr, scan),
-        .unknown => {},
-    }
-    switch (plan.data) {
-        .list => |list| {
-            scanLocalUseInExpr(program, local, list.list, scan);
-            scanLocalUseInExpr(program, local, list.index, scan);
-            scanLocalUseInExpr(program, local, list.len, scan);
-        },
-        .range => |range| {
-            scanLocalUseInExpr(program, local, range.current, scan);
-            scanLocalUseInExpr(program, local, range.end, scan);
-            scanLocalUseInExpr(program, local, range.step, scan);
-        },
-        .unbounded_range => |range| {
-            scanLocalUseInExpr(program, local, range.current, scan);
-            scanLocalUseInExpr(program, local, range.step, scan);
-        },
-        .single => |single| scanLocalUseInExpr(program, local, single.item, scan),
-        .append => |append| {
-            scanLocalUseInIterPlan(program, local, append.before, scan);
-            scanLocalUseInExpr(program, local, append.after, scan);
-        },
-        .concat => |concat| {
-            scanLocalUseInIterPlan(program, local, concat.first, scan);
-            scanLocalUseInIterPlan(program, local, concat.second, scan);
-        },
-        .map => |map| {
-            scanLocalUseInIterPlan(program, local, map.source, scan);
-            scanLocalUseInExpr(program, local, map.mapping_fn, scan);
-        },
-        .filter => |filter| {
-            scanLocalUseInIterPlan(program, local, filter.source, scan);
-            scanLocalUseInExpr(program, local, filter.predicate_fn, scan);
-        },
-        .custom => |custom| {
-            scanLocalUseInExpr(program, local, custom.state, scan);
-            scanLocalUseInExpr(program, local, custom.step_fn, scan);
-        },
-        .public => |public| scanLocalUseInExpr(program, local, public.iter_value, scan),
     }
 }
 

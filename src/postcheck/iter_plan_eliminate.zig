@@ -1,9 +1,10 @@
-//! Eliminate compiler-internal iterator plan values before Lambda solving.
+//! Normalize compiler-internal iterator plan values before Lambda solving.
 //!
-//! Iterator plans are a post-check optimization representation. This rewrite is
-//! the boundary that prevents raw plan values from reaching Lambda-to-LIR
-//! lowering. Optimized consumers may eventually consume plans here; until then,
-//! any remaining plan expression is replaced by its ordinary public `Iter`
+//! Iterator plans are a post-check optimization representation. This is the
+//! narrow boundary that prevents raw plan values from reaching ordinary
+//! Lambda-to-LIR lowering. It is not a general cleanup optimizer: optimized
+//! consumers may eventually consume plans here, and any remaining plan
+//! expression must be replaced by its already-lowered public `Iter`
 //! materialization.
 
 const std = @import("std");

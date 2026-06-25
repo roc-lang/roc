@@ -36,6 +36,16 @@ const LiftedSource = struct {
     }
 };
 
+const MonotypeSource = struct {
+    resources: helpers.ParsedResources,
+    mono: postcheck.Monotype.Ast.Program,
+
+    fn deinit(self: *MonotypeSource, allocator: Allocator) void {
+        self.mono.deinit();
+        helpers.cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
 fn sharedPrePublishedBuiltin() anyerror!helpers.PrePublishedBuiltin {
     shared_test_builtins_mutex.lockUncancelable(std.testing.io);
     defer shared_test_builtins_mutex.unlock(std.testing.io);
@@ -438,6 +448,96 @@ fn liftModuleAfterSpecConstr(
     errdefer lifted.deinit();
 
     try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+
+    return .{
+        .resources = resources,
+        .lifted = lifted,
+    };
+}
+
+fn lowerMonotypeModuleWithIteratorPlans(
+    allocator: Allocator,
+    source: []const u8,
+) anyerror!MonotypeSource {
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .iterator_plans = true,
+            .iterator_producer_plans = true,
+        },
+    );
+    errdefer mono.deinit();
+
+    return .{
+        .resources = resources,
+        .mono = mono,
+    };
+}
+
+fn liftModuleWithIteratorPlansAfterElimination(
+    allocator: Allocator,
+    source: []const u8,
+) anyerror!LiftedSource {
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .iterator_plans = true,
+            .iterator_producer_plans = true,
+        },
+    );
+    var mono_owned = true;
+    errdefer if (mono_owned) mono.deinit();
+
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    mono_owned = false;
+    mono = undefined;
+    errdefer lifted.deinit();
+
+    try postcheck.IterPlanEliminate.run(allocator, &lifted);
 
     return .{
         .resources = resources,
@@ -941,6 +1041,7 @@ fn markReachableLiftedExpr(
         .uninitialized,
         .uninitialized_payload,
         => {},
+        .iter_plan => |plan_id| markReachableLiftedIterPlan(program, plan_id, reachable),
         .static_data_candidate => |candidate| markReachableLiftedExpr(program, candidate.fallback, reachable),
         .list,
         .tuple,
@@ -1017,6 +1118,59 @@ fn markReachableLiftedExpr(
         },
         .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
         .continue_ => |continue_| for (program.exprSpan(continue_.values)) |value| markReachableLiftedExpr(program, value, reachable),
+    }
+}
+
+fn markReachableLiftedIterPlan(
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+    plan_id: postcheck.MonotypeLifted.Ast.IterPlanId,
+    reachable: []bool,
+) void {
+    const raw = @intFromEnum(plan_id);
+    if (raw >= program.iter_plans.items.len) @panic("iterator plan expression referenced a missing plan during test reachability scan");
+    const plan = program.iter_plans.items[raw];
+    if (plan.materialized) |expr| markReachableLiftedExpr(program, expr, reachable);
+    switch (plan.length) {
+        .known => |expr| markReachableLiftedExpr(program, expr, reachable),
+        .unknown => {},
+    }
+    switch (plan.data) {
+        .list => |list| {
+            markReachableLiftedExpr(program, list.list, reachable);
+            markReachableLiftedExpr(program, list.index, reachable);
+            markReachableLiftedExpr(program, list.len, reachable);
+        },
+        .range => |range| {
+            markReachableLiftedExpr(program, range.current, reachable);
+            markReachableLiftedExpr(program, range.end, reachable);
+            markReachableLiftedExpr(program, range.step, reachable);
+        },
+        .unbounded_range => |range| {
+            markReachableLiftedExpr(program, range.current, reachable);
+            markReachableLiftedExpr(program, range.step, reachable);
+        },
+        .single => |single| markReachableLiftedExpr(program, single.item, reachable),
+        .append => |append| {
+            markReachableLiftedIterPlan(program, append.before, reachable);
+            markReachableLiftedExpr(program, append.after, reachable);
+        },
+        .concat => |concat| {
+            markReachableLiftedIterPlan(program, concat.first, reachable);
+            markReachableLiftedIterPlan(program, concat.second, reachable);
+        },
+        .map => |map| {
+            markReachableLiftedIterPlan(program, map.source, reachable);
+            markReachableLiftedExpr(program, map.mapping_fn, reachable);
+        },
+        .filter => |filter| {
+            markReachableLiftedIterPlan(program, filter.source, reachable);
+            markReachableLiftedExpr(program, filter.predicate_fn, reachable);
+        },
+        .custom => |custom| {
+            markReachableLiftedExpr(program, custom.state, reachable);
+            markReachableLiftedExpr(program, custom.step_fn, reachable);
+        },
+        .public => |public| markReachableLiftedExpr(program, public.iter_value, reachable),
     }
 }
 
@@ -1328,6 +1482,68 @@ test "optimized for over list.iter uses private iterator cursor" {
     try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
     try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
+test "List.iter producer lowers to a materialized iterator plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter()
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .list => |list| {
+                found = true;
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                try std.testing.expectEqual(postcheck.IterPlan.DoneReachability.reachable, plan.done);
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.done);
+                switch (plan.length) {
+                    .known => |len| try std.testing.expectEqual(list.len, len),
+                    .unknown => return error.TestUnexpectedResult,
+                }
+                switch (mono_source.mono.exprs.items[@intFromEnum(materialized)].data) {
+                    .call_proc => {},
+                    else => return error.TestUnexpectedResult,
+                }
+                switch (mono_source.mono.exprs.items[@intFromEnum(list.len)].data) {
+                    .low_level => {},
+                    else => return error.TestUnexpectedResult,
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "List.iter producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter()
+    );
+    defer lifted_source.deinit(allocator);
+
+    for (lifted_source.lifted.exprs.items) |expr| {
+        switch (expr.data) {
+            .iter_plan => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
 }
 
 test "optimized for over list.iter append chain uses private iterator cursor" {

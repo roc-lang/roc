@@ -9,14 +9,16 @@ The final state is:
 
 - builtin iterator producers lower to explicit post-check iterator plan values
 - those plan values are ordinary post-check values with the public `Iter(item)`
-  type until a later post-check elimination rewrite consumes or materializes them
+  type until the iterator-aware post-check normalization consumes or
+  materializes them
 - source evaluation order is preserved for producers, conditions, branch
   selection, appended items, `dbg`, `expect`, and `crash`
 - optimized consumers consume known plans directly without constructing public
   `Iter` records, step closures, or public step tags in the hot loop
 - public observation boundaries materialize exactly the public `Iter` value the
   Roc builtin implementation promises
-- no raw iterator plan reaches Lambda-to-LIR lowering, LIR, ARC, or any backend
+- no raw iterator plan reaches ordinary Lambda-to-LIR lowering, LIR, ARC, or
+  any backend
 - Rocci Bird with and without a top-level `.iter()` in `on_screen_collided!`
   has the same optimized collision-loop shape and comparable `--opt=size` wasm
   size
@@ -90,14 +92,21 @@ Current branch status:
 - Monotype has an `ExprData.iter_plan` form.
 - Monotype has an `iter_plans` side store.
 - Monotype Lifted preserves plan expressions and plan stores.
+- Plan values carry the already-lowered public materialization expression needed
+  when they cross a public observation boundary.
+- A focused post-check normalization boundary currently materializes remaining
+  raw plans before Lambda-to-LIR lowering.
+- `List.iter` can emit a `ListIter` plan behind an explicit producer-plan flag;
+  the normal pipeline keeps that flag off until private consumers through locals
+  and branches are implemented.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
 - user-defined methods named `iter` or `single` are not recognized as builtins.
 
 That is only scaffolding. The full design still requires producer emission,
-plan elimination, materialization, optimized consumers through locals and
-branches, and integration measurements.
+iterator-aware normalization, semantic materialization, optimized consumers
+through locals and branches, and integration measurements.
 
 ## Non-Negotiable Invariants
 
@@ -117,7 +126,7 @@ branches, and integration measurements.
 - Refcounted payloads inside plan state are ordinary Roc values and are managed
   only by explicit LIR ARC statements.
 - LIR and backends must not know builtin iterator semantics.
-- No raw iterator plan may reach Lambda-to-LIR lowering.
+- No raw iterator plan may reach ordinary Lambda-to-LIR lowering.
 
 ## Core Design
 
@@ -163,8 +172,12 @@ reachable `Done`. An unbounded range or custom infinite iterator can have
 
 ### Producer Lowering
 
-When iterator plans are enabled, builtin producer calls lower to plan
-expressions instead of immediately lowering to public `Iter` construction.
+When iterator producer plans are enabled, builtin producer calls lower to plan
+expressions that also carry the already-lowered public `Iter` expression for
+semantic materialization. This producer flag stays separate from the existing
+direct optimized-consumer flag until the iterator-aware normalization can
+consume common plans privately instead of materializing them back to the public
+representation.
 
 Initial recognized producers:
 
@@ -186,10 +199,11 @@ Recognition must be exact checked identity: resolved owner, method name id,
 resolved procedure/template, dispatch plan, and monomorphic receiver/result
 types. A user method with the same spelling is never a builtin producer.
 
-### Plan Elimination
+### Iterator Normalization Boundary
 
-Add a post-check iterator-plan elimination rewrite before Lambda-to-LIR lowering.
-This rewrite owns every remaining `iter_plan` expression.
+Before ordinary Lambda-to-LIR lowering, the iterator-aware post-check rewrite
+must remove every remaining `iter_plan` expression. This is the same owner that
+knows iterator plan semantics; it is not a second broad cleanup optimizer.
 
 For every plan value it sees, the rewrite must choose exactly one outcome:
 
@@ -200,8 +214,8 @@ For every plan value it sees, the rewrite must choose exactly one outcome:
 - wrap an already-public value as `Public(iter_value)` when there is no more
   precise plan
 
-The rewrite may maintain environments from locals to already-lowered plan values or
-private plan-state values while traversing a body. It must not point an
+The rewrite may maintain environments from locals to already-lowered plan values
+or private plan-state values while traversing a body. It must not point an
 environment entry back to checked source. It must preserve ordinary evaluation
 order by rewriting producer sites, not by moving producer evaluation to consumer
 sites.
@@ -230,7 +244,7 @@ the `for`.
 
 ### Private Plan State
 
-Optimized consumers need private mutable cursor state. The elimination rewrite may
+Optimized consumers need private mutable cursor state. Iterator normalization may
 represent that state using ordinary post-check IR:
 
 - locals
@@ -331,13 +345,18 @@ Tests:
   Monotype tree
 - finite and unbounded ranges carry the right done reachability
 
-### Phase 3: Iterator-Plan Elimination Rewrite
+### Phase 3: Iterator Normalization Boundary
 
-Add a focused rewrite before Lambda-to-LIR lowering that removes all raw plan expressions.
+Extend the iterator-aware post-check rewrite before Lambda-to-LIR lowering so
+it removes all raw plan expressions. This boundary owns iterator semantics.
+General post-check passes stay plan-opaque until this rewrite has produced
+ordinary IR.
 
 Tasks:
 
 - traverse definitions, nested definitions, statements, and expressions
+- treat general call-pattern specialization and unrelated post-check passes as
+  plan-opaque until plans have been rewritten into ordinary IR
 - maintain a body-local environment from locals to plan/private-state values
 - track whether a local has public observations
 - rewrite known producer sites into private plan-state construction when all
@@ -391,8 +410,8 @@ Tasks:
 
 - stop replaying checked expressions in `lowerIteratorFor`
 - introduce an internal representation for source `for` that can survive until
-  iterator-plan elimination, or otherwise ensure the elimination rewrite sees the
-  consumer before public fallback lowering has erased it
+  iterator normalization, or otherwise ensure normalization sees the consumer
+  before public fallback lowering has erased it
 - lower `ListIter` with list/index/len state
 - lower `Single` with item/emitted state
 - lower `Append` and `Concat` with phase state
@@ -476,8 +495,8 @@ Tasks:
 
 - [x] `design.md` documents public `Iter` purity and private cursor plans.
 - [x] `design.md` documents first-class post-check plan values.
-- [x] `design.md` documents that iterator-plan elimination is a post-check
-  responsibility before LIR.
+- [x] `design.md` documents that iterator normalization is a post-check
+  responsibility before ordinary LIR lowering.
 - [x] `design.md` states that LIR and backends must not see raw plan values.
 - [x] Current direct `List.iter` optimized `for` shape test exists.
 - [x] Current direct visible append-chain optimized `for` shape test exists.
@@ -486,11 +505,15 @@ Tasks:
 - [x] User-defined `.single` is not recognized as builtin `Iter.single`.
 - [x] Monotype has `ExprData.iter_plan`.
 - [x] Monotype Lifted preserves plan expressions.
+- [x] Iterator plans carry a public materialization expression.
+- [x] Iterator-plan normalization boundary exists before Lambda-to-LIR lowering.
+- [x] General call-pattern specialization treats raw iterator plans as opaque.
+- [x] `List.iter` can produce `ListIter` behind the producer-plan flag.
 - [x] LIR lowering rejects raw plan expressions before materialization is
   implemented.
 - [ ] All recognized producers lower to plan expressions.
 - [ ] Recognition uses checked identity for every producer.
-- [ ] `List.iter` produces `ListIter`.
+- [ ] `List.iter` uses exact checked identity when producing `ListIter`.
 - [ ] `Iter.iter` preserves or forwards known plans correctly.
 - [ ] numeric finite ranges produce `Range`.
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
@@ -502,9 +525,10 @@ Tasks:
 - [ ] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [ ] `Iter.custom` produces `Custom`.
 - [ ] `Public(iter_value)` exists for unknown iterator values.
-- [ ] Iterator-plan elimination rewrite exists before Lambda-to-LIR lowering.
-- [ ] Plan elimination preserves producer-site evaluation order.
-- [ ] Plan elimination never replays checked expressions.
+- [ ] Iterator normalization consumes common plans privately before ordinary
+  lowering.
+- [ ] Iterator normalization preserves producer-site evaluation order.
+- [ ] Iterator normalization never replays checked expressions.
 - [ ] Private plan state can cross locals.
 - [ ] Private plan state can cross `if`.
 - [ ] Private plan state can cross `match`.
