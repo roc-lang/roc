@@ -410,6 +410,10 @@ const Pass = struct {
     }
 
     fn collectArgUses(self: *Pass, original_fn_count: usize) Allocator.Error!void {
+        // This loop only reads functions; it must not append to `program.fns`,
+        // whose reallocation would dangle the slice it iterates. Assert that in
+        // debug builds; the check compiles out of release builds.
+        const fns_base = self.program.fns.items.ptr;
         var changed = true;
         while (changed) {
             changed = false;
@@ -422,10 +426,18 @@ const Pass = struct {
                 try self.markArgUsesInExpr(fn_id, body, &changed);
             }
         }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.program.fns.items.ptr == fns_base);
+        }
     }
 
     fn collectCallPatterns(self: *Pass, original_fn_count: usize) Allocator.Error!void {
-        for (self.program.fns.items[0..original_fn_count], 0..) |fn_, index| {
+        // Collecting a pattern materializes specialized callables, which appends
+        // to `program.fns` and can reallocate it. Re-read `items` by index each
+        // step rather than iterate a slice captured before the loop.
+        var index: usize = 0;
+        while (index < original_fn_count) : (index += 1) {
+            const fn_ = self.program.fns.items[index];
             const body = switch (fn_.body) {
                 .roc => |body| body,
                 .hosted => continue,
@@ -871,6 +883,10 @@ const Pass = struct {
         defer self.allocator.free(done);
         @memset(done, false);
 
+        // This loop only reads functions; it must not append to `program.fns`,
+        // whose reallocation would dangle the slice it iterates. Assert that in
+        // debug builds; the check compiles out of release builds.
+        const fns_base = self.program.fns.items.ptr;
         const fn_count = self.program.fns.items.len;
         for (self.program.fns.items[0..fn_count]) |fn_| {
             const body = switch (fn_.body) {
@@ -878,6 +894,9 @@ const Pass = struct {
                 .hosted => continue,
             };
             try self.rewriteCallsInExpr(body, done);
+        }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.program.fns.items.ptr == fns_base);
         }
     }
 

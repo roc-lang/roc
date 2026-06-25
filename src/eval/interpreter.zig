@@ -3306,23 +3306,35 @@ pub const Interpreter = struct {
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
 
-        // Call the hosted function with the platform C ABI via the fixed register-image
-        // trampoline (no runtime code generation).
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_state.deinit();
-        host_trampoline.call(
-            self.layout_store,
-            arena_state.allocator(),
-            @ptrCast(hosted_fn),
-            arg_layouts,
-            ret_layout,
-            args_buf.ptr,
-            arg_offsets,
-            ret_buf.ptr,
-        ) catch |err| return self.invariantFailedError(
-            "hosted call C-ABI lowering failed for proc {d}: {s}",
-            .{ @intFromEnum(proc_id), @errorName(err) },
-        );
+        if (comptime host_trampoline.available) {
+            // Call the hosted function with the platform C ABI via the fixed register-image
+            // trampoline (no runtime code generation).
+            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena_state.deinit();
+            host_trampoline.call(
+                self.layout_store,
+                arena_state.allocator(),
+                @ptrCast(hosted_fn),
+                arg_layouts,
+                ret_layout,
+                args_buf.ptr,
+                arg_offsets,
+                ret_buf.ptr,
+            ) catch |err| return self.invariantFailedError(
+                "hosted call C-ABI lowering failed for proc {d}: {s}",
+                .{ @intFromEnum(proc_id), @errorName(err) },
+            );
+        } else {
+            // Architectures without a register-image trampoline (e.g. wasm32, where
+            // a dynamic-signature call cannot be synthesized) call hosted functions
+            // through a uniform `(args_buf, ret_buf)` ABI instead. The arguments are
+            // already packed contiguously above in Roc layout order, so the host reads
+            // each one from `args_buf` at its layout offset and writes the return value
+            // into `ret_buf`. Platforms register their hosted functions in this shape
+            // when `host_trampoline.available` is false (see the echo platform).
+            const uniform: *const fn ([*]u8, [*]u8) callconv(.c) void = @ptrCast(hosted_fn);
+            uniform(args_buf.ptr, ret_buf.ptr);
+        }
 
         if (self.roc_env.crashed) return error.Crash;
         if (ret_sa.size == 0) return Value.zst;
