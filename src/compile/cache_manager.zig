@@ -49,6 +49,12 @@ pub const CacheManager = struct {
     }
 
     pub fn computeCacheFilePath(self: *Self, cache_key: [32]u8, entries_dir: []const u8) Allocator.Error![]u8 {
+        return computeCacheFilePathWith(cache_key, entries_dir, self.allocator);
+    }
+
+    /// Compute the on-disk path for `cache_key` using an explicit allocator and no
+    /// access to `self`, so it is safe to call from worker threads.
+    pub fn computeCacheFilePathWith(cache_key: [32]u8, entries_dir: []const u8, allocator: Allocator) Allocator.Error![]u8 {
         var subdir_buf: [2]u8 = undefined;
         _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
@@ -57,10 +63,25 @@ pub const CacheManager = struct {
         _ = std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
         const filename = filename_buf[0..];
 
-        const cache_subdir = try std.fs.path.join(self.allocator, &.{ entries_dir, subdir });
-        defer self.allocator.free(cache_subdir);
+        const cache_subdir = try std.fs.path.join(allocator, &.{ entries_dir, subdir });
+        defer allocator.free(cache_subdir);
 
-        return std.fs.path.join(self.allocator, &.{ cache_subdir, filename });
+        return std.fs.path.join(allocator, &.{ cache_subdir, filename });
+    }
+
+    /// Load a cache entry using an explicit allocator and without recording stats,
+    /// so it is safe to call from worker threads (the caller folds hit/miss into
+    /// `stats` on the single-threaded coordinator). `roc_ctx` file I/O is already
+    /// worker-safe (the parse workers read source through it).
+    pub fn loadRawBytesWith(self: *Self, cache_key: [32]u8, entries_dir: []const u8, allocator: Allocator) ?[]const u8 {
+        if (!self.config.enabled) return null;
+
+        const cache_path = computeCacheFilePathWith(cache_key, entries_dir, allocator) catch return null;
+        defer allocator.free(cache_path);
+
+        if (!self.roc_ctx.fileExists(cache_path)) return null;
+
+        return self.roc_ctx.readFile(cache_path, allocator) catch return null;
     }
 
     pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) (Allocator.Error || error{ AccessDenied, IoError })!void {

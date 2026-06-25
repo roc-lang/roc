@@ -4125,6 +4125,15 @@ pub const Coordinator = struct {
             self.storeCirInCache(pkg, mod);
         }
 
+        try self.proceedToTypeInfo(pkg, mod, result.module_id);
+    }
+
+    /// Once a module's CIR is final and its imports are available, look up its
+    /// type-info artifact in the checked-module cache and, on a miss, enqueue type
+    /// checking. Shared by the cold canonicalize path and the CIR-cache-hit path
+    /// (both reach this with a final env and ready imports), so it must not assume
+    /// the env came from canonicalization.
+    fn proceedToTypeInfo(self: *Coordinator, pkg: *PackageState, mod: *ModuleState, module_id: ModuleId) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         const task_payload_alloc = self.getWorkerAllocator();
         const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_envs);
@@ -4151,7 +4160,7 @@ pub const Coordinator = struct {
         try self.enqueueTask(.{
             .type_check = .{
                 .package_name = pkg.name,
-                .module_id = result.module_id,
+                .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
