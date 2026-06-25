@@ -907,8 +907,9 @@ pub fn deinitCachedModule(self: *Self) void {
     // Free the type store arrays (allocated by deserializeWithMutableTypes)
     self.types.deinit();
 
-    // Free the NodeStore regions (allocated by deserializeWithMutableTypes)
-    self.store.regions.deinit(self.gpa);
+    // The whole NodeStore is heap-owned (deserializeWithCopy copies every
+    // sub-store out of the cache buffer so it can be re-checked), so free it all.
+    self.store.deinit();
 
     // Only free the hash map that was allocated during deserialization
     // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
