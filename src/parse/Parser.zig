@@ -6345,6 +6345,8 @@ const bin_op_bp_table = blk: {
     table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 22, .right = 23 };
     table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 20, .right = 21 };
+    // `lhs ? handler` (spaced `?`) binds looser than `??` and tighter than `=`/`==`.
+    table[@intFromEnum(Token.Tag.OpQuestion) - start] = .{ .left = 18, .right = 19 };
     table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 17, .right = 17 };
     table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 15, .right = 15 };
     table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 13, .right = 13 };
