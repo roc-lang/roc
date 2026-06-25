@@ -3597,6 +3597,28 @@ test "optimized for over direct Iter.custom uses private custom state" {
     , &.{"3"});
 }
 
+test "optimized for over infinite Iter.custom can exit through source break" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state| Ok((state, state + 1))
+        \\
+        \\main : {}
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in Iter.custom(0.I64, Unknown, advance) {
+        \\        if item == 4 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    , &.{"6"});
+}
+
 test "user single method is not recognized as builtin single iterator" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,

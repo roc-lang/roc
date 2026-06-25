@@ -700,6 +700,8 @@ Tasks:
   - [x] Direct `List.from_iter(List(Str).iter().append(...).map(...))` passes
     optimized LIR interpretation with the expected string list.
 - [ ] Infinite iterator tests pass.
+  - [x] An infinite `Iter.custom` source can be consumed by optimized `for`
+    and exited by a source `break` without requiring a reachable `Done`.
 - [ ] Full builtin iterator behavior tests pass.
 - [ ] Post-check and LIR module tests pass.
 - [ ] Rocci Bird `.iter()` and no-`.iter()` builds are both measured with
