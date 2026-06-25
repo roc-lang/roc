@@ -18083,25 +18083,9 @@ fn canonicalizeTypeAnnoBasicType(
             } else self.env.getIdent(type_name_ident);
             const type_path_ident = try self.env.insertIdent(base.Ident.for_text(type_path_text));
 
-            const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
-                    .module_name = module_name,
-                    .type_name = type_path_ident,
-                    .region = type_name_region,
-                } });
-            };
-
-            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse {
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                    .module_name = module_name,
-                    .type_name = type_path_ident,
-                    .region = type_name_region,
-                } });
-            };
-
             return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
                 .module_idx = import_idx,
-                .external_ref = try self.pushExternalRefFor(import_idx, type_path_ident, target_node_idx, .type, region),
+                .external_ref = try self.pushExternalRefFor(import_idx, type_path_ident, 0, .type, region),
             } } } }, region);
         }
 
@@ -18205,16 +18189,20 @@ fn resolveNestedExternalTypeAnno(
     region: Region,
 ) std.mem.Allocator.Error!?TypeAnno.Idx {
     const import_idx = external.import_idx orelse return null;
-    const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
-        self.lookupAvailableModuleEnv(external.original_ident) orelse
-        return null;
-    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse
-        (try self.lookupImportedTypeDeclNode(imported_type.env, type_path_text)) orelse
-        return null;
+
+    // Builtin type modules are compiler-fixed, so resolve the nested node now from
+    // the (always-available) builtin env. User modules stay symbolic (name-based)
+    // and are resolved against the imported module at check time.
+    const computed_node: u32 = if (self.importIsBuiltin(import_idx)) blk: {
+        const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
+            self.lookupAvailableModuleEnv(external.original_ident) orelse break :blk 0;
+        break :blk (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse
+            (try self.lookupImportedTypeDeclNode(imported_type.env, type_path_text)) orelse 0;
+    } else 0;
 
     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
         .module_idx = import_idx,
-        .external_ref = try self.pushExternalRefFor(import_idx, type_path_ident, target_node_idx, .type, region),
+        .external_ref = try self.pushExternalRefFor(import_idx, type_path_ident, computed_node, .type, region),
     } } } }, region);
 }
 
