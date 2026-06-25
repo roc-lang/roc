@@ -1752,6 +1752,39 @@ test "inclusive range producer lowers to a materialized range plan" {
     try std.testing.expect(found);
 }
 
+test "user range producers are not lowered as builtin Iter range plans" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\RangeBox := [RangeBox].{
+        \\    exclusive_range : RangeBox, I64 -> Iter(I64)
+        \\    exclusive_range = |_, start| Iter.single(start)
+        \\
+        \\    inclusive_range : RangeBox, I64 -> Iter(I64)
+        \\    inclusive_range = |_, start| Iter.single(start)
+        \\}
+        \\
+        \\main : (Iter(I64), Iter(I64))
+        \\main = (
+        \\    RangeBox.exclusive_range(RangeBox.RangeBox, 1.I64),
+        \\    RangeBox.inclusive_range(RangeBox.RangeBox, 1.I64),
+        \\)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .range => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 test "Iter.custom producer lowers Known length to a materialized custom plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,

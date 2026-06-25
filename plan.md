@@ -192,6 +192,10 @@ Public(iter_value)
 Finite and infinite iterators use the same model. A finite iterator has a
 reachable `Done`. An unbounded range or custom infinite iterator can have
 `Done` marked unreachable unless a later adapter introduces a finite boundary.
+The current public builtin surface has `Iter.custom` for infinite iterators but
+does not currently expose source syntax or a builtin numeric producer for
+`UnboundedRange`; that plan case is reserved for such a producer if one is
+added.
 
 ### Producer Lowering
 
@@ -366,7 +370,7 @@ Tests:
 - user methods with the same names do not emit plans
 - operands containing `dbg`, `expect`, and `crash` are not duplicated in the
   Monotype tree
-- finite and unbounded ranges carry the right done reachability
+- finite ranges and custom iterators carry the right done reachability
 
 ### Phase 3: Iterator Normalization Boundary
 
@@ -443,7 +447,7 @@ Tasks:
 - lower `Single` with item/emitted state
 - lower `Append` and `Concat` with phase state
 - lower `Map` and `Filter` over child plan state
-- lower finite and unbounded ranges directly
+- lower finite ranges directly
 - lower `Custom` by calling the custom step function
 - preserve loop-carried mutable variable behavior
 
@@ -538,12 +542,11 @@ Tasks:
 - [x] `List.iter` can produce `ListIter` behind the producer-plan flag.
 - [x] LIR lowering rejects raw plan expressions before materialization is
   implemented.
-- [ ] All recognized producers lower to plan expressions.
-- [ ] Recognition uses checked identity for every producer.
+- [x] All recognized producers lower to plan expressions.
+- [x] Recognition uses checked identity for every producer.
 - [x] `List.iter` uses exact checked identity when producing `ListIter`.
 - [x] `Iter.iter` preserves or forwards known plans correctly.
 - [x] numeric finite ranges produce `Range`.
-- [ ] numeric unbounded ranges produce `UnboundedRange`.
 - [x] `Iter.single` produces `Single`.
 - [x] `Iter.prepended` produces the correct plan shape.
 - [x] `Iter.append` produces `Append`.
