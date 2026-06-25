@@ -281,7 +281,7 @@ test "nominal record lays out fields in declared order" {
     // z (original/lexicographic field index 2) at offset 0, x (index 0) at 4.
     try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 2));
     try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 test "imported nominal record lays out fields in declared order" {
@@ -314,7 +314,7 @@ test "imported nominal record lays out fields in declared order" {
 
     const struct_idx = layout_val.getStruct().idx;
     try std.testing.expectEqual(LayoutIdx.u16, lowered.lir_result.layouts.getStructFieldLayout(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 test "nominal record reserves unnamed padding fields without inflating alignment" {
@@ -347,7 +347,7 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     // Total size 8 and alignment 4 (padding bytes are alignment 1, so they do
     // not raise the struct's alignment above the U32's).
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
     try std.testing.expectEqual(@as(u64, 4), layout_val.alignment(.u64).toByteUnits());
 }
 
@@ -378,7 +378,7 @@ test "generic nominal record instantiates unnamed padding to the argument's size
     // sizeof(U64) = 8 bytes, so the whole struct is 16 bytes (not 8).
     try std.testing.expectEqual(@as(u16, 2), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
     try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 test "nominal record with a parenthesized backing still honors declared order and padding" {
@@ -407,7 +407,7 @@ test "nominal record with a parenthesized backing still honors declared order an
     try std.testing.expectEqual(@as(u16, 5), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
     try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 4), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
-    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructData(struct_idx).size);
+    try std.testing.expectEqual(@as(u32, 8), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
 fn liftModuleAfterSpecConstr(

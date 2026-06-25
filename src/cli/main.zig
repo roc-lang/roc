@@ -1713,7 +1713,7 @@ const LayoutHashContext = struct {
                 const info = self.layouts.getTagUnionInfo(layout_val);
                 updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
                 updateHashU32(hasher, info.size());
-                updateHashU32(hasher, @intCast(info.data.discriminant_offset));
+                updateHashU32(hasher, @intCast(info.discriminant_offset));
                 updateHashU32(hasher, @intCast(info.data.discriminant_size));
                 updateHashU32(hasher, @intCast(info.variants.len));
                 for (0..info.variants.len) |i| {

@@ -3996,10 +3996,11 @@ pub const Interpreter = struct {
 
                 const disc: u32 = blk: {
                     const tu_data = self.layout_store.getTagUnionData(tag_plan.tag_union_idx);
+                    const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
                     break :blk switch (tu_data.discriminant_size) {
                         0 => 0,
-                        1 => val.offset(tu_data.discriminant_offset).read(u8),
-                        2 => val.offset(tu_data.discriminant_offset).read(u16),
+                        1 => val.offset(disc_offset).read(u8),
+                        2 => val.offset(disc_offset).read(u16),
                         else => return,
                     };
                 };
@@ -4607,7 +4608,7 @@ pub const Interpreter = struct {
                 }
 
                 const val = try self.alloc(ll.ret_layout);
-                @memset(val.ptr[0..tu_data.size], 0);
+                @memset(val.ptr[0..tu_data.size.get(self.layout_store.targetUsize())], 0);
 
                 const resolved_ok = ok_disc orelse return self.runtimeError("str_from_utf8: no Ok variant in layout");
                 const resolved_err = err_disc orelse return self.runtimeError("str_from_utf8: no Err variant in layout");
@@ -4624,7 +4625,7 @@ pub const Interpreter = struct {
                     if (inner_tu_data_opt) |inner_tu| {
                         // The inner tag union sits at offset 0 of the Err payload, which is at
                         // offset 0 of the outer tag union. Write its discriminant in place.
-                        inner_tu.writeDiscriminant(val.ptr, inner_bad_utf8_disc);
+                        inner_tu.writeDiscriminant(val.ptr, inner_bad_utf8_disc, self.layout_store.targetUsize());
                     }
                     self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_err);
                 }
@@ -5367,7 +5368,7 @@ pub const Interpreter = struct {
                         roc_str.bytes,
                         roc_str.length,
                         roc_str.capacity_or_alloc_ptr,
-                        tu_data.discriminant_offset,
+                        tu_data.discriminant_offset.get(self.layout_store.targetUsize()),
                     ),
                     .float => |float| dev_wrappers.roc_builtins_float_from_str(
                         result.ptr,
@@ -5375,7 +5376,7 @@ pub const Interpreter = struct {
                         roc_str.length,
                         roc_str.capacity_or_alloc_ptr,
                         float.width_bytes,
-                        tu_data.discriminant_offset,
+                        tu_data.discriminant_offset.get(self.layout_store.targetUsize()),
                     ),
                     .int => |int| dev_wrappers.roc_builtins_int_from_str(
                         result.ptr,
@@ -5384,7 +5385,7 @@ pub const Interpreter = struct {
                         roc_str.capacity_or_alloc_ptr,
                         int.width_bytes,
                         int.signed,
-                        tu_data.discriminant_offset,
+                        tu_data.discriminant_offset.get(self.layout_store.targetUsize()),
                     ),
                 }
                 break :blk result;

@@ -10758,7 +10758,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                             const inner_tu = ls.getTagUnionData(err_layout.getTagUnion().idx);
                             if (try self.findBadUtf8Variant(inner_tu)) |info| {
                                 err_record_idx = info.struct_idx;
-                                inner_disc_offset = inner_tu.discriminant_offset;
+                                inner_disc_offset = inner_tu.discriminant_offset.get(ls.targetUsize());
                                 inner_disc_size = inner_tu.discriminant_size;
                                 inner_bad_utf8_disc = info.disc;
                             }
@@ -15875,7 +15875,7 @@ fn resolveListElementPairLayout(self: *Self, ret_layout: layout.Idx) ListElement
     const field0_is_list = field0_val.tag == .list or field0_val.tag == .list_of_zst;
 
     return .{
-        .result_size = record_data.size,
+        .result_size = record_data.size.get(ls.targetUsize()),
         .result_align = @intCast(ret_layout_val.alignment(ls.targetUsize()).toByteUnits()),
         .elem_offset = if (field0_is_list)
             ls.getStructFieldOffset(record_idx, 1)

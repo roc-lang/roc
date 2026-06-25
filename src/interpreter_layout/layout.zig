@@ -42,6 +42,7 @@ pub const TagUnionVariant = canonical.TagUnionVariant;
 pub const ClosureLayout = canonical.ClosureLayout;
 pub const RocAlignment = canonical.RocAlignment;
 pub const SortKey = canonical.SortKey;
+pub const WidthValues = canonical.WidthValues;
 pub const SizeAlign = canonical.SizeAlign;
 
 // Re-export Info types

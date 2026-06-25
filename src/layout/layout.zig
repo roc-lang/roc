@@ -215,10 +215,30 @@ pub const RecordIdx = StructIdx;
 /// Backwards-compat alias for `StructIdx`.
 pub const TupleIdx = StructIdx;
 
+/// A byte value precomputed for both pointer widths, keeping the layout store
+/// target-independent: both targets' values are stored and the right one is a
+/// direct array read once the target is known (no per-read computation). Indexed
+/// by `@intFromEnum(TargetUsize)` — `[0]` is the 32-bit target, `[1]` the 64-bit.
+/// Computing both directly (rather than a pointer count) accounts for the
+/// pointer-width-dependent alignment padding exactly.
+pub fn WidthValues(comptime T: type) type {
+    return struct {
+        per_target: [2]T,
+
+        pub fn get(self: @This(), target_usize: target.TargetUsize) T {
+            return self.per_target[@intFromEnum(target_usize)];
+        }
+
+        pub fn both(value_for_u32: T, value_for_u64: T) @This() {
+            return .{ .per_target = .{ value_for_u32, value_for_u64 } };
+        }
+    };
+}
+
 /// Struct data stored in the layout Store — unified for records and tuples.
 pub const StructData = struct {
-    /// Size of the struct, in bytes
-    size: u32,
+    /// Size of the struct in bytes, precomputed for both pointer widths.
+    size: WidthValues(u32),
     /// Range of fields in the struct_fields list
     fields: collections.NonEmptyRange,
     /// Whether this struct transitively contains refcounted data. Precomputed
@@ -263,10 +283,12 @@ pub const TagUnionIdx = packed struct {
 
 /// Tag union data stored in the layout Store
 pub const TagUnionData = struct {
-    /// Size of the tag union, in bytes (max payload + discriminant, aligned)
-    size: u32,
-    /// Offset of the discriminant within the union (usually after payload)
-    discriminant_offset: u16,
+    /// Size of the tag union in bytes (max payload + discriminant, aligned),
+    /// precomputed for both pointer widths.
+    size: WidthValues(u32),
+    /// Offset of the discriminant within the union (after the payload),
+    /// precomputed for both pointer widths.
+    discriminant_offset: WidthValues(u16),
     /// Size of the discriminant in bytes (0, 1, 2, 4, or 8).
     /// A size of 0 means the tag union has exactly one variant, so the
     /// discriminant is implicit and always 0.
@@ -282,10 +304,10 @@ pub const TagUnionData = struct {
     }
 
     /// Read the discriminant value from memory at the given base pointer.
-    /// Adds discriminant_offset internally to find the discriminant location.
-    pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8) u32 {
+    /// Adds the discriminant offset (for the given target) internally.
+    pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8, target_usize: target.TargetUsize) u32 {
         if (self.discriminant_size == 0) return 0;
-        return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset);
+        return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset.get(target_usize));
     }
 
     /// Read the discriminant value from a pointer already at the discriminant location.
@@ -302,10 +324,10 @@ pub const TagUnionData = struct {
     }
 
     /// Write a discriminant value to memory at the given base pointer.
-    /// Adds discriminant_offset internally to find the discriminant location.
-    pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32) void {
+    /// Adds the discriminant offset (for the given target) internally.
+    pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32, target_usize: target.TargetUsize) void {
         if (self.discriminant_size == 0) return;
-        self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset, value);
+        self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset.get(target_usize), value);
     }
 
     /// Write a discriminant value to a pointer already at the discriminant location.
@@ -550,11 +572,13 @@ pub const BoxInfo = struct {
 pub const StructInfo = struct {
     data: *const StructData,
     alignment: std.mem.Alignment,
+    /// Size in bytes, resolved for the store's target.
+    byte_size: u32,
     fields: StructField.SafeMultiList.Slice,
     contains_refcounted: bool,
 
     pub fn size(self: StructInfo) u32 {
-        return self.data.size;
+        return self.byte_size;
     }
 };
 
@@ -568,15 +592,19 @@ pub const TagUnionInfo = struct {
     idx: TagUnionIdx,
     data: *const TagUnionData,
     alignment: std.mem.Alignment,
+    /// Size in bytes, resolved for the store's target.
+    byte_size: u32,
+    /// Discriminant offset, resolved for the store's target.
+    discriminant_offset: u16,
     variants: TagUnionVariant.SafeMultiList.Slice,
     contains_refcounted: bool,
 
     pub fn size(self: TagUnionInfo) u32 {
-        return self.data.size;
+        return self.byte_size;
     }
 
     pub fn readDiscriminant(self: TagUnionInfo, ptr: [*]const u8) u32 {
-        return self.data.readDiscriminantFromPtr(ptr + self.data.discriminant_offset);
+        return self.data.readDiscriminantFromPtr(ptr + self.discriminant_offset);
     }
 };
 
@@ -869,7 +897,7 @@ test "StructData.getFields()" {
     const testing = std.testing;
 
     const struct_data = StructData{
-        .size = 40,
+        .size = WidthValues(u32).both(40, 40),
         .fields = .{ .start = 10, .count = 5 },
     };
 

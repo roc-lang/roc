@@ -211,8 +211,8 @@ pub const Store = struct {
         }
         {
             const idx = try tag_union_data.append(allocator, .{
-                .size = 1,
-                .discriminant_offset = 0,
+                .size = layout_mod.WidthValues(u32).both(1, 1),
+                .discriminant_offset = layout_mod.WidthValues(u16).both(0, 0),
                 .discriminant_size = 1,
                 .variants = .{ .start = 0, .count = 2 },
                 .contains_refcounted = false,
@@ -464,7 +464,7 @@ pub const Store = struct {
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
-            .size = total_size,
+            .size = layout_mod.WidthValues(u32).both(total_size, total_size),
             .fields = fields_range,
         });
         assertAppendIdx(expected_idx, struct_data_idx);
@@ -531,7 +531,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_struct_idx = self.struct_data.items.items.len;
-        const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
+        const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = layout_mod.WidthValues(u32).both(total_size, total_size), .fields = fields_range });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
         self.struct_data.get(struct_data_idx).contains_refcounted = self.structContainsRefcounted(struct_idx);
         return try self.insertLayout(Layout.struct_(self.structSortKeyByIdx(struct_idx), struct_idx));
@@ -580,8 +580,8 @@ pub const Store = struct {
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
         const expected_tag_union_idx = self.tag_union_data.items.items.len;
         const tag_union_data_list_idx = try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
+            .size = layout_mod.WidthValues(u32).both(total_size, total_size),
+            .discriminant_offset = layout_mod.WidthValues(u16).both(discriminant_offset, discriminant_offset),
             .discriminant_size = discriminant_size,
             .variants = .{
                 .start = variants_start,
@@ -625,7 +625,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_struct_idx = self.struct_data.items.items.len;
-        const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
+        const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = layout_mod.WidthValues(u32).both(total_size, total_size), .fields = fields_range });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
         self.struct_data.get(struct_data_idx).contains_refcounted = self.structContainsRefcounted(struct_idx);
         const capture_layout = Layout.struct_(self.structSortKeyByIdx(struct_idx), struct_idx);
@@ -666,7 +666,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = 1 };
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_struct_idx = self.struct_data.items.items.len;
-        const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
+        const struct_data_idx = try self.struct_data.append(self.allocator, StructData{ .size = layout_mod.WidthValues(u32).both(total_size, total_size), .fields = fields_range });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
         self.struct_data.get(struct_data_idx).contains_refcounted = self.structContainsRefcounted(struct_idx);
         // The capture union's alignment comes from the 8-byte tag and payloads,
@@ -739,6 +739,7 @@ pub const Store = struct {
         return StructInfo{
             .data = struct_data,
             .alignment = layout.getStruct().sort_key.alignment(self.targetUsize()),
+            .byte_size = struct_data.size.get(self.targetUsize()),
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -756,6 +757,8 @@ pub const Store = struct {
             .idx = layout.getTagUnion().idx,
             .data = tu_data,
             .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize()),
+            .byte_size = tu_data.size.get(self.targetUsize()),
+            .discriminant_offset = tu_data.discriminant_offset.get(self.targetUsize()),
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -775,14 +778,14 @@ pub const Store = struct {
         };
     }
 
-    /// Get the canonical discriminant offset for a tag union.
+    /// Get the canonical discriminant offset for a tag union, for the store's target.
     pub fn getTagUnionDiscriminantOffset(self: *const Self, tu_idx: TagUnionIdx) u16 {
-        return self.getTagUnionData(tu_idx).discriminant_offset;
+        return self.getTagUnionData(tu_idx).discriminant_offset.get(self.targetUsize());
     }
 
-    /// Get the canonical size of a tag union.
+    /// Get the canonical size of a tag union, for the store's target.
     pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, _: std.mem.Alignment) u32 {
-        return self.getTagUnionData(tu_idx).size;
+        return self.getTagUnionData(tu_idx).size.get(self.targetUsize());
     }
 
     /// Create a new tag_union layout with a specific variant's payload layout replaced.
@@ -832,8 +835,8 @@ pub const Store = struct {
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
         const expected_tag_union_idx = self.tag_union_data.items.items.len;
         const tag_union_data_list_idx = try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
+            .size = layout_mod.WidthValues(u32).both(total_size, total_size),
+            .discriminant_offset = layout_mod.WidthValues(u16).both(discriminant_offset, discriminant_offset),
             .discriminant_size = tu_data.discriminant_size,
             .variants = .{
                 .start = variants_start,
@@ -846,9 +849,9 @@ pub const Store = struct {
         return Layout.tagUnion(self.tagUnionSortKeyByIdx(.{ .int_idx = @intCast(tag_union_data_idx) }), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
-    /// Get the canonical size of a struct.
+    /// Get the canonical size of a struct, for the store's target.
     pub fn getStructSize(self: *const Self, struct_idx: StructIdx, _: std.mem.Alignment) u32 {
-        return self.getStructData(struct_idx).size;
+        return self.getStructData(struct_idx).size.get(self.targetUsize());
     }
 
     /// Backwards-compat aliases
@@ -984,7 +987,7 @@ pub const Store = struct {
     fn getEmptyStructLayout(self: *Self) Allocator.Error!Idx {
         // Check if we already have an empty struct layout
         for (self.struct_data.items.items, 0..) |sd, i| {
-            if (sd.size == 0 and sd.fields.count == 0) {
+            if (sd.size.get(self.targetUsize()) == 0 and sd.fields.count == 0) {
                 const struct_idx = StructIdx{ .int_idx = @intCast(i) };
                 const empty_layout = Layout.struct_(.align_1, struct_idx);
                 return try self.insertLayout(empty_layout);
@@ -995,7 +998,7 @@ pub const Store = struct {
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
-            .size = 0,
+            .size = layout_mod.WidthValues(u32).both(0, 0),
             .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
         });
         if (comptime builtin.mode == .Debug) {
@@ -1104,7 +1107,7 @@ pub const Store = struct {
             },
             .struct_ => .{
                 // Use pre-computed size from StructData to avoid infinite recursion on recursive types
-                .size = @intCast(self.struct_data.get(@enumFromInt(layout.getStruct().idx.int_idx)).size),
+                .size = @intCast(self.struct_data.get(@enumFromInt(layout.getStruct().idx.int_idx)).size.get(target_usize)),
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getStruct().sort_key.alignment(target_usize).toByteUnits())),
             },
             .closure => blk: {
@@ -1120,7 +1123,7 @@ pub const Store = struct {
             },
             .tag_union => .{
                 // Use pre-computed size from TagUnionData to avoid infinite recursion on recursive types
-                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.getTagUnion().idx.int_idx)).size),
+                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.getTagUnion().idx.int_idx)).size.get(target_usize)),
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getTagUnion().sort_key.alignment(target_usize).toByteUnits())),
             },
             .zst => .{
@@ -1440,7 +1443,7 @@ pub const Store = struct {
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_struct_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, StructData{
-            .size = total_size,
+            .size = layout_mod.WidthValues(u32).both(total_size, total_size),
             .fields = fields_range,
         });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
@@ -1516,7 +1519,7 @@ pub const Store = struct {
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_struct_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, StructData{
-            .size = total_size,
+            .size = layout_mod.WidthValues(u32).both(total_size, total_size),
             .fields = fields_range,
         });
         assertAppendIdx(expected_struct_idx, struct_data_idx);
@@ -1601,8 +1604,8 @@ pub const Store = struct {
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
         const expected_tag_union_idx = self.tag_union_data.items.items.len;
         const tag_union_data_list_idx = try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
+            .size = layout_mod.WidthValues(u32).both(total_size, total_size),
+            .discriminant_offset = layout_mod.WidthValues(u16).both(discriminant_offset, discriminant_offset),
             .discriminant_size = discriminant_size,
             .variants = .{
                 .start = variants_start,

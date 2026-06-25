@@ -1897,7 +1897,7 @@ const GlueRocValueWriter = struct {
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
         }
-        self.layouts.getTagUnionInfo(tag_union_layout).data.writeDiscriminant(tag_union_base, tag_index);
+        self.layouts.getTagUnionInfo(tag_union_layout).data.writeDiscriminant(tag_union_base, tag_index, self.layouts.targetUsize());
     }
 
     fn readTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]const u8, tag_union_layout_idx: layout.Idx) u64 {
@@ -1905,7 +1905,7 @@ const GlueRocValueWriter = struct {
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
         }
-        return self.layouts.getTagUnionInfo(tag_union_layout).data.readDiscriminant(@constCast(tag_union_base));
+        return self.layouts.getTagUnionInfo(tag_union_layout).data.readDiscriminant(@constCast(tag_union_base), self.layouts.targetUsize());
     }
 };
 

@@ -3008,8 +3008,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         std.debug.panic("LIR/codegen invariant violated: str_find_first expected fields after Str, before Str, found Bool", .{});
                     }
 
-                    const result_offset = self.codegen.allocStackSlot(record_data.size);
-                    try self.zeroStackArea(result_offset, record_data.size);
+                    const record_size = record_data.size.get(ls.targetUsize());
+                    const result_offset = self.codegen.allocStackSlot(record_size);
+                    try self.zeroStackArea(result_offset, record_size);
 
                     const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrFindFirstLayout));
                     const layout_reg = try self.allocTempGeneral();
@@ -3058,8 +3059,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         std.debug.panic("LIR/codegen invariant violated: str_drop_prefix_caseless_ascii expected fields after Str, found Bool", .{});
                     }
 
-                    const result_offset = self.codegen.allocStackSlot(record_data.size);
-                    try self.zeroStackArea(result_offset, record_data.size);
+                    const record_size = record_data.size.get(ls.targetUsize());
+                    const result_offset = self.codegen.allocStackSlot(record_size);
+                    try self.zeroStackArea(result_offset, record_size);
 
                     const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrDropPrefixCaselessAsciiLayout));
                     const layout_reg = try self.allocTempGeneral();
@@ -3238,7 +3240,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         const inner_tu = ls.getTagUnionData(err_layout.getTagUnion().idx);
                                         if (self.findBadUtf8Variant(inner_tu)) |info| {
                                             err_record_idx = info.struct_idx;
-                                            inner_disc_offset = inner_tu.discriminant_offset;
+                                            inner_disc_offset = inner_tu.discriminant_offset.get(self.layout_store.targetUsize());
                                             inner_disc_size = inner_tu.discriminant_size;
                                             inner_bad_utf8_disc = info.disc;
                                         }
@@ -3299,8 +3301,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             "LIR/codegen invariant violated: str_from_utf8 could not resolve problem size",
                             .{},
                         );
-                        const tag_size = tu_data.size;
-                        const disc_offset = tu_data.discriminant_offset;
+                        const tag_size = tu_data.size.get(self.layout_store.targetUsize());
+                        const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
                         const disc_size = tu_data.discriminant_size;
                         if (builtin.mode == .Debug and resolved_index_size != 8) {
                             std.debug.panic(
@@ -5048,7 +5050,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
             const record_idx = record_layout.getStruct().idx;
-            const record_size = ls.getStructData(record_idx).size;
+            const record_size = ls.getStructData(record_idx).size.get(ls.targetUsize());
             // In shared layout, record field indices are canonical alphabetical order.
             // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
             const len_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0));
@@ -5155,7 +5157,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (ret_layout.tag != .struct_) unreachable;
             const record_idx = ret_layout.getStruct().idx;
             const record_data = ls.getStructData(record_idx);
-            const result_size: u32 = record_data.size;
+            const result_size: u32 = record_data.size.get(ls.targetUsize());
 
             // Find which field is the list and which is the element.
             // The record has exactly 2 fields.
@@ -7070,11 +7072,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.debug.assert(ret_layout_val.tag == .tag_union);
             const tu_idx = ret_layout_val.getTagUnion().idx;
             const tu_data = ls.getTagUnionData(tu_idx);
+            const tu_size = tu_data.size.get(ls.targetUsize());
 
-            const result_offset = self.codegen.allocStackSlot(tu_data.size);
-            try self.zeroStackArea(result_offset, tu_data.size);
+            const result_offset = self.codegen.allocStackSlot(tu_size);
+            try self.zeroStackArea(result_offset, tu_size);
 
-            const disc_offset: u32 = tu_data.discriminant_offset;
+            const disc_offset: u32 = tu_data.discriminant_offset.get(ls.targetUsize());
             const payload_size: u32 = disc_offset; // payload is before discriminant
 
             const info = intTryConvInfo(ll.op);
@@ -7196,9 +7199,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 std.debug.panic("generateNumFromStr: expected tag_union layout, got {s}", .{@tagName(ret_layout_val.tag)});
             }
             const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
-            const result_offset = self.codegen.allocStackSlot(tu_data.size);
-            try self.zeroStackArea(result_offset, tu_data.size);
-            const disc_offset: u32 = tu_data.discriminant_offset;
+            const tu_size = tu_data.size.get(ls.targetUsize());
+            const result_offset = self.codegen.allocStackSlot(tu_size);
+            try self.zeroStackArea(result_offset, tu_size);
+            const disc_offset: u32 = tu_data.discriminant_offset.get(ls.targetUsize());
 
             const base_reg = frame_ptr;
 
@@ -8155,14 +8159,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (stored_layout.tag != .tag_union) unreachable;
                     const tu_idx = stored_layout.getTagUnion().idx;
                     const tu_data = ls.getTagUnionData(tu_idx);
-                    const total_size = tu_data.size;
+                    const total_size = tu_data.size.get(ls.targetUsize());
                     if (total_size == 0) {
                         try self.codegen.emitLoadImm(rr, 1);
                         continue;
                     }
                     const lhs_base = try self.ensureRecordOnStack(t.lhs_loc, total_size);
                     const rhs_base = try self.ensureRecordOnStack(t.rhs_loc, total_size);
-                    const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
+                    const disc_offset: i32 = @intCast(tu_data.discriminant_offset.get(self.layout_store.targetUsize()));
                     const disc_size = tu_data.discriminant_size;
                     const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(total_size)));
                     const lhs_disc = try self.allocTempGeneral();
@@ -10470,7 +10474,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const disc_reg = try self.loadAndMaskDiscriminant(
                     stable_value_loc,
                     disc.target_layout != .u64,
-                    @intCast(tu_data.discriminant_offset),
+                    @intCast(tu_data.discriminant_offset.get(ls.targetUsize())),
                     tu_data.discriminant_size,
                 );
                 return .{ .general_reg = disc_reg };
@@ -10483,9 +10487,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
                     const disc_reg = try self.allocTempGeneral();
                     if (disc.target_layout != .u64) {
-                        try self.emitLoad(.w32, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset));
+                        try self.emitLoad(.w32, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset.get(self.layout_store.targetUsize())));
                     } else {
-                        try self.emitLoad(.w64, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset));
+                        try self.emitLoad(.w64, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset.get(self.layout_store.targetUsize())));
                     }
                     self.codegen.freeGeneral(box_ptr_reg);
 
@@ -10653,7 +10657,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .struct_ => {
                     const struct_layout = target_layout;
                     const struct_data = ls.getStructData(struct_layout.getStruct().idx);
-                    const stack_size = struct_data.size;
+                    const stack_size = struct_data.size.get(ls.targetUsize());
                     if (stack_size == 0) {
                         return .{ .immediate_i64 = 0 };
                     }
@@ -10775,7 +10779,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 {
                     const heap_ptr = try self.allocTempGeneral();
                     try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
-                    try self.storeDiscriminantToPtr(heap_ptr, inner_tu_data.discriminant_offset, tag.discriminant, inner_tu_data.discriminant_size);
+                    try self.storeDiscriminantToPtr(heap_ptr, inner_tu_data.discriminant_offset.get(self.layout_store.targetUsize()), tag.discriminant, inner_tu_data.discriminant_size);
                     self.codegen.freeGeneral(heap_ptr);
                 }
 
@@ -10794,7 +10798,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const tu_data = ls.getTagUnionData(union_layout.getTagUnion().idx);
-            const stack_size = tu_data.size;
+            const stack_size = tu_data.size.get(self.layout_store.targetUsize());
             const variants = ls.getTagUnionVariants(tu_data);
             if (@as(usize, tag.variant_index) >= variants.len) {
                 if (builtin.mode == .Debug) {
@@ -10811,7 +10815,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const base_offset = self.codegen.allocStackSlot(stack_size);
                 try self.zeroStackArea(base_offset, stack_size);
 
-                const disc_offset = tu_data.discriminant_offset;
+                const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
                 const disc_size = tu_data.discriminant_size;
                 try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
 
@@ -10830,7 +10834,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const payload_size: u32 = ls.layoutSizeAlign(payload_layout).size;
                 try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
 
-                const disc_offset = tu_data.discriminant_offset;
+                const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
                 const disc_size = tu_data.discriminant_size;
                 try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
 
@@ -12153,7 +12157,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const tuple_layout = ls.getLayout(result_layout);
                             if (tuple_layout.tag == .struct_) {
                                 const tuple_data = ls.getStructData(tuple_layout.getStruct().idx);
-                                const total_size = tuple_data.size;
+                                const total_size = tuple_data.size.get(ls.targetUsize());
 
                                 // Copy entire tuple as 8-byte chunks
                                 const temp_reg = try self.allocTempGeneral();
@@ -12346,12 +12350,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     switch (layout_val.tag) {
                         .struct_ => {
                             const struct_data = ls.getStructData(layout_val.getStruct().idx);
-                            try self.copyStackToPtr(loc, saved_ptr_reg, struct_data.size);
+                            try self.copyStackToPtr(loc, saved_ptr_reg, struct_data.size.get(ls.targetUsize()));
                             return;
                         },
                         .tag_union => {
                             const tu_data = ls.getTagUnionData(layout_val.getTagUnion().idx);
-                            try self.copyStackToPtr(loc, saved_ptr_reg, tu_data.size);
+                            try self.copyStackToPtr(loc, saved_ptr_reg, tu_data.size.get(ls.targetUsize()));
                             return;
                         },
                         .list, .list_of_zst => {
