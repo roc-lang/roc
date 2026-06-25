@@ -1528,6 +1528,33 @@ test "List.iter producer lowers to a materialized iterator plan" {
     try std.testing.expect(found);
 }
 
+test "user iter producer is not lowered as builtin List.iter plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    iter : Bag -> Iter(I64)
+        \\    iter = |_| Iter.single(1.I64)
+        \\}
+        \\
+        \\main : Iter(I64)
+        \\main = Bag.iter(Bag.Bag)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .list => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 test "List.iter producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
     var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,

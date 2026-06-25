@@ -10347,7 +10347,7 @@ const BodyContext = struct {
             .ty = fn_data.ret,
             .data = lowered_call.exprData(),
         });
-        if (try self.lowerIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, call_expr)) |plan_expr| {
+        if (try self.lowerIteratorProducerPlanExpr(plan, resolved, dispatcher_ty, lowered_call, call_expr)) |plan_expr| {
             return try self.applyDispatchResultMode(plan.result_mode, plan_expr, fn_data.ret);
         }
         return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
@@ -14007,6 +14007,7 @@ const BodyContext = struct {
     fn lowerIteratorProducerPlanExpr(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
+        resolved: MethodLookup,
         dispatcher_ty: Type.TypeId,
         lowered_call: LoweredResolvedDispatchCall,
         materialized: Ast.ExprId,
@@ -14018,6 +14019,7 @@ const BodyContext = struct {
         }
         if (!self.methodNameIs(plan.method, "iter")) return null;
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) return null;
+        if (!self.resolvedDispatchMatchesBuiltinMethod(resolved, .list, "iter")) return null;
 
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         const receiver_index = switch (plan.dispatcher) {
@@ -14325,6 +14327,42 @@ const BodyContext = struct {
             .local_proc => return false,
         };
         return self.resolvedValueMatchesProcedureMethodTarget(direct_target, expected);
+    }
+
+    fn resolvedDispatchMatchesBuiltinMethod(
+        self: *BodyContext,
+        resolved: MethodLookup,
+        owner: static_dispatch.BuiltinOwner,
+        comptime method_name: []const u8,
+    ) bool {
+        const expected = self.builder.lookupMethodTargetByName(.{ .builtin = owner }, method_name) orelse return false;
+        return methodLookupMatches(resolved, expected);
+    }
+
+    fn methodLookupMatches(actual: MethodLookup, expected: MethodLookup) bool {
+        if (!moduleBytesEqual(actual.view.key.bytes, expected.view.key.bytes)) return false;
+        if (actual.target.module_idx != expected.target.module_idx) return false;
+        if (actual.target.def_idx != expected.target.def_idx) return false;
+        if (actual.target.callable_ty != expected.target.callable_ty) return false;
+        return methodTargetKindMatches(actual.target.kind, expected.target.kind);
+    }
+
+    fn methodTargetKindMatches(
+        actual: static_dispatch.MethodTargetKind,
+        expected: static_dispatch.MethodTargetKind,
+    ) bool {
+        return switch (actual) {
+            .procedure => |actual_proc| switch (expected) {
+                .procedure => |expected_proc| names.procedureValueRefEql(actual_proc.proc, expected_proc.proc) and
+                    names.procedureTemplateRefEql(actual_proc.template, expected_proc.template),
+                .local_proc => false,
+            },
+            .local_proc => |actual_local| switch (expected) {
+                .procedure => false,
+                .local_proc => |expected_local| actual_local.binder == expected_local.binder and
+                    actual_local.expr == expected_local.expr,
+            },
+        };
     }
 
     fn resolvedValueMatchesProcedureMethodTarget(

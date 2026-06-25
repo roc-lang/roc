@@ -97,8 +97,9 @@ Current branch status:
 - A focused post-check normalization boundary currently materializes remaining
   raw plans before Lambda-to-LIR lowering.
 - `List.iter` can emit a `ListIter` plan behind an explicit producer-plan flag;
-  the normal pipeline keeps that flag off until private consumers through locals
-  and branches are implemented.
+  recognition checks the resolved builtin method target, and the normal
+  pipeline keeps that flag off until private consumers through locals and
+  branches are implemented.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -513,7 +514,7 @@ Tasks:
   implemented.
 - [ ] All recognized producers lower to plan expressions.
 - [ ] Recognition uses checked identity for every producer.
-- [ ] `List.iter` uses exact checked identity when producing `ListIter`.
+- [x] `List.iter` uses exact checked identity when producing `ListIter`.
 - [ ] `Iter.iter` preserves or forwards known plans correctly.
 - [ ] numeric finite ranges produce `Range`.
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
