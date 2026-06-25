@@ -14774,6 +14774,7 @@ const BodyContext = struct {
 
         const plan = self.builder.program.iterPlan(plan_id);
         switch (plan.data) {
+            .single => |single| return try self.lowerSingleIteratorPlanFold(single, plan.item_ty, acc_expr, step_fn, step_expr_data.ty, acc_ty),
             .range => |range| return try self.lowerRangeIteratorPlanFold(range, plan.item_ty, acc_expr, step_fn, step_expr_data.ty, acc_ty),
             else => return null,
         }
@@ -16582,6 +16583,47 @@ const BodyContext = struct {
         return try self.wrapLet(source_list_local, source_list_ty, plan.list.list, rest, acc_ty);
     }
 
+    fn lowerSingleIteratorPlanFold(
+        self: *BodyContext,
+        single: Ast.IterPlan.SingleIter,
+        item_ty: Type.TypeId,
+        initial_acc: Ast.ExprId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const bool_ty = try self.builder.primitiveType(.bool);
+
+        const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const item_expr = try self.builder.localExpr(item_local, item_ty);
+        const emitted_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), bool_ty);
+        const emitted_expr = try self.builder.localExpr(emitted_local, bool_ty);
+        const initial_acc_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), acc_ty);
+        const initial_acc_expr = try self.builder.localExpr(initial_acc_local, acc_ty);
+
+        const fold_fn_local: ?Ast.LocalId = switch (step_fn) {
+            .direct => null,
+            .value => try self.builder.program.addLocal(self.builder.symbols.fresh(), step_fn_ty),
+        };
+        const local_step_fn: IteratorFoldFn = switch (step_fn) {
+            .direct => |fn_id| .{ .direct = fn_id },
+            .value => .{ .value = try self.builder.localExpr(fold_fn_local orelse Common.invariant("Iter.fold step local was missing"), step_fn_ty) },
+        };
+
+        const folded = try self.foldStepExpr(initial_acc_expr, item_expr, local_step_fn, step_fn_ty, acc_ty, item_ty);
+        var rest = try self.builder.ifExpr(emitted_expr, initial_acc_expr, folded, acc_ty);
+        if (fold_fn_local) |local| {
+            const value = switch (step_fn) {
+                .direct => Common.invariant("direct Iter.fold step unexpectedly needed a local binding"),
+                .value => |expr| expr,
+            };
+            rest = try self.wrapLet(local, step_fn_ty, value, rest, acc_ty);
+        }
+        rest = try self.wrapLet(initial_acc_local, acc_ty, initial_acc, rest, acc_ty);
+        rest = try self.wrapLet(emitted_local, bool_ty, single.emitted, rest, acc_ty);
+        return try self.wrapLet(item_local, item_ty, single.item, rest, acc_ty);
+    }
+
     fn lowerRangeIteratorPlanFold(
         self: *BodyContext,
         range: Ast.IterPlan.RangeIter,
@@ -16698,6 +16740,26 @@ const BodyContext = struct {
         item_ty: Type.TypeId,
         prefix_values: []const Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
+        const next_acc = try self.foldStepExpr(acc_expr, item_expr, step_fn, step_fn_ty, acc_ty, item_ty);
+        const continue_values = try self.allocator.alloc(Ast.ExprId, prefix_values.len + 1);
+        defer self.allocator.free(continue_values);
+        @memcpy(continue_values[0..prefix_values.len], prefix_values);
+        continue_values[prefix_values.len] = next_acc;
+        return try self.builder.program.addExpr(.{
+            .ty = acc_ty,
+            .data = .{ .continue_ = .{ .values = try self.builder.program.addExprSpan(continue_values) } },
+        });
+    }
+
+    fn foldStepExpr(
+        self: *BodyContext,
+        acc_expr: Ast.ExprId,
+        item_expr: Ast.ExprId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+        item_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
         if (!self.foldStepFunctionMatches(step_fn_ty, acc_ty, item_ty)) {
             Common.invariant("Iter.fold step function type differed from iterator item and accumulator types");
         }
@@ -16711,17 +16773,9 @@ const BodyContext = struct {
                 .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ acc_expr, item_expr }),
             } },
         };
-        const next_acc = try self.builder.program.addExpr(.{
-            .ty = acc_ty,
-            .data = next_acc_data,
-        });
-        const continue_values = try self.allocator.alloc(Ast.ExprId, prefix_values.len + 1);
-        defer self.allocator.free(continue_values);
-        @memcpy(continue_values[0..prefix_values.len], prefix_values);
-        continue_values[prefix_values.len] = next_acc;
         return try self.builder.program.addExpr(.{
             .ty = acc_ty,
-            .data = .{ .continue_ = .{ .values = try self.builder.program.addExprSpan(continue_values) } },
+            .data = next_acc_data,
         });
     }
 

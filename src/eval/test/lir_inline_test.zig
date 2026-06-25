@@ -1857,6 +1857,65 @@ test "optimized Iter.fold over direct range preserves range and accumulator effe
     , &.{ "2", "10", "13", "4" });
 }
 
+test "optimized Iter.fold over direct single consumes iterator plan" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold(Iter.single(3.I64), 10.I64, |acc, item| acc + item)
+        \\    {}
+        \\}
+    , &.{"13"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = Iter.fold(Iter.single(3.I64), 10.I64, |acc, item| acc + item)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "tag_assign_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_tag_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_append_unsafe_count"));
+}
+
+test "optimized Iter.fold over direct single preserves item and accumulator effects" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold(Iter.single(tap(3.I64)), tap(10.I64), |acc, item| acc + item)
+        \\    dbg 4.I64
+        \\    {}
+        \\}
+    , &.{ "3", "10", "13", "4" });
+}
+
+test "optimized Iter.fold over direct single keeps refcounted items" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold(Iter.single("b"), "a", |acc, item| Str.concat(acc, item))
+        \\    {}
+        \\}
+    , &.{"\"ab\""});
+}
+
 test "local list.iter with public alias keeps public iterator semantics" {
     const source =
         \\module [main]
