@@ -2245,6 +2245,91 @@ test "public Iter.next materializes iterator plan before Lambda" {
     try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
+test "public aggregate storage materializes iterator plan before Lambda" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : (Iter(I64), I64)
+        \\main = ([10.I64, 20.I64].iter(), 1.I64)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
+test "unspecialized function return materializes iterator plan before Lambda" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\make_iter : I64 -> Iter(I64)
+        \\make_iter = |n| [n, 20.I64].iter()
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg match Iter.next(make_iter(10.I64)) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\    {}
+        \\}
+    , &.{"10"});
+
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\make_iter : I64 -> Iter(I64)
+        \\make_iter = |n| [n, 20.I64].iter()
+        \\
+        \\main : I64
+        \\main = match Iter.next(make_iter(10.I64)) {
+        \\    One({ item, .. }) => item
+        \\    _ => 0
+        \\}
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
+test "unspecialized function argument materializes iterator plan before Lambda" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\take_first : Iter(I64) -> I64
+        \\take_first = |iter|
+        \\    match Iter.next(iter) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg take_first([10.I64, 20.I64].iter())
+        \\    {}
+        \\}
+    , &.{"10"});
+
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\take_first : Iter(I64) -> I64
+        \\take_first = |iter|
+        \\    match Iter.next(iter) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\main : I64
+        \\main = take_first([10.I64, 20.I64].iter())
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
 test "List.iter producer lowers to a materialized iterator plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,

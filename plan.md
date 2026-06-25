@@ -602,8 +602,13 @@ Tasks:
   - [x] Direct `Iter.next(List.iter(...))` materializes before Lambda and
     preserves public iterator behavior.
 - [ ] Public aggregate storage materializes.
+  - [x] Tuple storage containing `List.iter(...)` materializes before Lambda.
 - [ ] Unspecialized function return materializes.
+  - [x] Function return of `List.iter(...)` materializes before Lambda and
+    preserves public `Iter.next` behavior.
 - [ ] Unspecialized call argument materializes.
+  - [x] Function argument receiving `List.iter(...)` materializes before Lambda
+    and preserves public `Iter.next` behavior.
 - [x] Raw plan expressions cannot reach Lambda-to-LIR lowering.
 - [x] Raw plan expressions cannot reach LIR.
 - [ ] Optimized `for` consumes plan values directly.
