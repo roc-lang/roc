@@ -14028,6 +14028,12 @@ const BodyContext = struct {
             return try self.lowerSingleIteratorProducerPlanExpr(plan, lowered_call, materialized);
         }
 
+        if (self.methodNameIs(plan.method, "append") and
+            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "append"))
+        {
+            return try self.lowerAppendIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
+        }
+
         if (!self.methodNameIs(plan.method, "iter")) return null;
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) return null;
         if (!self.resolvedDispatchMatchesBuiltinMethod(resolved, .list, "iter")) return null;
@@ -14068,6 +14074,67 @@ const BodyContext = struct {
             } },
         });
 
+        return try self.builder.program.addExpr(.{
+            .ty = materialized_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lowerAppendIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: Type.TypeId,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.append dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.append dispatch plan had an unexpected argument shape");
+        }
+        const after_index: usize = if (receiver_index == 0) 1 else 0;
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter.append call argument count differed from its dispatch plan");
+        }
+
+        const before_plan = try self.iteratorPlanForLoweredPublicExpr(lowered_args[receiver_index], dispatcher_ty);
+        const before = self.builder.program.iterPlan(before_plan);
+        const after_expr = lowered_args[after_index];
+        const after_ty = self.builder.program.exprs.items[@intFromEnum(after_expr)].ty;
+        if (!self.sameType(after_ty, self.iterItemType(dispatcher_ty))) {
+            Common.invariant("checked Iter.append item type differed from its iterator item type");
+        }
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const phase_expr = try self.boolLiteral(false, bool_ty);
+        const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
+
+        var steps = before.steps;
+        steps.one = true;
+        steps.done = before.done == .reachable;
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = after_ty,
+            .length = switch (before.length) {
+                .known => |len| .{ .known = try self.builder.lowLevelExpr(.num_plus, &.{ len, one_expr }, u64_ty) },
+                .unknown => .unknown,
+            },
+            .steps = steps,
+            .done = before.done,
+            .materialized = materialized,
+            .data = .{ .append = .{
+                .before = before_plan,
+                .after = after_expr,
+                .phase = phase_expr,
+            } },
+        });
+
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
         return try self.builder.program.addExpr(.{
             .ty = materialized_expr.ty,
             .data = .{ .iter_plan = plan_id },
@@ -14143,6 +14210,37 @@ const BodyContext = struct {
         return try self.builder.program.addExpr(.{
             .ty = iterator_ty,
             .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn iteratorPlanForLoweredPublicExpr(
+        self: *BodyContext,
+        iter_expr: Ast.ExprId,
+        iter_ty: Type.TypeId,
+    ) Allocator.Error!Ast.IterPlanId {
+        const expr = self.builder.program.exprs.items[@intFromEnum(iter_expr)];
+        if (!self.sameType(expr.ty, iter_ty)) {
+            Common.invariant("lowered iterator producer operand had a type different from its dispatch receiver type");
+        }
+        switch (expr.data) {
+            .iter_plan => |plan_id| return plan_id,
+            else => {},
+        }
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(iter_ty),
+            .length = .unknown,
+            .steps = .{
+                .append = true,
+                .one = true,
+                .skip = true,
+                .done = true,
+            },
+            .done = .reachable,
+            .materialized = iter_expr,
+            .data = .{ .public = .{
+                .iter_value = iter_expr,
+            } },
         });
     }
 

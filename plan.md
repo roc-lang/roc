@@ -103,6 +103,8 @@ Current branch status:
 - `Iter.single` can emit a `Single` plan behind the producer-plan flag; cursor
   state that belongs to first-class plans is represented as initial expressions
   rather than preexisting loop locals.
+- `Iter.append` can emit an `Append` plan behind the producer-plan flag, reusing
+  known child plans and wrapping unknown iterator operands as `Public`.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -523,12 +525,12 @@ Tasks:
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
 - [x] `Iter.single` produces `Single`.
 - [ ] `Iter.prepended` produces the correct plan shape.
-- [ ] `Iter.append` produces `Append`.
+- [x] `Iter.append` produces `Append`.
 - [ ] `Iter.concat` produces `Concat`.
 - [ ] `Iter.map` produces `Map`.
 - [ ] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [ ] `Iter.custom` produces `Custom`.
-- [ ] `Public(iter_value)` exists for unknown iterator values.
+- [x] `Public(iter_value)` exists for unknown iterator values.
 - [ ] Iterator normalization consumes common plans privately before ordinary
   lowering.
 - [ ] Iterator normalization preserves producer-site evaluation order.
