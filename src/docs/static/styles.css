@@ -509,6 +509,17 @@ footer p {
     text-decoration: none;
 }
 
+/* Builtin docs only (the langref-enabled site): the "Builtin Types" and
+   "Language Reference" sidebar entries, and the langref article links, are
+   prose labels rather than code identifiers, so they use the page font instead
+   of the monospace used elsewhere in the sidebar. Inline `code` inside a
+   langref article link keeps its monospace styling via the `code` rule. */
+.pkg-full-name.prose-label,
+.sidebar-module-link.prose-label,
+.langref-articles a {
+  font-family: var(--font-sans);
+}
+
 .sidebar-type {
     margin-left: 0;
 }

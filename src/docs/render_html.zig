@@ -1131,10 +1131,20 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("\">");
     try w.writeAll(roc_logo_svg);
     try w.writeAll("</a>\n");
-    try w.writeAll("            <h1 class=\"pkg-full-name\"><a href=\"");
+    // The roc builtins site (the only docs rendered with a langref) covers the
+    // whole language, not just the "Builtin" package, so its title is the
+    // generic "Documentation" in the page font rather than the package name in
+    // the monospace used for code identifiers.
+    try w.writeAll("            <h1 class=\"pkg-full-name");
+    if (ctx.langref != null) try w.writeAll(" prose-label");
+    try w.writeAll("\"><a href=\"");
     try w.writeAll(base);
     try w.writeAll("\">");
-    try writeHtmlEscaped(w, ctx.package_docs.name);
+    if (ctx.langref != null) {
+        try w.writeAll("Documentation");
+    } else {
+        try writeHtmlEscaped(w, ctx.package_docs.name);
+    }
     try w.writeAll("</a></h1>\n");
     try w.writeAll("        </div>\n");
 
@@ -1166,9 +1176,16 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
             try module_link_prefix.append(gpa, '/');
         }
 
+        // On the roc builtins site (the only docs rendered with a langref), the
+        // "Builtin" module is labelled "Builtin Types" in the page font, to match
+        // the "Language Reference" entry. Everywhere else module names are code
+        // identifiers shown in monospace, so this stays scoped to that one case.
+        const is_builtin_types = ctx.langref != null and std.mem.eql(u8, mod.name, "Builtin");
+
         try w.writeAll("                <li class=\"sidebar-entry\">\n");
         try w.writeAll("                    <a class=\"sidebar-module-link");
         if (is_active) try w.writeAll(" active");
+        if (is_builtin_types) try w.writeAll(" prose-label");
         try w.writeAll("\" data-module-name=\"");
         try writeHtmlEscaped(w, mod.name);
         try w.writeAll("\" href=\"");
@@ -1180,7 +1197,11 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         try w.writeAll("\">");
         try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
         try w.writeAll("<span>");
-        try writeHtmlEscaped(w, mod.name);
+        if (is_builtin_types) {
+            try w.writeAll("Builtin Types");
+        } else {
+            try writeHtmlEscaped(w, mod.name);
+        }
         try w.writeAll("</span></a>\n");
 
         // Sub-entries - grouped hierarchically
@@ -1212,7 +1233,7 @@ fn renderLangRefSidebar(
     // resolves to the site root from the current page and every langref page
     // lives directly under `langref/`.
     try w.writeAll("                <li class=\"sidebar-entry\">\n");
-    try w.writeAll("                    <a class=\"sidebar-module-link active\" data-module-name=\"");
+    try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" data-module-name=\"");
     try w.writeAll(langref_sidebar_id);
     try w.writeAll("\" href=\"");
     try writeHtmlEscaped(w, base);
@@ -1220,11 +1241,9 @@ fn renderLangRefSidebar(
     try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
     try w.writeAll("<span>Language Reference</span></a>\n");
 
-    try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
+    try w.writeAll("                    <ul class=\"sidebar-sub-entries langref-articles\">\n");
     for (langref.articles) |*article| {
         if (article.is_index) continue; // the README is the section landing page
-        const plain_title = render_markdown.titlePlainText(gpa, article) catch null;
-        defer if (plain_title) |t| gpa.free(t);
 
         try w.writeAll("                        <li><a href=\"");
         try writeHtmlEscaped(w, base);
@@ -1232,7 +1251,9 @@ fn renderLangRefSidebar(
         // Slugs contain only filename-safe characters, but escape defensively.
         try writeHtmlEscaped(w, article.slug);
         try w.writeAll(".html\">");
-        try writeHtmlEscaped(w, plain_title orelse article.slug);
+        // Render the title inline so backtick spans (e.g. the "`if` / `else`"
+        // heading) become inline `<code>` rather than literal backticks.
+        try render_markdown.renderTitleInline(w, gpa, langref.articles, article);
         try w.writeAll("</a></li>\n");
     }
     try w.writeAll("                    </ul>\n");

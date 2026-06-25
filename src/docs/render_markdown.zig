@@ -286,6 +286,27 @@ pub fn titlePlainText(gpa: Allocator, article: *const Article) Allocator.Error![
     return plainText(gpa, article.title);
 }
 
+/// Renders an article's title as inline HTML, preserving inline formatting:
+/// `code` spans become `<code>`, emphasis becomes `<em>`/`<strong>`. Used for
+/// sidebar links so e.g. the "`if` / `else`" heading shows its keywords as
+/// inline code rather than literal backticks.
+pub fn renderTitleInline(
+    w: Writer,
+    gpa: Allocator,
+    articles: []const Article,
+    article: *const Article,
+) RenderError!void {
+    var slugger = Slugger.init(gpa);
+    defer slugger.deinit();
+    var rctx = RenderCtx{
+        .w = w,
+        .gpa = gpa,
+        .articles = articles,
+        .slugger = &slugger,
+    };
+    try renderInline(&rctx, article.title);
+}
+
 /// Renders an article's body — everything that goes inside `.main-content`:
 /// an `<h1 class="module-name">` title followed by a `<section>` with the
 /// converted Markdown.
