@@ -3634,6 +3634,14 @@ pub const Coordinator = struct {
 
         const env = mod.moduleEnv() orelse return;
 
+        // The CIR key is SHA256(source) only — it does not fold in ingested files
+        // (`import "data" as ...`), whose contents are baked into CIR. Caching a
+        // module with ingested-file dependencies would serve stale CIR when an
+        // ingested file changes but the .roc source does not, so skip it. (The
+        // type-info cache key does fold ingested content, so those modules still
+        // benefit from it.)
+        if (env.file_dependencies.items.items.len > 0) return;
+
         var write_timer = startStageTimer(self.roc_ctx.std_io);
         defer self.total_cache_write_ns += readStageTimer(self.roc_ctx.std_io, &write_timer);
 
