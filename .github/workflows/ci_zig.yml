@@ -7,14 +7,6 @@ name: CI New Compiler
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
 
-# Keep fetched dependency packages in their own cache directory, separate from
-# build artifacts, so they can be cached under a stable key (the build.zig.zon
-# hash). A cold artifact cache then no longer forces re-downloading deps from
-# GitHub, which is the source of the transient HttpConnectionClosing fetch
-# failures CI hit on cache misses.
-env:
-  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
-
 jobs:
   # Checks that don't need to run on every OS
   check-once:
@@ -38,16 +30,18 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          # We manage the dependency-package cache ourselves below (stable key);
-          # mlugg's combined global+local cache uses a per-run key that churns
-          # and evicts under the repo cache quota, which is what left cold caches
-          # re-fetching deps and hitting HttpConnectionClosing.
-          use-cache: false
+          use-cache: true
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v4 # ratchet:actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.zig-global-cache
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
+          # while mlugg's own cache still handles build artifacts for speed.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
@@ -204,16 +198,18 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          # We manage the dependency-package cache ourselves below (stable key);
-          # mlugg's combined global+local cache uses a per-run key that churns
-          # and evicts under the repo cache quota, which is what left cold caches
-          # re-fetching deps and hitting HttpConnectionClosing.
-          use-cache: false
+          use-cache: true
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v4 # ratchet:actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.zig-global-cache
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
+          # while mlugg's own cache still handles build artifacts for speed.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
@@ -303,16 +299,18 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          # We manage the dependency-package cache ourselves below (stable key);
-          # mlugg's combined global+local cache uses a per-run key that churns
-          # and evicts under the repo cache quota, which is what left cold caches
-          # re-fetching deps and hitting HttpConnectionClosing.
-          use-cache: false
+          use-cache: true
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v4 # ratchet:actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.zig-global-cache
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
+          # while mlugg's own cache still handles build artifacts for speed.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
@@ -433,16 +431,18 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          # We manage the dependency-package cache ourselves below (stable key);
-          # mlugg's combined global+local cache uses a per-run key that churns
-          # and evicts under the repo cache quota, which is what left cold caches
-          # re-fetching deps and hitting HttpConnectionClosing.
-          use-cache: false
+          use-cache: true
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v4 # ratchet:actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.zig-global-cache
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
+          # while mlugg's own cache still handles build artifacts for speed.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
@@ -450,7 +450,7 @@ jobs:
       - name: build roc + repro executables for valgrind
         uses: ./.github/actions/flaky-retry
         with:
-          command: git clean -fdx -e .zig-global-cache && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+          command: git clean -fdx && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
           error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
@@ -490,16 +490,18 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          # We manage the dependency-package cache ourselves below (stable key);
-          # mlugg's combined global+local cache uses a per-run key that churns
-          # and evicts under the repo cache quota, which is what left cold caches
-          # re-fetching deps and hitting HttpConnectionClosing.
-          use-cache: false
+          use-cache: true
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v4 # ratchet:actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.zig-global-cache
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
+          # while mlugg's own cache still handles build artifacts for speed.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-

@@ -6,12 +6,6 @@ name: Cross Compilation Test
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
 
-# Cache fetched dependency packages under a stable key (the build.zig.zon hash)
-# in their own directory, so a cold runner doesn't re-download deps from GitHub
-# and hit transient HttpConnectionClosing fetch failures.
-env:
-  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
-
 jobs:
   # Cross-compile all fx platform tests from all host platforms
   roc-cross-compile:
@@ -36,12 +30,15 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          use-cache: false
+          use-cache: true
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v4 # ratchet:actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.zig-global-cache
+          # See ci_zig.yml: cache Zig's fetched-package subdir under a stable
+          # build.zig.zon key so a cold runner doesn't re-download deps and hit
+          # transient HttpConnectionClosing fetch failures.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
