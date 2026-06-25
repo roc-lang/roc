@@ -253,6 +253,7 @@ const CustomCase = enum {
     glue_zig,
     glue_zig_compiles,
     glue_zig_opaque_box,
+    glue_zig_box_payload_alignment,
     glue_rust,
     glue_rust_duplicate_tag_unions,
     glue_zig_bang_record_fields,
@@ -513,6 +514,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated Zig compiles with zig build-obj", .body = .{ .custom = .glue_zig_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue uses RocBox for opaque boxed app types", .body = .{ .custom = .glue_zig_opaque_box } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_zig_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue handles duplicate tag-union names", .body = .{ .custom = .glue_rust_duplicate_tag_unions } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
@@ -1648,6 +1650,7 @@ fn runCustomCase(
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_compiles => customGlueZigCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_opaque_box => customGlueZigOpaqueBox(io, allocator, &env, &timer, timeout_ms),
+        .glue_zig_box_payload_alignment => customGlueZigBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_duplicate_tag_unions => customGlueRustDuplicateTagUnions(io, allocator, &env, &timer),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
@@ -4447,6 +4450,49 @@ fn customGlueZigOpaqueBox(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     }
     if (std.mem.find(u8, generated, "**anyopaque") != null) {
         return customFailure(allocator, timer, "generated Zig file still uses **anyopaque for opaque boxed app types", .{});
+    }
+    return null;
+}
+
+fn customGlueZigBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Regression test for non-refcounted boxed payload teardown alignment.
+    //
+    // ZigGlue.roc previously emitted `decrefBox(@ptrCast(expr), roc_host)` for
+    // boxed payloads that are known and contain no refcounted values (e.g.
+    // `Box(I64)`). `decrefBox` hardcodes pointer alignment (`@alignOf(usize)`),
+    // so on small-pointer targets like wasm32 an 8-aligned payload is freed from
+    // `base + 4` instead of `base`. The fix emits
+    // `decrefBoxWith(@ptrCast(expr), @alignOf(payload), null, roc_host)` so the
+    // payload's real alignment is used to recover the allocation base.
+    //
+    // test/static-data-host exposes `BranchPair(Box(I64), Box(I64))`, which
+    // exercises exactly this path.
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-box-align-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/ZigGlue.roc", output_dir, "test/static-data-host/platform/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
+
+    for ([_][]const u8{
+        "decrefBoxWith(@ptrCast(payload._0), @alignOf(i64), null, roc_host);",
+        "decrefBoxWith(@ptrCast(payload._1), @alignOf(i64), null, roc_host);",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig file missing payload-aligned box decref {s}", .{needle});
+        }
+    }
+    // No boxed payload in this platform is opaque, so the pointer-aligned
+    // `decrefBox(@ptrCast(...))` form must never appear; its presence means a
+    // known non-refcounted boxed payload is being freed with pointer alignment
+    // instead of the payload's own alignment.
+    if (std.mem.find(u8, generated, "decrefBox(@ptrCast(") != null) {
+        return customFailure(allocator, timer, "generated Zig file uses pointer-aligned decrefBox(@ptrCast(...)) for a known boxed payload", .{});
     }
     return null;
 }
