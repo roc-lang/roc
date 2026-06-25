@@ -630,6 +630,9 @@ Tasks:
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     `List.from_iter` and list-result `Iter.collect` as exact-capacity list
     loops using list low-level operations.
+  - [x] Direct `Map(Range, fn)` plans are consumed by list-result
+    `Iter.collect` as direct grow-list loops without public collect-worker
+    specialization.
 - [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public
   behavior.
   - [x] Local `List.iter` with a public alias preserves public iterator behavior.

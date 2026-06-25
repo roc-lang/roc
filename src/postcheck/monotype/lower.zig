@@ -14654,6 +14654,15 @@ const BodyContext = struct {
         },
     };
 
+    const CollectItemAdapter = union(enum) {
+        none,
+        map: struct {
+            mapping_fn: ListIteratorMapFn,
+            mapping_fn_ty: Type.TypeId,
+            result_ty: Type.TypeId,
+        },
+    };
+
     fn iteratorProducerPlansEnabled(self: *BodyContext) bool {
         return self.builder.iterator_producer_plans and self.view.module_env.module_role != .builtin;
     }
@@ -14697,10 +14706,7 @@ const BodyContext = struct {
         }
 
         const plan_id = try self.iteratorPlanForLoweredPublicExpr(args[0], iter_ty);
-        const append_plan = (try self.listAppendIteratorPlanFromPlan(plan_id)) orelse return null;
-        defer append_plan.deinit(self.allocator);
-
-        return try self.lowerListAppendIteratorPlanToList(append_plan, ret_ty);
+        return try self.lowerIteratorPlanToList(plan_id, ret_ty);
     }
 
     fn lowerIteratorProducerPlanExpr(
@@ -16070,6 +16076,24 @@ const BodyContext = struct {
         }
     }
 
+    fn lowerIteratorPlanToList(
+        self: *BodyContext,
+        plan_id: Ast.IterPlanId,
+        list_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        if (try self.listAppendIteratorPlanFromPlan(plan_id)) |append_plan| {
+            defer append_plan.deinit(self.allocator);
+            return try self.lowerListAppendIteratorPlanToList(append_plan, list_ty);
+        }
+
+        const plan = self.builder.program.iterPlan(plan_id);
+        switch (plan.data) {
+            .range => |range| return try self.lowerRangeIteratorPlanToList(range, plan.item_ty, list_ty, plan.length, .none),
+            .map => |map| return try self.lowerMapIteratorPlanToList(map, plan.item_ty, list_ty),
+            else => return null,
+        }
+    }
+
     fn lowerListAppendIteratorPlanToList(
         self: *BodyContext,
         plan: ListAppendIteratorPlan,
@@ -16196,6 +16220,199 @@ const BodyContext = struct {
         return try self.builder.program.addExpr(.{
             .ty = list_ty,
             .data = .{ .continue_ = .{ .values = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ next_index, next_out }) } },
+        });
+    }
+
+    fn lowerMapIteratorPlanToList(
+        self: *BodyContext,
+        map: Ast.IterPlan.MapIter,
+        result_item_ty: Type.TypeId,
+        list_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const mapping_fn_ty = self.builder.program.exprs.items[@intFromEnum(map.mapping_fn)].ty;
+        const mapping_fn = switch (self.builder.program.exprs.items[@intFromEnum(map.mapping_fn)].data) {
+            .fn_def => |fn_id| ListIteratorMapFn{ .direct = fn_id },
+            else => ListIteratorMapFn{ .value = map.mapping_fn },
+        };
+
+        switch (mapping_fn) {
+            .direct => {
+                return try self.lowerMapSourceIteratorPlanToList(
+                    map.source,
+                    result_item_ty,
+                    list_ty,
+                    .{ .map = .{
+                        .mapping_fn = mapping_fn,
+                        .mapping_fn_ty = mapping_fn_ty,
+                        .result_ty = result_item_ty,
+                    } },
+                );
+            },
+            .value => {},
+        }
+
+        const mapping_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), mapping_fn_ty);
+        const mapping_fn_expr = try self.builder.localExpr(mapping_fn_local, mapping_fn_ty);
+        const loop = (try self.lowerMapSourceIteratorPlanToList(
+            map.source,
+            result_item_ty,
+            list_ty,
+            .{ .map = .{
+                .mapping_fn = .{ .value = mapping_fn_expr },
+                .mapping_fn_ty = mapping_fn_ty,
+                .result_ty = result_item_ty,
+            } },
+        )) orelse return null;
+
+        return try self.wrapLet(mapping_fn_local, mapping_fn_ty, map.mapping_fn, loop, list_ty);
+    }
+
+    fn lowerMapSourceIteratorPlanToList(
+        self: *BodyContext,
+        source_plan: Ast.IterPlanId,
+        result_item_ty: Type.TypeId,
+        list_ty: Type.TypeId,
+        adapter: CollectItemAdapter,
+    ) Allocator.Error!?Ast.ExprId {
+        const source = self.builder.program.iterPlan(source_plan);
+        if (!self.sameType(result_item_ty, self.listItemType(list_ty))) {
+            Common.invariant("mapped iterator collection result item type differed from list element type");
+        }
+
+        switch (source.data) {
+            .range => |range| return try self.lowerRangeIteratorPlanToList(range, source.item_ty, list_ty, source.length, adapter),
+            else => return null,
+        }
+    }
+
+    fn lowerRangeIteratorPlanToList(
+        self: *BodyContext,
+        range: Ast.IterPlan.RangeIter,
+        source_item_ty: Type.TypeId,
+        list_ty: Type.TypeId,
+        length: iter_plan.Length(Ast.ExprId),
+        adapter: CollectItemAdapter,
+    ) Allocator.Error!?Ast.ExprId {
+        const primitive = self.numericPrimitive(source_item_ty) orelse return null;
+        switch (primitive) {
+            .bool, .str => return null,
+            else => {},
+        }
+
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const u64_ty = try self.builder.primitiveType(.u64);
+
+        const start_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_item_ty);
+        const start_expr = try self.builder.localExpr(start_local, source_item_ty);
+        const end_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_item_ty);
+        const end_expr = try self.builder.localExpr(end_local, source_item_ty);
+        const step_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_item_ty);
+        const step_expr = try self.builder.localExpr(step_local, source_item_ty);
+
+        const current_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_item_ty);
+        const current_expr = try self.builder.localExpr(current_local, source_item_ty);
+        const done_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), bool_ty);
+        const done_expr = try self.builder.localExpr(done_local, bool_ty);
+        const out_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), list_ty);
+        const out_expr = try self.builder.localExpr(out_local, list_ty);
+
+        const initial_done = try self.rangeDoneExpr(start_expr, end_expr, range.inclusivity, .initial);
+        const next_state = try self.rangeNextState(current_expr, end_expr, step_expr, range.inclusivity, source_item_ty);
+        const initial_capacity = switch (length) {
+            .known => |known| known,
+            .unknown => try self.builder.intLiteralExpr(0, u64_ty),
+        };
+        const initial_out = try self.builder.lowLevelExpr(.list_with_capacity, &.{initial_capacity}, list_ty);
+
+        const done_body = try self.builder.program.addExpr(.{
+            .ty = list_ty,
+            .data = .{ .break_ = out_expr },
+        });
+        const item_expr = try self.collectAdaptItem(current_expr, source_item_ty, self.listItemType(list_ty), adapter);
+        const continue_body = try self.listCollectGrowContinue(list_ty, out_expr, item_expr, next_state.current, next_state.done);
+        const body = try self.builder.ifExpr(done_expr, done_body, continue_body, list_ty);
+
+        const params = [_]Ast.TypedLocal{
+            .{ .local = current_local, .ty = source_item_ty },
+            .{ .local = done_local, .ty = bool_ty },
+            .{ .local = out_local, .ty = list_ty },
+        };
+        const initial_values = [_]Ast.ExprId{ start_expr, initial_done, initial_out };
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = list_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(&params),
+            .initial_values = try self.builder.program.addExprSpan(&initial_values),
+            .body = body,
+        } } });
+
+        const step_let = try self.wrapLet(step_local, source_item_ty, range.step, loop_expr, list_ty);
+        const end_let = try self.wrapLet(end_local, source_item_ty, range.end, step_let, list_ty);
+        return try self.wrapLet(start_local, source_item_ty, range.current, end_let, list_ty);
+    }
+
+    fn collectAdaptItem(
+        self: *BodyContext,
+        source_item: Ast.ExprId,
+        source_item_ty: Type.TypeId,
+        result_item_ty: Type.TypeId,
+        adapter: CollectItemAdapter,
+    ) Allocator.Error!Ast.ExprId {
+        switch (adapter) {
+            .none => {
+                if (!self.sameType(source_item_ty, result_item_ty)) {
+                    Common.invariant("unadapted iterator collection item type differed from list element type");
+                }
+                return source_item;
+            },
+            .map => |map| {
+                const mapping_shape = self.builder.functionShape(map.mapping_fn_ty, "Iter.map mapping function had a non-function type");
+                const mapping_args = self.builder.program.types.span(mapping_shape.args);
+                if (mapping_args.len != 1) Common.invariant("Iter.map mapping function had an unexpected arity");
+                if (!self.sameType(mapping_args[0], source_item_ty) or !self.sameType(mapping_shape.ret, map.result_ty)) {
+                    Common.invariant("Iter.map mapping function type differed from iterator plan types");
+                }
+                if (!self.sameType(map.result_ty, result_item_ty)) {
+                    Common.invariant("Iter.map result type differed from collection list element type");
+                }
+                const mapped_data: Ast.ExprData = switch (map.mapping_fn) {
+                    .direct => |fn_id| .{ .call_proc = .{
+                        .callee = .{ .func = fn_id },
+                        .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{source_item}),
+                    } },
+                    .value => |mapping_fn| .{ .call_value = .{
+                        .callee = mapping_fn,
+                        .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{source_item}),
+                    } },
+                };
+                return try self.builder.program.addExpr(.{
+                    .ty = map.result_ty,
+                    .data = mapped_data,
+                });
+            },
+        }
+    }
+
+    fn listItemType(self: *BodyContext, list_ty: Type.TypeId) Type.TypeId {
+        return switch (self.builder.shapeContent(list_ty)) {
+            .list => |item_ty| item_ty,
+            else => Common.invariant("expected list type"),
+        };
+    }
+
+    fn listCollectGrowContinue(
+        self: *BodyContext,
+        list_ty: Type.TypeId,
+        out_expr: Ast.ExprId,
+        item_expr: Ast.ExprId,
+        next_current: Ast.ExprId,
+        next_done: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
+        const reserved = try self.builder.lowLevelExpr(.list_reserve, &.{ out_expr, one_expr }, list_ty);
+        const next_out = try self.builder.lowLevelExpr(.list_append_unsafe, &.{ reserved, item_expr }, list_ty);
+        return try self.builder.program.addExpr(.{
+            .ty = list_ty,
+            .data = .{ .continue_ = .{ .values = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ next_current, next_done, next_out }) } },
         });
     }
 

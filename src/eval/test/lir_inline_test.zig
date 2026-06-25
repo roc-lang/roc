@@ -724,6 +724,7 @@ const ProcShape = struct {
     list_get_unsafe_count: usize = 0,
     list_with_capacity_count: usize = 0,
     list_append_unsafe_count: usize = 0,
+    list_reserve_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
     str_concat_count: usize = 0,
     box_box_count: usize = 0,
@@ -791,6 +792,7 @@ fn collectProcShape(
                     .list_get_unsafe => shape.list_get_unsafe_count += 1,
                     .list_with_capacity => shape.list_with_capacity_count += 1,
                     .list_append_unsafe => shape.list_append_unsafe_count += 1,
+                    .list_reserve => shape.list_reserve_count += 1,
                     .str_count_utf8_bytes => shape.str_count_utf8_bytes_count += 1,
                     .str_concat => shape.str_concat_count += 1,
                     .box_box => shape.box_box_count += 1,
@@ -1377,6 +1379,21 @@ fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
 
     try std.testing.expect(!try reachableIterCollectShape(allocator, &unoptimized.lowered, .specialized));
     try std.testing.expect(try reachableIterCollectShape(allocator, &unoptimized.lowered, .generic));
+}
+
+fn expectRangeMapCollectUsesDirectListLoop(source: []const u8) anyerror!void {
+    const allocator = std.testing.allocator;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_append_unsafe_count"));
 }
 
 fn rootDirectCallTarget(
@@ -3294,8 +3311,8 @@ test "trmc: result used before the constructor is not transformed" {
     , .none);
 }
 
-test "plant iter pipeline specializes collect worker after inlining" {
-    try expectIterCollectWorkerSpecialized(
+test "plant iter pipeline collect uses direct range map list loop" {
+    try expectRangeMapCollectUsesDirectListLoop(
         \\module [main]
         \\
         \\Plant : { seed : I64 }
@@ -3335,8 +3352,8 @@ test "known-length List.iter collect specializes without unbound locals" {
     defer optimized.deinit(allocator);
 }
 
-test "direct iter collect worker specializes constructor recursive call" {
-    try expectIterCollectWorkerSpecialized(
+test "direct range map collect uses direct list loop" {
+    try expectRangeMapCollectUsesDirectListLoop(
         \\module [main]
         \\
         \\Plant : { seed : I64 }
