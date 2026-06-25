@@ -741,7 +741,8 @@ const Lowerer = struct {
         if (self.captures.get(local)) |capture| {
             return try self.lowerCaptureBindingInto(target, capture, next);
         }
-        return try self.assignLocal(target, try self.localForTyped(local, ty), next);
+        const source = try self.localForTyped(local, ty);
+        return try self.assignLocalBoundary(target, source, next);
     }
 
     fn lowerCapturedLocalInto(self: *Lowerer, target: LIR.LocalId, local: Lifted.LocalId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -2083,6 +2084,9 @@ const Lowerer = struct {
         if (try self.assignStructBoundary(target, target_content, source, source_content, next)) |stmt| {
             return stmt;
         }
+        if (try self.assignTagUnionBoundary(target, target_content, source, source_content, next)) |stmt| {
+            return stmt;
+        }
 
         if (self.isZstLocal(target)) {
             if (!self.isZstLocal(source)) {
@@ -2129,6 +2133,7 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!?LIR.CFStmtId {
         if (target_content.tag != .struct_ or source_content.tag != .struct_) return null;
+        if (!self.structLayoutsAssignable(target_content, source_content)) return null;
 
         const target_struct = self.result.layouts.getStructData(target_content.getStruct().idx);
         const target_fields = self.result.layouts.struct_fields.sliceRange(target_struct.getFields());
@@ -2170,6 +2175,123 @@ const Lowerer = struct {
         return current;
     }
 
+    fn assignTagUnionBoundary(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_content: layout.Layout,
+        source: LIR.LocalId,
+        source_content: layout.Layout,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!?LIR.CFStmtId {
+        if (target_content.tag != .tag_union or source_content.tag != .tag_union) return null;
+        if (!self.tagUnionLayoutsAssignable(target_content, source_content)) return null;
+
+        const target_variants = self.tagUnionVariants(target_content);
+        const source_variants = self.tagUnionVariants(source_content);
+
+        var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        var i = source_variants.len;
+        while (i > 0) {
+            i -= 1;
+            const variant_index: u16 = @intCast(i);
+            const target_payload_layout = target_variants.get(variant_index).payload_layout;
+            const source_payload_layout = source_variants.get(variant_index).payload_layout;
+            const branch_body = try self.assignTagUnionVariantBoundary(
+                target,
+                target_payload_layout,
+                source,
+                source_payload_layout,
+                variant_index,
+                next,
+            );
+            current = try self.discriminantSwitch(source, variant_index, branch_body, current, false);
+        }
+        return current;
+    }
+
+    fn assignTagUnionVariantBoundary(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_payload_layout: layout.Idx,
+        source: LIR.LocalId,
+        source_payload_layout: layout.Idx,
+        variant_index: u16,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const target_payload_content = self.result.layouts.getLayout(target_payload_layout);
+        const payload = if (self.result.layouts.isZeroSized(target_payload_content))
+            null
+        else
+            try self.addLocalForLayout(target_payload_layout);
+
+        const assign_tag = try self.result.store.addCFStmt(.{ .assign_tag = .{
+            .target = target,
+            .variant_index = variant_index,
+            .discriminant = variant_index,
+            .payload = payload,
+            .next = next,
+        } });
+
+        const target_payload = payload orelse return assign_tag;
+        const source_payload = try self.addLocalForLayout(source_payload_layout);
+        const assign_payload = try self.assignBoxBoundary(target_payload, source_payload, source_payload_layout, assign_tag);
+        return try self.assignRefRead(
+            source_payload,
+            source_payload_layout,
+            .{ .tag_payload_struct = .{
+                .source = source,
+                .variant_index = variant_index,
+                .tag_discriminant = variant_index,
+            } },
+            assign_payload,
+        );
+    }
+
+    fn tagUnionLayoutsAssignable(self: *Lowerer, target_content: layout.Layout, source_content: layout.Layout) bool {
+        if (target_content.tag != .tag_union or source_content.tag != .tag_union) return false;
+        const target_variants = self.tagUnionVariants(target_content);
+        const source_variants = self.tagUnionVariants(source_content);
+        if (target_variants.len != source_variants.len) return false;
+
+        var variant_index: usize = 0;
+        while (variant_index < target_variants.len) : (variant_index += 1) {
+            const target_payload_layout = target_variants.get(@intCast(variant_index)).payload_layout;
+            const source_payload_layout = source_variants.get(@intCast(variant_index)).payload_layout;
+            if (!self.layoutsAssignable(target_payload_layout, source_payload_layout)) return false;
+        }
+        return true;
+    }
+
+    fn tagUnionVariants(self: *Lowerer, content: layout.Layout) layout.TagUnionVariant.SafeMultiList.Slice {
+        if (content.tag != .tag_union) Common.invariant("tag union variant access expected a tag-union layout");
+        const data = self.result.layouts.getTagUnionData(content.getTagUnion().idx);
+        return self.result.layouts.getTagUnionVariants(data);
+    }
+
+    fn structLayoutsAssignable(self: *Lowerer, target_content: layout.Layout, source_content: layout.Layout) bool {
+        if (target_content.tag != .struct_ or source_content.tag != .struct_) return false;
+        const target_count = self.semanticStructFieldCount(target_content.getStruct().idx);
+        if (target_count != self.semanticStructFieldCount(source_content.getStruct().idx)) return false;
+
+        var field_index: usize = 0;
+        while (field_index < target_count) : (field_index += 1) {
+            const target_field_layout = self.structFieldLayoutByOriginalIndex(target_content.getStruct().idx, @intCast(field_index)) orelse return false;
+            const source_field_layout = self.structFieldLayoutByOriginalIndex(source_content.getStruct().idx, @intCast(field_index)) orelse return false;
+            if (!self.layoutsAssignable(target_field_layout, source_field_layout)) return false;
+        }
+        return true;
+    }
+
+    fn semanticStructFieldCount(self: *Lowerer, struct_idx: layout.StructIdx) usize {
+        const struct_data = self.result.layouts.getStructData(struct_idx);
+        const fields = self.result.layouts.struct_fields.sliceRange(struct_data.getFields());
+        var count: usize = 0;
+        for (0..fields.len) |sorted_index| {
+            if (!fields.get(@intCast(sorted_index)).is_padding) count += 1;
+        }
+        return count;
+    }
+
     fn structFieldLayoutByOriginalIndex(
         self: *Lowerer,
         struct_idx: layout.StructIdx,
@@ -2193,6 +2315,8 @@ const Lowerer = struct {
         if (target_content.tag == .box_of_zst and self.result.layouts.isZeroSized(source_content)) return true;
         if (source_content.tag == .box and self.result.layouts.getLayout(source_content.getIdx()).eql(target_content)) return true;
         if (source_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) return true;
+        if (target_content.tag == .struct_ and source_content.tag == .struct_) return self.structLayoutsAssignable(target_content, source_content);
+        if (target_content.tag == .tag_union and source_content.tag == .tag_union) return self.tagUnionLayoutsAssignable(target_content, source_content);
         return false;
     }
 
@@ -2389,12 +2513,21 @@ const Lowerer = struct {
             break :blk values;
         } else lowered.ids;
         defer if (capture_arg != null) self.allocator.free(call_args);
+        const proc = try self.markReachableFn(callee);
+        const ret_layout = self.result.store.getProcSpec(proc).ret_layout;
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const call_target = if (target_layout == ret_layout) target else try self.addLocalForLayout(ret_layout);
+        const after_call = if (call_target == target)
+            next
+        else
+            try self.assignBoxBoundary(target, call_target, ret_layout, next);
+
         var current = try self.result.store.addCFStmt(.{ .assign_call = .{
-            .target = target,
-            .proc = try self.markReachableFn(callee),
+            .target = call_target,
+            .proc = proc,
             .args = try self.result.store.addLocalSpan(call_args),
             .is_cold = is_cold,
-            .next = next,
+            .next = after_call,
         } });
         current = try self.prependExprs(lowered, current);
         return current;
@@ -3479,7 +3612,7 @@ const Lowerer = struct {
             .bind, .wildcard => try self.bindPattern(pat_id, source, on_match),
             .as => |as| blk: {
                 const tested = try self.lowerPatternThen(as.pattern, source, on_match, miss, continuation);
-                break :blk try self.assignLocal(try self.localFor(as.local), source, tested);
+                break :blk try self.assignLocalBoundary(try self.localForTyped(as.local, pat_ty), source, tested);
             },
             .record => |fields| try self.lowerRecordPatternThen(pat_ty, fields, source, on_match, miss, continuation),
             .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, miss, continuation),
@@ -3747,11 +3880,11 @@ const Lowerer = struct {
         const pat_data = self.pat(pat_id);
         const pat_ty = try self.lowerPatTy(pat_id);
         return switch (pat_data.data) {
-            .bind => |local| try self.assignLocal(try self.localForTyped(local, pat_ty), source, next),
+            .bind => |local| try self.assignLocalBoundary(try self.localForTyped(local, pat_ty), source, next),
             .wildcard => next,
             .as => |as| blk: {
                 const bound = try self.bindPattern(as.pattern, source, next);
-                break :blk try self.assignLocal(try self.localForTyped(as.local, pat_ty), source, bound);
+                break :blk try self.assignLocalBoundary(try self.localForTyped(as.local, pat_ty), source, bound);
             },
             .record => |fields| try self.bindRecordPattern(pat_ty, fields, source, next),
             .tuple => |items| try self.bindTuplePattern(items, source, next),
@@ -4454,6 +4587,10 @@ const Lowerer = struct {
             .op = .{ .local = source },
             .next = next,
         } });
+    }
+
+    fn assignLocalBoundary(self: *Lowerer, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.assignBoxBoundary(target, source, self.result.store.getLocal(source).layout_idx, next);
     }
 
     fn assignZst(self: *Lowerer, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
