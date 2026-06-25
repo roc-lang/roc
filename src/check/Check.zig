@@ -15814,7 +15814,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // If this constraint is already an error, the skip this pass
                         continue;
                     }
-                    if (try self.literalConstraintSatisfiedByNominalBacking(
+                    // Run the builtin-backing walk only when this nominal does not
+                    // define its own literal-conversion method. If it defines its own
+                    // `from_numeral` / `from_quote` / …, that method takes precedence,
+                    // so skip the walk and let the dispatch below resolve and run it.
+                    // Otherwise the walk would validate against the builtin backing and
+                    // shadow the user's own conversion.
+                    const nominal_defines_literal_method = original_env.lookupMethodBindingFromEnvAndDeclConst(
+                        self.cir,
+                        nominal_type.sourceDeclOptional(),
+                        constraint.fn_name,
+                    ) != null;
+                    if (!nominal_defines_literal_method and try self.literalConstraintSatisfiedByNominalBacking(
                         deferred_constraint.var_,
                         constraint,
                         nominal_type,

@@ -4855,6 +4855,26 @@ test "check type - builtin-backed nominal does not inherit backing methods" {
     try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
+test "check type - custom from_numeral wins over builtin-backing validation" {
+    // `Tiny` is U8-backed but defines its OWN `from_numeral` that accepts any
+    // numeral (it ignores the value and yields Tiny.(0)). The literal `300` does
+    // NOT fit U8, so if the builtin-backing walk shadowed the custom method we'd
+    // get an InvalidNumeral error. The custom `from_numeral` must take precedence,
+    // so this should type-check cleanly.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Tiny := U8.{
+        \\    from_numeral : Numeral -> Try(Tiny, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Tiny.(0))
+        \\}
+        \\
+        \\t : Tiny
+        \\t = 300
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Tiny");
+}
+
 test "check type - explicit value-backed nominal construction" {
     const source =
         \\main! = |_| {}
