@@ -79,6 +79,7 @@ const CanonicalizeTask = messages.CanonicalizeTask;
 const CanonicalizeImport = messages.CanonicalizeImport;
 const TypeCheckTask = messages.TypeCheckTask;
 const ParsedResult = messages.ParsedResult;
+const CirCachedResult = messages.CirCachedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
 
 const WorkerFailureError = Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong } || compile_package.TypeCheckModuleError;
@@ -344,6 +345,12 @@ pub const ModuleState = struct {
     semantic: ?OwnedSemanticModuleData = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
+    /// When non-null, `semantic.module_env` was relocated from the CIR cache and
+    /// is backed by this buffer: it must be freed via `deinitCachedModule` + this
+    /// buffer + source (not the normal env deinit). Set on a CIR-cache hit, and
+    /// also signals `tryUnblock` to skip canonicalization. Once an artifact takes
+    /// ownership of the env (publication or a type-info-cache hit), this is cleared.
+    cir_cache_buffer: ?[]align(messages.cir_env_buffer_align) u8 = null,
     /// Current compilation phase
     phase: Phase,
     /// Local imports (module IDs within same package)
@@ -504,9 +511,18 @@ pub const ModuleState = struct {
                 if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
                 }
-                env.deinit();
-                env_alloc.destroy(env);
-                if (source.len > 0) env_alloc.free(@constCast(source));
+                if (self.cir_cache_buffer) |buffer| {
+                    // CIR-cache-relocated env: its immutable sub-stores alias the
+                    // buffer, so it frees via deinitCachedModule + buffer + source.
+                    env.deinitCachedModule();
+                    env_alloc.destroy(env);
+                    if (source.len > 0) env_alloc.free(@constCast(source));
+                    env_alloc.free(buffer);
+                } else {
+                    env.deinit();
+                    env_alloc.destroy(env);
+                    if (source.len > 0) env_alloc.free(@constCast(source));
+                }
             }
         }
         for (self.explicit_root_ident_names) |name| gpa.free(name);
@@ -3857,10 +3873,22 @@ pub const Coordinator = struct {
         };
 
         if (!old_had_artifact) {
-            old_env.deinit();
-            old_env_alloc.destroy(old_env);
-            if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
+            if (mod.cir_cache_buffer) |old_cir_buffer| {
+                // The retired env was relocated from the CIR cache; free it via
+                // the cached path (immutable sub-stores alias the buffer).
+                old_env.deinitCachedModule();
+                old_env_alloc.destroy(old_env);
+                if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
+                old_env_alloc.free(old_cir_buffer);
+            } else {
+                old_env.deinit();
+                old_env_alloc.destroy(old_env);
+                if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
+            }
         }
+        // The installed env is now owned by the artifact (its own cached buffer),
+        // so this module no longer owns a standalone CIR-cache buffer.
+        mod.cir_cache_buffer = null;
 
         return true;
     }
@@ -3933,6 +3961,7 @@ pub const Coordinator = struct {
         // Capture by pointer so handlers can clear reports to transfer ownership
         switch (res) {
             .parsed => |*r| try self.handleParsed(r),
+            .cir_cached => |*r| try self.handleCirCached(r),
             .canonicalized => |*r| try self.handleCanonicalized(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .parse_failed => |*r| try self.handleParseFailed(r),
@@ -3985,37 +4014,14 @@ pub const Coordinator = struct {
         self.total_source_read_ns += result.source_read_ns;
         mod.compile_time_ns += result.parse_ns;
 
-        for (result.discovered_local_imports.items) |imp| {
-            const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
-            const current_mod = pkg.getModule(result.module_id) orelse {
-                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in parsed handler (module={s})\n", .{
-                    result.module_id, result.package_name, result.module_name,
-                });
-                unreachable;
-            };
-
-            if (child_id == result.module_id or pkg.moduleReaches(child_id, result.module_id)) {
-                try self.handleCycleInline(pkg, result.module_id, child_id);
-                return;
-            }
-
-            try current_mod.imports.append(self.gpa, child_id);
-
-            const child = pkg.getModule(child_id).?;
-            try child.dependents.append(self.gpa, result.module_id);
-            const new_depth = current_mod.depth +| 1;
-            if (new_depth < child.depth) {
-                child.depth = new_depth;
-            }
-
-            try pkg.recordLocalImportReachability(self.gpa, result.module_id, child_id);
-
-            if (child.phase == .Parse) {
-                pkg.remaining_modules += 1;
-                self.total_remaining += 1;
-                try self.enqueueParseTask(result.package_name, child_id);
-            }
-        }
+        if (try self.scheduleDiscoveredImports(
+            pkg,
+            result.module_id,
+            result.package_name,
+            result.module_name,
+            result.discovered_local_imports.items,
+            result.discovered_external_imports.items,
+        )) return; // cycle detected and handled
 
         const mod_after_imports = pkg.getModule(result.module_id) orelse {
             self.bugReport("BUG: module id={} not found in package '{s}' after local parse imports (module={s})\n", .{
@@ -4024,9 +4030,66 @@ pub const Coordinator = struct {
             unreachable;
         };
 
-        for (result.discovered_external_imports.items) |ext_imp| {
+        mod_after_imports.phase = .WaitingOnImports;
+        try self.tryUnblock(pkg, result.module_id);
+    }
+
+    /// Schedule a module's discovered imports — register local-import edges
+    /// (with cycle detection + reachability), enqueue unparsed children, and
+    /// record external imports + cross-package dependents. Shared by the cold
+    /// parse path and the CIR-cache-hit path. Returns true if an import cycle was
+    /// detected and handled inline, in which case the caller must return.
+    fn scheduleDiscoveredImports(
+        self: *Coordinator,
+        pkg: *PackageState,
+        module_id: ModuleId,
+        package_name: []const u8,
+        module_name: []const u8,
+        local_imports: []const DiscoveredLocalImport,
+        external_imports: []const DiscoveredExternalImport,
+    ) Allocator.Error!bool {
+        for (local_imports) |imp| {
+            const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
+            const current_mod = pkg.getModule(module_id) orelse {
+                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule (module={s})\n", .{
+                    module_id, package_name, module_name,
+                });
+                unreachable;
+            };
+
+            if (child_id == module_id or pkg.moduleReaches(child_id, module_id)) {
+                try self.handleCycleInline(pkg, module_id, child_id);
+                return true;
+            }
+
+            try current_mod.imports.append(self.gpa, child_id);
+
+            const child = pkg.getModule(child_id).?;
+            try child.dependents.append(self.gpa, module_id);
+            const new_depth = current_mod.depth +| 1;
+            if (new_depth < child.depth) {
+                child.depth = new_depth;
+            }
+
+            try pkg.recordLocalImportReachability(self.gpa, module_id, child_id);
+
+            if (child.phase == .Parse) {
+                pkg.remaining_modules += 1;
+                self.total_remaining += 1;
+                try self.enqueueParseTask(package_name, child_id);
+            }
+        }
+
+        const mod_after_imports = pkg.getModule(module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after local imports (module={s})\n", .{
+                module_id, package_name, module_name,
+            });
+            unreachable;
+        };
+
+        for (external_imports) |ext_imp| {
             try mod_after_imports.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
-            try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
+            try self.scheduleExternalImport(package_name, ext_imp.import_name);
 
             const qualified = base.module_path.parseQualifiedImport(ext_imp.import_name) orelse continue;
             const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
@@ -4035,10 +4098,59 @@ pub const Coordinator = struct {
             try self.registerCrossPackageDependent(
                 target_pkg_name,
                 target_module_id,
-                result.package_name,
-                result.module_id,
+                package_name,
+                module_id,
             );
         }
+
+        return false;
+    }
+
+    /// Handle a CIR-cache hit: adopt the relocated source-pure env (and its
+    /// backing buffer + source), schedule its imports exactly as the cold parse
+    /// path would, and move it into `WaitingOnImports`. `tryUnblock` then routes
+    /// it straight to type-info (skipping canonicalization) once imports are ready.
+    fn handleCirCached(self: *Coordinator, result: *CirCachedResult) Allocator.Error!void {
+        const pkg = self.packages.get(result.package_name) orelse {
+            self.bugReport("BUG: package '{s}' not found for cir_cached result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' for cir_cached result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
+        // Adopt the relocated env and its backing buffer. There is no AST (parse
+        // and canonicalization were skipped). The buffer marks the env as
+        // cache-relocated for both freeing and the `tryUnblock` canon-skip.
+        mod.source_file_state = result.source_file_state;
+        mod.replaceModuleEnv(result.module_env);
+        mod.cir_cache_buffer = result.env_buffer;
+        mod.cached_ast = null;
+
+        // Fold timing. There is no parse/canonicalize time on this path.
+        self.total_source_read_ns += result.source_read_ns;
+        self.total_cache_read_ns += result.cache_read_ns;
+
+        if (try self.scheduleDiscoveredImports(
+            pkg,
+            result.module_id,
+            result.package_name,
+            result.module_name,
+            result.discovered_local_imports.items,
+            result.discovered_external_imports.items,
+        )) return; // cycle detected and handled
+
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after cir_cached imports (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         mod_after_imports.phase = .WaitingOnImports;
         try self.tryUnblock(pkg, result.module_id);
@@ -4133,7 +4245,7 @@ pub const Coordinator = struct {
     /// checking. Shared by the cold canonicalize path and the CIR-cache-hit path
     /// (both reach this with a final env and ready imports), so it must not assume
     /// the env came from canonicalization.
-    fn proceedToTypeInfo(self: *Coordinator, pkg: *PackageState, mod: *ModuleState, module_id: ModuleId) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
+    fn proceedToTypeInfo(self: *Coordinator, pkg: *PackageState, mod: *ModuleState, module_id: ModuleId) Allocator.Error!void {
         const task_payload_alloc = self.getWorkerAllocator();
         const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_envs);
@@ -4168,6 +4280,7 @@ pub const Coordinator = struct {
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
                 .explicit_roots = explicit_roots,
+                .cir_cache_buffer = mod.cir_cache_buffer,
             },
         });
     }
@@ -4247,6 +4360,10 @@ pub const Coordinator = struct {
             try mod.replaceCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
             artifact_ptr_owned = false;
             try self.registerCheckedArtifact(pkg, mod);
+            // The published artifact now owns the env (and, for a CIR-cache hit,
+            // its backing buffer via cached-buffer storage), so the module no
+            // longer holds a standalone CIR-cache buffer.
+            mod.cir_cache_buffer = null;
             // Only cache a fully diagnostic-free module. A relocate-on-load cache hit
             // skips the compile-time finalizer, so it cannot reproduce the finalizer's
             // non-fatal diagnostics (e.g. `comptime_unused_branch`); caching only clean
@@ -4627,6 +4744,16 @@ pub const Coordinator = struct {
             }
         }
 
+        // A CIR-cache hit already holds the final canonicalized env, so skip
+        // canonicalization and go straight to type-info once imports are ready.
+        if (mod.cir_cache_buffer != null) {
+            if (comptime trace_build) {
+                std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} -> TypeInfo (CIR cached)\n", .{ pkg.name, mod.name });
+            }
+            try self.proceedToTypeInfo(pkg, mod, module_id);
+            return;
+        }
+
         if (comptime trace_build) {
             std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} -> Canonicalize\n", .{ pkg.name, mod.name });
         }
@@ -4869,18 +4996,138 @@ pub const Coordinator = struct {
         };
     }
 
+    /// Worker-thread pre-parse CIR cache lookup. On a hit, relocates the cached
+    /// source-pure env (taking ownership of `src` as its source) and returns a
+    /// `.cir_cached` result with the discovered-import scheduling lists recovered
+    /// from the entry tail. Returns null on any miss/mismatch (caller then parses).
+    ///
+    /// Uses only worker-local allocators and direct file I/O (no shared cache
+    /// allocator or stats), so it is safe to run concurrently across workers; the
+    /// coordinator folds the hit into stats when it adopts the result.
+    fn tryLoadCirCached(
+        self: *Coordinator,
+        task: ParseTask,
+        src: []const u8,
+        source_file_state: ?watch_inputs.State,
+        source_read_ns: u64,
+        task_allocs: WorkerTaskAllocators,
+    ) Allocator.Error!?WorkerResult {
+        return self.tryLoadCirCachedInner(task, src, source_file_state, source_read_ns, task_allocs) catch |err| switch (err) {
+            error.CirMiss => null,
+            else => |e| return e,
+        };
+    }
+
+    fn tryLoadCirCachedInner(
+        self: *Coordinator,
+        task: ParseTask,
+        src: []const u8,
+        source_file_state: ?watch_inputs.State,
+        source_read_ns: u64,
+        task_allocs: WorkerTaskAllocators,
+    ) (Allocator.Error || error{CirMiss})!WorkerResult {
+        const manager = self.cache_manager orelse return error.CirMiss;
+        if (!manager.config.enabled) return error.CirMiss;
+
+        var read_timer = startStageTimer(self.roc_ctx.std_io);
+
+        const key = cir_cache.CirCacheKey.compute(src);
+
+        const entries_dir = manager.config.getCirCacheDir(task_allocs.scratch) catch return error.CirMiss;
+        defer task_allocs.scratch.free(entries_dir);
+
+        const entry = manager.loadRawBytesWith(key.bytes, entries_dir, task_allocs.scratch) orelse return error.CirMiss;
+        defer task_allocs.scratch.free(entry);
+
+        const bodies = cir_cache.decodeEntry(key, entry) orelse return error.CirMiss;
+        if (bodies.env_body.len < @sizeOf(ModuleEnv.Serialized)) return error.CirMiss;
+
+        const module_alloc = task_allocs.module;
+        const buffer = try module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.env_body.len);
+        errdefer module_alloc.free(buffer);
+        @memcpy(buffer, bodies.env_body);
+
+        const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+        const cached_env = serialized_ptr.deserializeWithMutableTypes(
+            @intFromPtr(buffer.ptr),
+            module_alloc,
+            src,
+            task.module_name,
+        ) catch return error.CirMiss;
+        errdefer {
+            cached_env.deinitCachedModule();
+            module_alloc.destroy(cached_env);
+        }
+
+        check.TypedCIR.prepareRuntimeEnv(module_alloc, cached_env) catch return error.CirMiss;
+        cached_env.module_role = task.module_role;
+
+        // Recover the parser's discovered-import scheduling lists from the tail,
+        // copied into the result allocator (the lists outlive this task).
+        const worker_alloc = task_allocs.result;
+        var decoded = (cir_cache.decodeTail(worker_alloc, bodies.tail_body) catch |e| return e) orelse return error.CirMiss;
+        defer decoded.deinit(worker_alloc);
+
+        var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
+        errdefer {
+            for (discovered_local_imports.items) |imp| {
+                worker_alloc.free(imp.module_name);
+                worker_alloc.free(imp.path);
+            }
+            discovered_local_imports.deinit(worker_alloc);
+        }
+        var discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty;
+        errdefer {
+            for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
+            discovered_external_imports.deinit(worker_alloc);
+        }
+        for (decoded.local_imports.items) |imp| {
+            const name = try worker_alloc.dupe(u8, imp.module_name);
+            errdefer worker_alloc.free(name);
+            const path = try worker_alloc.dupe(u8, imp.path);
+            try discovered_local_imports.append(worker_alloc, .{ .module_name = name, .path = path });
+        }
+        for (decoded.external_imports.items) |name| {
+            const owned = try worker_alloc.dupe(u8, name);
+            errdefer worker_alloc.free(owned);
+            try discovered_external_imports.append(worker_alloc, .{ .import_name = owned });
+        }
+
+        const cache_read_ns = readStageTimer(self.roc_ctx.std_io, &read_timer);
+
+        return WorkerResult{ .cir_cached = .{
+            .package_name = task.package_name,
+            .module_id = task.module_id,
+            .module_name = task.module_name,
+            .path = task.path,
+            .source_file_state = source_file_state,
+            .module_env = cached_env,
+            .env_buffer = buffer,
+            .source = src,
+            .discovered_local_imports = discovered_local_imports,
+            .discovered_external_imports = discovered_external_imports,
+            .source_read_ns = source_read_ns,
+            .cache_read_ns = cache_read_ns,
+        } };
+    }
+
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var source_read_timer = startStageTimer(self.roc_ctx.std_io);
         const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
         const source_read_ns = readStageTimer(self.roc_ctx.std_io, &source_read_timer);
         const src = source_read.source;
 
+        // Pre-parse CIR cache lookup: if this exact source already has a cached
+        // source-pure CIR, relocate it and skip parsing + canonicalization. The
+        // relocated env takes ownership of `src` as its source. On a miss, `src`
+        // is left intact for the parse path below.
+        if (try self.tryLoadCirCached(task, src, source_read.file_state, source_read_ns, task_allocs)) |cir_result| {
+            return cir_result;
+        }
+
         // Start the parse timer after the source read so the two stages don't
         // overlap: `parse_ns` measures parsing only, never file I/O.
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
-
-        // Checked-module disk cache lookup happens after canonicalization, when
-        // the coordinator has the exact module identity and import keys.
 
         // Create ModuleEnv using the long-lived module allocator.
         const module_alloc = task_allocs.module;
@@ -5099,6 +5346,13 @@ pub const Coordinator = struct {
         // Keep those allocations with the published result instead of the
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
+        // A CIR-cache-relocated env must be owned by the published artifact via
+        // cached-buffer storage so it frees correctly (deinitCachedModule + buffer
+        // + source). A normally-canonicalized env uses live `.checked_source`.
+        const module_env_storage_override: ?check.CheckedArtifact.ModuleEnvStorage = if (task.cir_cache_buffer) |buffer|
+            .{ .cached_buffer = .{ .env = env, .buffer = buffer, .source = env.common.source } }
+        else
+            null;
         var typecheck_output = try compile_package.PackageEnv.typeCheckModule(
             self.roc_ctx.std_io,
             check_alloc,
@@ -5109,6 +5363,7 @@ pub const Coordinator = struct {
             task.imported_artifacts,
             task.available_artifacts,
             task.explicit_roots,
+            module_env_storage_override,
         );
         defer typecheck_output.deinit();
 

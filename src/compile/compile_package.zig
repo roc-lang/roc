@@ -1703,6 +1703,10 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
         explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+        /// When set, the published artifact owns `env` via this storage (used for
+        /// a CIR-cache-relocated env, which frees via `deinitCachedModule` +
+        /// buffer). When null, the artifact owns `env` as a live `.checked_source`.
+        module_env_storage_override: ?CheckedArtifact.ModuleEnvStorage,
     ) TypeCheckModuleError!TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
@@ -1774,9 +1778,10 @@ pub const PackageEnv = struct {
         // work (lowering + interpreting + storing) into `eval_timing`, so it is
         // measured on its own without overlapping type inference.
         var eval_timing = eval.CompileTimeFinalization.EvalTiming{ .io = std_io };
-        var checked_artifact = publishCheckedArtifactFromCheckedModule(
+        var checked_artifact = publishCheckedArtifactFromCheckedModuleWithStorage(
             artifact_alloc,
             env,
+            module_env_storage_override orelse .{ .checked_source = env },
             imported_envs,
             imported_artifacts,
             .{
@@ -1959,6 +1964,7 @@ pub const PackageEnv = struct {
             imported_artifacts.items,
             available_artifacts,
             &.{},
+            null,
         );
         defer typecheck_output.deinit();
         if (typecheck_output.checked_artifact != null) {

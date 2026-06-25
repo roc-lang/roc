@@ -11,6 +11,7 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
+const collections = @import("collections");
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -18,6 +19,10 @@ const CheckedArtifact = check.CheckedArtifact;
 const Report = reporting.Report;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
+
+/// Alignment of a relocated CIR-cache env buffer, matching the artifact's
+/// cached-buffer storage so the buffer can flow straight into publication.
+pub const cir_env_buffer_align = collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits();
 
 /// Module identifier - index into the modules list
 pub const ModuleId = u32;
@@ -116,6 +121,10 @@ pub const TypeCheckTask = struct {
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    /// When non-null, `module_env` was relocated from the CIR cache and is backed
+    /// by this buffer; the published artifact must own the env via cached-buffer
+    /// storage (freed with `deinitCachedModule` + buffer) rather than as a live env.
+    cir_cache_buffer: ?[]align(cir_env_buffer_align) u8 = null,
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation
@@ -301,10 +310,44 @@ pub const WorkerOom = struct {
     module_name: []const u8,
 };
 
+/// Result of a pre-parse CIR cache hit: the module's canonicalized env was
+/// relocated directly from cache, skipping parse + canonicalization. The env is
+/// backed by `env_buffer` + `source` (allocated with the module allocator), which
+/// the coordinator threads into the module so they are freed via the cached-buffer
+/// ownership path (`deinitCachedModule` + buffer + source).
+pub const CirCachedResult = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+    /// Path to the module file
+    path: []const u8,
+    /// Raw source file state consumed before line-ending normalization, when requested.
+    source_file_state: ?watch_inputs.State,
+    /// The relocated canonicalized module environment (ownership returned)
+    module_env: *ModuleEnv,
+    /// The relocated env's backing buffer (env sub-stores alias it)
+    env_buffer: []align(cir_env_buffer_align) u8,
+    /// The env's source bytes (the env aliases these)
+    source: []const u8,
+    /// Discovered local imports recovered from the cache entry tail
+    discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
+    /// Discovered external imports recovered from the cache entry tail
+    discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
+    /// Timing: nanoseconds spent reading the source file from disk
+    source_read_ns: u64,
+    /// Timing: nanoseconds spent reading + relocating the cached CIR
+    cache_read_ns: u64,
+};
+
 /// Result sent from workers - contains ALL outputs from the operation
 pub const WorkerResult = union(enum) {
     /// Module was successfully parsed
     parsed: ParsedResult,
+    /// Module's CIR was loaded from cache (parse + canonicalization skipped)
+    cir_cached: CirCachedResult,
     /// Module was successfully canonicalized
     canonicalized: CanonicalizedResult,
     /// Module was successfully type-checked
@@ -321,6 +364,7 @@ pub const WorkerResult = union(enum) {
     pub fn getPackageName(self: WorkerResult) []const u8 {
         return switch (self) {
             .parsed => |r| r.package_name,
+            .cir_cached => |r| r.package_name,
             .canonicalized => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .parse_failed => |r| r.package_name,
@@ -333,6 +377,7 @@ pub const WorkerResult = union(enum) {
     pub fn getModuleId(self: WorkerResult) ModuleId {
         return switch (self) {
             .parsed => |r| r.module_id,
+            .cir_cached => |r| r.module_id,
             .canonicalized => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .parse_failed => |r| r.module_id,
@@ -345,6 +390,7 @@ pub const WorkerResult = union(enum) {
     pub fn getModuleName(self: WorkerResult) []const u8 {
         return switch (self) {
             .parsed => |r| r.module_name,
+            .cir_cached => |r| r.module_name,
             .canonicalized => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .parse_failed => |r| r.module_name,
@@ -369,6 +415,21 @@ pub const WorkerResult = union(enum) {
                 r.discovered_external_imports.deinit(gpa);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
+            },
+            .cir_cached => |*r| {
+                // Mirrors `.parsed`: the relocated env, its buffer, and its source
+                // are adopted by the module in `handleCirCached`, so they are not
+                // freed here (only on an unhandled drop at shutdown, matching the
+                // parsed env's behavior). Free just the discovered-import lists.
+                for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.module_name);
+                    gpa.free(imp.path);
+                }
+                r.discovered_local_imports.deinit(gpa);
+                for (r.discovered_external_imports.items) |imp| {
+                    gpa.free(imp.import_name);
+                }
+                r.discovered_external_imports.deinit(gpa);
             },
             .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
