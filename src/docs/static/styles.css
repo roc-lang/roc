@@ -219,6 +219,10 @@ table tr td {
     margin-left: var(--entry-anchor-offset);
 }
 
+.entry-doc {
+    padding-left: 20px;
+}
+
 /* Entry type vs value styling */
 .entry-type > .entry-signature {
     font-weight: var(--weight-semibold);
