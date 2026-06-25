@@ -611,6 +611,9 @@ Tasks:
   - [x] Direct local `List.iter` plus local `.append(...)` avoids public step
     values when the append result is consumed privately.
 - [ ] Optimized `for` through `if` avoids public step values.
+  - [x] Direct `for` over an `if` whose branches are known `ListIter` /
+    `Append(ListIter, item...)` plans lowers to branch-local private cursor
+    loops instead of public iterator steps.
 - [ ] Optimized `for` through `match` avoids public step values.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
 - [x] Optimized `for` over direct `Single` consumes the plan value.

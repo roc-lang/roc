@@ -15399,6 +15399,10 @@ const BodyContext = struct {
         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
 
+        if (try self.ifIteratorFor(for_, result_ty, carries, plan)) |if_for| {
+            return if_for;
+        }
+
         if (try self.localIteratorPlanFor(for_, result_ty, carries, plan)) |local_for| {
             return local_for;
         }
@@ -15506,6 +15510,179 @@ const BodyContext = struct {
             .initial_values = try self.builder.program.addExprSpan(initial_values),
             .body = match_expr,
         } };
+    }
+
+    fn ifIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        for_plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.iteratorProducerPlansEnabled()) return null;
+
+        const expr = self.view.bodies.expr(for_.expr);
+        const if_ = switch (expr.data) {
+            .if_ => |if_| if_,
+            else => return null,
+        };
+
+        const comptime_site = try self.ifComptimeSite(for_.expr, if_);
+        const branches = try self.allocator.alloc(Ast.IfBranch, if_.branches.len);
+        defer self.allocator.free(branches);
+        for (if_.branches, 0..) |branch, index| {
+            const cond = try self.lowerExpr(branch.cond);
+            var branch_ctx = try self.childContext(self.current_fn_key);
+            defer branch_ctx.deinit();
+            const branch_for = .{
+                .expr = branch.body,
+                .pattern = for_.pattern,
+                .body = for_.body,
+                .plan = for_.plan,
+            };
+            const body_data = (try branch_ctx.lowerKnownPlanIteratorFor(branch_for, result_ty, carries, for_plan)) orelse return null;
+            const body = try self.builder.program.addExpr(.{
+                .ty = result_ty,
+                .data = body_data,
+            });
+            branches[index] = .{
+                .cond = cond,
+                .body = try branch_ctx.wrapComptimeBranch(comptime_site, index, body),
+            };
+        }
+
+        var else_ctx = try self.childContext(self.current_fn_key);
+        defer else_ctx.deinit();
+        const else_for = .{
+            .expr = if_.final_else,
+            .pattern = for_.pattern,
+            .body = for_.body,
+            .plan = for_.plan,
+        };
+        const else_data = (try else_ctx.lowerKnownPlanIteratorFor(else_for, result_ty, carries, for_plan)) orelse return null;
+        const else_body = try self.builder.program.addExpr(.{
+            .ty = result_ty,
+            .data = else_data,
+        });
+
+        return .{ .if_ = .{
+            .branches = try self.builder.program.addIfBranchSpan(branches),
+            .final_else = try else_ctx.wrapComptimeBranch(comptime_site, if_.branches.len, else_body),
+        } };
+    }
+
+    fn lowerKnownPlanIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        for_plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (try self.blockIteratorFor(for_, result_ty, carries, for_plan)) |block_for| return block_for;
+        if (try self.ifIteratorFor(for_, result_ty, carries, for_plan)) |if_for| return if_for;
+        if (try self.localIteratorPlanFor(for_, result_ty, carries, for_plan)) |local_for| return local_for;
+        if (try self.iteratorPlanExprFor(for_, result_ty, carries, for_plan)) |plan_for| return plan_for;
+        if (try self.customIteratorForPlan(for_, result_ty, carries, for_plan)) |custom_for| return custom_for;
+        if (try self.rangeIteratorForPlan(for_, result_ty, carries, for_plan)) |range_for| return range_for;
+        if (try self.listIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |list_for| return list_for;
+        if (try self.singleIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |single_for| return single_for;
+        if (try self.appendListIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |append_for| return append_for;
+        if (try self.mapListIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |map_for| return map_for;
+        if (try self.filterListIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |filter_for| return filter_for;
+        return null;
+    }
+
+    fn blockIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        for_plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        const expr = self.view.bodies.expr(for_.expr);
+        const block = switch (expr.data) {
+            .block => |block| block,
+            else => return null,
+        };
+
+        const stmts = try self.lowerBlockStatements(block.statements, block.final_expr);
+        defer self.allocator.free(stmts.items);
+        const final_for = .{
+            .expr = block.final_expr,
+            .pattern = for_.pattern,
+            .body = for_.body,
+            .plan = for_.plan,
+        };
+        const final_expr = if (stmts.diverges)
+            try self.unreachableAfterDivergentStatementExpr(result_ty)
+        else blk: {
+            const final_data = (try self.lowerKnownPlanIteratorFor(final_for, result_ty, carries, for_plan)) orelse return null;
+            break :blk try self.builder.program.addExpr(.{
+                .ty = result_ty,
+                .data = final_data,
+            });
+        };
+
+        return .{ .block = .{
+            .statements = try self.builder.program.addStmtSpan(stmts.items[0..stmts.len]),
+            .final_expr = final_expr,
+        } };
+    }
+
+    fn iteratorPlanExprFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        for_plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        const expr_ty = try self.lowerType(self.view.bodies.expr(for_.expr).ty);
+        const iterable = try self.lowerExprAtType(for_.expr, expr_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => return null,
+        };
+        return try self.iteratorPlanIdFor(plan_id, for_, result_ty, carries, for_plan);
+    }
+
+    fn iteratorPlanIdFor(
+        self: *BodyContext,
+        plan_id: Ast.IterPlanId,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        for_plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        try self.constrainTypeToMono(for_plan.item_ty, iter_plan_value.item_ty);
+
+        if (try self.listAppendIteratorPlanFromPlan(plan_id)) |append_plan| {
+            defer append_plan.deinit(self.allocator);
+            return try self.lowerListIteratorPlanFor(
+                for_,
+                result_ty,
+                carries,
+                append_plan.list,
+                append_plan.item_ty,
+                append_plan.item_ty,
+                append_plan.append_items,
+                .none,
+            );
+        }
+
+        switch (iter_plan_value.data) {
+            .single => |single| return try self.lowerSingleIteratorPlanFor(for_, result_ty, carries, single, iter_plan_value.item_ty),
+            .range => |range| {
+                const primitive = self.numericPrimitive(iter_plan_value.item_ty) orelse return null;
+                switch (primitive) {
+                    .bool, .str => return null,
+                    else => {},
+                }
+                return try self.lowerRangeIteratorFor(for_, result_ty, carries, range, iter_plan_value.item_ty);
+            },
+            .custom => |custom| return try self.lowerCustomIteratorFor(for_, result_ty, carries, custom, iter_plan_value.item_ty),
+            else => return null,
+        }
     }
 
     fn localIteratorPlanFor(
