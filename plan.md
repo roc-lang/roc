@@ -632,6 +632,8 @@ Tasks:
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     direct-call `Iter.fold` as accumulator loop parameters without public
     iterator step values.
+  - [x] Direct `Range` plans are consumed by direct-call `Iter.fold` as numeric
+    cursor and accumulator loop parameters without public iterator step values.
 - [ ] Optimized `List.from_iter` consumes plan values directly.
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     `List.from_iter` and list-result `Iter.collect` as exact-capacity list
@@ -647,6 +649,9 @@ Tasks:
   - [x] Direct append operands consumed by `List.from_iter` preserve `dbg`
     ordering relative to collection and following expressions.
   - [x] Direct append operands and accumulator operands consumed by `Iter.fold`
+    preserve `dbg` ordering relative to the fold result and following
+    expressions.
+  - [x] Direct range operands and accumulator operands consumed by `Iter.fold`
     preserve `dbg` ordering relative to the fold result and following
     expressions.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
