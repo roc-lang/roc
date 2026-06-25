@@ -204,7 +204,8 @@ pub const TargetsConfig = struct {
     }
 
     /// Create a TargetsConfig from a parsed AST.
-    /// Returns null if the platform header has no targets section.
+    /// Returns null if the platform header has no targets section. An explicit
+    /// empty `targets: {}` section returns a hostless config with zero targets.
     /// All string values are duped with the provided allocator, so the
     /// returned TargetsConfig owns its memory and is independent of the AST.
     pub fn fromAST(allocator: Allocator, ast: anytype) Allocator.Error!?TargetsConfig {
@@ -785,6 +786,40 @@ test "getLinkSpec returns null for unsupported target" {
     // x64musl is not in the config
     const spec = config.getLinkSpec(.x64musl);
     try testing.expect(spec == null);
+}
+
+test "fromAST accepts explicit hostless targets section" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\platform ""
+        \\    requires { make_glue : List({}) -> Try(List({}), Str) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_make_glue": make_glue_for_host }
+        \\    targets: {}
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+
+    try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    try testing.expect(maybe_config != null);
+
+    const config = maybe_config.?;
+    defer config.deinit(allocator);
+
+    try testing.expect(config.inputs_dir == null);
+    try testing.expectEqual(@as(usize, 0), config.targets.len);
 }
 
 test "fromAST captures punned wasm identifier config" {

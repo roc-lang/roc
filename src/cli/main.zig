@@ -6833,6 +6833,12 @@ fn selectBuildPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             try ctx.io.stderr().print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
@@ -6869,6 +6875,12 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
