@@ -50,6 +50,7 @@ const key_domain_tag = "roc-cir-key-v1";
 /// reflected in `MODULE_ENV_VERSION_HASH`) makes old entries miss rather than
 /// mis-deserialize.
 pub const magic = "roc-cir-cache-v1";
+/// On-disk entry format version, bumped on any header/tail layout change.
 pub const format_version: u64 = 1;
 
 /// Header layout, in order:
