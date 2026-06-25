@@ -104,21 +104,20 @@ Use `--no-server` when you only want the build steps. With no app argument, the
 helper builds the maintained six-app suite; pass one app path for targeted QA.
 
 `../src/signal_graph.zig` owns the active graph node shape, dependent-edge
-mutation, reachable-dependent traversal, and rank sorting. The native host
-drives it today; the wasm host instantiates it at build time so the shared graph
-primitive stays wasm-safe while the rest of the engine is extracted.
+mutation, reachable-dependent traversal, and rank sorting. Both hosts reach it
+through the shared engine.
 
 `../src/scope_tree.zig` owns scope branch identity, root/component/when/row
-scope interning, active row lookup, and ancestry queries. Native still owns row
-payload refcounts and disposal until keyed-row matching is extracted.
+scope interning, active row lookup, and ancestry queries. Row payload refcounts
+and disposal are driven by the shared engine through each host's `Ctx`.
 
 `../src/identity_table.zig` owns node/DOM identity interning, including the
 browser-relevant rule that DOM ids are one-based because id `0` is the mount
 root.
 
-`../src/keyed_rows.zig` owns the host-agnostic keyed-row match plan. Native
-currently executes that plan through its HostValue/thunk/scope adapter; the wasm
-host should grow the same adapter surface rather than a separate row matcher.
+`../src/keyed_rows.zig` owns the host-agnostic keyed-row match plan. The shared
+engine executes that plan through the host value/thunk/scope adapter exposed by
+each host's `Ctx`.
 
 `../src/host_value_registry.zig` owns the shared `roc_host_value_*` handle table:
 one-based handles, vacant-slot reuse, clone/get/take, and debug type tags.

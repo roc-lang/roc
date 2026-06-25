@@ -1,8 +1,9 @@
 //! Platform host for testing signal-based reactive UI applications.
 //!
-//! The host owns simulated DOM state, event routing, signal evaluation,
-//! scope/key lifecycle, and render batching. Roc returns a retained immutable
-//! descriptor tree from `roc_ui_init`; the host drives all later events.
+//! The native host is the spec/telemetry/debug boundary: it owns the simulated
+//! DOM, Roc allocation diagnostics, benchmark metrics, and browser-style event
+//! replay. Reactive and structural behavior lives in `engine.zig`; this host
+//! supplies `NativeCtx` plus a render sink and drives the shared engine path.
 
 const std = @import("std");
 const builtin = @import("builtin");
