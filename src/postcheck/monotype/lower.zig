@@ -14268,8 +14268,7 @@ const BodyContext = struct {
 
         const before_expr = try self.builder.localExpr(before_local, iterator_ty);
         const after_expr = try self.builder.localExpr(after_local, item_ty);
-        const single_after = try self.iterSingleExpr(iterator_ty, item_ty, after_expr);
-        const rest_expr = try self.iterConcatExpr(iterator_ty, before_expr, single_after);
+        const rest_expr = try self.iterAppendExpr(iterator_ty, item_ty, before_expr, after_expr);
 
         return .{
             .pat = tag_pat,
@@ -14380,55 +14379,30 @@ const BodyContext = struct {
         };
     }
 
-    fn iterSingleExpr(
+    fn iterAppendExpr(
         self: *BodyContext,
         iterator_ty: Type.TypeId,
         item_ty: Type.TypeId,
-        item_expr: Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse
-            Common.invariant("iterator Append lowering could not find Iter method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, "single") orelse
-            Common.invariant("checked method registry is missing Iter.single");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexIsolated(lookup, 0, item_ty);
-        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.single target had a non-function type");
-        const arg_tys = self.builder.program.types.span(fn_data.args);
-        if (arg_tys.len != 1) Common.invariant("Iter.single target arity changed");
-        if (!self.sameType(arg_tys[0], item_ty)) Common.invariant("Iter.single argument type differed from iterator item type");
-        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.single return type differed from iterator type");
-
-        return try self.builder.program.addExpr(.{
-            .ty = fn_data.ret,
-            .data = .{ .call_proc = .{
-                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{item_expr}),
-            } },
-        });
-    }
-
-    fn iterConcatExpr(
-        self: *BodyContext,
-        iterator_ty: Type.TypeId,
         first_expr: Ast.ExprId,
-        second_expr: Ast.ExprId,
+        after_expr: Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
         const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse
             Common.invariant("iterator Append lowering could not find Iter method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, "concat") orelse
-            Common.invariant("checked method registry is missing Iter.concat");
+        const lookup = self.builder.lookupMethodTargetByName(owner, "append") orelse
+            Common.invariant("checked method registry is missing Iter.append");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexIsolated(lookup, 0, iterator_ty);
-        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.concat target had a non-function type");
+        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.append target had a non-function type");
         const arg_tys = self.builder.program.types.span(fn_data.args);
-        if (arg_tys.len != 2) Common.invariant("Iter.concat target arity changed");
-        if (!self.sameType(arg_tys[0], iterator_ty)) Common.invariant("Iter.concat first argument type differed from iterator type");
-        if (!self.sameType(arg_tys[1], iterator_ty)) Common.invariant("Iter.concat second argument type differed from iterator type");
-        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.concat return type differed from iterator type");
+        if (arg_tys.len != 2) Common.invariant("Iter.append target arity changed");
+        if (!self.sameType(arg_tys[0], iterator_ty)) Common.invariant("Iter.append first argument type differed from iterator type");
+        if (!self.sameType(arg_tys[1], item_ty)) Common.invariant("Iter.append second argument type differed from iterator item type");
+        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.append return type differed from iterator type");
 
         return try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
                 .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ first_expr, second_expr }),
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ first_expr, after_expr }),
             } },
         });
     }
