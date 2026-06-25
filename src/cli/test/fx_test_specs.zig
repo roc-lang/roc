@@ -341,6 +341,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: List.first with function syntax",
     },
     .{
+        .roc_file = "test/fx/postcheck_list_contains_record_field_repro.roc",
+        .io_spec = "1>x",
+        .description = "Regression test: List.contains with a named record value",
+    },
+    .{
         .roc_file = "test/fx/zst_nested_singleton_shapes.roc",
         .io_spec = "1>zst first ok|1>zst get ok|1>zst repeat ok|1>zst pattern ok|1>non-zst distinct ok|1>non-zst first ok|1>non-zst get ok|1>non-zst pattern ok",
         .description = "Nested singleton record/tag ZSTs behave correctly in lists, equality, and pattern matches",
