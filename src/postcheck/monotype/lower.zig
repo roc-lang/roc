@@ -14719,6 +14719,10 @@ const BodyContext = struct {
         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
 
+        if (try self.rangeIteratorForPlan(for_, result_ty, carries, plan)) |range_for| {
+            return range_for;
+        }
+
         if (try self.listIteratorSourceFromPlan(plan)) |source| {
             defer source.deinit(self.allocator);
             return try self.lowerListIteratorFor(for_, result_ty, carries, source);
@@ -15127,6 +15131,187 @@ const BodyContext = struct {
             false;
     }
 
+    fn rangeIteratorForPlan(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.builder.iterator_producer_plans) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceRangePlan(for_.expr, iterator_ty)) return null;
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked range iterator expression did not lower to an iterator plan"),
+        };
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        const range = switch (iter_plan_value.data) {
+            .range => |range| range,
+            else => Common.invariant("checked range iterator expression lowered to a non-range iterator plan"),
+        };
+        const item_ty = iter_plan_value.item_ty;
+        const primitive = self.numericPrimitive(item_ty) orelse return null;
+        switch (primitive) {
+            .bool, .str => return null,
+            else => {},
+        }
+
+        return try self.lowerRangeIteratorFor(for_, result_ty, carries, range, item_ty);
+    }
+
+    fn checkedExprCanProduceRangePlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        switch (expr.data) {
+            .call => |call| {
+                const direct_target = call.direct_target orelse return false;
+                return self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "exclusive_range") or
+                    self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "inclusive_range");
+            },
+            else => {},
+        }
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, "exclusive_range") and
+            !self.methodNameIs(producer.method, "inclusive_range"))
+        {
+            return false;
+        }
+        return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
+    }
+
+    fn lowerRangeIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        range: Ast.IterPlan.RangeIter,
+        item_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprData {
+        const bool_ty = try self.builder.primitiveType(.bool);
+
+        const start_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const start_expr = try self.builder.localExpr(start_local, item_ty);
+        const end_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const end_expr = try self.builder.localExpr(end_local, item_ty);
+        const step_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const step_expr = try self.builder.localExpr(step_local, item_ty);
+
+        const current_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const current_expr = try self.builder.localExpr(current_local, item_ty);
+        const done_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), bool_ty);
+        const done_expr = try self.builder.localExpr(done_local, bool_ty);
+
+        const initial_done = try self.rangeDoneExpr(start_expr, end_expr, range.inclusivity, .initial);
+        const next_state = try self.rangeNextState(current_expr, end_expr, step_expr, range.inclusivity, item_ty);
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (carries) |carry| {
+            try self.saveBinder(carry.binder, &saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        defer self.restoreBinders(saved.items);
+
+        try self.pushLoopContext(result_ty, carries);
+        defer self.popLoopContext();
+
+        const done_body = try self.breakCurrentLoopExpr();
+        const prefix_values = [_]Ast.ExprId{ next_state.current, next_state.done };
+        const continue_body = try self.lowerIteratorPlanItemThenContinue(for_, result_ty, current_expr, item_ty, &prefix_values, carries);
+        const body = try self.builder.ifExpr(done_expr, done_body, continue_body, result_ty);
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, 2 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = current_local, .ty = item_ty };
+        params[1] = .{ .local = done_local, .ty = bool_ty };
+        for (carries, 0..) |carry, i| params[i + 2] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(Ast.ExprId, 2 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = start_expr;
+        initial_values[1] = initial_done;
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 2] = try self.builder.localExpr(carry.initial_local, carry.ty);
+        }
+
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(params),
+            .initial_values = try self.builder.program.addExprSpan(initial_values),
+            .body = body,
+        } } });
+
+        const step_let = try self.wrapLet(step_local, item_ty, range.step, loop_expr, result_ty);
+        const end_let = try self.wrapLet(end_local, item_ty, range.end, step_let, result_ty);
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(start_local, item_ty),
+            .value = range.current,
+            .rest = end_let,
+        } };
+    }
+
+    const RangeDonePosition = enum {
+        initial,
+        after_yield,
+    };
+
+    const RangeNextState = struct {
+        current: Ast.ExprId,
+        done: Ast.ExprId,
+    };
+
+    fn rangeDoneExpr(
+        self: *BodyContext,
+        current: Ast.ExprId,
+        end: Ast.ExprId,
+        inclusivity: RangeInclusivity,
+        position: RangeDonePosition,
+    ) Allocator.Error!Ast.ExprId {
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const op: can.CIR.Expr.LowLevel = switch (inclusivity) {
+            .exclusive => .num_is_gte,
+            .inclusive => switch (position) {
+                .initial => .num_is_gt,
+                .after_yield => .num_is_eq,
+            },
+        };
+        return try self.builder.lowLevelExpr(op, &.{ current, end }, bool_ty);
+    }
+
+    fn rangeNextState(
+        self: *BodyContext,
+        current: Ast.ExprId,
+        end: Ast.ExprId,
+        step: Ast.ExprId,
+        inclusivity: RangeInclusivity,
+        item_ty: Type.TypeId,
+    ) Allocator.Error!RangeNextState {
+        switch (inclusivity) {
+            .exclusive => {
+                const next_current = try self.builder.lowLevelExpr(.num_plus, &.{ current, step }, item_ty);
+                return .{
+                    .current = next_current,
+                    .done = try self.rangeDoneExpr(next_current, end, inclusivity, .after_yield),
+                };
+            },
+            .inclusive => {
+                const is_last = try self.rangeDoneExpr(current, end, inclusivity, .after_yield);
+                const incremented = try self.builder.lowLevelExpr(.num_plus, &.{ current, step }, item_ty);
+                return .{
+                    .current = try self.builder.ifExpr(is_last, current, incremented, item_ty),
+                    .done = is_last,
+                };
+            },
+        }
+    }
+
     fn lowerSingleIteratorFor(
         self: *BodyContext,
         for_: anytype,
@@ -15379,6 +15564,37 @@ const BodyContext = struct {
                 .body = for_.body,
                 .result_ty = result_ty,
                 .prefix_values = &prefix_values,
+                .carries = carries,
+            } },
+            miss,
+        );
+    }
+
+    fn lowerIteratorPlanItemThenContinue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        item_expr: Ast.ExprId,
+        item_ty: Type.TypeId,
+        prefix_values: []const Ast.ExprId,
+        carries: []const LoopCarry,
+    ) Allocator.Error!Ast.ExprId {
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        try self.savePatternBinders(for_.pattern, &saved);
+        for (carries) |carry| try self.saveBinder(carry.binder, &saved);
+        defer self.restoreBinders(saved.items);
+
+        const miss = try self.runtimeCrashExpr(result_ty, "pattern match failed");
+        return try self.lowerMaterializedPatternThen(
+            for_.pattern,
+            item_expr,
+            item_ty,
+            result_ty,
+            .{ .iterator_body_with_prefix = .{
+                .body = for_.body,
+                .result_ty = result_ty,
+                .prefix_values = prefix_values,
                 .carries = carries,
             } },
             miss,
