@@ -140,6 +140,9 @@ Current branch status:
 - direct `Filter(ListIter | Append(ListIter, item...), predicate)` source `for`
   loops consume child plan state directly and bind each produced item once
   before the predicate/body branch.
+- direct private `ListIter` state can cross an immutable local when the local's
+  only later observations are exact `for` iterable uses in the same lowering
+  scope. Other uses still keep the public iterator value.
 - direct finite numeric ranges are consumed by optimized `for` as private
   numeric cursor state, including inclusive end values at numeric maxima.
 - direct `Iter.custom` is consumed by optimized `for` as private custom state
@@ -585,6 +588,8 @@ Tasks:
 - [ ] Iterator normalization preserves producer-site evaluation order.
 - [ ] Iterator normalization never replays checked expressions.
 - [ ] Private plan state can cross locals.
+  - [x] Direct `ListIter` private state can cross an immutable local when every
+    later use is the exact iterable in a `for`.
 - [ ] Private plan state can cross `if`.
 - [ ] Private plan state can cross `match`.
 - [ ] Materialization is implemented for every plan.
@@ -597,6 +602,8 @@ Tasks:
 - [x] Raw plan expressions cannot reach LIR.
 - [ ] Optimized `for` consumes plan values directly.
 - [ ] Optimized `for` through locals avoids public step values.
+  - [x] Direct local `List.iter` avoids public step values when all uses are
+    private `for` consumers.
 - [ ] Optimized `for` through `if` avoids public step values.
 - [ ] Optimized `for` through `match` avoids public step values.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
@@ -616,6 +623,7 @@ Tasks:
 - [ ] Optimized `List.from_iter` consumes plan values directly.
 - [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public
   behavior.
+  - [x] Local `List.iter` with a public alias preserves public iterator behavior.
 - [ ] `dbg`, `expect`, and `crash` in producer operands are not duplicated or
   moved.
 - [ ] Refcounted list/string/item payload tests pass under ARC.

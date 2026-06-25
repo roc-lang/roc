@@ -1527,6 +1527,62 @@ test "optimized for over list.iter uses private iterator cursor" {
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
+test "optimized for over local list.iter uses private iterator cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    iter = [1.I64, 2.I64, 3.I64].iter()
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"6"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
+test "local list.iter with public alias keeps public iterator semantics" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    iter = [1.I64, 2.I64].iter()
+        \\    saved = iter
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\
+        \\    saved_first = match Iter.next(saved) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    dbg ($sum, saved_first)
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"(3, 1)"});
+}
+
 test "List.iter producer lowers to a materialized iterator plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
