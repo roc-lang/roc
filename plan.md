@@ -703,7 +703,12 @@ Tasks:
   - [x] An infinite `Iter.custom` source can be consumed by optimized `for`
     and exited by a source `break` without requiring a reachable `Done`.
 - [ ] Full builtin iterator behavior tests pass.
-- [ ] Post-check and LIR module tests pass.
+  - [x] `zig build run-test-zig-builtin-doc` passes with the iterator changes.
+- [x] Post-check and LIR module tests pass.
+  - [x] `zig build run-test-zig-module-postcheck`,
+    `zig build run-test-zig-module-lir`, and
+    `zig build run-test-zig-lir-inline` pass after the latest iterator-plan
+    lowering and behavior tests.
 - [ ] Rocci Bird `.iter()` and no-`.iter()` builds are both measured with
   `--opt=size`.
 - [ ] Rocci Bird `.iter()` and no-`.iter()` disassemblies show comparable
