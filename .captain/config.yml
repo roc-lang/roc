@@ -1,0 +1,199 @@
+# Captain configuration for roc's Zig unit tests on RWX.
+#
+# roc's custom test runner (test/zig_test_runner.zig, enabled with -Droc-test-runner) emits
+# rwx-v1-json directly — Captain's own canonical schema — so no language/framework hint is
+# needed; Captain ingests the per-module files (one per binary) generically and merges them.
+#
+# - command:  runs every module test, writing tmp/rwx-results-*/zig-tests-<module>.json.
+# - retries:  re-runs only the failing test ids Captain records in {{ jsonFilePath }}
+#             (each module binary self-filters by id; non-matching binaries run nothing).
+#
+# Not partitioned: the whole module suite runs in ~14s, so splitting across `parallel` tasks
+# saved almost no wall-clock while paying the per-agent fixed cost (tool-cache download +
+# build-graph eval) N times. Run as single tasks. (build.zig keeps a dormant -Droc-test-files
+# hook if partitioning is ever wanted again.)
+
+test-suites:
+  roc-unit-debug:
+    # Module unit tests only (-Droc-test-modules-only) so the count Captain reports matches
+    # what actually ran. The non-module bespoke runners (eval/cli/LSP) and the Zig-native
+    # platform tests now have their own Captain suites below (roc-eval/roc-cli-*/roc-lsp/
+    # roc-platforms) rather than running in a plain task.
+    command: >-
+      zig build run-test-zig
+      -Droc-test-runner -Droc-test-modules-only -Droc-test-rwx-out=tmp/rwx-results-debug
+      -Dfuzz -Dsystem-afl=false
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-debug/zig-tests-*.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-unit-debug.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build run-test-zig
+        -Droc-test-runner -Droc-test-modules-only -Droc-test-rwx-out=tmp/rwx-results-debug
+        -Dfuzz -Dsystem-afl=false
+        -- --roc-test-only-json={{ jsonFilePath }}
+
+  roc-unit-release:
+    # Module unit tests only (see roc-unit-debug note), ReleaseFast.
+    command: >-
+      zig build run-test-zig -Doptimize=ReleaseFast
+      -Droc-test-runner -Droc-test-modules-only -Droc-test-rwx-out=tmp/rwx-results-release
+      -Dfuzz -Dsystem-afl=false
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-release/zig-tests-*.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-unit-release.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build run-test-zig -Doptimize=ReleaseFast
+        -Droc-test-runner -Droc-test-modules-only -Droc-test-rwx-out=tmp/rwx-results-release
+        -Dfuzz -Dsystem-afl=false
+        -- --roc-test-only-json={{ jsonFilePath }}
+
+  # ── Bespoke fork-based runners (eval / cli / LSP) ────────────────────────────────────
+  # These are NOT Zig's test protocol; each is a parent process that forks workers and
+  # aggregates results. They emit rwx-v1-json from their parent via the shared reporter in
+  # src/build/test_harness.zig (writeRwxResults), so a single results file per suite — no
+  # per-binary glob/merge. The runner reads --roc-test-only-json on retry and self-filters by
+  # id (the same id scheme as the unit runner: "<suite>::<name>").
+
+  roc-eval:
+    # Eval interpreter/dev/wasm/llvm test suite (all backends; --llvm adds the LLVM backend).
+    command: >-
+      zig build run-test-eval
+      -- --llvm --roc-test-rwx-out=tmp/rwx-results-eval --roc-test-suite=eval
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-eval/eval.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-eval.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build run-test-eval
+        -- --llvm --roc-test-rwx-out=tmp/rwx-results-eval --roc-test-suite=eval
+        --roc-test-only-json={{ jsonFilePath }}
+
+  roc-cli-platforms:
+    # CLI integration matrix, interpreter + dev backends (the default `run-test-cli` run).
+    command: >-
+      zig build run-test-cli
+      -- --roc-test-rwx-out=tmp/rwx-results-cli-platforms --roc-test-suite=cli-platforms
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-cli-platforms/cli-platforms.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-cli-platforms.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build run-test-cli
+        -- --roc-test-rwx-out=tmp/rwx-results-cli-platforms --roc-test-suite=cli-platforms
+        --roc-test-only-json={{ jsonFilePath }}
+
+  roc-cli-llvm:
+    # CLI integration matrix, LLVM size + speed backends only (distinct suite so its count
+    # matches what ran; the failing ids on retry are a subset of these cases).
+    command: >-
+      zig build run-test-cli
+      -- --include-llvm --filter "[size]" --filter "[speed]"
+      --roc-test-rwx-out=tmp/rwx-results-cli-llvm --roc-test-suite=cli-llvm
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-cli-llvm/cli-llvm.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-cli-llvm.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build run-test-cli
+        -- --include-llvm --filter "[size]" --filter "[speed]"
+        --roc-test-rwx-out=tmp/rwx-results-cli-llvm --roc-test-suite=cli-llvm
+        --roc-test-only-json={{ jsonFilePath }}
+
+  roc-lsp:
+    # LSP integration specs (bespoke fork-based runner, dedicated build step).
+    command: >-
+      zig build run-test-zig-module-lsp_integration
+      -- --roc-test-rwx-out=tmp/rwx-results-lsp --roc-test-suite=lsp
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-lsp/lsp.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-lsp.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build run-test-zig-module-lsp_integration
+        -- --roc-test-rwx-out=tmp/rwx-results-lsp --roc-test-suite=lsp
+        --roc-test-only-json={{ jsonFilePath }}
+
+  # ── Zig-native platform tests (fx / http / json / watch) ─────────────────────────────
+  # These ARE Zig's test protocol (b.addTest), so they reuse the unit runner's rwx-v1-json
+  # reporter via -Droc-test-runner (each writes zig-tests-<suite>.json; glob + merge). Run
+  # together in one suite. watch uses suite "watch_cli" so its ids don't collide with the
+  # watch *module* already in roc-unit-*. -Droc-test-runner matches the build-ci anchor so
+  # the test binaries cache-hit and only RUN here.
+  roc-platforms:
+    command: >-
+      zig build
+      run-test-zig-fx-platform
+      run-test-zig-http-header-decoder-platform
+      run-test-zig-json-decoder-platform
+      run-test-zig-watch-cli
+      -Droc-test-runner -Droc-test-rwx-out=tmp/rwx-results-platform
+      -Dfuzz -Dsystem-afl=false
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-platform/zig-tests-*.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-platforms.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build
+        run-test-zig-fx-platform
+        run-test-zig-http-header-decoder-platform
+        run-test-zig-json-decoder-platform
+        run-test-zig-watch-cli
+        -Droc-test-runner -Droc-test-rwx-out=tmp/rwx-results-platform
+        -Dfuzz -Dsystem-afl=false
+        -- --roc-test-only-json={{ jsonFilePath }}
+
+  roc-playground:
+    # WASM playground integration suite (bespoke fork runner under bytebox; same shared reporter).
+    command: >-
+      zig build run-test-playground
+      -- --roc-test-rwx-out=tmp/rwx-results-playground --roc-test-suite=playground
+    fail-on-duplicate-test-id: true
+    results:
+      path: tmp/rwx-results-playground/playground.json
+    output:
+      print-summary: true
+      reporters:
+        rwx-v1-json: tmp/captain/roc-playground.json
+    retries:
+      attempts: 2
+      command: >-
+        zig build run-test-playground
+        -- --roc-test-rwx-out=tmp/rwx-results-playground --roc-test-suite=playground
+        --roc-test-only-json={{ jsonFilePath }}

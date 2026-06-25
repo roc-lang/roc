@@ -1,0 +1,268 @@
+# arm64 Linux leg — embedded run (called from ci.yml). arch is run-level, so the
+# arm64 matrix lives in its own definition with base.arch: arm64. Runs the
+# arch-sensitive subset of the x64 DAG plus kcov parser coverage (arm64-only:
+# x86_64 hits a Zig DWARF bug, so coverage runs here today).
+# on.cli lets this leg be iterated directly (`rwx run .rwx/ci-arm64.yml --target
+# build-ci-arm64`); it's ignored when this file is embedded via ci.yml.
+on:
+  cli:
+    init:
+      commit-sha: ${{ event.git.sha }}
+
+base:
+  image: ubuntu:24.04
+  config: rwx/base 1.1.1
+  arch: arm64
+
+tool-cache:
+  vault: dylan-roc
+
+tasks:
+  # No .git here — preserving it busts the cache key every commit. Only the
+  # snapshot zero-drift check needs git, via the separate code-git clone below.
+  - key: code
+    call: git/clone 2.0.7
+    with:
+      repository: https://github.com/roc-lang/roc.git
+      ref: ${{ init.commit-sha }}
+
+  # Extracted into $HOME (OUTSIDE the workspace) with the local zig build cache
+  # pinned to $HOME/.zig-cache, so the positive, workspace-relative input filters
+  # stay pure-source without whiting out the toolchain or busting the tool-cache.
+  - key: zig-arm64
+    run: |
+      set -euo pipefail
+      ZIG_VERSION=0.16.0
+      ZIG_DIR="zig-aarch64-linux-${ZIG_VERSION}"
+      URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_DIR}.tar.xz"
+      for attempt in 1 2 3; do
+        if curl -fsSL --retry 3 -o zig.tar.xz "$URL"; then break; fi
+        echo "zig download attempt ${attempt} failed; retrying" >&2
+        sleep 5
+      done
+      tar -xf zig.tar.xz -C "$HOME"
+      rm zig.tar.xz
+      mkdir -p "$HOME/.zig-cache"
+      echo "$HOME/${ZIG_DIR}" > "$RWX_ENV/PATH"
+      echo "$HOME/.zig-cache" > "$RWX_ENV/ZIG_LOCAL_CACHE_DIR"
+      "$HOME/${ZIG_DIR}/zig" version
+
+  # The ONLY network boundary — retry transient fetch flakes here so the build
+  # anchors run offline and need no retry. `--fetch` fetches only EAGER deps;
+  # kcov is a LAZY dep (build.zig.zon `lazy = true`) that arm64 build-ci needs,
+  # so we additionally `zig fetch` it (URL read from build.zig.zon to stay in
+  # sync). Both land in ~/.cache/zig, which carries across `use:`.
+  # POSITIVE input filter (include only build inputs). Toolchain + local zig cache
+  # live in $HOME (outside the workspace), so this workspace-relative filter never
+  # drops them. `&pos-build` defined here (first filtered task on this leg).
+  - key: zig-deps-arm64
+    use: [code, zig-arm64]
+    filter: &pos-build
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details  # embedded into the roc binary via addAnonymousImport (build.zig:5042)
+    run: |
+      set +e
+      pattern="HttpConnectionClosing|EndOfStream|503|Timeout|WriteFailed|TemporaryNameServerFailure|cannot download|ConnectionResetByPeer|ConnectionTimedOut|FetchFailed|invalid HTTP response|bad HTTP response"
+      fetch_all() {
+        zig build build-ci -Dfuzz -Dsystem-afl=false --fetch || return 1
+        kcov_url=$(grep -A1 'kcov = ' build.zig.zon | grep -oE 'https://[^"]+')
+        [ -n "$kcov_url" ] || { echo "kcov url not found in build.zig.zon" >&2; return 1; }
+        echo "fetching lazy dep kcov: $kcov_url"
+        zig fetch "$kcov_url" || return 1
+      }
+      attempt=1; max=5
+      while :; do
+        fetch_all 2>&1 | tee /tmp/fetch.out
+        rc=${PIPESTATUS[0]}
+        [ "$rc" -eq 0 ] && break
+        if [ "$attempt" -ge "$max" ] || ! grep -qE "$pattern" /tmp/fetch.out; then exit "$rc"; fi
+        attempt=$((attempt+1)); echo ">>> transient fetch failure; retry ${attempt}/${max} in 10s" >&2; sleep 10
+      done
+
+  # Captain CLI — inline per-test results, retry, and partitioning for the unit suites
+  # (shared .captain/config.yml). Secret-free; RWX provides the access token automatically.
+  - key: captain
+    call: rwx/install-captain 1.1.7
+
+  # System packages not on the rwx/base image, pulled into their own cached tasks.
+  - key: system-file
+    run: |
+      set -euo pipefail
+      sudo apt-get update && sudo apt-get install -y file
+
+  # kcov build/link deps. On arm64 `zig build build-ci` builds kcov (coverage
+  # tools); x86_64 build-ci skips kcov (Zig DWARF bug), so this is arm64-only.
+  - key: system-kcov
+    run: |
+      set -euo pipefail
+      # Authoritative build-dep list: src/flake.nix `kcovBuildDeps`
+      #   = [ elfutils  pkg-config  curl  zlib ]  (Linux only).
+      # elfutils -> libdw-dev + libelf-dev, curl -> libcurl4-openssl-dev,
+      # zlib -> zlib1g-dev. pkg-config is essential: kcov's build resolves
+      # libdw/libelf via pkg-config module names; without it Zig searches
+      # "lib"+name (liblibdw.so) and fails. rwx/base ships none of these.
+      sudo apt-get update && sudo apt-get install -y \
+        pkg-config libdw-dev libelf-dev libcurl4-openssl-dev zlib1g-dev
+
+  # Debug anchor (arm64 native; defaults to musl per build.zig:2217). No retry:
+  # deps are pre-fetched, so this builds offline and fails fast on real errors.
+  - key: build-ci-arm64
+    use: [code, zig-arm64, system-kcov, zig-deps-arm64]
+    filter: *pos-build
+    tool-cache: ci-build-ci-arm64
+    timeout: 45m  # arm64 build compiles roc + kcov from source; exceeds the 10m default
+    agent:
+      cpus: 32
+      memory: 64gb
+    run: |
+      set -euo pipefail
+      # -Droc-test-runner: pre-build the custom-runner test binaries so the unit tasks cache-hit
+      # and only run them (see ci.yml build-ci-x64).
+      zig build build-ci -Droc-test-runner -Dfuzz -Dsystem-afl=false
+
+  # Test-execution leaves: CPU-bound, memory-light → compute-optimized 8c/16g.
+  # Leaf positive filter: build inputs + the anchor's compiled binaries (zig-out),
+  # consumed via the filesystem layer. `.zig-cache` + toolchain are in $HOME, so
+  # they're inherited unfiltered. `&pos-leaf` defined here (first leaf).
+  # Captain-partitioned module unit tests (see .captain/config.yml, suite roc-unit-debug).
+  - key: unit-debug
+    use: [build-ci-arm64, captain]
+    filter: &pos-leaf
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details
+      - zig-out
+      - .captain  # Captain suite config (.captain/config.yml); without it `captain run` finds no command
+    agent: &test-agent
+      cpus: 8
+      memory: 16gb
+    run: |
+      set -euo pipefail
+      captain run roc-unit-debug
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-unit-debug.json
+
+  # NB: snapshot tests are arch-independent (compiler front-end output, not
+  # codegen), so they run once on x64 (ci.yml) — not duplicated here.
+
+  # run-test-cli exercises the fx platform tests (test/fx/file_import_str.roc imports
+  # CONTRIBUTING/profiling/...), and this leaf roc-checks a CONTRIBUTING/profiling
+  # file, so it keeps CONTRIBUTING/profiling on top of the leaf inputs (only
+  # CONTRIBUTING reader on this leg, so the list is inline rather than anchored).
+  - key: platforms
+    use: [build-ci-arm64, captain]
+    filter:
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details
+      - zig-out
+      - .captain  # Captain suite config; without it `captain run` finds no command
+      # Data files imported by the CLI test fixtures (run-test-cli): test/fx
+      # imports CONTRIBUTING/profiling/…, test/echo/all_syntax_test.roc imports
+      # the repo-root README.md. Both must survive the filter (FILE NOT FOUND otherwise).
+      - CONTRIBUTING/profiling
+      - README.md
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-cli-platforms
+      ./zig-out/bin/roc check ./CONTRIBUTING/profiling/bench_repeated_check.roc
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-cli-platforms.json
+
+  # Parser coverage via kcov (arm64-only). kcov is built from the build.zig.zon
+  # dep; it needs the system-kcov libs at runtime too.
+  # system-kcov must precede build-ci-arm64 in `use:` because build-ci-arm64
+  # itself uses system-kcov (a dependency must be listed before its dependents).
+  - key: coverage-parser
+    use: [system-kcov, build-ci-arm64]
+    filter: *pos-leaf
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      zig build run-coverage-parser
+
+  # Release anchor (arm64). No retry (deps pre-fetched).
+  - key: build-release-arm64
+    use: [code, zig-arm64, system-kcov, zig-deps-arm64]
+    filter: *pos-build
+    tool-cache: ci-build-release-arm64
+    timeout: 45m
+    agent:
+      cpus: 32
+      memory: 64gb
+    run: |
+      set -euo pipefail
+      # -Droc-test-runner: pre-build custom-runner test binaries so unit-release cache-hits.
+      zig build build-ci -Droc-test-runner -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false
+
+  # Module unit tests in ReleaseFast via Captain (single task — not worth partitioning).
+  - key: unit-release
+    use: [build-release-arm64, captain]
+    filter: *pos-leaf
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-unit-release
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-unit-release.json
+
+  # LSP integration specs via Captain (bespoke fork-based runner; was part of plain unit-misc).
+  - key: lsp
+    use: [build-ci-arm64, captain]
+    filter: *pos-leaf
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-lsp
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-lsp.json
+
+  # fx / http / json / watch platform tests via Captain (Zig-native; was part of plain
+  # unit-misc). Needs pos-cli inputs (fx fixtures import CONTRIBUTING/profiling + README.md).
+  - key: platform-tests
+    use: [build-ci-arm64, captain]
+    filter:
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details
+      - zig-out
+      - .captain
+      - CONTRIBUTING/profiling
+      - README.md
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-platforms
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-platforms.json
+
+  - key: static-link
+    use: [build-release-arm64, system-file]
+    filter: *pos-leaf
+    run: |
+      set -euo pipefail
+      file ./zig-out/bin/roc
+      file ./zig-out/bin/roc | grep "statically linked"

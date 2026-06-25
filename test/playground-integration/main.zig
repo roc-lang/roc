@@ -999,6 +999,7 @@ fn runTests(
     test_cases: []const TestCase,
     wasm_path: []const u8,
     stats_events: ?*std.ArrayListUnmanaged(harness.StatsEvent),
+    rwx_records: ?*std.ArrayListUnmanaged(harness.RwxRecord),
 ) anyerror!TestStats {
     var stats = TestStats{
         .total = test_cases.len,
@@ -1036,6 +1037,19 @@ fn runTests(
             if (events.items.len > event_index) {
                 events.items[event_index].worker_index = 0;
             }
+        };
+        defer if (rwx_records) |recs| {
+            const kind: []const u8 = switch (case_result) {
+                .passed => "successful",
+                .skipped => "skipped",
+                .failed => "failed",
+            };
+            recs.append(arena, .{
+                .name = case.name,
+                .status_kind = kind,
+                .duration_ns = relativeNs(case_start, nanoTimestamp()),
+                .message = case_message,
+            }) catch {};
         };
 
         if (case.skip) {
@@ -1183,6 +1197,10 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     var wasm_path: ?[]const u8 = null;
     var stats_args: PlaygroundStatsArgs = .{};
+    var rwx_out: ?[]const u8 = null;
+    var rwx_suite: ?[]const u8 = null;
+    var rwx_file: ?[]const u8 = null;
+    var rwx_only_json: ?[]const u8 = null;
     var case_filters = std.ArrayList([]const u8).empty;
     defer case_filters.deinit(allocator);
     var i: usize = 1;
@@ -1220,6 +1238,14 @@ pub fn main(init: std.process.Init) anyerror!void {
                 return;
             }
             try case_filters.append(allocator, args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-rwx-out=")) {
+            rwx_out = arg["--roc-test-rwx-out=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-suite=")) {
+            rwx_suite = arg["--roc-test-suite=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-file=")) {
+            rwx_file = arg["--roc-test-file=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-only-json=")) {
+            rwx_only_json = arg["--roc-test-only-json=".len..];
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             // Positional argument - treat as WASM path
             wasm_path = arg;
@@ -1363,6 +1389,23 @@ pub fn main(init: std.process.Init) anyerror!void {
         test_cases = kept;
     }
 
+    // Targeted retry (Captain's {{ jsonFilePath }}): keep only cases whose rwx id is listed.
+    if (rwx_only_json) |only_path| {
+        if (harness.loadOnlyJsonIds(allocator, std_io, only_path)) |loaded| {
+            var only = loaded;
+            defer only.deinit();
+            const suite = rwx_suite orelse "playground";
+            var kept = std.ArrayList(TestCase).empty;
+            for (test_cases.items) |case| {
+                const id = harness.rwxTestId(allocator, suite, case.name) catch continue;
+                defer allocator.free(id);
+                if (only.contains(id)) try kept.append(allocator, case);
+            }
+            test_cases.deinit(allocator);
+            test_cases = kept;
+        }
+    }
+
     logDebug("[INFO] Starting Playground Integration Tests...\n", .{});
     logDebug("[INFO] Running {} test cases\n", .{test_cases.items.len});
 
@@ -1370,7 +1413,11 @@ pub fn main(init: std.process.Init) anyerror!void {
     defer stats_events.deinit(allocator);
     const maybe_stats_events: ?*std.ArrayListUnmanaged(harness.StatsEvent) = if (stats_args.json_path != null) &stats_events else null;
 
-    const stats = try runTests(std_io, allocator, gpa.allocator(), test_cases.items, playground_wasm_path, maybe_stats_events);
+    var rwx_records: std.ArrayListUnmanaged(harness.RwxRecord) = .empty;
+    defer rwx_records.deinit(allocator);
+    const maybe_rwx_records: ?*std.ArrayListUnmanaged(harness.RwxRecord) = if (rwx_out != null) &rwx_records else null;
+
+    const stats = try runTests(std_io, allocator, gpa.allocator(), test_cases.items, playground_wasm_path, maybe_stats_events, maybe_rwx_records);
 
     logDebug("\nAll Playground Integration Tests Completed!\n", .{});
     logDebug("Final Results: {}/{} passed ({d:0.}%)\n", .{ stats.passed, stats.total, stats.successRate() });
@@ -1386,6 +1433,13 @@ pub fn main(init: std.process.Init) anyerror!void {
             },
             .events = stats_events.items,
         });
+    }
+
+    // rwx-v1-json reporter for Captain (no-op unless --roc-test-rwx-out is set).
+    if (rwx_out) |rwx_dir| {
+        const suite = rwx_suite orelse "playground";
+        const file = rwx_file orelse "test/playground-integration/main.zig";
+        harness.writeRwxResults(allocator, std_io, rwx_dir, suite, file, rwx_records.items) catch {};
     }
 
     // Exit with error if any tests failed

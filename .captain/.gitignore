@@ -1,0 +1,3 @@
+# Captain's per-suite OSS-mode state (timings/flakes/quarantines) is generated at run time
+# and managed by Captain Cloud on RWX — don't commit it. Keep only config.yml.
+*/

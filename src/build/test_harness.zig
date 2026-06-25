@@ -520,6 +520,18 @@ pub const StandardArgs = struct {
     /// result to stdout, and loops until stdin EOFs. Used by the Windows
     /// Child-based executor to amortize process-boot cost across many tests.
     worker_stream: bool = false,
+    /// rwx-v1-json reporter output directory (Captain). Null = reporter disabled.
+    /// Set by `--roc-test-rwx-out=<dir>`.
+    rwx_out: ?[]const u8 = null,
+    /// Suite name used for rwx-v1-json ids (`<suite>::<name>`) and the output filename.
+    /// Set by `--roc-test-suite=<name>`.
+    rwx_suite: ?[]const u8 = null,
+    /// Reported `location.file` for every test in the rwx-v1-json output.
+    /// Set by `--roc-test-file=<path>`.
+    rwx_file: ?[]const u8 = null,
+    /// Path to a v1.TestResults JSON whose test ids restrict this run (Captain targeted
+    /// retry via `{{ jsonFilePath }}`). Set by `--roc-test-only-json=<path>`.
+    rwx_only_json: ?[]const u8 = null,
     /// Remaining positional args (runner-specific)
     positional: []const []const u8 = &.{},
 };
@@ -714,6 +726,162 @@ fn appendJsonString(out: *std.ArrayList(u8), allocator: Allocator, value: []cons
     try out.append(allocator, '"');
 }
 
+/// rwx-v1-json schema URL (Captain's native, framework-agnostic test-results schema).
+pub const rwx_schema_url = "https://raw.githubusercontent.com/rwx-research/test-results-schema/main/v1.json";
+
+const max_only_json_bytes: usize = 64 * 1024 * 1024;
+
+/// One test outcome for the rwx-v1-json reporter. `status_kind` is the already-mapped rwx
+/// status string — one of "successful", "failed", "skipped", "timedOut". The caller maps its
+/// own (richer) status enum to this (e.g. crash→"failed", timeout→"timedOut", leak→"failed").
+pub const RwxRecord = struct {
+    name: []const u8,
+    status_kind: []const u8,
+    duration_ns: u64,
+    /// Optional failure detail rendered inline in RWX; emitted only for non-pass/skip statuses.
+    message: ?[]const u8 = null,
+};
+
+/// rwx-v1-json id for a test: "<suite>::<name>". Globally unique across suites (a bare test
+/// name is only unique within one runner). Caller owns the result.
+pub fn rwxTestId(allocator: Allocator, suite: []const u8, name: []const u8) Allocator.Error![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}::{s}", .{ suite, name });
+}
+
+fn appendRwxSummaryField(out: *std.ArrayList(u8), allocator: Allocator, name: []const u8, value: usize) !void {
+    try out.appendSlice(allocator, ",\n    ");
+    try appendJsonString(out, allocator, name);
+    try out.appendSlice(allocator, ": ");
+    try appendU64(out, allocator, @intCast(value));
+}
+
+/// Write `records` as `<out_dir>/<suite>.json` in rwx-v1-json (Captain's native schema) so a
+/// bespoke fork-based runner's results render inline in RWX and feed targeted retry / flake
+/// detection. Mirrors the unit runner's reporter (test/zig_test_runner.zig:423-519). id =
+/// "<suite>::<name>", location.file = `file`. Failure messages are included inline.
+pub fn writeRwxResults(
+    allocator: Allocator,
+    io: std.Io,
+    out_dir: []const u8,
+    suite: []const u8,
+    file: []const u8,
+    records: []const RwxRecord,
+) !void {
+    var n_failed: usize = 0;
+    var n_skipped: usize = 0;
+    var n_successful: usize = 0;
+    var n_timed_out: usize = 0;
+    for (records) |rec| {
+        if (std.mem.eql(u8, rec.status_kind, "skipped")) {
+            n_skipped += 1;
+        } else if (std.mem.eql(u8, rec.status_kind, "timedOut")) {
+            n_timed_out += 1;
+        } else if (std.mem.eql(u8, rec.status_kind, "successful")) {
+            n_successful += 1;
+        } else {
+            n_failed += 1;
+        }
+    }
+    const any_failure = (n_failed + n_timed_out) > 0;
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+
+    try out.appendSlice(allocator, "{\n  \"$schema\": ");
+    try appendJsonString(&out, allocator, rwx_schema_url);
+    try out.appendSlice(allocator, ",\n  \"framework\": { \"language\": \"other\", \"kind\": \"other\", \"providedLanguage\": \"Zig\", \"providedKind\": \"roc\" }");
+    try out.appendSlice(allocator, ",\n  \"summary\": {\n    \"status\": { \"kind\": ");
+    try appendJsonString(&out, allocator, if (any_failure) "failed" else "successful");
+    try out.appendSlice(allocator, " }");
+    try appendRwxSummaryField(&out, allocator, "tests", records.len);
+    try appendRwxSummaryField(&out, allocator, "otherErrors", 0);
+    try appendRwxSummaryField(&out, allocator, "retries", 0);
+    try appendRwxSummaryField(&out, allocator, "canceled", 0);
+    try appendRwxSummaryField(&out, allocator, "failed", n_failed);
+    try appendRwxSummaryField(&out, allocator, "pended", 0);
+    try appendRwxSummaryField(&out, allocator, "quarantined", 0);
+    try appendRwxSummaryField(&out, allocator, "skipped", n_skipped);
+    try appendRwxSummaryField(&out, allocator, "successful", n_successful);
+    try appendRwxSummaryField(&out, allocator, "timedOut", n_timed_out);
+    try appendRwxSummaryField(&out, allocator, "todo", 0);
+    try out.appendSlice(allocator, "\n  },\n  \"tests\": [");
+
+    for (records, 0..) |rec, idx| {
+        if (idx > 0) try out.append(allocator, ',');
+        try out.appendSlice(allocator, "\n    { \"id\": ");
+        const id = try rwxTestId(allocator, suite, rec.name);
+        defer allocator.free(id);
+        try appendJsonString(&out, allocator, id);
+        try out.appendSlice(allocator, ", \"name\": ");
+        try appendJsonString(&out, allocator, rec.name);
+        try out.appendSlice(allocator, ", \"location\": { \"file\": ");
+        try appendJsonString(&out, allocator, file);
+        try out.appendSlice(allocator, " }, \"attempt\": { \"durationInNanoseconds\": ");
+        try appendU64(&out, allocator, rec.duration_ns);
+        try out.appendSlice(allocator, ", \"status\": { \"kind\": ");
+        try appendJsonString(&out, allocator, rec.status_kind);
+        const is_failure = !std.mem.eql(u8, rec.status_kind, "successful") and
+            !std.mem.eql(u8, rec.status_kind, "skipped");
+        if (is_failure) {
+            if (rec.message) |msg| {
+                if (msg.len > 0) {
+                    try out.appendSlice(allocator, ", \"message\": ");
+                    try appendJsonString(&out, allocator, msg);
+                }
+            }
+        }
+        try out.appendSlice(allocator, " } } }");
+    }
+    try out.appendSlice(allocator, "\n  ]\n}\n");
+
+    try std.Io.Dir.cwd().createDirPath(io, out_dir);
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ out_dir, suite });
+    defer allocator.free(path);
+    var file_handle = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file_handle.close(io);
+    try file_handle.writeStreamingAll(io, out.items);
+}
+
+/// Set of test ids parsed from a v1.TestResults JSON (Captain's `{{ jsonFilePath }}`), used to
+/// restrict a run to just the failing tests for targeted retry. Caller calls `deinit()`.
+pub const OnlyJsonIds = struct {
+    parsed: std.json.Parsed(Doc),
+    set: std.StringHashMap(void),
+
+    const Doc = struct {
+        tests: []const struct {
+            id: ?[]const u8 = null,
+        } = &.{},
+    };
+
+    pub fn contains(self: *const OnlyJsonIds, id: []const u8) bool {
+        return self.set.contains(id);
+    }
+
+    pub fn deinit(self: *OnlyJsonIds) void {
+        self.set.deinit();
+        self.parsed.deinit();
+    }
+};
+
+/// Load the set of test ids to re-run from a v1.TestResults JSON file. Returns null on any
+/// error (missing / unreadable / malformed) — callers then run the full suite.
+pub fn loadOnlyJsonIds(allocator: Allocator, io: std.Io, path: []const u8) ?OnlyJsonIds {
+    const contents = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_only_json_bytes)) catch return null;
+    defer allocator.free(contents);
+    const parsed = std.json.parseFromSlice(
+        OnlyJsonIds.Doc,
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
+    ) catch return null;
+    var set = std.StringHashMap(void).init(allocator);
+    for (parsed.value.tests) |t| {
+        if (t.id) |id| set.put(id, {}) catch {};
+    }
+    return .{ .parsed = parsed, .set = set };
+}
+
 /// Parse standard harness flags from an argv-style slice.
 pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator) !StandardArgs {
     var filters: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -765,6 +933,14 @@ pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Alloc
             }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             args.help_requested = true;
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-rwx-out=")) {
+            args.rwx_out = arg["--roc-test-rwx-out=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-suite=")) {
+            args.rwx_suite = arg["--roc-test-suite=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-file=")) {
+            args.rwx_file = arg["--roc-test-file=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-only-json=")) {
+            args.rwx_only_json = arg["--roc-test-only-json=".len..];
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             try positional.append(allocator, arg);
         }

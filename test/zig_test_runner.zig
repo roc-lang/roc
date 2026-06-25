@@ -26,15 +26,33 @@ const RunnerConfig = struct {
     partition_count: usize = 1,
     timing_name: ?[]const u8 = null,
     timing_generation_ns: ?i128 = null,
+    // rwx-v1-json reporter (RWX Captain). When rwx_out_dir is set, write
+    // <dir>/zig-tests-<suite_name>.json on completion. suite_name/suite_file tag the
+    // results for Captain (per-binary output filename, test-id prefix, location.file).
+    rwx_out_dir: ?[]const u8 = null,
+    suite_name: ?[]const u8 = null,
+    suite_file: ?[]const u8 = null,
+    // Targeted retry: path to an rwx-v1-json file (Captain's {{ jsonFilePath }}) listing the
+    // tests to re-run. When set, only tests whose id (<suite>::<name>) appears are selected.
+    only_json: ?[]const u8 = null,
 };
 
-const TimingRecord = struct {
+const ResultStatus = enum { pass, skip, fail };
+
+const TestRecord = struct {
     test_index: u32,
     duration_ns: u64,
+    status: ResultStatus,
+    // Treated as failures by the rwx reporter (leak detection / logged errors are roc's
+    // additional pass criteria beyond the test function's own return).
+    leaked: bool = false,
+    logged_errors: bool = false,
 };
 
 const timing_dir = ".zig-cache/roc-test-timings";
 const max_timing_file_bytes = 16 * 1024 * 1024;
+const max_only_json_bytes = 64 * 1024 * 1024;
+const rwx_schema_url = "https://raw.githubusercontent.com/rwx-research/test-results-schema/main/v1.json";
 
 pub fn main(init: std.process.Init.Minimal) void {
     @disableInstrumentation();
@@ -97,6 +115,14 @@ fn parseArgs(args: []const []const u8) RunnerConfig {
                 arg["--roc-test-timing-generation-ns=".len..],
                 10,
             ) catch @panic("unable to parse --roc-test-timing-generation-ns");
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-rwx-out=")) {
+            config.rwx_out_dir = arg["--roc-test-rwx-out=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-suite=")) {
+            config.suite_name = arg["--roc-test-suite=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-file=")) {
+            config.suite_file = arg["--roc-test-file=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--roc-test-only-json=")) {
+            config.only_json = arg["--roc-test-only-json=".len..];
         } else {
             std.debug.panic("unrecognized command line argument: {s}", .{arg});
         }
@@ -229,6 +255,57 @@ fn loadTimingWeights(allocator: std.mem.Allocator, config: RunnerConfig) TimingW
     return weights;
 }
 
+/// rwx-v1-json id for a test: "<suite>::<zig test name>". Globally unique across module
+/// binaries (the zig name alone is only unique within a binary). Caller owns the result.
+fn testId(allocator: std.mem.Allocator, suite_name: ?[]const u8, test_name: []const u8) std.mem.Allocator.Error![]u8 {
+    const suite = suite_name orelse "zig";
+    return std.fmt.allocPrint(allocator, "{s}::{s}", .{ suite, test_name });
+}
+
+/// Load the set of test ids to re-run from Captain's {{ jsonFilePath }} rwx-v1-json file.
+/// Returns null if no retry file is configured. Caller deinits + frees the arena via the
+/// returned parsed handle.
+const OnlyJsonIds = struct {
+    parsed: std.json.Parsed(Doc),
+    set: std.StringHashMap(void),
+
+    const Doc = struct {
+        tests: []const struct {
+            id: ?[]const u8 = null,
+        } = &.{},
+    };
+
+    fn deinit(self: *OnlyJsonIds) void {
+        self.set.deinit();
+        self.parsed.deinit();
+    }
+};
+
+fn loadOnlyJsonIds(allocator: std.mem.Allocator, path: []const u8) ?OnlyJsonIds {
+    const contents = Io.Dir.cwd().readFileAlloc(
+        runner_io,
+        path,
+        allocator,
+        .limited(max_only_json_bytes),
+    ) catch return null;
+    defer allocator.free(contents);
+
+    const parsed = std.json.parseFromSlice(
+        OnlyJsonIds.Doc,
+        allocator,
+        contents,
+        // alloc_always: dupe strings into the parsed arena so the ids survive freeing
+        // `contents` below (alloc_if_needed would leave them aliasing the freed buffer).
+        .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
+    ) catch return null;
+
+    var set = std.StringHashMap(void).init(allocator);
+    for (parsed.value.tests) |t| {
+        if (t.id) |id| set.put(id, {}) catch {};
+    }
+    return .{ .parsed = parsed, .set = set };
+}
+
 const WeightedTest = struct {
     index: u32,
     weight: u64,
@@ -288,6 +365,25 @@ fn buildSelectedIndices(allocator: std.mem.Allocator, config: RunnerConfig) std.
         }
     }.lessThan);
 
+    // Targeted retry: keep only the tests Captain asked us to re-run (by id). Each module
+    // binary runs only the failing tests it actually owns; binaries with no matches run none.
+    if (config.only_json) |only_path| {
+        if (loadOnlyJsonIds(allocator, only_path)) |loaded| {
+            var ids = loaded;
+            defer ids.deinit();
+
+            var kept = std.ArrayList(u32).empty;
+            errdefer kept.deinit(allocator);
+            for (selected.items) |test_i| {
+                const id = try testId(allocator, config.suite_name, builtin.test_functions[@intCast(test_i)].name);
+                defer allocator.free(id);
+                if (ids.set.contains(id)) try kept.append(allocator, test_i);
+            }
+            selected.deinit(allocator);
+            return kept.toOwnedSlice(allocator);
+        }
+    }
+
     return selected.toOwnedSlice(allocator);
 }
 
@@ -299,7 +395,7 @@ fn nowNs() u64 {
 fn writeTimingRecords(
     allocator: std.mem.Allocator,
     config: RunnerConfig,
-    records: []const TimingRecord,
+    records: []const TestRecord,
 ) void {
     const name = config.timing_name orelse return;
     const generation_ns = config.timing_generation_ns orelse return;
@@ -324,6 +420,104 @@ fn writeTimingRecords(
     }) catch {};
 }
 
+// rwx-v1-json structs (https://github.com/rwx-research/test-results-schema/blob/main/v1.json).
+// Zig has no native Captain framework, so we report as the generic "other" framework, which
+// Captain ingests directly (rwx-v1-json is its own canonical schema — no custom parser needed).
+const RwxStatus = struct { kind: []const u8 };
+const RwxLocation = struct { file: []const u8 };
+const RwxAttempt = struct { durationInNanoseconds: u64, status: RwxStatus };
+const RwxTest = struct {
+    id: []const u8,
+    name: []const u8,
+    location: RwxLocation,
+    attempt: RwxAttempt,
+};
+const RwxFramework = struct {
+    language: []const u8 = "other",
+    kind: []const u8 = "other",
+    providedLanguage: []const u8 = "Zig",
+    providedKind: []const u8 = "roc",
+};
+const RwxSummary = struct {
+    status: RwxStatus,
+    tests: usize,
+    otherErrors: usize = 0,
+    retries: usize = 0,
+    canceled: usize = 0,
+    failed: usize,
+    pended: usize = 0,
+    quarantined: usize = 0,
+    skipped: usize,
+    successful: usize,
+    timedOut: usize = 0,
+    todo: usize = 0,
+};
+const RwxDoc = struct {
+    @"$schema": []const u8 = rwx_schema_url,
+    framework: RwxFramework = .{},
+    summary: RwxSummary,
+    tests: []const RwxTest,
+};
+
+/// Write this binary's tests as <rwx_out_dir>/zig-tests-<suite>.json. No-op when the reporter
+/// is not enabled (-Droc-test-rwx-out unset). Best-effort: never fails the test run.
+fn writeRwxResults(
+    allocator: std.mem.Allocator,
+    config: RunnerConfig,
+    records: []const TestRecord,
+) void {
+    const out_dir = config.rwx_out_dir orelse return;
+    const suite = config.suite_name orelse "zig";
+    const file = config.suite_file orelse suite;
+
+    var arena_inst = std.heap.ArenaAllocator.init(allocator);
+    defer arena_inst.deinit();
+    const arena = arena_inst.allocator();
+
+    var tests = std.ArrayList(RwxTest).empty;
+    var n_pass: usize = 0;
+    var n_fail: usize = 0;
+    var n_skip: usize = 0;
+    for (records) |rec| {
+        const ti: usize = @intCast(rec.test_index);
+        if (ti >= builtin.test_functions.len) continue;
+        const name = builtin.test_functions[ti].name;
+        // roc treats a leak or a logged error as a failure, beyond the test fn's own result.
+        const failed = rec.status == .fail or rec.leaked or rec.logged_errors;
+        const kind: []const u8 = if (rec.status == .skip) "skipped" else if (failed) "failed" else "successful";
+        if (rec.status == .skip) {
+            n_skip += 1;
+        } else if (failed) {
+            n_fail += 1;
+        } else {
+            n_pass += 1;
+        }
+        tests.append(arena, .{
+            .id = testId(arena, suite, name) catch continue,
+            .name = name,
+            .location = .{ .file = file },
+            .attempt = .{ .durationInNanoseconds = rec.duration_ns, .status = .{ .kind = kind } },
+        }) catch continue;
+    }
+
+    const doc = RwxDoc{
+        .summary = .{
+            .status = .{ .kind = if (n_fail > 0) "failed" else "successful" },
+            .tests = tests.items.len,
+            .failed = n_fail,
+            .skipped = n_skip,
+            .successful = n_pass,
+        },
+        .tests = tests.items,
+    };
+
+    const json = std.json.Stringify.valueAlloc(arena, doc, .{ .whitespace = .indent_2 }) catch return;
+
+    Io.Dir.cwd().createDirPath(runner_io, out_dir) catch return;
+    const path = std.fmt.allocPrint(arena, "{s}/zig-tests-{s}.json", .{ out_dir, suite }) catch return;
+    Io.Dir.cwd().writeFile(runner_io, .{ .sub_path = path, .data = json }) catch {};
+}
+
 fn mainServer(init: std.process.Init.Minimal, config: RunnerConfig) anyerror!void {
     @disableInstrumentation();
 
@@ -343,14 +537,15 @@ fn mainServer(init: std.process.Init.Minimal, config: RunnerConfig) anyerror!voi
 
     var selected_indices: []u32 = &.{};
     defer if (selected_indices.len != 0) allocator.free(selected_indices);
-    var timing_records = std.ArrayList(TimingRecord).empty;
-    defer timing_records.deinit(allocator);
+    var test_records = std.ArrayList(TestRecord).empty;
+    defer test_records.deinit(allocator);
 
     while (true) {
         const hdr = try server.receiveMessage();
         switch (hdr.tag) {
             .exit => {
-                writeTimingRecords(allocator, config, timing_records.items);
+                writeTimingRecords(allocator, config, test_records.items);
+                writeRwxResults(allocator, config, test_records.items);
                 return std.process.exit(0);
             },
 
@@ -422,14 +617,23 @@ fn mainServer(init: std.process.Init.Minimal, config: RunnerConfig) anyerror!voi
                         break :status .fail;
                     },
                 };
-                timing_records.append(allocator, .{
-                    .test_index = selected_indices[metadata_index],
-                    .duration_ns = nowNs() - started_ns,
-                }) catch {};
+                const duration_ns = nowNs() - started_ns;
 
                 testing.io_instance.deinit();
                 const leak_count = testing.allocator_instance.detectLeaks();
                 testing.allocator_instance.deinitWithoutLeakChecks();
+
+                test_records.append(allocator, .{
+                    .test_index = selected_indices[metadata_index],
+                    .duration_ns = duration_ns,
+                    .status = switch (status) {
+                        .pass => .pass,
+                        .skip => .skip,
+                        else => .fail,
+                    },
+                    .leaked = leak_count > 0,
+                    .logged_errors = log_err_count > 0,
+                }) catch {};
 
                 try server.serveTestResults(.{
                     .index = metadata_index,
@@ -465,8 +669,8 @@ fn mainTerminal(init: std.process.Init.Minimal, config: RunnerConfig) void {
         @panic("unable to build selected test indices");
     };
     defer allocator.free(selected_indices);
-    var timing_records = std.ArrayList(TimingRecord).empty;
-    defer timing_records.deinit(allocator);
+    var test_records = std.ArrayList(TestRecord).empty;
+    defer test_records.deinit(allocator);
 
     const selected_count = selected_indices.len;
     var ok_count: usize = 0;
@@ -490,10 +694,6 @@ fn mainTerminal(init: std.process.Init.Minimal, config: RunnerConfig) void {
             .argv0 = .init(init.args),
             .environ = init.environ,
         });
-        defer {
-            testing.io_instance.deinit();
-            if (testing.allocator_instance.deinit() == .leak) leaks += 1;
-        }
         testing.log_level = .warn;
         testing.environ = init.environ;
         log_err_count = 0;
@@ -503,50 +703,64 @@ fn mainTerminal(init: std.process.Init.Minimal, config: RunnerConfig) void {
             std.debug.print("{d}/{d} {s}...", .{ selected_i, selected_count, test_fn.name });
         }
         const started_ns = nowNs();
-        if (test_fn.func()) |_| {
-            timing_records.append(allocator, .{
-                .test_index = test_i,
-                .duration_ns = nowNs() - started_ns,
-            }) catch {};
-            ok_count += 1;
-            test_node.end();
-            if (!have_tty) std.debug.print("OK\n", .{});
-        } else |err| switch (err) {
-            error.SkipZigTest => {
-                timing_records.append(allocator, .{
-                    .test_index = test_i,
-                    .duration_ns = nowNs() - started_ns,
-                }) catch {};
+        // Capture the outcome and dump the failure trace here (before any further fallible
+        // calls clobber the error-return trace), then tear down to learn the leak result.
+        var status: ResultStatus = .pass;
+        var caught_err: ?anyerror = null;
+        if (test_fn.func()) |_| {} else |err| {
+            caught_err = err;
+            switch (err) {
+                error.SkipZigTest => status = .skip,
+                else => {
+                    status = .fail;
+                    if (@errorReturnTrace()) |trace| std.debug.dumpErrorReturnTrace(trace);
+                },
+            }
+        }
+        const duration_ns = nowNs() - started_ns;
+        const logged_errors = log_err_count > 0;
+
+        testing.io_instance.deinit();
+        const leaked = testing.allocator_instance.deinit() == .leak;
+        if (leaked) leaks += 1;
+
+        switch (status) {
+            .pass => {
+                ok_count += 1;
+                if (!have_tty) std.debug.print("OK\n", .{});
+            },
+            .skip => {
                 skip_count += 1;
                 if (have_tty) {
                     std.debug.print("{d}/{d} {s}...SKIP\n", .{ selected_i, selected_count, test_fn.name });
                 } else {
                     std.debug.print("SKIP\n", .{});
                 }
-                test_node.end();
             },
-            else => {
-                timing_records.append(allocator, .{
-                    .test_index = test_i,
-                    .duration_ns = nowNs() - started_ns,
-                }) catch {};
+            .fail => {
                 fail_count += 1;
                 if (have_tty) {
                     std.debug.print("{d}/{d} {s}...FAIL ({t})\n", .{
-                        selected_i, selected_count, test_fn.name, err,
+                        selected_i, selected_count, test_fn.name, caught_err.?,
                     });
                 } else {
-                    std.debug.print("FAIL ({t})\n", .{err});
+                    std.debug.print("FAIL ({t})\n", .{caught_err.?});
                 }
-                if (@errorReturnTrace()) |trace| {
-                    std.debug.dumpErrorReturnTrace(trace);
-                }
-                test_node.end();
             },
         }
+        test_node.end();
+
+        test_records.append(allocator, .{
+            .test_index = test_i,
+            .duration_ns = duration_ns,
+            .status = status,
+            .leaked = leaked,
+            .logged_errors = logged_errors,
+        }) catch {};
     }
     root_node.end();
-    writeTimingRecords(allocator, config, timing_records.items);
+    writeTimingRecords(allocator, config, test_records.items);
+    writeRwxResults(allocator, config, test_records.items);
 
     if (ok_count == selected_count) {
         std.debug.print("All {d} tests passed.\n", .{ok_count});

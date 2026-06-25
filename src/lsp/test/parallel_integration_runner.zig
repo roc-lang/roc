@@ -390,6 +390,10 @@ fn printUsage() void {
         \\  --timeout <ms>       Per-spec timeout in ms (default: 120000)
         \\  --verbose            Show PASS results with timing
         \\  --stats-json <path>  Write MiniCI harness stats JSON
+        \\  --roc-test-rwx-out=<DIR>     Write rwx-v1-json results to <DIR>/<suite>.json (Captain)
+        \\  --roc-test-suite=<NAME>      Suite name for rwx ids + filename (default: lsp)
+        \\  --roc-test-file=<PATH>       Reported location.file for every test
+        \\  --roc-test-only-json=<PATH>  Run only specs whose id is listed (Captain retry)
         \\
     , .{});
 }
@@ -414,10 +418,28 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
         return;
     }
 
-    const specs = try buildSpecs(arena, args.filters);
+    var specs = try buildSpecs(arena, args.filters);
     if (specs.len == 0) {
         std.debug.print("No LSP integration specs matched filters.\n", .{});
         return;
+    }
+
+    // Targeted retry (Captain's {{ jsonFilePath }}): keep only specs whose rwx id is listed.
+    // Applied before the worker branches so worker modes see the same restricted set.
+    if (args.rwx_only_json) |only_path| {
+        if (harness.loadOnlyJsonIds(gpa, init.io, only_path)) |loaded| {
+            var only = loaded;
+            defer only.deinit();
+            const suite = args.rwx_suite orelse "lsp";
+            var kept: std.ArrayListUnmanaged(integration.Spec) = .empty;
+            for (specs) |spec| {
+                const id = harness.rwxTestId(gpa, suite, spec.name) catch continue;
+                defer gpa.free(id);
+                if (only.contains(id)) kept.append(arena, spec) catch {};
+            }
+            specs = kept.items;
+            if (specs.len == 0) return;
+        }
     }
 
     if (args.worker_index) |idx| {
@@ -479,6 +501,31 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
 
     if (args.stats_json_path) |path| {
         try writeStatsJson(gpa, init.io, path, specs, results, spans);
+    }
+
+    // rwx-v1-json reporter for Captain (no-op unless --roc-test-rwx-out is set). Built before
+    // the loop below since it frees the failure messages referenced inline.
+    if (args.rwx_out) |rwx_dir| {
+        const suite = args.rwx_suite orelse "lsp";
+        const file = args.rwx_file orelse "src/lsp/test/parallel_integration_runner.zig";
+        if (gpa.alloc(harness.RwxRecord, specs.len)) |rwx_records| {
+            defer gpa.free(rwx_records);
+            for (specs, results, 0..) |spec, result, i| {
+                const kind: []const u8 = switch (result.status) {
+                    .pass => "successful",
+                    .skip => "skipped",
+                    .timeout => "timedOut",
+                    .fail, .crash => "failed",
+                };
+                rwx_records[i] = .{
+                    .name = spec.name,
+                    .status_kind = kind,
+                    .duration_ns = result.duration_ns,
+                    .message = result.message,
+                };
+            }
+            harness.writeRwxResults(gpa, init.io, rwx_dir, suite, file, rwx_records) catch {};
+        } else |_| {}
     }
 
     var has_failure = false;

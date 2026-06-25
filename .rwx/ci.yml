@@ -1,0 +1,607 @@
+on:
+  # Match GHA (ci_manager.yml) — CI runs on pull requests. No push trigger (GHA has none here).
+  github:
+    pull_request:
+      init:
+        commit-sha: ${{ event.git.sha }}
+        pr-number: ${{ event.github.pull_request.number }}
+  cli:
+    init:
+      commit-sha: ${{ event.git.sha }}
+      pr-number: ''
+
+# Match GHA's `concurrency: cancel-in-progress` (grouped per ref): a new commit on a PR cancels
+# the superseded run. Scoped to PR runs via `if` so local `rwx run` iterations (pr-number empty)
+# aren't cancelled. Pool ids are org-global, so the id is repo-qualified to avoid collisions.
+concurrency-pools:
+  - id: roc-lang/roc:ci-pr-${{ init.pr-number }}
+    if: ${{ init.pr-number != '' }}
+    capacity: 1
+    on-overflow: cancel-running
+
+base:
+  image: ubuntu:24.04
+  config: rwx/base 1.1.1
+
+# Tool caches (incremental compile state) live in the scratch dylan-roc vault.
+# It's unlocked, so CLI runs can write; migrates to the proper cache vault at step 3.
+tool-cache:
+  vault: dylan-roc
+
+tasks:
+  # ============================================================ setup
+  # Clone roc (public repo, tokenless). NO .git here: preserving it would change
+  # the cache key on every commit and bust hits for the build anchors and leaves.
+  # Only the two git-specific checks use the separate `code-git` clone below.
+  - key: code
+    call: git/clone 2.0.7
+    with:
+      repository: https://github.com/roc-lang/roc.git
+      ref: ${{ init.commit-sha }}
+
+  # Git-bearing clone — ONLY for checks that genuinely need .git (snapshot
+  # zero-drift `git diff`, and run-check-git-lints which otherwise skips itself).
+  # This one busts cache per-commit by design; the expensive anchors don't.
+  - key: code-git
+    call: git/clone 2.0.7
+    with:
+      repository: https://github.com/roc-lang/roc.git
+      ref: ${{ init.commit-sha }}
+      preserve-git-dir: true
+
+  # Install pinned Zig 0.16.0 (no RWX zig package exists). Extracted into $HOME
+  # (OUTSIDE the workspace) and PATH-ed there; $PATH is auto-merged across `use:`
+  # deps. Living outside /var/mint-workspace is what lets the positive, workspace-
+  # relative input filters stay pure-source without whiting out the toolchain.
+  # The local zig build cache is pinned to $HOME/.zig-cache for the same reason
+  # (so the anchors' positive filter need not list — and thereby churn on — it).
+  # Dependency-download is isolated here as the single retryable network boundary.
+  - key: zig-x64
+    run: |
+      set -euo pipefail
+      ZIG_VERSION=0.16.0
+      ZIG_DIR="zig-x86_64-linux-${ZIG_VERSION}"
+      URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_DIR}.tar.xz"
+      for attempt in 1 2 3; do
+        if curl -fsSL --retry 3 -o zig.tar.xz "$URL"; then break; fi
+        echo "zig download attempt ${attempt} failed; retrying" >&2
+        sleep 5
+      done
+      tar -xf zig.tar.xz -C "$HOME"
+      rm zig.tar.xz
+      mkdir -p "$HOME/.zig-cache"
+      echo "$HOME/${ZIG_DIR}" > "$RWX_ENV/PATH"
+      echo "$HOME/.zig-cache" > "$RWX_ENV/ZIG_LOCAL_CACHE_DIR"
+      "$HOME/${ZIG_DIR}/zig" version
+
+  # Captain CLI — inline per-test results, targeted retry, and timing-balanced
+  # partitioning for the Zig unit suites (see .captain/config.yml). Secret-free:
+  # RWX provides Captain its access token automatically.
+  - key: captain
+    call: rwx/install-captain 1.1.7
+
+  # ============================================================ source-only gates
+  # Pure source/grep/perl checks — no compiled binaries needed, so they run in
+  # parallel with the build instead of waiting on the anchor (build.zig:4091-4115).
+  # POSITIVE input filter: include ONLY the build inputs. Anything outside this set
+  # (docs, design/, devtools/, examples/, root *.md, …) is whited out, so changes to
+  # them are a content-cache HIT. Safe because the toolchain + zig cache live in
+  # $HOME (outside the workspace, so the filter never touches them). `&pos-build` is
+  # defined here (first filtered task) and referenced by the anchors + zig-deps.
+  - key: source-gates
+    use: [code, zig-x64]
+    filter: &pos-build
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details  # embedded into the roc binary via addAnonymousImport (build.zig:5042)
+    run: |
+      set -euo pipefail
+      zig build run-check-zig-format
+      zig build run-check-type-checker-patterns
+      zig build run-check-enum-from-int-zero
+      zig build run-check-unused-suppression
+      zig build run-check-semantic-audit
+      zig build run-check-postcheck-architecture
+      zig build run-check-panic
+      zig build run-check-cli-global-stdio
+
+  # Dependency fetch — the single network boundary. Fetches all build.zig.zon deps
+  # once into Zig's global cache (~/.cache/zig); the whole filesystem carries
+  # across `use:`, so the build anchors compile offline (no per-anchor fetch idle,
+  # and the flaky HttpConnectionClosing surface is confined to this one retried task).
+  - key: zig-deps-x64
+    use: [code, zig-x64]
+    filter: *pos-build
+    run: |
+      # The ONLY network boundary — retry transient fetch flakes here (faithful
+      # port of GHA .github/actions/flaky-retry) so the build anchors run offline
+      # and need no retry of their own. RWX injects `set -e`; `set +e` lets us
+      # inspect+retry, and $PIPESTATUS (bash) reads the exit through the tee pipe.
+      # NOTE: `--fetch` only gets EAGER build.zig.zon deps. x86_64 build-ci needs
+      # only those (it skips kcov), so no lazy `zig fetch` is required here.
+      set +e
+      pattern="HttpConnectionClosing|EndOfStream|503|Timeout|WriteFailed|TemporaryNameServerFailure|cannot download|ConnectionResetByPeer|ConnectionTimedOut|FetchFailed|invalid HTTP response|bad HTTP response"
+      attempt=1; max=5
+      while :; do
+        zig build build-ci -Dfuzz -Dsystem-afl=false --fetch 2>&1 | tee /tmp/fetch.out
+        rc=${PIPESTATUS[0]}
+        [ "$rc" -eq 0 ] && break
+        if [ "$attempt" -ge "$max" ] || ! grep -qE "$pattern" /tmp/fetch.out; then exit "$rc"; fi
+        attempt=$((attempt+1)); echo ">>> transient fetch failure; retry ${attempt}/${max} in 10s" >&2; sleep 10
+      done
+
+  # ============================================================ DEBUG anchor
+  # The single cached Debug compile. On Linux x86_64 the build defaults to musl +
+  # x86_64_v3 (build.zig:2215-2227) and Debug optimize (:2229), matching GHA.
+  # Consumed by every debug-config leaf; eval/cli --llvm are runtime flags (LLVM
+  # is statically linked unconditionally) so they reuse this anchor too.
+  # No retry: deps are pre-fetched by zig-deps-x64, so this runs offline and fails
+  # fast on real compile errors.
+  - key: build-ci-x64
+    use: [code, zig-x64, zig-deps-x64]
+    # Positive filter: only the build inputs affect this anchor's cache key, so any
+    # change outside them (docs, design/, examples/, root *.md, …) is a HIT. The zig
+    # toolchain + local cache live in $HOME (outside the workspace), so they survive
+    # this workspace-relative filter and the tool-cache warm-restore is untouched.
+    filter: *pos-build
+    tool-cache: ci-build-ci-x64  # persist .zig-cache + ~/.cache/zig → warm runs skip the build-runner compile & recompile only changed modules
+    timeout: 45m
+    agent:
+      cpus: 32
+      memory: 64gb
+    run: |
+      set -euo pipefail
+      # -Droc-test-runner so the module + standalone test binaries are compiled ONCE here with
+      # the custom runner; the Captain unit partitions then cache-hit and only RUN (no per-
+      # partition recompile). Doesn't affect the roc compiler / check tools / other runners.
+      zig build build-ci -Droc-test-runner -Dfuzz -Dsystem-afl=false
+
+  # Tool/roc-dependent checks (need the prebuilt check tools + debug roc).
+  # Uses code-git: run-check-tidy (git ls-files) and run-check-zig-lints
+  # (git diff vs origin/main) both require a git worktree.
+  - key: gates
+    use: [build-ci-x64, code-git]
+    run: |
+      set -euo pipefail
+      zig build run-check-zig-lints
+      zig build run-check-tidy
+      zig build run-check-test-wiring
+      zig build run-check-builtin-format
+      zig build run-check-fx-platform-test-coverage
+      zig build run-test-serialization-sizes
+
+  # git-lints needs .git (run-check-git-lints skips itself without a worktree),
+  # so it uses code-git. Kept separate from `gates` so the other checks stay
+  # cacheable across commits.
+  - key: git-lints
+    use: [build-ci-x64, code-git]
+    run: |
+      set -euo pipefail
+      zig build run-check-git-lints
+      # GHA ci_zig.yml `check-once` parity: no tracked plan.md files allowed. Needs a real
+      # git worktree (git ls-files), which code-git provides and the .git-less `code` clone does not.
+      matches="$(git ls-files -- ':(glob)**/plan.md')"
+      if [ -n "$matches" ]; then
+        echo "Tracked plan.md files are not allowed:"
+        echo "$matches"
+        exit 1
+      fi
+
+  # Test-execution leaves need more than the default 2c/8g (they OOM), but are
+  # CPU-bound and memory-light — so compute-optimized 8c/16g (not 8c/32g) via the
+  # &test-agent alias. Cheap lint/format/check leaves stay on 2c/8g.
+  # Captain runs roc's custom runner (-Droc-test-runner; binaries pre-built by the anchor so
+  # this only RUNS them), emits rwx-v1-json per module, and gives inline per-test results +
+  # "retry failed tests" via outputs.test-results. See .captain/config.yml (roc-unit-debug).
+  # NOT partitioned: with the anchor pre-build, running all ~2800 module tests is ~14s, so
+  # `parallel:` only saved ~9s wall while paying the ~64s/agent fixed cost (tool-cache download
+  # + build-graph eval) N times. The partition config/globs/flags stay wired — re-add
+  # `parallel: N` here if the suite grows enough to be worth it.
+  - key: unit-debug
+    use: [build-ci-x64, captain]
+    # Leaf positive filter: build inputs + the anchor's compiled binaries (zig-out).
+    # zig-out is consumed via the filesystem layer (zig build run-* / ./zig-out/bin
+    # expect it at the cwd-relative project path). `.zig-cache` + toolchain are in
+    # $HOME, so they're inherited unfiltered. Defined here (first leaf).
+    filter: &pos-leaf
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details
+      - zig-out
+      - .captain  # Captain suite config (.captain/config.yml); without it `captain run` finds no command
+    agent: &test-agent
+      cpus: 8
+      memory: 16gb
+    run: |
+      set -euo pipefail
+      captain run roc-unit-debug
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-unit-debug.json
+
+  # 4c/8g — measured faster AND more consistent than 2c (4c ~167-174s vs 2c ~181-270s
+  # exec, benchmarked with cache:false). The snapshot *regeneration* is single-threaded
+  # under --debug (src/snapshot_tool/main.zig:726-728), but the rest of the exec (LLVM
+  # relink of snapshot_exe, write_compiled_builtins, build runner) is multi-threaded and
+  # benefits; 2c also contends more (high variance). 4 cores is the sweet spot — the
+  # single-threaded regen means more cores wouldn't help further.
+  - key: snapshots
+    use: [build-ci-x64, code-git]
+    agent:
+      cpus: 4
+      memory: 8gb
+    run: |
+      set -euo pipefail
+      zig build run-check-snapshots -- --debug
+      git diff --exit-code test/snapshots
+
+  - key: eval-llvm
+    use: [build-ci-x64, captain]
+    filter: *pos-leaf
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-eval
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-eval.json
+
+  # run-test-cli exercises the fx platform tests, whose test/fx/file_import_str.roc
+  # imports CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc — so this leaf
+  # (and `platforms`) must keep CONTRIBUTING/profiling on top of the leaf inputs.
+  # `&pos-cli` defined here; referenced by `platforms` below.
+  - key: cli-llvm
+    use: [build-ci-x64, captain]
+    filter: &pos-cli
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details
+      - zig-out
+      - .captain  # Captain suite config; without it `captain run` finds no command
+      # Data files imported by the CLI test fixtures (run-test-cli): test/fx
+      # imports CONTRIBUTING/profiling/…, test/echo/all_syntax_test.roc imports
+      # the repo-root README.md. Both must survive the filter or the tests fail
+      # with FILE NOT FOUND.
+      - CONTRIBUTING/profiling
+      - README.md
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-cli-llvm
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-cli-llvm.json
+
+  # CLI platform tests (interpreter + dev) + minimal roc-check smoke (debug roc).
+  - key: platforms
+    use: [build-ci-x64, captain]
+    filter: *pos-cli
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-cli-platforms
+      ./zig-out/bin/roc check ./CONTRIBUTING/profiling/bench_repeated_check.roc
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-cli-platforms.json
+
+  - key: dylib-archive
+    use: build-ci-x64
+    filter: *pos-leaf
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      zig build run-test-dylib
+      zig build run-test-archive
+
+  - key: playground
+    use: [build-ci-x64, captain]
+    filter: *pos-leaf
+    run: |
+      set -euo pipefail
+      captain run roc-playground
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-playground.json
+
+  - key: fuzz-repro
+    use: build-ci-x64
+    filter: *pos-leaf
+    env:
+      ROC_FUZZ_SEED: ${{ init.commit-sha }}
+    run: |
+      set -euo pipefail
+      # python3 is present on the rwx/base image (verified).
+      for target in tokenize parse canonicalize typecheck; do
+        export ROC_FUZZ_TARGET="$target"
+        export ROC_FUZZ_INPUT="/tmp/roc-${target}-fuzz-input"
+        python3 - <<'PY'
+      import base64, hashlib, os, pathlib
+      seed = os.environ["ROC_FUZZ_SEED"]
+      target = os.environ["ROC_FUZZ_TARGET"]
+      data = bytearray()
+      for index in range(8):
+          data.extend(hashlib.sha256(f"{seed}:{target}:{index}".encode()).digest())
+      path = pathlib.Path(os.environ["ROC_FUZZ_INPUT"])
+      path.write_bytes(data)
+      print(f"{target} fuzz seed: {seed}")
+      print(f"{target} fuzz input base64: {base64.b64encode(data).decode()}")
+      PY
+        zig build "run-repro-${target}" -- "$ROC_FUZZ_INPUT"
+      done
+
+  # ============================================================ cross-compile (compile-only)
+  # GHA ci_zig.yml `zig-cross-compile`: compile-only checks that roc builds for each cross
+  # target (no execution). Runs on every build like the anchors; the *pos-build filter makes
+  # docs/test-only changes a HIT. x64-only — cross output is build-host-independent and GHA
+  # runs it x64-only too.
+  #
+  # The roc-cross-compile / on-target-run job (ci_cross_compile.yml) deliberately STAYS on GHA:
+  # it builds from 4 hosts (3 are mac/win — never on RWX) and its on-target check runs every
+  # host's binary together on one target runner. RWX can't reproduce that — arch is run-level so
+  # arm64 is an embedded run, and embedded runs are filesystem-isolated (only string init params
+  # cross the boundary, never the cross-built binary). So it's part of the mac/win GHA remainder.
+  #
+  # Each cross target lazily pulls its roc_deps_<target> (roc-bootstrap prebuilt deps). `zig build
+  # --fetch` only gets EAGER deps, so pre-fetch the lazy per-target deps here as a dedicated,
+  # retryable network boundary — kept separate from zig-deps-x64 so cross-dep churn doesn't bust
+  # the native anchor deps cache. Mirrors the arm64 zig-deps lazy-fetch pattern.
+  - key: zig-deps-cross-x64
+    use: [code, zig-x64]
+    # Narrow key: this task only reads build.zig.zon (greps the dep URLs) but build.zig MUST be in
+    # the filter too — `zig fetch <url>` errors "no build.zig file found" without a project root
+    # (validated). Keying on just these two — NOT *pos-build — means a src/test change is a HIT here;
+    # it only re-runs when build.zig OR build.zig.zon changes.
+    # No tool-cache on purpose: `zig fetch <url>` is URL-keyed (it downloads, THEN hashes), so it
+    # re-downloads even when the package is already in the global cache — verified: a warm 2.3 GB
+    # tool-cache restored, yet every dep still re-fetched. A tool-cache would just move the same
+    # ~2.3 GB over the wire for nothing. (Zig's hash-skip lives in `zig build`, not `zig fetch`.)
+    # Instead the 6 prebuilt bundles fetch in PARALLEL — independent downloads into distinct
+    # p/<hash> dirs. `zig fetch` is CPU-bound on decompression (`.tar.xz`/`.zip`, user≈real), not
+    # network, so wall time scales with cores: 4 cpus runs the 6 extractions in ~2 waves (~100s vs
+    # the ~290s serial sum). Memory stays small (8gb) — fetch/extract isn't memory-heavy.
+    agent:
+      cpus: 4
+      memory: 8gb
+    filter:
+      - build.zig
+      - build.zig.zon
+    run: |
+      set +e
+      # `zig fetch` of a .zip needs a seekable temp file in the global package cache's tmp dir; it
+      # doesn't makePath it first, so pre-create it. x86_64-windows-gnu is the only .zip dep. Each
+      # fetch gets its own random tmp subdir, so concurrent fetches don't collide.
+      mkdir -p "$HOME/.cache/zig/tmp" "$HOME/.cache/zig/p"
+      pattern="HttpConnectionClosing|EndOfStream|503|Timeout|WriteFailed|TemporaryNameServerFailure|cannot download|ConnectionResetByPeer|ConnectionTimedOut|FetchFailed|invalid HTTP response|bad HTTP response"
+      # Per-dep fetch with its own flaky-retry (faithful port of GHA .github/actions/flaky-retry);
+      # invoked as a background job per dep so all 6 download concurrently.
+      fetch_one() {
+        key="$1"
+        url=$(grep -A1 "\.${key} = " build.zig.zon | grep -oE 'https://[^"]+')
+        [ -n "$url" ] || { echo "[${key}] url not found in build.zig.zon" >&2; return 1; }
+        attempt=1; max=5
+        while :; do
+          out="/tmp/fetch.${key}.out"
+          zig fetch "$url" >"$out" 2>&1
+          rc=$?
+          sed "s|^|[${key}] |" "$out"
+          [ "$rc" -eq 0 ] && { echo "[${key}] done"; return 0; }
+          if [ "$attempt" -ge "$max" ] || ! grep -qE "$pattern" "$out"; then
+            echo "[${key}] fetch failed (rc=${rc}) after ${attempt} attempt(s)" >&2; return "$rc"
+          fi
+          attempt=$((attempt+1)); echo "[${key}] transient failure; retry ${attempt}/${max} in 10s" >&2; sleep 10
+        done
+      }
+      pids=""
+      for key in \
+        roc_deps_aarch64_linux_musl \
+        roc_deps_arm_linux_musleabihf \
+        roc_deps_x86_linux_musl \
+        roc_deps_aarch64_macos_none \
+        roc_deps_x86_64_macos_none \
+        roc_deps_x86_64_windows_gnu; do
+        echo "fetching lazy cross dep ${key}"
+        fetch_one "$key" &
+        pids="$pids $!"
+      done
+      rc=0
+      for p in $pids; do wait "$p" || rc=1; done
+      exit "$rc"
+
+  # Compile-only matrix (6 targets), structured like a build anchor: offline build off the deps
+  # boundary, own per-target tool-cache. Per-target cache name is REQUIRED — a tool cache is
+  # initial + 3 incremental layers and resets on the 4th, so sharing one name across the 6 matrix
+  # variants would thrash (each target reset the others).
+  - key: zig-cross-compile
+    use: [code, zig-x64, zig-deps-x64, zig-deps-cross-x64]
+    filter: *pos-build
+    tool-cache: ci-zig-cross-${{ parallel.target }}
+    timeout: 45m
+    # Match the build anchors: Compute-Optimized 32c/64gb. A full `zig build` of roc is
+    # memory-heavy (LLVM/link peak) — 32gb (CO 16c) OOMs; 64gb is the next CO tier (32c) and is
+    # what the anchors use to build roc with even more pressure (-Droc-test-runner -Dfuzz).
+    agent:
+      cpus: 32
+      memory: 64gb
+    parallel:
+      matrix:
+        target:
+          - aarch64-linux-musl
+          - arm-linux-musleabihf
+          - x86-linux-musl
+          - aarch64-macos-none
+          - x86_64-macos-none
+          - x86_64-windows-gnu
+    run: |
+      set -euo pipefail
+      zig build -Dtarget=${{ parallel.target }}
+
+  # ============================================================ tracy compile-check
+  # Anti-bitrot: ensure the Tracy-instrumented build still compiles (-Dno-bin).
+  - key: tracy-src
+    call: git/clone 2.0.7
+    with:
+      repository: https://github.com/wolfpld/tracy.git
+      ref: v0.11.0
+      path: tracy
+
+  # tracy-check is a full compiler compile (with Tracy instrumentation), not a
+  # cheap check — it needs compile-class CPU + a longer timeout + its own
+  # tool-cache (distinct -Dtracy config, so it can't share build-ci's cache).
+  - key: tracy-check
+    use: [code, zig-x64, zig-deps-x64, tracy-src]
+    # pos-build inputs plus the tracy/ clone this build consumes (-Dtracy=./tracy).
+    # Can't reuse *pos-build (it lacks tracy/), so the include set is inline.
+    filter:
+      - build.zig
+      - build.zig.zon
+      - src
+      - test
+      - ci
+      - vendor
+      - legal_details
+      - tracy
+    tool-cache: ci-tracy-check
+    timeout: 45m
+    agent:
+      cpus: 16
+      memory: 32gb
+    run: |
+      set -euo pipefail
+      zig build -Dno-bin -Dfuzz -Dtracy=./tracy
+
+  # ============================================================ RELEASE anchor
+  # ReleaseFast musl/x86_64_v3 — separate compilation from Debug (no artifact
+  # sharing). Serves release unit tests + the static-link assertion on the
+  # distribution binary.
+  - key: build-release-x64
+    use: [code, zig-x64, zig-deps-x64]
+    filter: *pos-build
+    tool-cache: ci-build-release-x64
+    timeout: 45m
+    agent:
+      cpus: 32
+      memory: 64gb
+    run: |
+      set -euo pipefail
+      # -Droc-test-runner: pre-build the custom-runner test binaries (see build-ci-x64) so the
+      # ReleaseFast unit partitions cache-hit and only run.
+      zig build build-ci -Droc-test-runner -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false
+
+  # Module unit tests in ReleaseFast via Captain (single task — see unit-debug; not worth
+  # partitioning).
+  - key: unit-release
+    use: [build-release-x64, captain]
+    filter: *pos-leaf
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-unit-release
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-unit-release.json
+
+  # LSP integration specs — bespoke fork-based runner, now in Captain (was part of the old
+  # plain `unit-misc` non-module run). rwx-v1-json from its parent via the shared reporter.
+  - key: lsp
+    use: [build-ci-x64, captain]
+    filter: *pos-leaf
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-lsp
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-lsp.json
+
+  # fx / http / json / watch platform tests — Zig-native (b.addTest), reuse the unit runner's
+  # rwx-v1-json reporter via -Droc-test-runner. Needs pos-cli inputs (the fx platform fixtures
+  # import CONTRIBUTING/profiling). Replaces the rest of the old plain `unit-misc` task.
+  - key: platform-tests
+    use: [build-ci-x64, captain]
+    filter: *pos-cli
+    agent: *test-agent
+    run: |
+      set -euo pipefail
+      captain run roc-platforms
+    outputs:
+      test-results:
+        - path: tmp/captain/roc-platforms.json
+
+  # System packages not on the rwx/base image (verified via probe), pulled into
+  # their own cached tasks. Leaves `use:` them so the apt layer is shared and
+  # not re-installed inline on every run.
+  - key: system-file
+    run: |
+      set -euo pipefail
+      sudo apt-get update && sudo apt-get install -y file
+
+  - key: system-valgrind
+    run: |
+      set -euo pipefail
+      # libc6-dbg is required for Valgrind's function redirections.
+      sudo apt-get update && sudo apt-get install -y valgrind libc6-dbg
+
+  - key: static-link
+    use: [build-release-x64, system-file]
+    filter: *pos-leaf
+    run: |
+      set -euo pipefail
+      file ./zig-out/bin/roc
+      file ./zig-out/bin/roc | grep "statically linked"
+
+  # ============================================================ VALGRIND anchor
+  # Special config: ReleaseFast musl/x86_64_v3, -Dstrip=false + larger shared
+  # memory (build.zig valgrind path). Distinct from the release anchor.
+  - key: build-valgrind-x64
+    use: [code, zig-x64, zig-deps-x64]
+    filter: *pos-build
+    tool-cache: ci-build-valgrind-x64
+    timeout: 45m
+    agent:
+      cpus: 32
+      memory: 64gb
+    run: |
+      set -euo pipefail
+      # Build ONLY what the valgrind leaf uses (roc + snapshot + test_runner + the str/int
+      # platform hosts), not the full default install. The default install also builds
+      # playground, eval/lsp runners, repro-* and playground tests — all with -Dstrip=false
+      # debug info that valgrind never runs. (libhost.a for x64musl is build-generated, not
+      # committed, so build-test-hosts is required for the str/int apps.)
+      zig build roc build-snapshot-tool build-test-runner build-test-hosts \
+        -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 \
+        -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+
+  - key: valgrind
+    use: [build-valgrind-x64, system-valgrind]
+    filter: *pos-leaf
+    agent: *test-agent
+    timeout: 30m
+    run: |
+      set -euo pipefail
+      valgrind --version
+      ./zig-out/bin/test_runner ./zig-out/bin/roc str --mode=valgrind --app=test/str/app.roc
+      ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=valgrind --app=test/int/app.roc
+      # Reuse the snapshot tool the build-valgrind-x64 anchor already built (inherited via
+      # use:) instead of rebuilding it from scratch here: valgrind_snapshots.sh rebuilds with
+      # the default target, which misses the anchor's -Dcpu/-Dtarget cache key (~406s wasted).
+      SNAPSHOT_BIN=./zig-out/bin/snapshot ./ci/valgrind_snapshots.sh
+
+  # ============================================================ arm64 leg
+  # arch is run-level, so the arm64 matrix is an embedded run with its own base.
+  - key: arm64
+    call: ${{ run.dir }}/ci-arm64.yml
+    init:
+      commit-sha: ${{ init.commit-sha }}

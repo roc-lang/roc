@@ -122,6 +122,26 @@ fn isNativeishOrMusl(target: ResolvedTarget) bool {
         (target.query.isNativeAbi() or target.result.abi.isMusl());
 }
 
+/// Target for build-time host tools (builtin_compiler, the ci/ check exes, …). It uses the
+/// host's arch/OS/ABI but pins a FIXED baseline CPU instead of the auto-detected native CPU
+/// that `b.graph.host` carries. CI runners are ephemeral and vary by CPU model (e.g. AMD
+/// EPYC 9R45 on the 32c anchor vs 9R14 on a 2c leaf); native targeting bakes the runner's CPU
+/// into Zig's compile cache key, so a tool built on one agent never cache-hits on another.
+/// That miss cascades: builtin_compiler → Builtin.bin → compiled_builtins → every artifact
+/// embedding the builtins recompiles from scratch. A baseline CPU is a subset of every agent's
+/// CPU (so the tool still runs everywhere) and the tools' output is CPU-independent, so pinning
+/// it only stabilizes the cache key. Using a canonical os version range (via resolveTargetQuery)
+/// also avoids cross-agent kernel-version differences leaking into the key.
+fn hostToolsTarget(b: *std.Build) ResolvedTarget {
+    const host = b.graph.host.result;
+    return b.resolveTargetQuery(.{
+        .cpu_arch = host.cpu.arch,
+        .os_tag = host.os.tag,
+        .abi = host.abi,
+        .cpu_model = .baseline,
+    });
+}
+
 const NativeSharedArchiveTarget = struct {
     resolved: ResolvedTarget,
     roc_name: []const u8,
@@ -1624,12 +1644,17 @@ fn createAndRunBuiltinCompiler(
     flag_enable_tracy: ?[]const u8,
     roc_files: []const []const u8,
 ) BuiltinCompilerRun {
-    // Build and run the compiler
+    // Build and run the compiler. Runs at build time on the *host*, but pin a baseline-CPU
+    // host target (not native b.graph.host) so the cache key is identical across CI runners
+    // with different CPUs — otherwise this exe (and the builtins it bakes) recompiles per
+    // agent and cascades into recompiling everything that embeds compiled_builtins. See
+    // hostToolsTarget.
+    const host_tools = hostToolsTarget(b);
     const builtin_compiler_exe = b.addExecutable(.{
         .name = "builtin_compiler",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-            .target = b.graph.host, // this runs at build time on the *host* machine!
+            .target = host_tools,
             // Kept Debug deliberately: this exe publishes + serializes the
             // builtin CheckedModuleArtifact (a few seconds of Debug run), but building
             // it ReleaseFast would optimize the whole check/eval closure (incl. the
@@ -1643,7 +1668,7 @@ fn createAndRunBuiltinCompiler(
             .link_libc = true,
         }),
     });
-    configureBackend(builtin_compiler_exe, b.graph.host);
+    configureBackend(builtin_compiler_exe, host_tools);
 
     // Add only the minimal modules needed for parsing/checking
     builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
@@ -1664,7 +1689,7 @@ fn createAndRunBuiltinCompiler(
     // is added here as a standalone module rooted at compile_time_finalization.zig.
     const comptime_finalizer_module = b.createModule(.{
         .root_source_file = b.path("src/eval/compile_time_finalization.zig"),
-        .target = b.graph.host,
+        .target = host_tools,
         .optimize = .Debug,
         .link_libc = true,
         .imports = &.{
@@ -1686,7 +1711,7 @@ fn createAndRunBuiltinCompiler(
     builtin_compiler_exe.root_module.addImport("comptime_finalizer", comptime_finalizer_module);
 
     // Add tracy support (required by parse/can/check modules)
-    add_tracy(b, roc_modules.build_options, builtin_compiler_exe, b.graph.host, false, flag_enable_tracy);
+    add_tracy(b, roc_modules.build_options, builtin_compiler_exe, host_tools, false, flag_enable_tracy);
 
     // Run the builtin compiler to generate .bin files in zig-out/builtins/
     const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
@@ -2224,6 +2249,37 @@ fn absoluteBuildPath(b: *std.Build, path: []const u8) []const u8 {
     return b.pathFromRoot(path);
 }
 
+/// Tag a standalone plain-unit test's run step for the rwx-v1-json reporter (suite name +
+/// file, and the output dir when set), mirroring what createModuleTests does for the 28
+/// modules. No-op when the custom runner is off. Lets these tests join the Captain suite.
+fn tagCaptainRun(
+    b: *std.Build,
+    run_step: *std.Build.Step.Run,
+    enabled: bool,
+    rwx_out: []const u8,
+    suite_name: []const u8,
+    suite_file: []const u8,
+) void {
+    if (!enabled) return;
+    run_step.addArgs(&.{
+        b.fmt("--roc-test-suite={s}", .{suite_name}),
+        b.fmt("--roc-test-file={s}", .{suite_file}),
+    });
+    if (rwx_out.len != 0) run_step.addArg(b.fmt("--roc-test-rwx-out={s}", .{rwx_out}));
+}
+
+/// Captain partition membership: true if `suite_file` is in the comma-separated `csv`
+/// (an empty csv means "no subset requested" → all files run). Used by the module loop and
+/// the standalone plain-unit tests so the same -Droc-test-files selection covers both.
+fn rocTestFileSelected(csv: []const u8, suite_file: []const u8) bool {
+    if (csv.len == 0) return true;
+    var it = std.mem.tokenizeScalar(u8, csv, ',');
+    while (it.next()) |entry| {
+        if (std.mem.eql(u8, std.mem.trim(u8, entry, " \t"), suite_file)) return true;
+    }
+    return false;
+}
+
 pub fn build(b: *std.Build) void {
     configureZigCacheEnvironment(b);
 
@@ -2329,6 +2385,26 @@ pub fn build(b: *std.Build) void {
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
     const glue_release_tag = b.option([]const u8, "glue-release-tag", "Nightly release tag used in generated glue package URLs");
+    // Opt-in: build module unit tests against roc's custom partitioned runner
+    // (test/zig_test_runner.zig) which adds an rwx-v1-json reporter + Captain-compatible
+    // selection. Default off → Zig's default runner (no behavior change for local `zig build`).
+    // Turned on in CI so RWX Captain gets per-test results, retry, and partitioning.
+    const roc_test_runner = b.option(bool, "roc-test-runner", "Build Zig unit tests against roc's custom partitioned runner + rwx-v1-json reporter (CI/Captain)") orelse false;
+    // rwx-v1-json reporter output directory. Empty = no reporter (parity mode). Each module
+    // writes <dir>/zig-tests-<module>.json; Captain globs+merges them. Requires -Droc-test-runner.
+    const roc_test_rwx_out = b.option([]const u8, "roc-test-rwx-out", "Directory for the rwx-v1-json test reporter output (empty = disabled)") orelse "";
+    // Captain partitioning: comma-separated subset of module root files (matching the
+    // partition globs / each test's location.file) to run this partition. Empty = all.
+    // Captain expands {{ testFiles }} into this option per RWX_PARALLEL_INDEX/TOTAL.
+    const roc_test_files_csv = b.option([]const u8, "roc-test-files", "Captain partition: comma-separated module root files to run (empty = all)") orelse "";
+    // run-test-zig scope split (so Captain-partitioned runs report counts that match what ran):
+    //   default                  → module tests + non-module standalone tests (LSP integration,
+    //                              snapshot-tool, builtin-doc, lir/trmc, cli-unit, watch, platform).
+    //   -Droc-test-files=<csv>    → ONLY the listed module tests (non-module excluded) — the
+    //                              partition path; each partition's count == Captain's count.
+    //   -Droc-test-nonmodule-only → ONLY the non-module standalone tests (run once, unpartitioned).
+    const roc_test_nonmodule_only = b.option(bool, "roc-test-nonmodule-only", "run-test-zig: run only the non-module standalone tests (LSP/snapshot-tool/platform/etc.)") orelse false;
+    const roc_test_modules_only = b.option(bool, "roc-test-modules-only", "run-test-zig: run only the 28 module unit tests (exclude the non-module standalone tests)") orelse false;
     if (shared_memory_size) |size| {
         if (size == 0) {
             std.log.err("-Dshared-memory-size must be greater than 0", .{});
@@ -2525,7 +2601,7 @@ pub fn build(b: *std.Build) void {
         .name = "zig_lints",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/zig_lints.zig"),
-            .target = b.graph.host,
+            .target = hostToolsTarget(b),
             .optimize = .Debug,
         }),
     });
@@ -2533,7 +2609,7 @@ pub fn build(b: *std.Build) void {
         .name = "tidy",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/tidy.zig"),
-            .target = b.graph.host,
+            .target = hostToolsTarget(b),
             .optimize = .Debug,
         }),
     });
@@ -2541,7 +2617,7 @@ pub fn build(b: *std.Build) void {
         .name = "check_test_wiring",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/check_test_wiring.zig"),
-            .target = b.graph.host,
+            .target = hostToolsTarget(b),
             .optimize = .Debug,
         }),
     });
@@ -2549,7 +2625,7 @@ pub fn build(b: *std.Build) void {
         .name = "minici",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/minici.zig"),
-            .target = b.graph.host,
+            .target = hostToolsTarget(b),
             .optimize = .Debug,
         }),
     });
@@ -2755,7 +2831,12 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    b.installArtifact(test_runner_exe);
+    const test_runner_install = b.addInstallArtifact(test_runner_exe, .{});
+    b.getInstallStep().dependOn(&test_runner_install.step);
+    // Named step so CI can build just the test_runner (e.g. the valgrind anchor, which only
+    // needs roc + snapshot + test_runner + test hosts, not the full default install).
+    const build_test_runner_step = b.step("build-test-runner", "Build the CLI/valgrind test_runner");
+    build_test_runner_step.dependOn(&test_runner_install.step);
 
     // Store CLI runner step reference so we can add glue host dependency later.
     var run_cli_test_step: ?*std.Build.Step = null;
@@ -3478,7 +3559,7 @@ pub fn build(b: *std.Build) void {
 
     // Build playground integration tests - now enabled for all optimization modes.
     const playground_test_install = blk: {
-        const playground_test_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSafe else optimize;
+        const playground_test_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSmall else optimize;
         const playground_wasm_target = b.resolveTargetQuery(.{
             .cpu_arch = .wasm32,
             .os_tag = .freestanding,
@@ -3924,7 +4005,7 @@ pub fn build(b: *std.Build) void {
     build_test_zig_step.dependOn(&install_stack_overflow_test_helper.step);
 
     // Create and add module tests
-    const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
+    const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters, roc_test_runner, roc_test_rwx_out);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
     if (builtin.os.tag == .windows) {
         // Zig 0.16's Windows test runner IPC can time out while many Roc test
@@ -3982,6 +4063,23 @@ pub fn build(b: *std.Build) void {
     }
     build_test_zig_step.dependOn(&guarded_list_violation_exe.step);
     run_test_zig_step.dependOn(run_guarded_list_violations_step);
+
+    // Captain partitioning: when -Droc-test-files names a subset of module root files, only
+    // *run* those modules in this partition. Every module is still built (the anchor needs
+    // them); we just gate which run steps the run-test-zig aggregate depends on.
+    const roc_test_files_selected = roc_test_files_csv.len != 0;
+    // Scope split (see the -Droc-test-nonmodule-only option). A partition (-Droc-test-files)
+    // is implicitly module-only so its reported count matches what ran.
+    const include_modules = !roc_test_nonmodule_only;
+    const include_non_module = roc_test_nonmodule_only or
+        (!roc_test_files_selected and !roc_test_modules_only);
+    // Custom runner for the standalone plain-unit tests (snapshot-tool, builtin-doc, lir-inline,
+    // trmc-lir, cli) — same wiring createModuleTests applies to the 28 modules, so these join the
+    // Captain suite too. null → Zig's default runner (opt-out path unchanged).
+    const captain_runner: ?Step.Compile.TestRunner = if (roc_test_runner)
+        .{ .path = b.path("test/zig_test_runner.zig"), .mode = .server }
+    else
+        null;
 
     for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to tests that canonicalize ordinary modules.
@@ -4074,6 +4172,17 @@ pub fn build(b: *std.Build) void {
 
         // Create run step that accepts command line args (including --test-filter)
         const individual_run = b.addRunArtifact(module_test.test_step);
+        if (roc_test_runner) {
+            // Mirror the suite tagging applied to the aggregate run step (in createModuleTests)
+            // so a standalone `run-test-zig-module-<name>` also emits a tagged rwx-v1-json file.
+            individual_run.addArgs(&.{
+                b.fmt("--roc-test-suite={s}", .{module_test.suite_name}),
+                b.fmt("--roc-test-file={s}", .{module_test.suite_file}),
+            });
+            if (roc_test_rwx_out.len != 0) {
+                individual_run.addArg(b.fmt("--roc-test-rwx-out={s}", .{roc_test_rwx_out}));
+            }
+        }
         if (run_args.len != 0) {
             individual_run.addArgs(run_args);
         }
@@ -4084,7 +4193,13 @@ pub fn build(b: *std.Build) void {
 
         b.default_step.dependOn(&module_test.test_step.step);
         build_test_zig_step.dependOn(&module_test.test_step.step);
-        tests_summary.addRun(&module_test.run_step.step);
+
+        // Partition gate: only run this module in the aggregate when it's in the selected
+        // subset (or no subset was requested). csv membership matched on the repo-relative
+        // root file (== each test's reported location.file, what Captain balances over).
+        if (include_modules and rocTestFileSelected(roc_test_files_csv, module_test.suite_file)) {
+            tests_summary.addRun(&module_test.run_step.step);
+        }
     }
 
     const lsp_integration_test_harness_module = createTestHarnessModule(b, roc_modules);
@@ -4123,7 +4238,7 @@ pub fn build(b: *std.Build) void {
 
     b.default_step.dependOn(&lsp_integration_runner_exe.step);
     build_test_zig_step.dependOn(&lsp_integration_runner_exe.step);
-    run_test_zig_step.dependOn(&run_lsp_integration.step);
+    if (include_non_module) run_test_zig_step.dependOn(&run_lsp_integration.step);
 
     // Add snapshot tool test
     const enable_snapshot_tests = b.option(bool, "snapshot-tests", "Enable snapshot tests") orelse true;
@@ -4137,6 +4252,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = captain_runner,
         });
         roc_modules.addAll(snapshot_test);
         snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -4168,7 +4284,10 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_snapshot_test.addArgs(run_args);
         }
-        tests_summary.addRun(&run_snapshot_test.step);
+        tagCaptainRun(b, run_snapshot_test, roc_test_runner, roc_test_rwx_out, "snapshot_tool", "src/snapshot_tool/main.zig");
+        if (include_modules and rocTestFileSelected(roc_test_files_csv, "src/snapshot_tool/main.zig")) {
+            tests_summary.addRun(&run_snapshot_test.step);
+        }
 
         const run_snapshot_tool_test_step = b.step(
             "run-test-zig-snapshot-tool",
@@ -4192,6 +4311,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = captain_runner,
         });
         roc_modules.addAll(builtin_doc_test);
         builtin_doc_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -4220,7 +4340,10 @@ pub fn build(b: *std.Build) void {
             run_builtin_doc_test.addArgs(run_args);
         }
 
-        tests_summary.addRun(&run_builtin_doc_test.step);
+        tagCaptainRun(b, run_builtin_doc_test, roc_test_runner, roc_test_rwx_out, "builtin_doc", "src/eval/test/builtin_doc_tests.zig");
+        if (include_modules and rocTestFileSelected(roc_test_files_csv, "src/eval/test/builtin_doc_tests.zig")) {
+            tests_summary.addRun(&run_builtin_doc_test.step);
+        }
 
         const run_builtin_doc_test_step = b.step(
             "run-test-zig-builtin-doc",
@@ -4238,6 +4361,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
         .filters = test_filters,
+        .test_runner = captain_runner,
     });
     roc_modules.addAll(lir_inline_test);
     lir_inline_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -4266,7 +4390,10 @@ pub fn build(b: *std.Build) void {
         run_lir_inline_test.addArgs(run_args);
     }
 
-    tests_summary.addRun(&run_lir_inline_test.step);
+    tagCaptainRun(b, run_lir_inline_test, roc_test_runner, roc_test_rwx_out, "lir_inline", "src/eval/test/lir_inline_test.zig");
+    if (include_modules and rocTestFileSelected(roc_test_files_csv, "src/eval/test/lir_inline_test.zig")) {
+        tests_summary.addRun(&run_lir_inline_test.step);
+    }
 
     const run_lir_inline_test_step = b.step(
         "run-test-zig-lir-inline",
@@ -4283,6 +4410,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
         .filters = test_filters,
+        .test_runner = captain_runner,
     });
     roc_modules.addAll(trmc_lir_test);
     trmc_lir_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -4311,7 +4439,10 @@ pub fn build(b: *std.Build) void {
         run_trmc_lir_test.addArgs(run_args);
     }
 
-    tests_summary.addRun(&run_trmc_lir_test.step);
+    tagCaptainRun(b, run_trmc_lir_test, roc_test_runner, roc_test_rwx_out, "trmc_lir", "src/eval/test/trmc_lir_test.zig");
+    if (include_modules and rocTestFileSelected(roc_test_files_csv, "src/eval/test/trmc_lir_test.zig")) {
+        tests_summary.addRun(&run_trmc_lir_test.step);
+    }
 
     const run_trmc_lir_test_step = b.step(
         "run-test-zig-trmc-lir",
@@ -4331,6 +4462,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = captain_runner,
         });
         roc_modules.addAll(cli_test);
         linkWatchPlatformLibs(cli_test, target);
@@ -4360,7 +4492,10 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_cli_test.addArgs(run_args);
         }
-        tests_summary.addRun(&run_cli_test.step);
+        tagCaptainRun(b, run_cli_test, roc_test_runner, roc_test_rwx_out, "cli", "src/cli/main.zig");
+        if (include_modules and rocTestFileSelected(roc_test_files_csv, "src/cli/main.zig")) {
+            tests_summary.addRun(&run_cli_test.step);
+        }
 
         const run_cli_main_test_step = b.step(
             "run-test-zig-cli-main",
@@ -4381,6 +4516,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = captain_runner,
         });
         roc_modules.addAll(watch_test);
         add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
@@ -4394,7 +4530,10 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_watch_test.addArgs(run_args);
         }
-        tests_summary.addRun(&run_watch_test.step);
+        // Suite name "watch_cli" (not "watch") so its ids don't collide with the watch *module*
+        // test that already runs in Captain (same src/watch/watch.zig source → same test names).
+        tagCaptainRun(b, run_watch_test, roc_test_runner, roc_test_rwx_out, "watch_cli", "src/watch/watch.zig");
+        if (include_non_module) tests_summary.addRun(&run_watch_test.step);
 
         const run_watch_cli_test_step = b.step(
             "run-test-zig-watch-cli",
@@ -4805,6 +4944,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = captain_runner,
         });
 
         const run_fx_platform_test = b.addRunArtifact(fx_platform_test);
@@ -4817,7 +4957,8 @@ pub fn build(b: *std.Build) void {
         run_fx_platform_test.step.dependOn(final_static_data_platform_step);
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
         run_fx_platform_test.step.dependOn(build_roc_step);
-        tests_summary.addRun(&run_fx_platform_test.step);
+        tagCaptainRun(b, run_fx_platform_test, roc_test_runner, roc_test_rwx_out, "fx_platform", "src/cli/test/fx_platform_test.zig");
+        if (include_non_module) tests_summary.addRun(&run_fx_platform_test.step);
 
         const run_fx_platform_zig_test_step = b.step(
             "run-test-zig-fx-platform",
@@ -4900,6 +5041,7 @@ pub fn build(b: *std.Build) void {
                     .link_libc = true,
                 }),
                 .filters = test_filters,
+                .test_runner = captain_runner,
             });
 
             const run_http_header_decoder_platform_test = b.addRunArtifact(http_header_decoder_platform_test);
@@ -4911,6 +5053,8 @@ pub fn build(b: *std.Build) void {
             run_http_header_decoder_platform_test.step.dependOn(final_http_host_step);
             run_http_header_decoder_platform_test.step.dependOn(&install_http_app.step);
             run_http_header_decoder_platform_test.step.dependOn(build_roc_step);
+            // The dedicated run-test-zig-http-header-decoder-platform step is what Captain invokes.
+            tagCaptainRun(b, run_http_header_decoder_platform_test, roc_test_runner, roc_test_rwx_out, "http_platform", "src/cli/test/http_header_decoder_platform_test.zig");
 
             const run_http_header_decoder_platform_test_for_summary = b.addRunArtifact(http_header_decoder_platform_test);
             run_http_header_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_HTTP_HEADER_DECODER_PREBUILT_EXE", http_app_installed_path);
@@ -4920,7 +5064,7 @@ pub fn build(b: *std.Build) void {
             run_http_header_decoder_platform_test_for_summary.step.dependOn(final_http_host_step);
             run_http_header_decoder_platform_test_for_summary.step.dependOn(&install_http_app.step);
             run_http_header_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
-            tests_summary.addRun(&run_http_header_decoder_platform_test_for_summary.step);
+            if (include_non_module) tests_summary.addRun(&run_http_header_decoder_platform_test_for_summary.step);
 
             const run_http_header_decoder_platform_zig_test_step = b.step(
                 "run-test-zig-http-header-decoder-platform",
@@ -5017,6 +5161,7 @@ pub fn build(b: *std.Build) void {
                     .link_libc = true,
                 }),
                 .filters = test_filters,
+                .test_runner = captain_runner,
             });
 
             const run_json_decoder_platform_test = b.addRunArtifact(json_decoder_platform_test);
@@ -5032,6 +5177,8 @@ pub fn build(b: *std.Build) void {
             run_json_decoder_platform_test.step.dependOn(&install_json_camel_app.step);
             run_json_decoder_platform_test.step.dependOn(&install_json_camel_direct_app.step);
             run_json_decoder_platform_test.step.dependOn(build_roc_step);
+            // The dedicated run-test-zig-json-decoder-platform step is what Captain invokes.
+            tagCaptainRun(b, run_json_decoder_platform_test, roc_test_runner, roc_test_rwx_out, "json_platform", "src/cli/test/json_decoder_platform_test.zig");
 
             const run_json_decoder_platform_test_for_summary = b.addRunArtifact(json_decoder_platform_test);
             run_json_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_JSON_DECODER_PREBUILT_EXE", json_app_installed_path);
@@ -5045,7 +5192,7 @@ pub fn build(b: *std.Build) void {
             run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_camel_app.step);
             run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_camel_direct_app.step);
             run_json_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
-            tests_summary.addRun(&run_json_decoder_platform_test_for_summary.step);
+            if (include_non_module) tests_summary.addRun(&run_json_decoder_platform_test_for_summary.step);
 
             const run_json_decoder_platform_zig_test_step = b.step(
                 "run-test-zig-json-decoder-platform",

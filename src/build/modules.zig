@@ -272,6 +272,12 @@ fn targetMatchesHost(target: ResolvedTarget) bool {
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
     run_step: *Step.Run,
+    /// Module name (e.g. "collections"); used by the rwx-v1-json reporter as the
+    /// per-binary output filename and the test-id prefix.
+    suite_name: []const u8,
+    /// Repo-relative path of the module's root source file (e.g. "src/collections/mod.zig");
+    /// used as the rwx-v1-json `location.file` and as the unit Captain partitions over.
+    suite_file: []const u8,
 };
 
 /// Bundles the per-module test steps with accounting for forced passes (aggregators +
@@ -697,6 +703,14 @@ pub const RocModules = struct {
         optimize: OptimizeMode,
         zstd: ?*Dependency,
         test_filters: []const []const u8,
+        // When true, build each module test against roc's custom partitioned runner
+        // (test/zig_test_runner.zig) instead of Zig's default runner, and tag each run
+        // step with its suite name + file so the runner's rwx-v1-json reporter can attribute
+        // results. Gated by the -Droc-test-runner build option (CI/Captain only).
+        roc_test_runner: bool,
+        // Directory for the rwx-v1-json reporter output (empty = reporter disabled). Passed to
+        // each module's run step as --roc-test-rwx-out so the runner writes per-module results.
+        roc_test_rwx_out: []const u8,
     ) ModuleTestsResult {
         const test_configs = [_]ModuleType{
             .collections,
@@ -742,6 +756,14 @@ pub const RocModules = struct {
                 const wrappers = wrapperTestCount(b, module_type, module);
                 forced_passes += wrappers;
             }
+            // Roc's partitioned runner keeps Zig's server-mode protocol + leak detection
+            // but adds the rwx-v1-json reporter and Captain-compatible selection. Opt-in:
+            // when off, module tests use Zig's default runner (no behavior change).
+            const test_runner: ?Step.Compile.TestRunner = if (roc_test_runner)
+                .{ .path = b.path("test/zig_test_runner.zig"), .mode = .server }
+            else
+                null;
+
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}", .{@tagName(module_type)}),
                 .root_module = b.createModule(.{
@@ -757,6 +779,7 @@ pub const RocModules = struct {
                     .link_libc = true,
                 }),
                 .filters = filter_injection.filters,
+                .test_runner = test_runner,
             });
 
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
@@ -778,9 +801,34 @@ pub const RocModules = struct {
 
             const run_step = b.addRunArtifact(test_step);
 
+            // Repo-relative path of the module's root source file. All 28 module configs
+            // are created via b.path("src/.../mod.zig") (a .src_path LazyPath); fall back to
+            // the module name for any non-path root (none today).
+            const suite_name = @tagName(module_type);
+            const suite_file: []const u8 = switch (module.root_source_file.?) {
+                .src_path => |sp| sp.sub_path,
+                else => suite_name,
+            };
+
+            // Tag the run with its suite identity so the custom runner's rwx-v1-json reporter
+            // can name its output file (zig-tests-<suite>.json), set each test's location.file,
+            // and prefix test ids for global uniqueness. Only valid for the custom runner —
+            // Zig's default runner rejects unknown args, so gate on roc_test_runner.
+            if (roc_test_runner) {
+                run_step.addArgs(&.{
+                    b.fmt("--roc-test-suite={s}", .{suite_name}),
+                    b.fmt("--roc-test-file={s}", .{suite_file}),
+                });
+                if (roc_test_rwx_out.len != 0) {
+                    run_step.addArg(b.fmt("--roc-test-rwx-out={s}", .{roc_test_rwx_out}));
+                }
+            }
+
             tests[i] = .{
                 .test_step = test_step,
                 .run_step = run_step,
+                .suite_name = suite_name,
+                .suite_file = suite_file,
             };
         }
 

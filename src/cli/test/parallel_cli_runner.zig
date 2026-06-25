@@ -557,7 +557,10 @@ fn appendPlatformSpecs(
             for (io_specs) |spec| {
                 if (skipIoSpecOnHost(spec)) continue;
 
-                const name = try fmtTestName(allocator, spec.roc_file, opt);
+                // Include the spec description: a single roc_file can have multiple io_specs
+                // (e.g. test/fx/stdin_while_uaf.roc), which would otherwise produce identical
+                // "<file> [<opt>]" names and collide as duplicate Captain test ids.
+                const name = try fmtSpecTestName(allocator, spec.roc_file, opt, spec.description);
                 const case = CliCase{
                     .id = cases.items.len,
                     .suite = .platforms,
@@ -604,6 +607,13 @@ fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
 
 fn fmtTestName(allocator: Allocator, roc_file: []const u8, opt: OptMode) CliRunnerError![]const u8 {
     return std.fmt.allocPrint(allocator, "{s} [{s}]", .{ roc_file, opt.cliName() });
+}
+
+/// Like fmtTestName but appends the spec description (when present) so io_specs that share a
+/// roc_file get distinct, globally-unique names (and therefore distinct Captain test ids).
+fn fmtSpecTestName(allocator: Allocator, roc_file: []const u8, opt: OptMode, description: []const u8) CliRunnerError![]const u8 {
+    if (description.len == 0) return fmtTestName(allocator, roc_file, opt);
+    return std.fmt.allocPrint(allocator, "{s} [{s}]: {s}", .{ roc_file, opt.cliName(), description });
 }
 
 fn caseRocFile(case: CliCase) ?[]const u8 {
@@ -6562,6 +6572,10 @@ fn printUsage() void {
         \\  --glue-opt <opt>     Glue execution mode; supported value: interpreter
         \\  --glue-full-targets  Run opt-in non-default glue compile targets
         \\  --verbose            Show PASS results with timing
+        \\  --roc-test-rwx-out=<DIR>     Write rwx-v1-json results to <DIR>/<suite>.json (Captain)
+        \\  --roc-test-suite=<NAME>      Suite name for rwx ids + filename (default: cli)
+        \\  --roc-test-file=<PATH>       Reported location.file for every test
+        \\  --roc-test-only-json=<PATH>  Run only tests whose id is listed (Captain retry)
         \\
     , .{});
 }
@@ -6730,8 +6744,28 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
         roc_binary_path;
     glue_execution_mode = parsed.glue_options.execution_mode;
 
-    const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options);
+    var tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options);
     if (tests.len == 0) return;
+
+    // Targeted retry (Captain's {{ jsonFilePath }}): keep only cases whose rwx id is listed.
+    // Applied before the worker branches so Windows worker modes (which re-apply filters for
+    // stable indices) see the same restricted set.
+    if (args.rwx_only_json) |only_path| {
+        if (harness.loadOnlyJsonIds(gpa, init.io, only_path)) |loaded| {
+            var only = loaded;
+            defer only.deinit();
+            const suite = args.rwx_suite orelse "cli";
+            var kept: std.ArrayListUnmanaged(CliCase) = .empty;
+            for (tests) |case| {
+                const id = harness.rwxTestId(gpa, suite, case.name) catch continue;
+                defer gpa.free(id);
+                if (only.contains(id)) kept.append(spec_arena.allocator(), case) catch {};
+            }
+            tests = kept.items;
+            if (tests.len == 0) return;
+        }
+    }
+
     const timeout_ms = effectiveTimeoutMs(args, parsed.suites);
 
     // Worker mode: parent spawned us with `--worker <idx>` to run a single
@@ -6818,6 +6852,32 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
 
     if (args.stats_json_path) |path| {
         try writeStatsJson(gpa, init.io, path, tests, results, spans);
+    }
+
+    // rwx-v1-json reporter for Captain (no-op unless --roc-test-rwx-out is set). Built before
+    // the message-free loop below since failure messages are referenced inline.
+    if (args.rwx_out) |rwx_dir| {
+        const suite = args.rwx_suite orelse "cli";
+        const file = args.rwx_file orelse "src/cli/test/parallel_cli_runner.zig";
+        if (gpa.alloc(harness.RwxRecord, tests.len)) |rwx_records| {
+            defer gpa.free(rwx_records);
+            for (tests, 0..) |case, i| {
+                const r = results[i];
+                const kind: []const u8 = switch (r.status) {
+                    .pass => "successful",
+                    .skip => "skipped",
+                    .timeout => "timedOut",
+                    .build_failed, .run_failed, .crash, .infra_error => "failed",
+                };
+                rwx_records[i] = .{
+                    .name = case.name,
+                    .status_kind = kind,
+                    .duration_ns = r.duration_ns,
+                    .message = r.message,
+                };
+            }
+            harness.writeRwxResults(gpa, init.io, rwx_dir, suite, file, rwx_records) catch {};
+        } else |_| {}
     }
 
     for (results) |r| {

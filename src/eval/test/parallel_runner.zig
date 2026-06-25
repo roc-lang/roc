@@ -1725,6 +1725,10 @@ fn printHelp() void {
         \\                        LLVM uses a separate 420000ms backend budget.
         \\                        LLVM eval lock slots match the worker count.
         \\  --llvm                Include the LLVM backend. Default: skip LLVM.
+        \\  --roc-test-rwx-out=<DIR>     Write rwx-v1-json results to <DIR>/<suite>.json (Captain).
+        \\  --roc-test-suite=<NAME>      Suite name for rwx ids + filename (default: eval).
+        \\  --roc-test-file=<PATH>       Reported location.file for every test.
+        \\  --roc-test-only-json=<PATH>  Run only tests whose id is listed (Captain retry).
         \\
         \\COVERAGE:
         \\  Use `zig build run-coverage-eval` to build with coverage instrumentation.
@@ -2203,6 +2207,25 @@ pub fn main(init: std.process.Init) RunnerError!void {
     }
     trace_worker.stamp("filter pass");
 
+    // Targeted retry (Captain's {{ jsonFilePath }}): keep only tests whose rwx id is listed.
+    // Applied here, alongside --filter, so the Windows worker modes that re-apply the filters
+    // (for stable indices) see the same restricted set.
+    if (cli.rwx_only_json) |only_path| {
+        if (harness.loadOnlyJsonIds(gpa, io, only_path)) |loaded| {
+            var only = loaded;
+            defer only.deinit();
+            const suite = cli.rwx_suite orelse "eval";
+            var kept: std.ArrayListUnmanaged(TestCase) = .empty;
+            for (filtered_buf.items) |tc| {
+                const id = harness.rwxTestId(gpa, suite, tc.name) catch continue;
+                defer gpa.free(id);
+                if (only.contains(id)) kept.append(gpa, tc) catch {};
+            }
+            filtered_buf.deinit(gpa);
+            filtered_buf = kept;
+        }
+    }
+
     const tests = filtered_buf.items;
     if (tests.len == 0) {
         if (cli.filters.len == 0) {
@@ -2430,6 +2453,32 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     if (cli.stats_json_path) |path| {
         try writeStatsJson(gpa, io, path, tests, results, spans);
+    }
+
+    // rwx-v1-json reporter for Captain (no-op unless --roc-test-rwx-out is set). Built before
+    // the message-free loop below since failure messages are referenced inline.
+    if (cli.rwx_out) |rwx_dir| {
+        const suite = cli.rwx_suite orelse "eval";
+        const file = cli.rwx_file orelse "src/eval/test/eval_tests.zig";
+        if (gpa.alloc(harness.RwxRecord, tests.len)) |rwx_records| {
+            defer gpa.free(rwx_records);
+            for (tests, 0..) |tc, i| {
+                const r = results[i];
+                const kind: []const u8 = switch (r.status) {
+                    .pass => "successful",
+                    .skip => "skipped",
+                    .timeout => "timedOut",
+                    .fail, .crash => "failed",
+                };
+                rwx_records[i] = .{
+                    .name = tc.name,
+                    .status_kind = kind,
+                    .duration_ns = r.duration_ns,
+                    .message = r.message,
+                };
+            }
+            harness.writeRwxResults(gpa, io, rwx_dir, suite, file, rwx_records) catch {};
+        } else |_| {}
     }
 
     // Free GPA-duped messages after all reporting that may reference them.
