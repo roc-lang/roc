@@ -113,6 +113,10 @@ Current branch status:
   producer-plan flag.
 - `Iter.prepended` can emit a `Concat(Single(item), rest)` plan behind the
   producer-plan flag.
+- finite numeric range syntax and `Iter.exclusive_range`/`Iter.inclusive_range`
+  can emit `Range` plans behind the producer-plan flag; length is currently
+  recorded as unknown until checked output exposes the corresponding
+  `steps_between` dispatch as explicit producer data.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -533,7 +537,7 @@ Tasks:
 - [ ] Recognition uses checked identity for every producer.
 - [x] `List.iter` uses exact checked identity when producing `ListIter`.
 - [x] `Iter.iter` preserves or forwards known plans correctly.
-- [ ] numeric finite ranges produce `Range`.
+- [x] numeric finite ranges produce `Range`.
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
 - [x] `Iter.single` produces `Single`.
 - [x] `Iter.prepended` produces the correct plan shape.

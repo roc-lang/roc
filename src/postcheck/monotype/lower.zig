@@ -7,6 +7,7 @@ const builtins = @import("builtins");
 const base = @import("base");
 
 const Common = @import("../common.zig");
+const iter_plan = @import("../iter_plan.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const solve = @import("solve.zig");
@@ -26,6 +27,7 @@ const checked = check.CheckedModule;
 const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
+const RangeInclusivity = iter_plan.RangeInclusivity;
 
 /// Options used while lowering checked modules into Monotype IR.
 pub const Options = struct {
@@ -14047,6 +14049,18 @@ const BodyContext = struct {
             return try self.lowerSingleIteratorProducerPlanExpr(plan, lowered_call, materialized);
         }
 
+        if (self.methodNameIs(plan.method, "exclusive_range") and
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "exclusive_range"))
+        {
+            return try self.lowerRangeIteratorProducerPlanExpr(plan, lowered_call, materialized, .exclusive);
+        }
+
+        if (self.methodNameIs(plan.method, "inclusive_range") and
+            self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "inclusive_range"))
+        {
+            return try self.lowerRangeIteratorProducerPlanExpr(plan, lowered_call, materialized, .inclusive);
+        }
+
         if (self.methodNameIs(plan.method, "prepended") and
             self.resolvedDispatchMatchesIteratorMethod(resolved, materialized_expr.ty, "prepended"))
         {
@@ -14251,6 +14265,67 @@ const BodyContext = struct {
                 .source = source_plan,
                 .predicate_fn = predicate_fn,
                 .kind = kind,
+            } },
+        });
+
+        return try self.builder.program.addExpr(.{
+            .ty = materialized_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lowerRangeIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+        inclusivity: RangeInclusivity,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 2) {
+            Common.invariant("checked Iter range dispatch plan had an unexpected argument shape");
+        }
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter range call argument count differed from its dispatch plan");
+        }
+
+        return try self.rangeIteratorProducerPlanExpr(lowered_args, materialized, inclusivity);
+    }
+
+    fn rangeIteratorProducerPlanExpr(
+        self: *BodyContext,
+        lowered_args: []const Ast.ExprId,
+        materialized: Ast.ExprId,
+        inclusivity: RangeInclusivity,
+    ) Allocator.Error!Ast.ExprId {
+        if (lowered_args.len != 2) {
+            Common.invariant("generated Iter range plan had an unexpected argument shape");
+        }
+
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+        const item_ty = self.iterItemType(materialized_expr.ty);
+        const current = lowered_args[0];
+        const end = lowered_args[1];
+        if (!self.sameType(self.builder.program.exprs.items[@intFromEnum(current)].ty, item_ty) or
+            !self.sameType(self.builder.program.exprs.items[@intFromEnum(end)].ty, item_ty))
+        {
+            Common.invariant("checked Iter range bounds differed from iterator item type");
+        }
+        const step = try self.builder.intLiteralExpr(1, item_ty);
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = item_ty,
+            .length = .unknown,
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .materialized = materialized,
+            .data = .{ .range = .{
+                .current = current,
+                .end = end,
+                .step = step,
+                .inclusivity = inclusivity,
             } },
         });
 
@@ -14471,12 +14546,20 @@ const BodyContext = struct {
         const direct_target = call.direct_target orelse return null;
 
         const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
-        if (!self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "single")) return null;
-
         const lowered_args = switch (lowered.data) {
             .call_proc => |call_proc| self.builder.program.exprSpan(call_proc.args),
             else => Common.invariant("checked direct iterator producer lowered to a non-direct call"),
         };
+
+        if (self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "exclusive_range")) {
+            return try self.rangeIteratorProducerPlanExpr(lowered_args, materialized, .exclusive);
+        }
+
+        if (self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "inclusive_range")) {
+            return try self.rangeIteratorProducerPlanExpr(lowered_args, materialized, .inclusive);
+        }
+
+        if (!self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "single")) return null;
         if (lowered_args.len != 1) {
             Common.invariant("checked Iter.single direct call had an unexpected arity");
         }

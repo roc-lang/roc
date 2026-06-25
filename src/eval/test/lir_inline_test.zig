@@ -1658,6 +1658,86 @@ test "user single producer is not lowered as builtin Iter.single plan" {
     }
 }
 
+test "exclusive range producer lowers to a materialized range plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = 1.I64..<5.I64
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .range => |range| {
+                if (range.inclusivity != .exclusive) continue;
+                found = true;
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                switch (plan.length) {
+                    .known => return error.TestUnexpectedResult,
+                    .unknown => {},
+                }
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.done);
+                switch (mono_source.mono.exprs.items[@intFromEnum(range.step)].data) {
+                    .int_lit => {},
+                    else => return error.TestUnexpectedResult,
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "inclusive range producer lowers to a materialized range plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = 1.I64..=5.I64
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .range => |range| {
+                if (range.inclusivity != .inclusive) continue;
+                found = true;
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                switch (plan.length) {
+                    .known => return error.TestUnexpectedResult,
+                    .unknown => {},
+                }
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.done);
+                switch (mono_source.mono.exprs.items[@intFromEnum(range.step)].data) {
+                    .int_lit => {},
+                    else => return error.TestUnexpectedResult,
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
 test "Iter.prepended producer lowers to concat of single and receiver plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
@@ -2129,6 +2209,32 @@ test "Iter.single producer materializes before Lambda when returned publicly" {
         \\
         \\main : Iter(I64)
         \\main = Iter.single(42.I64)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "exclusive range producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = 1.I64..<5.I64
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "inclusive range producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = 1.I64..=5.I64
     );
     defer lifted_source.deinit(allocator);
 
