@@ -719,12 +719,12 @@ Tests:
 
 ## Completion Checklist
 
-- [ ] `design.md` documents internal iterator plans and public materialization
-      boundaries.
-- [ ] `IterPlan` data exists in the post-check pipeline.
+- [x] `design.md` documents internal iterator plans and public materialization
+  boundaries.
+- [x] `IterPlan` data exists in the post-check pipeline.
 - [ ] Plans are keyed by explicit checked/Monotype identity, never names or
       generated code shape.
-- [ ] `List.iter` produces a `ListIter` plan for optimized consumers.
+- [x] `List.iter` produces a `ListIter` plan for optimized consumers.
 - [ ] Numeric ranges produce finite or unbounded range plans.
 - [ ] `Iter.single` produces a `Single` plan.
 - [ ] `Iter.append` produces an `Append` plan.
@@ -733,8 +733,8 @@ Tests:
 - [ ] `Iter.keep_if` and `Iter.drop_if` produce filter-like plans.
 - [ ] `Iter.custom` remains supported.
 - [ ] Public materialization from every plan is implemented.
-- [ ] Public alias/reuse tests pass.
-- [ ] Rest-escaping tests pass.
+- [x] Public alias/reuse tests pass.
+- [x] Rest-escaping tests pass.
 - [ ] Infinite iterator tests pass.
 - [ ] Refcounted payload tests pass under ARC.
 - [ ] Optimized `for` lowers known plans without public step values in the hot

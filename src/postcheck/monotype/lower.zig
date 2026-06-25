@@ -35,6 +35,9 @@ pub const Options = struct {
     /// Restore stored constants as readonly static-data values when their
     /// ConstStore shape requires runtime storage.
     static_data_literals: bool = false,
+    /// Lower recognized builtin iterator producers directly into private
+    /// cursor plans for optimized consumers.
+    iterator_plans: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
 };
 
@@ -368,6 +371,7 @@ const Builder = struct {
     program: *Ast.Program,
     proc_debug_names: bool,
     static_data_literals: bool,
+    iterator_plans: bool,
     target_usize: base.target.TargetUsize,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
@@ -402,6 +406,7 @@ const Builder = struct {
             .program = program,
             .proc_debug_names = options.proc_debug_names,
             .static_data_literals = options.static_data_literals,
+            .iterator_plans = options.iterator_plans,
             .target_usize = options.target_usize,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
@@ -3579,6 +3584,12 @@ const BodyContext = struct {
             body: checked.CheckedExprId,
             result_ty: Type.TypeId,
             rest_expr: Ast.ExprId,
+            carries: []const LoopCarry,
+        },
+        iterator_body_with_prefix: struct {
+            body: checked.CheckedExprId,
+            result_ty: Type.TypeId,
+            prefix_values: []const Ast.ExprId,
             carries: []const LoopCarry,
         },
     };
@@ -12902,6 +12913,12 @@ const BodyContext = struct {
                 body.rest_expr,
                 body.carries,
             ),
+            .iterator_body_with_prefix => |body| try self.lowerIteratorBodyThenContinueWithPrefix(
+                body.body,
+                body.result_ty,
+                body.prefix_values,
+                body.carries,
+            ),
         };
     }
 
@@ -13946,6 +13963,12 @@ const BodyContext = struct {
         carries: []const LoopCarry,
     };
 
+    const ListIteratorSource = struct {
+        expr: checked.CheckedExprId,
+        list_ty: Type.TypeId,
+        item_ty: Type.TypeId,
+    };
+
     fn lowerIteratorFor(
         self: *BodyContext,
         for_: anytype,
@@ -13954,6 +13977,10 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprData {
         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
+
+        if (try self.listIteratorSourceFromPlan(plan)) |source| {
+            return try self.lowerListIteratorFor(for_, result_ty, carries, source);
+        }
 
         const step = try self.iteratorStepShape(plan.step_ty);
         const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
@@ -14021,6 +14048,157 @@ const BodyContext = struct {
             .initial_values = try self.builder.program.addExprSpan(initial_values),
             .body = match_expr,
         } };
+    }
+
+    fn listIteratorSourceFromPlan(
+        self: *BodyContext,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?ListIteratorSource {
+        if (!self.builder.iterator_plans) return null;
+
+        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.iter.method), "iter")) {
+            Common.invariant("checked iterator for plan did not call .iter");
+        }
+        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.next.method), "next")) {
+            Common.invariant("checked iterator for plan did not call .next");
+        }
+
+        const iter_args = plan.iter.argsSlice(self.view.static_dispatch_plans);
+        if (iter_args.len != 1 or plan.iter.dispatcher_arg_index != 0) {
+            Common.invariant("checked iterator .iter plan had an unexpected argument shape");
+        }
+
+        const iterable_expr = switch (iter_args[0]) {
+            .checked_expr => |expr| expr,
+            .loop_iterator_state => Common.invariant("iterator .iter dispatch used loop iterator state"),
+        };
+        if (iterable_expr != plan.iterable) {
+            Common.invariant("iterator .iter dispatch argument differed from iterator-for iterable");
+        }
+
+        const list_ty = try self.lowerType(plan.iter.dispatcher_ty);
+        if (!self.typeHasBuiltinOwner(list_ty, .list)) return null;
+        const item_ty = switch (self.builder.shapeContent(list_ty)) {
+            .list => |elem_ty| elem_ty,
+            else => Common.invariant("builtin List owner lowered to non-list Monotype content"),
+        };
+        try self.constrainTypeToMono(plan.item_ty, item_ty);
+
+        return .{
+            .expr = iterable_expr,
+            .list_ty = list_ty,
+            .item_ty = item_ty,
+        };
+    }
+
+    fn lowerListIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        source: ListIteratorSource,
+    ) Allocator.Error!Ast.ExprData {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+
+        const list_value = try self.lowerExprAtType(source.expr, source.list_ty);
+        const list_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source.list_ty);
+        const list_expr = try self.builder.localExpr(list_local, source.list_ty);
+
+        const len_value = try self.builder.lowLevelExpr(.list_len, &.{list_expr}, u64_ty);
+        const len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const len_expr = try self.builder.localExpr(len_local, u64_ty);
+
+        const index_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const index_expr = try self.builder.localExpr(index_local, u64_ty);
+        const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
+        const next_index = try self.builder.lowLevelExpr(.num_plus, &.{ index_expr, one_expr }, u64_ty);
+
+        _ = try self.builder.program.addIterPlan(.{
+            .item_ty = source.item_ty,
+            .length = .{ .known = len_expr },
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .data = .{ .list = .{
+                .list = list_expr,
+                .index = index_expr,
+                .len = len_expr,
+            } },
+        });
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (carries) |carry| {
+            try self.saveBinder(carry.binder, &saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        defer self.restoreBinders(saved.items);
+
+        try self.pushLoopContext(result_ty, carries);
+        defer self.popLoopContext();
+
+        const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, len_expr }, bool_ty);
+        const done_body = try self.breakCurrentLoopExpr();
+        const item_expr = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ list_expr, index_expr }, source.item_ty);
+        const continue_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, item_expr, source.item_ty, next_index, carries);
+        const body = try self.builder.ifExpr(done_cond, done_body, continue_body, result_ty);
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = index_local, .ty = u64_ty };
+        for (carries, 0..) |carry, i| params[i + 1] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(Ast.ExprId, 1 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = try self.builder.intLiteralExpr(0, u64_ty);
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 1] = try self.builder.localExpr(carry.initial_local, carry.ty);
+        }
+
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(params),
+            .initial_values = try self.builder.program.addExprSpan(initial_values),
+            .body = body,
+        } } });
+        const len_let = try self.wrapLet(len_local, u64_ty, len_value, loop_expr, result_ty);
+
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(list_local, source.list_ty),
+            .value = list_value,
+            .rest = len_let,
+        } };
+    }
+
+    fn lowerListIteratorBodyThenContinue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        item_expr: Ast.ExprId,
+        item_ty: Type.TypeId,
+        next_index: Ast.ExprId,
+        carries: []const LoopCarry,
+    ) Allocator.Error!Ast.ExprId {
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        try self.savePatternBinders(for_.pattern, &saved);
+        for (carries) |carry| try self.saveBinder(carry.binder, &saved);
+        defer self.restoreBinders(saved.items);
+
+        const prefix_values = [_]Ast.ExprId{next_index};
+        const miss = try self.runtimeCrashExpr(result_ty, "pattern match failed");
+        return try self.lowerMaterializedPatternThen(
+            for_.pattern,
+            item_expr,
+            item_ty,
+            result_ty,
+            .{ .iterator_body_with_prefix = .{
+                .body = for_.body,
+                .result_ty = result_ty,
+                .prefix_values = &prefix_values,
+                .carries = carries,
+            } },
+            miss,
+        );
     }
 
     fn lowerWhile(
@@ -14283,6 +14461,16 @@ const BodyContext = struct {
         rest_expr: Ast.ExprId,
         carries: []const LoopCarry,
     ) Allocator.Error!Ast.ExprId {
+        return try self.lowerIteratorBodyThenContinueWithPrefix(body, result_ty, &.{rest_expr}, carries);
+    }
+
+    fn lowerIteratorBodyThenContinueWithPrefix(
+        self: *BodyContext,
+        body: checked.CheckedExprId,
+        result_ty: Type.TypeId,
+        prefix_values: []const Ast.ExprId,
+        carries: []const LoopCarry,
+    ) Allocator.Error!Ast.ExprId {
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
             .block => |block| {
@@ -14304,7 +14492,7 @@ const BodyContext = struct {
                 }
                 return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(lowered_statements),
-                    .final_expr = try self.continueWithState(result_ty, rest_expr, carries),
+                    .final_expr = try self.continueWithPrefixAndCarries(result_ty, prefix_values, carries),
                 } } });
             },
             else => {
@@ -14312,7 +14500,7 @@ const BodyContext = struct {
                 const body_stmt = try self.builder.program.addStmt(.{ .expr = body_expr });
                 return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(&[_]Ast.StmtId{body_stmt}),
-                    .final_expr = try self.continueWithState(result_ty, rest_expr, carries),
+                    .final_expr = try self.continueWithPrefixAndCarries(result_ty, prefix_values, carries),
                 } } });
             },
         }
@@ -14529,12 +14717,21 @@ const BodyContext = struct {
         rest_expr: Ast.ExprId,
         carries: []const LoopCarry,
     ) Allocator.Error!Ast.ExprId {
-        const values = try self.allocator.alloc(Ast.ExprId, 1 + carries.len);
+        return try self.continueWithPrefixAndCarries(ty, &.{rest_expr}, carries);
+    }
+
+    fn continueWithPrefixAndCarries(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        prefix_values: []const Ast.ExprId,
+        carries: []const LoopCarry,
+    ) Allocator.Error!Ast.ExprId {
+        const values = try self.allocator.alloc(Ast.ExprId, prefix_values.len + carries.len);
         defer self.allocator.free(values);
-        values[0] = rest_expr;
+        @memcpy(values[0..prefix_values.len], prefix_values);
         for (carries, 0..) |carry, i| {
             const current = self.binders.get(carry.binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            values[i + 1] = try self.builder.localExpr(current, carry.ty);
+            values[prefix_values.len + i] = try self.builder.localExpr(current, carry.ty);
         }
         return try self.continueWith(ty, values);
     }

@@ -214,6 +214,7 @@ pub fn lowerCheckedModulesToLir(
         .{
             .proc_debug_names = target.proc_debug_names,
             .static_data_literals = target.checked_module_state == .complete and roots.include_static_data_exports,
+            .iterator_plans = target.inline_mode != .none,
             .target_usize = target.target_usize,
         },
     );

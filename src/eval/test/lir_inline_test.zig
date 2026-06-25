@@ -606,6 +606,8 @@ const ProcShape = struct {
     erased_call_count: usize = 0,
     packed_erased_fn_count: usize = 0,
     low_level_count: usize = 0,
+    list_len_count: usize = 0,
+    list_get_unsafe_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
     str_concat_count: usize = 0,
     box_box_count: usize = 0,
@@ -669,6 +671,8 @@ fn collectProcShape(
             .assign_low_level => |stmt| {
                 shape.low_level_count += 1;
                 switch (stmt.op) {
+                    .list_len => shape.list_len_count += 1,
+                    .list_get_unsafe => shape.list_get_unsafe_count += 1,
                     .str_count_utf8_bytes => shape.str_count_utf8_bytes_count += 1,
                     .str_concat => shape.str_concat_count += 1,
                     .box_box => shape.box_box_count += 1,
@@ -1276,6 +1280,30 @@ test "low level wrapper is inlined when inline mode is enabled" {
     const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
     try std.testing.expectEqual(@as(usize, 0), shape.direct_call_count);
     try std.testing.expectEqual(@as(usize, 1), shape.str_count_utf8_bytes_count);
+}
+
+test "optimized for over list uses private iterator cursor" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in [10.I64, 20.I64, 30.I64] {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
 test "destination baseline: boxed record update reboxes a list and string payload" {
