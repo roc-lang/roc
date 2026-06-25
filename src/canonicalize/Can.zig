@@ -6689,6 +6689,28 @@ fn importIsBuiltin(self: *const Self, import_idx: Import.Idx) bool {
     return std.mem.eql(u8, name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(name);
 }
 
+/// Compute the compiler-fixed target node for a reference into a builtin import,
+/// reading the always-available builtin env. Returns 0 for user imports (whose
+/// references stay symbolic and are resolved by name at check time). This lets the
+/// migrated construction sites avoid reading USER imported-module contents while
+/// still binding builtin references (e.g. associated types of builtin type
+/// modules) to their fixed node.
+fn builtinExternalNode(
+    self: *Self,
+    import_idx: Import.Idx,
+    module_name: Ident.Idx,
+    name_text: []const u8,
+    kind: CIR.ExternalRef.Kind,
+) std.mem.Allocator.Error!u32 {
+    if (!self.importIsBuiltin(import_idx)) return 0;
+    const info = self.lookupAvailableModuleEnv(module_name) orelse return 0;
+    return switch (kind) {
+        .value => (try self.lookupImportedExposedValueNode(info.env, name_text)) orelse 0,
+        .type, .nominal_type => (try self.lookupImportedExposedTypeNode(info.env, name_text)) orelse
+            (try self.lookupImportedTypeDeclNode(info.env, name_text)) orelse 0,
+    };
+}
+
 /// Record an external reference: builtin imports keep their compiler-fixed node
 /// (`computed_node`); user imports stay symbolic (`name_ident`, resolved later).
 fn pushExternalRefFor(
@@ -13360,39 +13382,15 @@ fn finishNominalRecordForType(
                     .free_vars = DataSpan.empty(),
                 };
             };
-            const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                return CanonicalizedExpr{
-                    .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                        .module_name = module_name,
-                        .type_name = type_ident,
-                        .region = type_region,
-                    } }),
-                    .free_vars = DataSpan.empty(),
-                };
-            };
-            const target_node_idx = blk: {
-                if (exposed_info.target) |target| {
-                    if (target.typeDeclNode()) |node_idx| break :blk node_idx;
-                } else {
-                    const original_name_text = self.env.getIdent(exposed_info.original_name);
-                    if (try self.lookupImportedExposedTypeNode(imported_type.env, original_name_text)) |node_idx| break :blk node_idx;
-                }
-                return CanonicalizedExpr{
-                    .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                        .module_name = module_name,
-                        .type_name = type_ident,
-                        .region = type_region,
-                    } }),
-                    .free_vars = DataSpan.empty(),
-                };
-            };
-            if (try self.validateImportedNominalTagTarget(Expr.Idx, imported_type.env, target_node_idx, module_name, type_ident, type_region)) |malformed_idx| {
-                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            }
+            // Symbolic reference; existence/exposure/nominal validation against the
+            // imported module happen during external resolution at check time. A
+            // builtin import binds its compiler-fixed node now (builtin env is
+            // always available); user imports stay name-based.
+            const builtin_node = try self.builtinExternalNode(import_idx, module_name, self.env.getIdent(exposed_info.original_name), .nominal_type);
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = import_idx,
-                    .external_ref = try self.pushExternalRefFor(import_idx, exposed_info.original_name, target_node_idx, .nominal_type, region),
+                    .external_ref = try self.pushExternalRefFor(import_idx, exposed_info.original_name, builtin_node, .nominal_type, region),
                     .backing_expr = backing_expr_idx,
                     .backing_type = .record,
                 },
