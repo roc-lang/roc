@@ -4823,6 +4823,38 @@ test "check type - primitive-backed nominal lifts string literal" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Token");
 }
 
+test "check type - multi-level numeric nominal chain lifts numeric literal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := U64
+        \\Outer := Inner
+        \\
+        \\x : Outer
+        \\x = 0
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "check type - builtin-backed nominal does not inherit backing methods" {
+    // A literal lifts into `Distance` because `from_numeral` is inherited from
+    // the `U64` backing (the backing-chain walk). Other methods are NOT inherited
+    // that way: `+` requires `Distance` to provide `add`, which it does not, so
+    // this is a MISSING METHOD error — not a TYPE MISMATCH. This pins the
+    // asymmetry: only the literal conversion rides through the backing chain.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\d : Distance
+        \\d = 0
+        \\
+        \\total = d + d
+    ;
+    try checkTypesModule(source, .fail, "MISSING METHOD");
+}
+
 test "check type - explicit value-backed nominal construction" {
     const source =
         \\main! = |_| {}
