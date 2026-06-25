@@ -1227,7 +1227,7 @@ generate_rust_roc_str =
 	\\            let prev = (*rc).fetch_sub(1, Ordering::Relaxed);
 	\\            if prev == 1 {
 	\\                let ptr_width = core::mem::size_of::<usize>();
-	\\                let base = (alloc_ptr as *mut u8).sub(ptr_width) as *mut c_void;
+	\\                let base = alloc_ptr.sub(ptr_width) as *mut c_void;
 	\\                roc_host.dealloc(base, core::mem::align_of::<usize>());
 	\\            }
 	\\        }
@@ -1819,11 +1819,11 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
-			elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, elem_id, "item")
+			elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, elem_id, "(*item)")
 			if elem_stmt == "" {
 				"    {\n        let list = ${expr};\n        list.decref(roc_host);\n    }\n"
 			} else {
-				"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item in list.allocation_items().iter().copied() {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+				"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item in list.allocation_items() {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
 			}
 		}
 		RocBox(inner_id) =>
