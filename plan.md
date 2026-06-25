@@ -128,6 +128,9 @@ Current branch status:
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
+- direct `List.iter` and direct `Iter.single` source `for` loops consume
+  already-lowered `ListIter` and `Single` plan values instead of replaying the
+  checked producer expression.
 - direct finite numeric ranges are consumed by optimized `for` as private
   numeric cursor state, including inclusive end values at numeric maxima.
 - direct `Iter.custom` is consumed by optimized `for` as private custom state
@@ -585,6 +588,8 @@ Tasks:
 - [ ] Optimized `for` through locals avoids public step values.
 - [ ] Optimized `for` through `if` avoids public step values.
 - [ ] Optimized `for` through `match` avoids public step values.
+- [x] Optimized `for` over direct `ListIter` consumes the plan value.
+- [x] Optimized `for` over direct `Single` consumes the plan value.
 - [ ] Optimized `for` over `Append` and `Concat` uses explicit phase state.
 - [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
 - [x] Optimized `for` over ranges uses direct numeric state.

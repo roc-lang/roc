@@ -14727,6 +14727,14 @@ const BodyContext = struct {
             return range_for;
         }
 
+        if (try self.listIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |list_for| {
+            return list_for;
+        }
+
+        if (try self.singleIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |single_for| {
+            return single_for;
+        }
+
         if (try self.listIteratorSourceFromPlan(plan)) |source| {
             defer source.deinit(self.allocator);
             return try self.lowerListIteratorFor(for_, result_ty, carries, source);
@@ -15133,6 +15141,214 @@ const BodyContext = struct {
             method == wanted_id
         else
             false;
+    }
+
+    fn listIteratorPlanForPlanValue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.builder.iterator_producer_plans) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceListIterPlan(for_.expr, iterator_ty)) return null;
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked List.iter expression did not lower to an iterator plan"),
+        };
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        const list = switch (iter_plan_value.data) {
+            .list => |list| list,
+            else => Common.invariant("checked List.iter expression lowered to a non-list iterator plan"),
+        };
+
+        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, list, iter_plan_value.item_ty);
+    }
+
+    fn checkedExprCanProduceListIterPlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        const expr_ty = try self.lowerType(expr.ty);
+        if (!self.sameType(expr_ty, iterator_ty)) return false;
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, "iter")) return false;
+        const dispatcher_ty = try self.lowerType(producer.dispatcher_ty);
+        return self.typeHasBuiltinOwner(dispatcher_ty, .list);
+    }
+
+    fn lowerListIteratorPlanFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        list: Ast.IterPlan.ListIter,
+        item_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprData {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const list_ty = self.builder.program.exprs.items[@intFromEnum(list.list)].ty;
+
+        const list_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), list_ty);
+        const list_expr = try self.builder.localExpr(list_local, list_ty);
+
+        const len_value = try self.builder.lowLevelExpr(.list_len, &.{list_expr}, u64_ty);
+        const len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const len_expr = try self.builder.localExpr(len_local, u64_ty);
+
+        const index_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const index_expr = try self.builder.localExpr(index_local, u64_ty);
+        const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
+        const next_index = try self.builder.lowLevelExpr(.num_plus, &.{ index_expr, one_expr }, u64_ty);
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (carries) |carry| {
+            try self.saveBinder(carry.binder, &saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        defer self.restoreBinders(saved.items);
+
+        try self.pushLoopContext(result_ty, carries);
+        defer self.popLoopContext();
+
+        const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, len_expr }, bool_ty);
+        const done_body = try self.breakCurrentLoopExpr();
+        const continue_body = try self.lowerListIteratorContinue(for_, result_ty, list_expr, len_expr, index_expr, item_ty, &.{}, next_index, carries);
+        const body = try self.builder.ifExpr(done_cond, done_body, continue_body, result_ty);
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = index_local, .ty = u64_ty };
+        for (carries, 0..) |carry, i| params[i + 1] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(Ast.ExprId, 1 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = list.index;
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 1] = try self.builder.localExpr(carry.initial_local, carry.ty);
+        }
+
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(params),
+            .initial_values = try self.builder.program.addExprSpan(initial_values),
+            .body = body,
+        } } });
+        const len_let = try self.wrapLet(len_local, u64_ty, len_value, loop_expr, result_ty);
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(list_local, list_ty),
+            .value = list.list,
+            .rest = len_let,
+        } };
+    }
+
+    fn singleIteratorPlanForPlanValue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.builder.iterator_producer_plans) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceSinglePlan(for_.expr, iterator_ty)) return null;
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked Iter.single expression did not lower to an iterator plan"),
+        };
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        const single = switch (iter_plan_value.data) {
+            .single => |single| single,
+            else => Common.invariant("checked Iter.single expression lowered to a non-single iterator plan"),
+        };
+
+        return try self.lowerSingleIteratorPlanFor(for_, result_ty, carries, single, iter_plan_value.item_ty);
+    }
+
+    fn checkedExprCanProduceSinglePlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        switch (expr.data) {
+            .call => |call| {
+                const direct_target = call.direct_target orelse return false;
+                return self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "single");
+            },
+            else => {},
+        }
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, "single")) return false;
+        return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
+    }
+
+    fn lowerSingleIteratorPlanFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        single: Ast.IterPlan.SingleIter,
+        item_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprData {
+        const bool_ty = try self.builder.primitiveType(.bool);
+
+        const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const item_expr = try self.builder.localExpr(item_local, item_ty);
+
+        const emitted_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), bool_ty);
+        const emitted_expr = try self.builder.localExpr(emitted_local, bool_ty);
+        const next_emitted = try self.boolLiteral(true, bool_ty);
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (carries) |carry| {
+            try self.saveBinder(carry.binder, &saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        defer self.restoreBinders(saved.items);
+
+        try self.pushLoopContext(result_ty, carries);
+        defer self.popLoopContext();
+
+        const done_body = try self.breakCurrentLoopExpr();
+        const continue_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, item_expr, item_ty, next_emitted, carries);
+        const body = try self.builder.ifExpr(emitted_expr, done_body, continue_body, result_ty);
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = emitted_local, .ty = bool_ty };
+        for (carries, 0..) |carry, i| params[i + 1] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(Ast.ExprId, 1 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = single.emitted;
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 1] = try self.builder.localExpr(carry.initial_local, carry.ty);
+        }
+
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(params),
+            .initial_values = try self.builder.program.addExprSpan(initial_values),
+            .body = body,
+        } } });
+
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(item_local, item_ty),
+            .value = single.item,
+            .rest = loop_expr,
+        } };
     }
 
     fn customIteratorForPlan(
