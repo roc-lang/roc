@@ -244,7 +244,7 @@ test "SerialStringInterner: grows past initial table capacity preserving ids/loo
     }
 }
 
-fn roundTrip(gpa: Allocator, src: *const SerialStringInterner) anyerror!struct { buffer: []align(16) u8, it: SerialStringInterner } {
+fn roundTrip(gpa: Allocator, src: *const SerialStringInterner) (Allocator.Error || error{BufferTooSmall})!struct { buffer: []align(16) u8, it: SerialStringInterner } {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();

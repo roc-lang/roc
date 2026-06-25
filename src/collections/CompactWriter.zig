@@ -38,7 +38,7 @@ pub fn writeGather(
     self: *@This(),
     file: anytype,
     io: anytype,
-) anyerror!void {
+) std.Io.File.WritePositionalError!void {
     var offset: u64 = 0;
     for (self.iovecs.items) |iovec| {
         const bytes = @as([*]const u8, @ptrCast(iovec.iov_base))[0..iovec.iov_len];
@@ -411,7 +411,7 @@ test "zeroValuePadding: tagged-union determinism regardless of prior garbage / l
     // SAME bytes no matter what garbage preceded it. (A mislocated tag breaks this and
     // corrupted the discriminant on x86_64.)
     const Case = struct {
-        fn check(comptime U: type, value: U) anyerror!void {
+        fn check(comptime U: type, value: U) error{TestExpectedEqual}!void {
             var a: [@sizeOf(U)]u8 align(@alignOf(U)) = undefined;
             var b: [@sizeOf(U)]u8 align(@alignOf(U)) = undefined;
             @memset(&a, 0xAA); // two different poisons in the inactive/padding bytes

@@ -5,4 +5,8 @@ x = [One("x")]
 
 test = x == [One("a")]
 
-main! = |_| test
+main! = |_| if test {
+    Ok({})
+} else {
+    Err(Exit(1))
+}

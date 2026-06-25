@@ -4,6 +4,28 @@ const std = @import("std");
 const builtin = @import("builtin");
 const util = @import("util.zig");
 
+/// Explicit (superset) error set for this file's test helpers, composed from the portable
+/// named std/util error sets they use plus the custom errors they return. Declaring a
+/// broader set than any single helper needs is fine and keeps every helper explicit.
+const TestError = util.RocRunError ||
+    std.Io.File.ReadStreamingError ||
+    std.Io.File.Reader.Error ||
+    std.Io.File.Writer.Error ||
+    std.fmt.ParseIntError ||
+    error{
+        TestExpectedEqual,
+        TestUnexpectedResult,
+        EndOfStream,
+        StreamTooLong,
+        ReadFailed,
+        WriteFailed,
+        Unexpected,
+        SkipZigTest,
+        JsonDecoderFailed,
+        RocBuildFailed,
+        BinaryContainsOriginalFieldName,
+    };
+
 const testing = std.testing;
 const io = std.testing.io;
 
@@ -143,7 +165,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
     );
 }
 
-fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) anyerror!?[]u8 {
+fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) TestError!?[]u8 {
     const key_z = try allocator.dupeZ(u8, key);
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return null;
@@ -156,7 +178,7 @@ fn buildRocApp(
     target_name: []const u8,
     output_path: []const u8,
     roc_file: []const u8,
-) anyerror!void {
+) TestError!void {
     const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
     defer allocator.free(target_arg);
 
@@ -201,7 +223,7 @@ fn buildRocApp(
     }
 }
 
-fn expectBinaryOmits(allocator: std.mem.Allocator, exe_path: []const u8, needles: []const []const u8) anyerror!void {
+fn expectBinaryOmits(allocator: std.mem.Allocator, exe_path: []const u8, needles: []const []const u8) TestError!void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .limited(256 * 1024 * 1024));
     defer allocator.free(bytes);
 
@@ -218,7 +240,7 @@ fn buildJson(
     optional_mask: u8,
     status_index: usize,
     mode_index: usize,
-) anyerror![]u8 {
+) TestError![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -257,7 +279,7 @@ fn buildJson(
     return json.toOwnedSlice(allocator);
 }
 
-fn buildRecordOrderJson(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildRecordOrderJson(allocator: std.mem.Allocator) TestError![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -282,7 +304,7 @@ fn buildRecordOrderJson(allocator: std.mem.Allocator) anyerror![]u8 {
     return json.toOwnedSlice(allocator);
 }
 
-fn buildReverseOrderJson(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildReverseOrderJson(allocator: std.mem.Allocator) TestError![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -306,7 +328,7 @@ fn buildReverseOrderJson(allocator: std.mem.Allocator) anyerror![]u8 {
     return json.toOwnedSlice(allocator);
 }
 
-fn buildReorderedJson(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildReorderedJson(allocator: std.mem.Allocator) TestError![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -344,7 +366,7 @@ fn buildReorderedJson(allocator: std.mem.Allocator) anyerror![]u8 {
     return json.toOwnedSlice(allocator);
 }
 
-fn buildDuplicateJson(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildDuplicateJson(allocator: std.mem.Allocator) TestError![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -369,7 +391,7 @@ fn buildDuplicateJson(allocator: std.mem.Allocator) anyerror![]u8 {
     return json.toOwnedSlice(allocator);
 }
 
-fn buildMissingRequiredJson(allocator: std.mem.Allocator) anyerror![]u8 {
+fn buildMissingRequiredJson(allocator: std.mem.Allocator) TestError![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -409,7 +431,7 @@ fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize)
     return total;
 }
 
-fn buildExpectedStdout(allocator: std.mem.Allocator, value: u64) anyerror![]u8 {
+fn buildExpectedStdout(allocator: std.mem.Allocator, value: u64) TestError![]u8 {
     return std.fmt.allocPrint(allocator, "{d}\n", .{value});
 }
 
@@ -434,7 +456,7 @@ fn nativeRunnableTargetName() ?[]const u8 {
     };
 }
 
-fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const u8, input: []const u8, expected_stdout: []const u8) anyerror!void {
+fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const u8, input: []const u8, expected_stdout: []const u8) TestError!void {
     const result = try util.runChildWithTimeout(io, allocator, &.{exe_path}, .{
         .stdin = input,
         .max_output_bytes = 16 * 1024,
@@ -467,7 +489,7 @@ fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const 
     try expectNoRuntimeAllocation(result.stderr);
 }
 
-fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) anyerror!void {
+fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) TestError!void {
     const invalid_utf8_json = "{\"foo\":\"bad\xff\"}";
     const result = try util.runChildWithTimeout(io, allocator, &.{exe_path}, .{
         .stdin = invalid_utf8_json,
@@ -500,7 +522,7 @@ fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []c
     try expectNoRuntimeAllocation(result.stderr);
 }
 
-fn expectNoRuntimeAllocation(stderr: []const u8) anyerror!void {
+fn expectNoRuntimeAllocation(stderr: []const u8) TestError!void {
     try testing.expect(std.mem.find(u8, stderr, "roc_alloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_realloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_dealloc called") == null);

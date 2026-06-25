@@ -187,7 +187,7 @@ pub fn writeFdInfo(
     handle: platform.Handle,
     size: usize,
     target_path: []const u8,
-) anyerror![]const u8 {
+) (std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.File.Writer.Error || error{InvalidTargetPath})![]const u8 {
     if (comptime platform.is_windows) {
         // On Windows, return command line arguments
         const handle_int = @intFromPtr(handle);

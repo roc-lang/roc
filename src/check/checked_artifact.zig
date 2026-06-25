@@ -108,7 +108,20 @@ pub const CheckedModuleArtifactKey = extern struct {
         checking_context_identity: CheckingContextIdentity,
         direct_import_artifact_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
-        const source_hash = hashBytes(source);
+        return computeFromSourceHash(
+            hashBytes(source),
+            module_identity,
+            checking_context_identity,
+            direct_import_artifact_keys,
+        );
+    }
+
+    pub fn computeFromSourceHash(
+        source_hash: [32]u8,
+        module_identity: ModuleIdentity,
+        checking_context_identity: CheckingContextIdentity,
+        direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+    ) CheckedModuleArtifactKey {
         const compiler_artifact_hash = build_options.compiler_artifact_hash;
         const module_identity_hash = hashModuleIdentity(module_identity);
         const checking_context_identity_hash = hashCheckingContextIdentity(checking_context_identity);
@@ -208,6 +221,28 @@ fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 fn hashByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
     hashU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
+}
+
+fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
+    const deps = module_env.file_dependencies.items.items;
+    if (deps.len == 0) {
+        return hashBytes(module_env.getSourceAll());
+    }
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashByteSlice(&hasher, "roc-module-source-inputs-v2");
+    hashByteSlice(&hasher, module_env.getSourceAll());
+    hashU32(&hasher, @intCast(deps.len));
+    for (deps) |dep| {
+        hashByteSlice(&hasher, module_env.fileDependencyRelativePath(dep));
+        hasher.update(&.{@intFromEnum(dep.state)});
+        switch (dep.state) {
+            .present => hasher.update(&dep.content_hash),
+            .missing, .unreadable => {},
+            .pending => unreachable,
+        }
+    }
+    return hasher.finalResult();
 }
 
 fn hashModuleIdentity(identity: ModuleIdentity) [32]u8 {
@@ -403,6 +438,7 @@ pub const PublishInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     available_artifacts: []const ImportedModuleView = &.{},
     relation_artifacts: []const ImportedModuleView = &.{},
+    platform_requirement_artifact: ?ImportedModuleView = null,
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
@@ -413,6 +449,8 @@ pub const PublishInputs = struct {
 
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
+    pub const Error = Allocator.Error || error{CompileTimeProblem};
+
     context: ?*anyopaque = null,
     finalize: *const fn (
         context: ?*anyopaque,
@@ -422,7 +460,7 @@ pub const CompileTimeFinalizer = struct {
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
         problem_store: ?*problem.Store,
-    ) anyerror!void,
+    ) Error!void,
 
     pub fn run(
         self: CompileTimeFinalizer,
@@ -432,7 +470,7 @@ pub const CompileTimeFinalizer = struct {
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
         problem_store: ?*problem.Store,
-    ) anyerror!void {
+    ) Error!void {
         try self.finalize(self.context, allocator, artifact, imports, available_artifacts, relation_artifacts, problem_store);
     }
 };
@@ -5948,6 +5986,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     const empty_exported_const_templates = ExportedConstTemplateTable{};
     const empty_provided_exports = ProvidedExportTable{};
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+    const empty_platform_required_declarations = PlatformRequiredDeclarationTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
     const empty_hoisted_constants = HoistedConstTable{};
@@ -5980,6 +6019,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .exported_const_templates = empty_exported_const_templates.view(),
         .provided_exports = &empty_provided_exports,
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
+        .platform_required_declarations = &empty_platform_required_declarations,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
         .hoisted_constants = &empty_hoisted_constants,
@@ -10404,6 +10444,55 @@ fn checkedBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeI
     }
 }
 
+/// Public `checkedTypeBuiltinNominal` function.
+pub fn checkedTypeBuiltinNominal(
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+) ?CheckedBuiltinNominal {
+    return checkedBuiltinForLiteralTarget(artifact.checked_types.view(), root);
+}
+
+/// Public `checkedTypeRootKey` function.
+pub fn checkedTypeRootKey(
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+) canonical.CanonicalTypeKey {
+    const index: usize = @intFromEnum(root);
+    if (index >= artifact.checked_types.roots.items.len) {
+        checkedArtifactInvariant("checked type key lookup referenced a missing root", .{});
+    }
+    return artifact.checked_types.roots.items[index].key;
+}
+
+/// Public `builtinNominalAcceptsNumeralLiteral` function.
+pub fn builtinNominalAcceptsNumeralLiteral(builtin_nominal: CheckedBuiltinNominal) bool {
+    return switch (builtin_nominal) {
+        .u8,
+        .i8,
+        .u16,
+        .i16,
+        .u32,
+        .i32,
+        .u64,
+        .i64,
+        .u128,
+        .i128,
+        .f32,
+        .f64,
+        .dec,
+        => true,
+
+        .bool,
+        .str,
+        .list,
+        .box,
+        .parse_tag_union_spec,
+        .fields,
+        .field,
+        => false,
+    };
+}
+
 fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?CheckedBuiltinNominal {
     return switch (variable.numeric_default_phase orelse return null) {
         .mono_specialization => .dec,
@@ -10499,6 +10588,88 @@ fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: us
         out[pad + digit_count - 1 - i] = digit;
     }
     return out;
+}
+
+/// Whether a parser-owned numeral literal can be represented by a builtin nominal type.
+pub fn numeralLiteralFitsBuiltin(
+    allocator: Allocator,
+    module_env: *const ModuleEnv,
+    literal: ModuleEnv.NumeralLiteral,
+    builtin_nominal: CheckedBuiltinNominal,
+    has_suffix: bool,
+) Allocator.Error!bool {
+    const text = try numeralLiteralDecimalText(allocator, module_env, literal);
+    defer allocator.free(text);
+    return numeralTextFitsBuiltin(text, builtin_nominal, has_suffix);
+}
+
+fn numeralTextFitsBuiltin(text: []const u8, builtin_nominal: CheckedBuiltinNominal, has_suffix: bool) bool {
+    return switch (builtin_nominal) {
+        .u8 => parseIntFits(u8, text),
+        .u16 => parseIntFits(u16, text),
+        .u32 => parseIntFits(u32, text),
+        .u64 => parseIntFits(u64, text),
+        .u128 => parseIntFits(u128, text),
+        .i8 => parseIntFits(i8, text),
+        .i16 => parseIntFits(i16, text),
+        .i32 => parseIntFits(i32, text),
+        .i64 => parseIntFits(i64, text),
+        .i128 => parseIntFits(i128, text),
+        .f32 => parseFloatFits(f32, text),
+        .f64 => parseFloatFits(f64, text),
+        .dec => builtins.dec.RocDec.fromNonemptySlice(text) != null or !has_suffix,
+        else => true,
+    };
+}
+
+fn parseIntFits(comptime T: type, text: []const u8) bool {
+    _ = std.fmt.parseInt(T, text, 10) catch return false;
+    return true;
+}
+
+fn parseFloatFits(comptime T: type, text: []const u8) bool {
+    _ = std.fmt.parseFloat(T, text) catch return false;
+    return true;
+}
+
+/// Whether an integer literal value can be represented by a builtin nominal type.
+pub fn intLiteralFitsBuiltin(value: CIR.IntValue, builtin_nominal: CheckedBuiltinNominal) bool {
+    return switch (builtin_nominal) {
+        .u8 => intValueFitsUnsigned(u8, value),
+        .u16 => intValueFitsUnsigned(u16, value),
+        .u32 => intValueFitsUnsigned(u32, value),
+        .u64 => intValueFitsUnsigned(u64, value),
+        .u128 => intValueFitsUnsigned(u128, value),
+        .i8 => intValueFitsSigned(i8, value),
+        .i16 => intValueFitsSigned(i16, value),
+        .i32 => intValueFitsSigned(i32, value),
+        .i64 => intValueFitsSigned(i64, value),
+        .i128 => intValueFitsSigned(i128, value),
+        else => true,
+    };
+}
+
+fn intValueFitsUnsigned(comptime T: type, value: CIR.IntValue) bool {
+    const max_value = @as(u128, std.math.maxInt(T));
+    return switch (value.kind) {
+        .u128 => @as(u128, @bitCast(value.bytes)) <= max_value,
+        .i128 => blk: {
+            const signed_value = @as(i128, @bitCast(value.bytes));
+            if (signed_value < 0) break :blk false;
+            break :blk @as(u128, @intCast(signed_value)) <= max_value;
+        },
+    };
+}
+
+fn intValueFitsSigned(comptime T: type, value: CIR.IntValue) bool {
+    return switch (value.kind) {
+        .u128 => @as(u128, @bitCast(value.bytes)) <= @as(u128, @intCast(std.math.maxInt(T))),
+        .i128 => blk: {
+            const signed_value = @as(i128, @bitCast(value.bytes));
+            break :blk signed_value >= @as(i128, std.math.minInt(T)) and
+                signed_value <= @as(i128, std.math.maxInt(T));
+        },
+    };
 }
 
 fn fracLitToF64(literal: FracLit) f64 {
@@ -13985,6 +14156,421 @@ fn platformRequiredPayloadForDeclaration(
     };
 }
 
+fn applyPlatformRequiredSignatureSubstitutions(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
+    platform_requirement_context: ?PlatformRequirementContextKey,
+    platform_requirement_artifact: ?ImportedModuleView,
+) Allocator.Error!void {
+    const context = platform_requirement_context orelse return;
+    const platform = platform_requirement_artifact orelse {
+        checkedArtifactInvariant("platform requirement substitution missing platform declaration artifact", .{});
+    };
+    const expected_context = PlatformRequirementContextKey.compute(
+        platform.module_identity,
+        platform.platform_required_declarations.identityHash(platform.canonical_names),
+    );
+    if (!std.meta.eql(context.bytes, expected_context.bytes)) {
+        checkedArtifactInvariant("platform requirement substitution context does not match declaration artifact", .{});
+    }
+
+    if (platform.platform_required_declarations.declarations.len == 0) return;
+
+    var projector = CheckedTypeStoreImportProjector.init(allocator, &checked_types.store, names, platform);
+    defer projector.deinit();
+
+    var formals = std.ArrayList(CheckedTypeId).empty;
+    defer formals.deinit(allocator);
+    var actuals = std.ArrayList(CheckedTypeId).empty;
+    defer actuals.deinit(allocator);
+    var app_scheme_keys = std.ArrayList(canonical.CanonicalTypeSchemeKey).empty;
+    defer app_scheme_keys.deinit(allocator);
+
+    var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
+    defer active.deinit();
+
+    for (platform.platform_required_declarations.declarations) |declaration| {
+        const required_name = try names.internExportName(platform.canonical_names.exportNameText(declaration.platform_name));
+        const app_def = appDefByRequiredName(module, names, required_name) orelse continue;
+        const app_root = checked_types.rootForSourceVar(module, module.defType(app_def)) orelse {
+            checkedArtifactInvariant("platform requirement substitution missing app def checked root", .{});
+        };
+        const app_scheme_key = try canonical_type_keys.schemeFromVar(
+            allocator,
+            module.typeStoreConst(),
+            module.identStoreConst(),
+            module.defType(app_def),
+        );
+        const platform_scheme = platform.checked_types.schemeForKey(declaration.declared_source_ty) orelse {
+            checkedArtifactInvariant("platform requirement substitution missing platform declaration checked scheme", .{});
+        };
+        const expected_root = try projector.project(platform_scheme.root);
+
+        active.clearRetainingCapacity();
+        try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            &checked_types.store,
+            expected_root,
+            app_root,
+            &formals,
+            &actuals,
+            &active,
+        );
+        try app_scheme_keys.append(allocator, app_scheme_key);
+    }
+
+    if (formals.items.len == 0) return;
+
+    var clone_active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    defer clone_active.deinit();
+
+    for (checked_types.source_type_roots) |*entry| {
+        clone_active.clearRetainingCapacity();
+        entry.checked_root = try checked_types.store.cloneCheckedTypeRootSubstituting(
+            allocator,
+            names,
+            entry.checked_root,
+            formals.items,
+            actuals.items,
+            &clone_active,
+        );
+    }
+
+    for (app_scheme_keys.items) |scheme_key| {
+        for (checked_types.store.schemes.items) |*scheme| {
+            if (!std.meta.eql(scheme.key.bytes, scheme_key.bytes)) continue;
+            clone_active.clearRetainingCapacity();
+            scheme.root = try checked_types.store.cloneCheckedTypeRootSubstituting(
+                allocator,
+                names,
+                scheme.root,
+                formals.items,
+                actuals.items,
+                &clone_active,
+            );
+            break;
+        }
+    }
+}
+
+fn appDefByRequiredName(
+    module: TypedCIR.Module,
+    names: *const canonical.CanonicalNameStore,
+    required_name: canonical.ExportNameId,
+) ?CIR.Def.Idx {
+    const module_env = module.moduleEnvConst();
+    for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
+        const def = module.def(def_idx);
+        const name = def.patternName() orelse continue;
+        if (names.lookupExportIdent(module.identStoreConst(), name) == required_name) return def_idx;
+    }
+    return null;
+}
+
+fn collectPlatformRequiredSignatureSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    expected: CheckedTypeId,
+    actual: CheckedTypeId,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    if (expected == actual) return;
+
+    const pair = PlatformRequirementTypePair{
+        .expected = @intFromEnum(expected),
+        .actual = @intFromEnum(actual),
+    };
+    if (active.contains(pair)) return;
+    try active.put(pair, {});
+    defer _ = active.remove(pair);
+
+    const expected_payload = store.payload(expected);
+    const actual_payload = store.payload(actual);
+
+    if (checkedTypePayloadIsIdentity(actual_payload)) {
+        if (checkedTypePayloadIsIdentity(expected_payload)) return;
+        if (checkedTypePayloadIsLiteralDefaultPinnedVar(actual_payload) and
+            checkedTypePayloadIsStructuralAggregate(expected_payload))
+        {
+            return;
+        }
+        try appendUniquePlatformForClauseSubstitution(formals, actuals, allocator, actual, expected);
+        return;
+    }
+    if (checkedTypePayloadIsIdentity(expected_payload)) return;
+
+    switch (expected_payload) {
+        .alias => |alias| return try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            alias.backing,
+            actual,
+            formals,
+            actuals,
+            active,
+        ),
+        else => {},
+    }
+    switch (actual_payload) {
+        .alias => |alias| return try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected,
+            alias.backing,
+            formals,
+            actuals,
+            active,
+        ),
+        else => {},
+    }
+
+    switch (expected_payload) {
+        .function => |expected_fn| {
+            const actual_fn = switch (actual_payload) {
+                .function => |actual_fn| actual_fn,
+                else => return,
+            };
+            if (expected_fn.args.len != actual_fn.args.len) return;
+            for (expected_fn.args, actual_fn.args) |expected_arg, actual_arg| {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_arg,
+                    actual_arg,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_fn.ret,
+                actual_fn.ret,
+                formals,
+                actuals,
+                active,
+            );
+        },
+        .nominal => |expected_nominal| {
+            const actual_nominal = switch (actual_payload) {
+                .nominal => |actual_nominal| actual_nominal,
+                else => {
+                    if (!expected_nominal.is_opaque) {
+                        try collectPlatformRequiredSignatureSubstitutions(
+                            allocator,
+                            names,
+                            store,
+                            expected_nominal.backing,
+                            actual,
+                            formals,
+                            actuals,
+                            active,
+                        );
+                    }
+                    return;
+                },
+            };
+            if (expected_nominal.name != actual_nominal.name or
+                expected_nominal.origin_module != actual_nominal.origin_module or
+                expected_nominal.source_decl != actual_nominal.source_decl or
+                expected_nominal.builtin != actual_nominal.builtin or
+                expected_nominal.args.len != actual_nominal.args.len)
+            {
+                return;
+            }
+            for (expected_nominal.args, actual_nominal.args) |expected_arg, actual_arg| {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_arg,
+                    actual_arg,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+            if (!expected_nominal.is_opaque) {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_nominal.backing,
+                    actual_nominal.backing,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+        },
+        .tuple => |expected_items| {
+            const actual_items = switch (actual_payload) {
+                .tuple => |actual_items| actual_items,
+                else => return,
+            };
+            if (expected_items.len != actual_items.len) return;
+            for (expected_items, actual_items) |expected_item, actual_item| {
+                try collectPlatformRequiredSignatureSubstitutions(
+                    allocator,
+                    names,
+                    store,
+                    expected_item,
+                    actual_item,
+                    formals,
+                    actuals,
+                    active,
+                );
+            }
+        },
+        .empty_record,
+        .record,
+        .record_unbound,
+        => try collectPlatformRequiredRecordSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected_payload,
+            actual_payload,
+            formals,
+            actuals,
+            active,
+        ),
+        .empty_tag_union,
+        .tag_union,
+        => try collectPlatformRequiredTagSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected_payload,
+            actual_payload,
+            formals,
+            actuals,
+            active,
+        ),
+        else => {},
+    }
+}
+
+fn collectPlatformRequiredRecordSignatureSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    expected_payload: CheckedTypePayload,
+    actual_payload: CheckedTypePayload,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    const expected_parts = recordParts(expected_payload) orelse return;
+    const actual_parts = recordParts(actual_payload) orelse return;
+    const expected_row = try flattenPlatformRequirementRecordRow(allocator, store, expected_parts.fields, expected_parts.ext);
+    defer expected_row.deinit(allocator);
+    const actual_row = try flattenPlatformRequirementRecordRow(allocator, store, actual_parts.fields, actual_parts.ext);
+    defer actual_row.deinit(allocator);
+
+    for (expected_row.fields) |expected_field| {
+        const actual_field = findRecordField(names, actual_row.fields, expected_field.name) orelse {
+            if (actual_row.tail) |tail| {
+                if (checkedTypePayloadIsIdentity(platformRequirementPayload(store, tail))) continue;
+            }
+            continue;
+        };
+        try collectPlatformRequiredSignatureSubstitutions(
+            allocator,
+            names,
+            store,
+            expected_field.ty,
+            actual_field.ty,
+            formals,
+            actuals,
+            active,
+        );
+    }
+
+    if (expected_row.tail) |expected_tail| {
+        if (actual_row.tail) |actual_tail| {
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_tail,
+                actual_tail,
+                formals,
+                actuals,
+                active,
+            );
+        }
+    }
+}
+
+fn collectPlatformRequiredTagSignatureSubstitutions(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    expected_payload: CheckedTypePayload,
+    actual_payload: CheckedTypePayload,
+    formals: *std.ArrayList(CheckedTypeId),
+    actuals: *std.ArrayList(CheckedTypeId),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    const expected_union = tagUnionParts(expected_payload) orelse return;
+    const actual_union = tagUnionParts(actual_payload) orelse return;
+    const expected_row = try flattenPlatformRequirementTagRow(allocator, store, expected_union.tags, expected_union.ext);
+    defer expected_row.deinit(allocator);
+    const actual_row = try flattenPlatformRequirementTagRow(allocator, store, actual_union.tags, actual_union.ext);
+    defer actual_row.deinit(allocator);
+
+    for (expected_row.tags) |expected_tag| {
+        const actual_tag = findTag(names, actual_row.tags, expected_tag.name) orelse {
+            if (actual_row.tail) |tail| {
+                if (checkedTypePayloadIsIdentity(platformRequirementPayload(store, tail))) continue;
+            }
+            continue;
+        };
+        const expected_args = expected_tag.argsSlice(store);
+        const actual_args = actual_tag.argsSlice(store);
+        if (expected_args.len != actual_args.len) continue;
+        for (expected_args, actual_args) |expected_arg, actual_arg| {
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_arg,
+                actual_arg,
+                formals,
+                actuals,
+                active,
+            );
+        }
+    }
+
+    if (expected_row.tail) |expected_tail| {
+        if (actual_row.tail) |actual_tail| {
+            try collectPlatformRequiredSignatureSubstitutions(
+                allocator,
+                names,
+                store,
+                expected_tail,
+                actual_tail,
+                formals,
+                actuals,
+                active,
+            );
+        }
+    }
+}
+
 fn applyPlatformForClauseSubstitutions(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -14422,6 +15008,405 @@ fn platformRequirementTypesCompatible(
     return try checker.compatible(scratch_expected, scratch_actual);
 }
 
+/// Public `checkedTypesCompatible` function.
+pub fn checkedTypesCompatible(
+    allocator: Allocator,
+    expected_artifact: *const CheckedModuleArtifact,
+    expected: CheckedTypeId,
+    actual_artifact: *const CheckedModuleArtifact,
+    actual: CheckedTypeId,
+) Allocator.Error!bool {
+    return platformRequirementTypesCompatible(allocator, expected_artifact, expected, actual_artifact, actual);
+}
+
+/// A platform-required numeric target for an app-side checked type root.
+pub const PlatformRequiredNumericExpectation = struct {
+    app_type: canonical.CanonicalTypeKey,
+    expected_builtin: CheckedBuiltinNominal,
+};
+
+/// Collect app type roots whose numeric builtin target is implied by platform requirements.
+pub fn collectPlatformRequiredNumericExpectations(
+    allocator: Allocator,
+    platform_declaration_artifact: *const CheckedModuleArtifact,
+    app_artifact: *const CheckedModuleArtifact,
+) Allocator.Error![]const PlatformRequiredNumericExpectation {
+    var expectations = std.ArrayList(PlatformRequiredNumericExpectation).empty;
+    errdefer expectations.deinit(allocator);
+
+    var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
+    defer active.deinit();
+
+    for (platform_declaration_artifact.platform_required_declarations.declarations) |declaration| {
+        const required_name = platform_declaration_artifact.canonical_names.exportNameText(declaration.platform_name);
+        const app_value = appTopLevelValueByName(app_artifact, required_name) orelse continue;
+
+        const expected_root = platformRequiredDeclarationRoot(platform_declaration_artifact, declaration);
+        const actual_root = checkedTypeRootForScheme(app_artifact, app_value.source_scheme);
+        if (!try platformRequirementTypesCompatible(
+            allocator,
+            platform_declaration_artifact,
+            expected_root,
+            app_artifact,
+            actual_root,
+        )) continue;
+
+        active.clearRetainingCapacity();
+        try collectPlatformRequiredNumericExpectationsForTypes(
+            allocator,
+            platform_declaration_artifact,
+            expected_root,
+            app_artifact,
+            actual_root,
+            &expectations,
+            &active,
+        );
+    }
+
+    return try expectations.toOwnedSlice(allocator);
+}
+
+fn collectPlatformRequiredNumericExpectationsForTypes(
+    allocator: Allocator,
+    expected_artifact: *const CheckedModuleArtifact,
+    expected: CheckedTypeId,
+    actual_artifact: *const CheckedModuleArtifact,
+    actual: CheckedTypeId,
+    expectations: *std.ArrayList(PlatformRequiredNumericExpectation),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    const pair = PlatformRequirementTypePair{
+        .expected = @intFromEnum(expected),
+        .actual = @intFromEnum(actual),
+    };
+    if (active.contains(pair)) return;
+    try active.put(pair, {});
+    defer _ = active.remove(pair);
+
+    if (checkedTypeBuiltinNominal(expected_artifact, expected)) |expected_builtin| {
+        if (builtinNominalAcceptsNumeralLiteral(expected_builtin)) {
+            try appendPlatformRequiredNumericExpectation(
+                allocator,
+                actual_artifact,
+                actual,
+                expected_builtin,
+                expectations,
+            );
+        }
+    }
+
+    const expected_payload = expected_artifact.checked_types.payload(expected);
+    const actual_payload = actual_artifact.checked_types.payload(actual);
+
+    switch (expected_payload) {
+        .alias => |alias| return try collectPlatformRequiredNumericExpectationsForTypes(
+            allocator,
+            expected_artifact,
+            alias.backing,
+            actual_artifact,
+            actual,
+            expectations,
+            active,
+        ),
+        else => {},
+    }
+    switch (actual_payload) {
+        .alias => |alias| return try collectPlatformRequiredNumericExpectationsForTypes(
+            allocator,
+            expected_artifact,
+            expected,
+            actual_artifact,
+            alias.backing,
+            expectations,
+            active,
+        ),
+        else => {},
+    }
+    switch (actual_payload) {
+        .nominal => |actual_nominal| switch (expected_payload) {
+            .nominal => {},
+            else => {
+                if (!actual_nominal.is_opaque) {
+                    return try collectPlatformRequiredNumericExpectationsForTypes(
+                        allocator,
+                        expected_artifact,
+                        expected,
+                        actual_artifact,
+                        actual_nominal.backing,
+                        expectations,
+                        active,
+                    );
+                }
+            },
+        },
+        else => {},
+    }
+
+    switch (expected_payload) {
+        .nominal => |expected_nominal| {
+            const actual_nominal = switch (actual_payload) {
+                .nominal => |nominal| nominal,
+                else => {
+                    if (!expected_nominal.is_opaque) {
+                        try collectPlatformRequiredNumericExpectationsForTypes(
+                            allocator,
+                            expected_artifact,
+                            expected_nominal.backing,
+                            actual_artifact,
+                            actual,
+                            expectations,
+                            active,
+                        );
+                    }
+                    return;
+                },
+            };
+            if (expected_nominal.name != actual_nominal.name or
+                expected_nominal.origin_module != actual_nominal.origin_module or
+                expected_nominal.source_decl != actual_nominal.source_decl or
+                expected_nominal.builtin != actual_nominal.builtin or
+                expected_nominal.args.len != actual_nominal.args.len)
+            {
+                if (!expected_nominal.is_opaque and !actual_nominal.is_opaque) {
+                    try collectPlatformRequiredNumericExpectationsForTypes(
+                        allocator,
+                        expected_artifact,
+                        expected_nominal.backing,
+                        actual_artifact,
+                        actual_nominal.backing,
+                        expectations,
+                        active,
+                    );
+                }
+                return;
+            }
+            for (expected_nominal.args, actual_nominal.args) |expected_arg, actual_arg| {
+                try collectPlatformRequiredNumericExpectationsForTypes(
+                    allocator,
+                    expected_artifact,
+                    expected_arg,
+                    actual_artifact,
+                    actual_arg,
+                    expectations,
+                    active,
+                );
+            }
+            if (!expected_nominal.is_opaque) {
+                try collectPlatformRequiredNumericExpectationsForTypes(
+                    allocator,
+                    expected_artifact,
+                    expected_nominal.backing,
+                    actual_artifact,
+                    actual_nominal.backing,
+                    expectations,
+                    active,
+                );
+            }
+        },
+        .function => |expected_fn| {
+            const actual_fn = switch (actual_payload) {
+                .function => |function| function,
+                else => return,
+            };
+            if (expected_fn.args.len != actual_fn.args.len) return;
+            for (expected_fn.args, actual_fn.args) |expected_arg, actual_arg| {
+                try collectPlatformRequiredNumericExpectationsForTypes(
+                    allocator,
+                    expected_artifact,
+                    expected_arg,
+                    actual_artifact,
+                    actual_arg,
+                    expectations,
+                    active,
+                );
+            }
+            try collectPlatformRequiredNumericExpectationsForTypes(
+                allocator,
+                expected_artifact,
+                expected_fn.ret,
+                actual_artifact,
+                actual_fn.ret,
+                expectations,
+                active,
+            );
+        },
+        .tuple => |expected_items| {
+            const actual_items = switch (actual_payload) {
+                .tuple => |items| items,
+                else => return,
+            };
+            if (expected_items.len != actual_items.len) return;
+            for (expected_items, actual_items) |expected_item, actual_item| {
+                try collectPlatformRequiredNumericExpectationsForTypes(
+                    allocator,
+                    expected_artifact,
+                    expected_item,
+                    actual_artifact,
+                    actual_item,
+                    expectations,
+                    active,
+                );
+            }
+        },
+        .record, .record_unbound, .empty_record => try collectPlatformRequiredRecordNumericExpectations(
+            allocator,
+            expected_artifact,
+            expected_payload,
+            actual_artifact,
+            actual_payload,
+            expectations,
+            active,
+        ),
+        .tag_union, .empty_tag_union => try collectPlatformRequiredTagUnionNumericExpectations(
+            allocator,
+            expected_artifact,
+            expected_payload,
+            actual_artifact,
+            actual_payload,
+            expectations,
+            active,
+        ),
+        else => {},
+    }
+}
+
+fn collectPlatformRequiredRecordNumericExpectations(
+    allocator: Allocator,
+    expected_artifact: *const CheckedModuleArtifact,
+    expected_payload: CheckedTypePayload,
+    actual_artifact: *const CheckedModuleArtifact,
+    actual_payload: CheckedTypePayload,
+    expectations: *std.ArrayList(PlatformRequiredNumericExpectation),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    const expected_parts = recordParts(expected_payload) orelse return;
+    const actual_parts = recordParts(actual_payload) orelse return;
+
+    for (expected_parts.fields) |expected_field| {
+        const actual_field = findRecordFieldAcrossArtifacts(actual_artifact, actual_parts.fields, expected_artifact, expected_field.name) orelse continue;
+        try collectPlatformRequiredNumericExpectationsForTypes(
+            allocator,
+            expected_artifact,
+            expected_field.ty,
+            actual_artifact,
+            actual_field.ty,
+            expectations,
+            active,
+        );
+    }
+
+    if (expected_parts.ext) |expected_ext| {
+        if (actual_parts.ext) |actual_ext| {
+            try collectPlatformRequiredNumericExpectationsForTypes(
+                allocator,
+                expected_artifact,
+                expected_ext,
+                actual_artifact,
+                actual_ext,
+                expectations,
+                active,
+            );
+        }
+    }
+}
+
+fn collectPlatformRequiredTagUnionNumericExpectations(
+    allocator: Allocator,
+    expected_artifact: *const CheckedModuleArtifact,
+    expected_payload: CheckedTypePayload,
+    actual_artifact: *const CheckedModuleArtifact,
+    actual_payload: CheckedTypePayload,
+    expectations: *std.ArrayList(PlatformRequiredNumericExpectation),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    const expected_parts = tagUnionParts(expected_payload) orelse return;
+    const actual_parts = tagUnionParts(actual_payload) orelse return;
+
+    for (expected_parts.tags) |expected_tag| {
+        const actual_tag = findTagAcrossArtifacts(actual_artifact, actual_parts.tags, expected_artifact, expected_tag.name) orelse continue;
+        const expected_args = expected_tag.argsSlice(&expected_artifact.checked_types);
+        const actual_args = actual_tag.argsSlice(&actual_artifact.checked_types);
+        if (expected_args.len != actual_args.len) return;
+        for (expected_args, actual_args) |expected_arg, actual_arg| {
+            try collectPlatformRequiredNumericExpectationsForTypes(
+                allocator,
+                expected_artifact,
+                expected_arg,
+                actual_artifact,
+                actual_arg,
+                expectations,
+                active,
+            );
+        }
+    }
+
+    if (expected_parts.ext) |expected_ext| {
+        if (actual_parts.ext) |actual_ext| {
+            try collectPlatformRequiredNumericExpectationsForTypes(
+                allocator,
+                expected_artifact,
+                expected_ext,
+                actual_artifact,
+                actual_ext,
+                expectations,
+                active,
+            );
+        }
+    }
+}
+
+fn appendPlatformRequiredNumericExpectation(
+    allocator: Allocator,
+    app_artifact: *const CheckedModuleArtifact,
+    app_type: CheckedTypeId,
+    expected_builtin: CheckedBuiltinNominal,
+    expectations: *std.ArrayList(PlatformRequiredNumericExpectation),
+) Allocator.Error!void {
+    const app_key = checkedTypeRootKey(app_artifact, app_type);
+    for (expectations.items) |expectation| {
+        if (expectation.expected_builtin != expected_builtin) continue;
+        if (std.meta.eql(expectation.app_type.bytes, app_key.bytes)) return;
+    }
+    try expectations.append(allocator, .{
+        .app_type = app_key,
+        .expected_builtin = expected_builtin,
+    });
+}
+
+fn findRecordFieldAcrossArtifacts(
+    actual_artifact: *const CheckedModuleArtifact,
+    fields: []const CheckedRecordField,
+    expected_artifact: *const CheckedModuleArtifact,
+    expected_name: canonical.RecordFieldLabelId,
+) ?CheckedRecordField {
+    for (fields) |field| {
+        if (recordFieldLabelsMatch(
+            &actual_artifact.canonical_names,
+            field.name,
+            &expected_artifact.canonical_names,
+            expected_name,
+        )) return field;
+    }
+    return null;
+}
+
+fn findTagAcrossArtifacts(
+    actual_artifact: *const CheckedModuleArtifact,
+    tags: []const CheckedTag,
+    expected_artifact: *const CheckedModuleArtifact,
+    expected_name: canonical.TagLabelId,
+) ?CheckedTag {
+    for (tags) |tag| {
+        if (tagLabelsMatch(
+            &actual_artifact.canonical_names,
+            tag.name,
+            &expected_artifact.canonical_names,
+            expected_name,
+        )) return tag;
+    }
+    return null;
+}
+
 const PlatformRequirementTypePair = struct {
     expected: u32,
     actual: u32,
@@ -14563,9 +15548,9 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
     ) Allocator.Error!bool {
         const expected_parts = recordParts(expected_payload) orelse return false;
         const actual_parts = recordParts(actual_payload) orelse return false;
-        const expected_row = try self.flattenRecordRow(expected_parts.fields, expected_parts.ext);
+        const expected_row = try flattenPlatformRequirementRecordRow(self.allocator, self.store, expected_parts.fields, expected_parts.ext);
         defer expected_row.deinit(self.allocator);
-        const actual_row = try self.flattenRecordRow(actual_parts.fields, actual_parts.ext);
+        const actual_row = try flattenPlatformRequirementRecordRow(self.allocator, self.store, actual_parts.fields, actual_parts.ext);
         defer actual_row.deinit(self.allocator);
 
         for (expected_row.fields) |expected_field| {
@@ -14595,9 +15580,9 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
     ) Allocator.Error!bool {
         const expected_union = tagUnionParts(expected_payload) orelse return false;
         const actual_union = tagUnionParts(actual_payload) orelse return false;
-        const expected_row = try self.flattenTagRow(expected_union.tags, expected_union.ext);
+        const expected_row = try flattenPlatformRequirementTagRow(self.allocator, self.store, expected_union.tags, expected_union.ext);
         defer expected_row.deinit(self.allocator);
-        const actual_row = try self.flattenTagRow(actual_union.tags, actual_union.ext);
+        const actual_row = try flattenPlatformRequirementTagRow(self.allocator, self.store, actual_union.tags, actual_union.ext);
         defer actual_row.deinit(self.allocator);
 
         for (expected_row.tags) |expected_tag| {
@@ -14630,103 +15615,109 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         return checkedTypePayloadIsIdentity(self.payload(tail_id));
     }
 
-    const FlattenedRecordRow = struct {
-        fields: []const CheckedRecordField,
-        tail: ?CheckedTypeId,
-
-        fn deinit(self: @This(), allocator: Allocator) void {
-            if (self.fields.len > 0) allocator.free(self.fields);
-        }
-    };
-
-    fn flattenRecordRow(
-        self: *PlatformRequirementTypeCompatibilityChecker,
-        head: []const CheckedRecordField,
-        ext: ?CheckedTypeId,
-    ) Allocator.Error!FlattenedRecordRow {
-        var fields = std.ArrayList(CheckedRecordField).empty;
-        errdefer fields.deinit(self.allocator);
-        try fields.appendSlice(self.allocator, head);
-        var tail = ext;
-        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-        while (tail) |tail_id| {
-            if (seen.contains(tail_id)) {
-                tail = null;
-                break;
-            }
-            try seen.put(tail_id, {});
-            switch (self.payload(tail_id)) {
-                .empty_record => {
-                    tail = null;
-                    break;
-                },
-                .record => |record| {
-                    try fields.appendSlice(self.allocator, record.fields);
-                    tail = record.ext;
-                },
-                .record_unbound => |tail_fields| {
-                    try fields.appendSlice(self.allocator, tail_fields);
-                    tail = null;
-                    break;
-                },
-                .alias => |alias| tail = alias.backing,
-                else => break,
-            }
-        }
-        return .{ .fields = try fields.toOwnedSlice(self.allocator), .tail = tail };
-    }
-
-    const FlattenedTagRow = struct {
-        tags: []const CheckedTag,
-        tail: ?CheckedTypeId,
-
-        fn deinit(self: @This(), allocator: Allocator) void {
-            if (self.tags.len > 0) allocator.free(self.tags);
-        }
-    };
-
-    fn flattenTagRow(
-        self: *PlatformRequirementTypeCompatibilityChecker,
-        head: []const CheckedTag,
-        ext: ?CheckedTypeId,
-    ) Allocator.Error!FlattenedTagRow {
-        var tags = std.ArrayList(CheckedTag).empty;
-        errdefer tags.deinit(self.allocator);
-        try tags.appendSlice(self.allocator, head);
-        var tail = ext;
-        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-        while (tail) |tail_id| {
-            if (seen.contains(tail_id)) {
-                tail = null;
-                break;
-            }
-            try seen.put(tail_id, {});
-            switch (self.payload(tail_id)) {
-                .empty_tag_union => {
-                    tail = null;
-                    break;
-                },
-                .tag_union => |tag_union| {
-                    try tags.appendSlice(self.allocator, tag_union.tags);
-                    tail = tag_union.ext;
-                },
-                .alias => |alias| tail = alias.backing,
-                else => break,
-            }
-        }
-        return .{ .tags = try tags.toOwnedSlice(self.allocator), .tail = tail };
-    }
-
     fn payload(self: *const PlatformRequirementTypeCompatibilityChecker, root: CheckedTypeId) CheckedTypePayload {
-        const index: usize = @intFromEnum(root);
-        if (index >= self.store.payloads.items.len) {
-            checkedArtifactInvariant("platform requirement type compatibility referenced missing checked type payload", .{});
-        }
-        return self.store.payload(@enumFromInt(index));
+        return platformRequirementPayload(self.store, root);
     }
 };
+
+const FlattenedPlatformRequirementRecordRow = struct {
+    fields: []const CheckedRecordField,
+    tail: ?CheckedTypeId,
+
+    fn deinit(self: @This(), allocator: Allocator) void {
+        if (self.fields.len > 0) allocator.free(self.fields);
+    }
+};
+
+fn flattenPlatformRequirementRecordRow(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    head: []const CheckedRecordField,
+    ext: ?CheckedTypeId,
+) Allocator.Error!FlattenedPlatformRequirementRecordRow {
+    var fields = std.ArrayList(CheckedRecordField).empty;
+    errdefer fields.deinit(allocator);
+    try fields.appendSlice(allocator, head);
+    var tail = ext;
+    var seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer seen.deinit();
+    while (tail) |tail_id| {
+        if (seen.contains(tail_id)) {
+            tail = null;
+            break;
+        }
+        try seen.put(tail_id, {});
+        switch (platformRequirementPayload(store, tail_id)) {
+            .empty_record => {
+                tail = null;
+                break;
+            },
+            .record => |record| {
+                try fields.appendSlice(allocator, record.fields);
+                tail = record.ext;
+            },
+            .record_unbound => |tail_fields| {
+                try fields.appendSlice(allocator, tail_fields);
+                tail = null;
+                break;
+            },
+            .alias => |alias| tail = alias.backing,
+            else => break,
+        }
+    }
+    return .{ .fields = try fields.toOwnedSlice(allocator), .tail = tail };
+}
+
+const FlattenedPlatformRequirementTagRow = struct {
+    tags: []const CheckedTag,
+    tail: ?CheckedTypeId,
+
+    fn deinit(self: @This(), allocator: Allocator) void {
+        if (self.tags.len > 0) allocator.free(self.tags);
+    }
+};
+
+fn flattenPlatformRequirementTagRow(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    head: []const CheckedTag,
+    ext: ?CheckedTypeId,
+) Allocator.Error!FlattenedPlatformRequirementTagRow {
+    var tags = std.ArrayList(CheckedTag).empty;
+    errdefer tags.deinit(allocator);
+    try tags.appendSlice(allocator, head);
+    var tail = ext;
+    var seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer seen.deinit();
+    while (tail) |tail_id| {
+        if (seen.contains(tail_id)) {
+            tail = null;
+            break;
+        }
+        try seen.put(tail_id, {});
+        switch (platformRequirementPayload(store, tail_id)) {
+            .empty_tag_union => {
+                tail = null;
+                break;
+            },
+            .tag_union => |tag_union| {
+                try tags.appendSlice(allocator, tag_union.tags);
+                tail = tag_union.ext;
+            },
+            .alias => |alias| tail = alias.backing,
+            else => break,
+        }
+    }
+    return .{ .tags = try tags.toOwnedSlice(allocator), .tail = tail };
+}
+
+fn platformRequirementPayload(store: *const CheckedTypeStore, root: CheckedTypeId) CheckedTypePayload {
+    const index: usize = @intFromEnum(root);
+    if (index >= store.payloads.items.len) {
+        checkedArtifactInvariant("platform requirement referenced missing checked type payload", .{});
+    }
+    return store.payload(@enumFromInt(index));
+}
 
 fn findRecordFieldById(
     fields: []const CheckedRecordField,
@@ -17248,6 +18239,14 @@ fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
     };
 }
 
+/// Public `checkedTypeRootIsIdentity` function.
+pub fn checkedTypeRootIsIdentity(
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+) bool {
+    return checkedTypePayloadIsIdentity(artifact.checked_types.payload(root));
+}
+
 /// A structural aggregate type: a tag union, record, or tuple. A value pinned to a
 /// numeric default can never have one of these shapes.
 fn checkedTypePayloadIsStructuralAggregate(payload: CheckedTypePayload) bool {
@@ -17474,9 +18473,9 @@ fn appTopLevelValueByName(
     app_artifact: *const CheckedModuleArtifact,
     required_name: []const u8,
 ) ?TopLevelValueEntry {
+    const required_export = app_artifact.canonical_names.lookupExportName(required_name) orelse return null;
     for (app_artifact.top_level_values.entries) |entry| {
-        const app_name = app_artifact.canonical_names.exportNameText(entry.source_name);
-        if (Ident.textEql(app_name, required_name)) return entry;
+        if (entry.source_name == required_export) return entry;
     }
     return null;
 }
@@ -23507,6 +24506,7 @@ pub const ImportedModuleView = struct {
     exported_const_templates: ExportedConstTemplateView,
     provided_exports: *const ProvidedExportTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     callable_eval_templates: CallableEvalTemplateTableView,
     hoisted_constants: *const HoistedConstTable,
@@ -23550,6 +24550,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_const_templates = artifact.exported_const_templates.view(),
         .provided_exports = &artifact.provided_exports,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+        .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .hoisted_constants = &artifact.hoisted_constants,
@@ -24806,8 +25807,8 @@ pub fn checkedModuleKeyFromTypedModule(
     const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
     defer allocator.free(direct_import_artifact_keys);
 
-    return CheckedModuleArtifactKey.compute(
-        module_env.getSourceAll(),
+    return CheckedModuleArtifactKey.computeFromSourceHash(
+        hashModuleSourceInputs(module_env),
         module_identity,
         checking_context_identity,
         direct_import_artifact_keys,
@@ -24820,7 +25821,7 @@ pub fn publishFromTypedModule(
     modules: *const TypedCIR.Modules,
     module_idx: u32,
     inputs: PublishInputs,
-) anyerror!CheckedModuleArtifact {
+) CompileTimeFinalizer.Error!CheckedModuleArtifact {
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
     const idents = module.identStoreConst();
@@ -24856,8 +25857,8 @@ pub fn publishFromTypedModule(
 
     const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
     errdefer allocator.free(direct_import_artifact_keys);
-    const artifact_key = CheckedModuleArtifactKey.compute(
-        module_env.getSourceAll(),
+    const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
+        hashModuleSourceInputs(module_env),
         module_identity,
         checking_context_identity,
         direct_import_artifact_keys,
@@ -24880,6 +25881,14 @@ pub fn publishFromTypedModule(
     var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports, inputs.available_artifacts, &source_nodes);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
+    try applyPlatformRequiredSignatureSubstitutions(
+        allocator,
+        module,
+        &canonical_names,
+        &checked_type_publication,
+        inputs.platform_requirement_context,
+        inputs.platform_requirement_artifact,
+    );
     try applyPlatformForClauseSubstitutions(
         allocator,
         module,
@@ -25276,7 +26285,7 @@ const ProvidedExportKindExpectation = struct {
 fn expectProvidedExportKind(
     source: []const u8,
     expected: ProvidedExportKindExpectation,
-) anyerror!void {
+) (@import("test/TestEnv.zig").TestEnvError || Allocator.Error)!void {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;
@@ -25335,6 +26344,7 @@ fn expectProvidedExportKind(
     const empty_exported_const_templates = ExportedConstTemplateTable{};
     const empty_provided_exports = ProvidedExportTable{};
     const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+    const empty_platform_required_declarations = PlatformRequiredDeclarationTable{};
     const empty_platform_required_bindings = PlatformRequiredBindingTable{};
     const empty_callable_eval_templates = CallableEvalTemplateTable{};
     const empty_hoisted_constants = HoistedConstTable{};
@@ -25367,6 +26377,7 @@ fn expectProvidedExportKind(
         .exported_const_templates = empty_exported_const_templates.view(),
         .provided_exports = &empty_provided_exports,
         .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
+        .platform_required_declarations = &empty_platform_required_declarations,
         .platform_required_bindings = &empty_platform_required_bindings,
         .callable_eval_templates = empty_callable_eval_templates.view(),
         .hoisted_constants = &empty_hoisted_constants,
@@ -26186,7 +27197,7 @@ fn isSliceField(comptime FT: type) bool {
 /// slices, allocate + byte-fill each field, serialize, deserialize, and assert
 /// every field is byte-identical (incl. padding) after relocation. Validates the
 /// per-field serialize/deserialize wiring for any POD element shape.
-fn expectAllSliceStoreRoundTrips(comptime Store: type) anyerror!void {
+fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestError!void {
     const gpa = std.testing.allocator;
     var store: Store = .{};
     inline for (std.meta.fields(Store)) |field| {
@@ -26551,6 +27562,43 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqualSlices(u8, &ty1_key.bytes, &loaded.checked_types.roots.items[1].key.bytes);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_record, loaded.checked_types.payloads.items[0]);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_tag_union, loaded.checked_types.payloads.items[1]);
+}
+
+test "module source input hash uses explicit file dependency state" {
+    const gpa = std.testing.allocator;
+
+    var missing_env = try ModuleEnv.init(gpa, "module []\n");
+    defer missing_env.deinit();
+    try missing_env.initCIRFields("Test");
+    const missing_idx = try missing_env.recordFileDependency("data.txt");
+    missing_env.setFileDependencyMissing(missing_idx);
+    const missing_hash = hashModuleSourceInputs(&missing_env);
+
+    missing_env.file_dependencies.items.items[@intFromEnum(missing_idx)].content_hash = [_]u8{0xFE} ** 32;
+    const missing_hash_after_payload_change = hashModuleSourceInputs(&missing_env);
+    try std.testing.expectEqualSlices(u8, &missing_hash, &missing_hash_after_payload_change);
+
+    var unreadable_env = try ModuleEnv.init(gpa, "module []\n");
+    defer unreadable_env.deinit();
+    try unreadable_env.initCIRFields("Test");
+    const unreadable_idx = try unreadable_env.recordFileDependency("data.txt");
+    unreadable_env.setFileDependencyUnreadable(unreadable_idx);
+    const unreadable_hash = hashModuleSourceInputs(&unreadable_env);
+
+    var present_env = try ModuleEnv.init(gpa, "module []\n");
+    defer present_env.deinit();
+    try present_env.initCIRFields("Test");
+    const present_idx = try present_env.recordFileDependency("data.txt");
+    present_env.setFileDependencyContentHash(present_idx, [_]u8{0} ** 32);
+    const present_hash = hashModuleSourceInputs(&present_env);
+
+    const missing_bits: u256 = @bitCast(missing_hash);
+    const unreadable_bits: u256 = @bitCast(unreadable_hash);
+    const present_bits: u256 = @bitCast(present_hash);
+
+    try std.testing.expect(missing_bits != unreadable_bits);
+    try std.testing.expect(missing_bits != present_bits);
+    try std.testing.expect(unreadable_bits != present_bits);
 }
 
 test "SERIALIZED_VERSION_HASH golden value" {

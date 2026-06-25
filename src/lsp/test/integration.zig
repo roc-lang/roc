@@ -17,4 +17,5 @@ const parse_error_tests = @import("parse_error_test.zig");
 const handler_integration_tests = @import("handler_integration_tests.zig");
 
 pub const Spec = integration_spec.Spec;
+pub const SpecError = integration_spec.SpecError;
 pub const specs = parse_error_tests.specs ++ syntax_tests.specs ++ handler_integration_tests.specs;
