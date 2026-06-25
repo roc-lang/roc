@@ -1,602 +1,641 @@
-# Complete Compile-Time Roots And Static Data Plan
+# Builtin Iterator Internal Plans
 
 ## Goal
 
-Complete the compiler work required for this statement to be true without
-asterisks:
+Convert optimized Roc iterator lowering from the current public `Iter` record
+hot path into compiler-owned iterator plans that optimize to the same basic
+shape as Rust iterators: concrete state carried in loop locals, direct calls to
+known adapter functions, no iterator-wrapper heap allocation, and no repeated
+construction/destruction of public step values in optimized consumers.
 
-> Every eligible top-level value and every eligible top-level-equivalent
-> expression is evaluated during checking; maximal selected roots are subsumed
-> correctly; compile-time observables run during that evaluation; and every
-> reachable evaluated value that needs a target static representation is
-> emitted once as static data and shared by later uses.
+The public Roc API does not change:
 
-The concrete proof case is Rocci Bird with the `on_screen_collided!`
-`base_points` value left in this shape:
+- `Iter(item)` remains the public builtin iterator type.
+- `Iter` methods remain pure functions.
+- Public iterator values remain immutable and reusable.
+- `Iter.next`, `.step`, `Iter.map`, `Iter.keep_if`, `Iter.append`,
+  `Iter.concat`, `List.iter`, ranges, and custom iterators keep their current
+  source-level meanings.
+
+The optimized internal representation is allowed to be different. The compiler
+may lower recognized builtin iterator pipelines to private mutable cursor state
+when that mutation is not observable by Roc source.
+
+## Motivation
+
+Rocci Bird exposed that the current pure-Roc iterator implementation is much
+bulkier than Rust's optimized iterator code. After static-data hoisting and the
+`Append` branch fix, the `.iter()` and no-`.iter()` Rocci Bird builds are close
+in size, which proves the original static-data rebuild problem is no longer the
+dominant issue. The remaining gap is that Roc still often represents iteration
+as public `Iter` records, step closures, public step tag unions, and rest
+iterator records that are constructed only to be immediately destructured by a
+consumer.
+
+Rust avoids that shape. In `/home/rtfeldman/code/rust`, the core iterator trait
+is `next(&mut self) -> Option<Self::Item)` in
+`library/core/src/iter/traits/iterator.rs`. Adapters such as `Map`, `Filter`,
+`Chain`, `Once`, slice iterators, and `Vec::IntoIter` are concrete structs:
+
+- `library/core/src/iter/adapters/map.rs`
+- `library/core/src/iter/adapters/filter.rs`
+- `library/core/src/iter/adapters/chain.rs`
+- `library/core/src/iter/sources/once.rs`
+- `library/core/src/slice/iter.rs`
+- `library/alloc/src/vec/into_iter.rs`
+
+LLVM sees concrete state fields and private mutation. There is no universal
+runtime iterator object in the hot loop, and there is no public "rest iterator"
+record that has to be rebuilt on each step.
+
+Roc can optimize to that shape without changing the public model. The key is
+that mutable state must be compiler-created private cursor state, not mutation
+of a public Roc value.
+
+## Correctness Model
+
+This source must keep working exactly as written:
 
 ```roc
-base_points = [
-    { x: 11, y: 2 },
-    ...
-].iter()
+iter = [1, 2].iter()
+saved = iter
+
+for item in iter {
+    {}
+}
+
+use(saved)
 ```
 
-The final proof is not just "Rocci Bird builds." The final proof is:
+The loop may advance a private cursor derived from `iter`, but it must not
+mutate `saved`. If a public iterator value can be observed again, its meaning
+is unchanged.
 
-- `base_points` is evaluated during checking.
-- The static list backing for those points is emitted once.
-- The `Iter` value is emitted as static data.
-- The iterator `step` callable is represented by static callable data.
-- The callable captures point at the same static list backing.
-- `on_screen_collided!` no longer rebuilds the base list, iterator record, or
-  base iterator closure at runtime.
-
-## Terms
-
-An expression is eligible for compile-time evaluation when all of these are
-true:
-
-- it has no runtime data dependency
-- it is unconditionally evaluated at the point where the selected root is
-  evaluated
-- it contains no effectful call
-- it is not poisoned by an already-owned checking error
-
-Unresolved or erroneous expressions are not eligible for hoisting, and that
-poison is local to the expression or dependency region that owns the checking
-error. A separate eligible expression elsewhere in the same module or program
-must still be hoisted. A module, package, program, or checked artifact that
-contains diagnostics is not globally disqualified from compile-time evaluation;
-only the affected expression/dependency region is. Poison propagates through
-explicit checked dependencies, such as using an erroneous local or top-level
-value, and nowhere else. This is required for Roc's normal recovery model:
-`roc check`, test discovery, and runnable code paths must keep doing every
-sound independent piece of work even when another definition has a diagnostic.
-This is not a general "unsupported shape" escape hatch: if a well-checked
-eligible expression cannot be evaluated, stored, restored, or emitted correctly,
-that is a compiler bug to fix with a regression test.
-
-Implementation must never use a checked-module, checked-package, or
-checked-program "has diagnostics" bit as a compile-time-evaluation gate.
-Diagnostics and compile-time roots are parallel checking outputs: a bad
-expression contributes its diagnostic and poisons only dependent root
-candidates, while every independent eligible root in the same artifact is still
-published, evaluated, and later emitted if reachable.
-
-`crash`, `dbg`, and `expect` are compile-time observables. They are not
-effectful calls. If an eligible selected root contains them, they must run
-during checking.
-
-Runtime-controlled branch bodies, match guards, and match branch values are not
-standalone roots. Their contents can only run at compile time through an
-eligible enclosing control expression.
-
-Evaluation and target static-data emission are separate:
-
-- all eligible top-level values and selected hoisted roots must be evaluated
-  during checking so diagnostics are correct
-- successful unreachable values do not need target static data
-- reachable evaluated values that need a target static representation must be
-  emitted once and shared
-
-## Current State
-
-The branch already has the major pieces of the pipeline:
-
-- checker root frames and selected-root intervals in `src/check/Check.zig`
-- selected hoisted root records in `src/check/hoist_roots.zig`
-- compile-time root publication in `src/check/checked_artifact.zig`
-- checked `ConstStore` support for lists, records, tags, boxes, strings, and
-  function values in `src/check/const_store.zig`
-- compile-time finalization through LIR interpretation in
-  `src/eval/compile_time_finalization.zig`
-- Monotype restoration of stored consts in `src/postcheck/monotype/lower.zig`
-- LIR const plans for records, lists, boxes, finite callables, and erased
-  callables in `src/postcheck/solved_lir_lower.zig`
-- static-data export materialization in `src/compile/static_data_exports.zig`
-
-This work is now implemented and tested:
-
-- a function-valued aggregate can be a stored hoisted constant
-- a bare function root is still rejected as a data root and restored through
-  callable-root handling
-- provided static-data layout requests carry the originating `const_ref`/node
-  through Monotype, Lambda Solved, Lambda Mono, and LIR, so provided data
-  exports with the same checked type but different concrete callable values use
-  the exact value-specific layout/const plan instead of the first matching
-  checked type
-- `ReachableProcs.run` marks const plans reached through reachable
-  `.assign_literal .static_data` statements, so callable procedures and child
-  capture plans needed only by internal static data are preserved before
-  proc/statement compaction
-- finite callable static-data materialization is covered for zero-capture,
-  scalar-capture, captured-list, nested-callable-capture, and multi-variant
-  callable-set provided data
-- erased callable static data is covered in the callable-containing aggregate
-  path
-- static-data selection is made after LIR const-plan and layout selection, so
-  it uses explicit value, checked type, layout, and const-plan data
-- layout-inserted box edges are treated as target representation by static-data
-  selection and export materialization, not as source `Box` values
-- cross-module compile-time diagnostics are covered by tests proving eligible
-  module-level roots run even when unreachable from runtime roots
-- Rocci Bird has been rebuilt and inspected after the full static callable path
-  was completed
-
-## Invariants
-
-- There is one source of truth for root eligibility: the checker's existing
-  expression traversal in `src/check/Check.zig`.
-- There is one subsumption rule: an eligible parent frame replaces child
-  candidates in that frame's candidate interval.
-- Checker-error poison is expression/dependency-local. It is never a
-  module-wide, package-wide, or program-wide hoisting disable switch.
-- Checked artifact diagnostics must be carried alongside compile-time roots,
-  not used to suppress independent roots.
-- No backend may rediscover root eligibility from source shape, names, wasm
-  bytes, object symbols, or generated code.
-- No stage after checking reports user-facing type/effect/static-dispatch
-  errors.
-- Effectful calls are never evaluated at compile time.
-- Creating a function value is not an effectful call.
-- Function values inside compile-time aggregates are valid `ConstStore` values.
-- Static-data export writing consumes explicit `ConstStore` nodes, checked
-  types, LIR layouts, and LIR const plans.
-- Backends only lower explicit LIR statements and static-data exports.
-
-## Phase 1: Lock The Bug Down With Failing Tests
-
-Add tests before implementation changes. Each test should fail for the current
-reason, not because of syntax, platform setup, or missing imports.
-
-### Checker Root Tests
-
-File: `src/check/test/hoist_roots_test.zig`
-
-Add a test for a closed local iterator RHS inside a runtime-dependent
-function:
+This source must also keep working:
 
 ```roc
-main = |arg| {
-    base = [{ x: 1.I64, y: 2.I64 }].iter()
-    _ = arg
-    base
+iter = [1, 2].iter()
+
+first = Iter.next(iter)
+second = Iter.next(iter)
+```
+
+Both `first` and `second` observe the same original iterator. Any lowering that
+turns public `Iter.next(iter)` into destructive mutation of shared iterator
+storage is incorrect.
+
+The allowed optimized lowering is:
+
+```text
+public_or_known_iter = ...
+private_cursor = derive cursor state from public_or_known_iter
+
+while private_cursor can produce an item:
+    item = private_cursor.current_item
+    private_cursor = private_cursor.advanced_state
+    body(item)
+```
+
+For `List.iter`, `private_cursor` is just fields such as list pointer, index,
+and length. The cursor is not heap-allocated and is not refcounted. The list
+payload inside the cursor remains an ordinary Roc value and is managed by ARC.
+
+## Current Status Quo
+
+The current public builtin is in `src/build/roc/Builtin.roc`:
+
+```roc
+Iter(item) :: {
+    len_if_known : [Known(U64), Unknown],
+    step : () -> [
+        Append({ before : Iter(item), after : item }),
+        One({ item : item, rest : Iter(item) }),
+        Skip({ rest : Iter(item) }),
+        Done,
+    ],
 }
 ```
 
-Expected:
+Important current implementation points:
 
-- the selected root for `base` exists
-- the root is a binding root or root body for the full iterator value, not just
-  the child list
-- no standalone closure/function root is selected
-- no child list root remains if the iterator parent is selected
+- `List.iter` constructs public iterator records and zero-argument step
+  closures.
+- `Iter.map`, `Iter.keep_if`, `Iter.append`, and `Iter.concat` are ordinary Roc
+  functions that wrap source iterators in new public iterator records.
+- `for` lowering in `src/postcheck/monotype/lower.zig` lowers through checked
+  iterator dispatch plans, calls `.iter` and `.next`, matches the public step
+  union, and carries a public iterator value as loop state.
+- Optimized builds run call-pattern specialization in
+  `src/postcheck/monotype_lifted/spec_constr.zig`.
+- LIR passes already include scalarization, box reuse, return slots, string
+  append rewriting, tag reachability, reachable-proc cleanup, and ARC insertion
+  in `src/lir/checked_pipeline.zig`.
 
-Add a control test where the parent is runtime-dependent and the closed child
-survives:
+The current infrastructure already has useful pieces:
+
+- Checked iterator `for` has explicit dispatch plans, so post-check lowering
+  does not need to rediscover `.iter`/`.next` from source syntax.
+- Monotype lowering has exact method-target lookup for iterator dispatch.
+- SpecConstr can specialize known records, tags, tuples, and callable values
+  at direct call sites.
+- ScalarizeJoins can split struct-like loop state once it is visible in LIR.
+- TagReachability can remove impossible tag branches after earlier passes make
+  value origins explicit.
+- ARC borrow inference can optimize refcounted payloads inside iterator state.
+
+These pieces are not enough by themselves. The current hot path still exposes
+the public `Iter` representation too long, so later passes have to recover from
+record/closure/step-union construction instead of lowering the known iterator
+plan directly.
+
+## Target Design
+
+Add an explicit post-check iterator-plan representation for builtin `Iter`.
+
+The initial plan vocabulary should include:
+
+```text
+ListIter(list, index, len)
+Range(current, end, inclusivity, step)
+UnboundedRange(current, step)
+Single(item, emitted)
+Append(before, after, phase)
+Concat(first, second, phase)
+Map(source, mapping_fn)
+Filter(source, predicate_fn)
+Custom(state, step_fn)
+Public(iter_value)
+```
+
+`Public(iter_value)` is the materialization boundary. It means the compiler is
+using the ordinary public `Iter` representation because the value is being
+observed as a public Roc value, or because no explicit plan exists for the
+producer.
+
+Known plans are lowered directly in optimized consumers:
+
+- source `for`
+- `Iter.fold`
+- `List.from_iter`
+- later, any builtin consumer that repeatedly calls `Iter.next`
+
+Consumers carry plan state directly as loop parameters. A `ListIter` loop
+should carry the source list, current index, and length. A `Map` loop should
+carry the source state plus the mapping function. A `Filter` loop should carry
+the source state plus the predicate and loop internally until it finds a
+matching item or the source is done. `Append` and `Concat` should be explicit
+phase machines, not public iterator-record rebuilds.
+
+Finite and infinite iterators use the same abstraction. A finite plan has a
+reachable done state. An infinite plan, such as an unbounded range or a custom
+Fibonacci-like state machine, has no reachable done transition unless an
+adapter introduces one. Collecting an infinite iterator into a list remains
+nonterminating or resource-exhausting according to source semantics.
+
+## Non-Goals
+
+- Do not change the public Roc `Iter` API.
+- Do not require user code to annotate iterator memory behavior.
+- Do not use reference counts to decide uniqueness of `Iter` wrappers.
+- Do not teach ARC about iterator-wrapper ownership.
+- Do not have the backend inspect generated wasm, LLVM, symbols, closure
+  layouts, or object bytes to recognize iterator patterns.
+- Do not introduce source-name or display-string recognition.
+- Do not rely on a size cleanup pass to repair iterator lowering after the
+  fact.
+
+## Required Invariants
+
+- Builtin iterator operations are recognized only by exact checked identity:
+  method owner, method name id, function template, static-dispatch plan, and
+  Monotype instantiation.
+- Public Roc `Iter` values are immutable and reusable.
+- Private iterator cursor mutation is allowed only for compiler-created state
+  that cannot be observed as the original public value.
+- The `Iter` wrapper itself does not require heap allocation or refcounting.
+- Refcounted payloads inside iterator state remain ordinary Roc values and are
+  managed only by LIR ARC insertion.
+- If a known plan crosses a public observation boundary, the compiler
+  materializes the ordinary public `Iter` value with the same meaning as the
+  builtin Roc implementation.
+- If a public iterator value is passed into code without an explicit plan, that
+  code sees `Public(iter_value)`.
+- Infinite iterators are valid plans.
+- Unreachable step variants are removed from optimized consumers by explicit
+  plan facts and ordinary reachability/tag-reachability data, not by matching
+  generated code shape.
+
+## Phase 1: Lock Down Semantics With Tests
+
+Add tests before implementation changes. These tests should keep passing after
+optimization, and some should inspect optimized IR to prevent regressions.
+
+### Public Purity Tests
+
+Add evaluator or compile/run tests proving public iterator values are reusable:
 
 ```roc
-main = |arg| {
-    value = {
-        base: [{ x: 1.I64, y: 2.I64 }].iter(),
-        runtime: arg,
-    }
-    value.runtime
-}
+main =
+    iter = [1, 2].iter()
+    a = Iter.next(iter)
+    b = Iter.next(iter)
+    (a, b)
 ```
 
 Expected:
 
-- the runtime-dependent record is not selected
-- the closed iterator child remains selected
+- `a` and `b` are equal.
+- The second `Iter.next` does not observe the advanced state from the first.
 
-Add a callable aggregate subsumption test:
+Add an alias-after-loop test:
 
 ```roc
-main = |arg| {
-    value = { f: |n| n + 1.I64, bytes: [1.U8, 2.U8] }
-    _ = arg
-    value
-}
+main =
+    iter = [1, 2].iter()
+    saved = iter
+
+    sum =
+        var acc = 0
+        for item in iter {
+            acc = acc + item
+        }
+        acc
+
+    (sum, Iter.next(saved))
 ```
 
 Expected:
 
-- the record root is selected
-- the list child is not selected
-- the function expression is not selected as a data root
+- `sum` is `3`.
+- `Iter.next(saved)` still returns the first item.
 
-Add checker-error poison locality tests:
+Add rest-escaping tests:
 
 ```roc
-bad = unknown_name
+main =
+    iter = [1, 2, 3].iter()
 
-good = [1.I64, 2.I64].iter()
+    rest =
+        when Iter.next(iter) is
+            One({ rest }) -> rest
+            _ -> iter
 
-main = good
+    Iter.next(rest)
 ```
 
 Expected:
 
-- the `bad` definition owns the original checking diagnostic
-- `good` is still selected/evaluated as a compile-time root
-- `main` still depends on the stored `good` value
-- no module-wide or program-wide "has diagnostics" bit suppresses `good`
+- The escaped rest iterator has the correct public meaning.
 
-Add the dependent poisoned case:
+### Infinite Iterator Tests
 
-```roc
-bad = unknown_name
+Add tests for custom or builtin unbounded iteration once the relevant API
+exists:
 
-dependent = [bad, 1.I64].iter()
+- unbounded range consumed by `take` or an equivalent finite consumer
+- Fibonacci-like custom iterator consumed by a finite consumer
+- direct `Iter.next` on the public value remains reusable
+- optimized `for` or `fold` over a finite prefix does not allocate iterator
+  wrappers
 
-independent = [2.I64, 3.I64].iter()
-```
+If the standard library does not yet expose a finite `take`, use a custom
+consumer that breaks after `n` items.
+
+### Refcounted Payload Tests
+
+Add tests where iterator items and cursor state contain refcounted values:
+
+- list of strings iterated twice through aliased public iterators
+- `Map` returning strings
+- `Filter` over records containing lists
+- `Append` with a refcounted final item
+- `Concat` over two list iterators with shared list payloads
 
 Expected:
 
-- `dependent` is not selected because it explicitly depends on `bad`
-- `independent` is still selected
-- the original `bad` diagnostic is not duplicated by attempting to hoist
-  `dependent`
+- No leaks.
+- No double frees.
+- Reusing the public iterator after a private optimized consumer is correct.
 
-### Compile-Time Diagnostic Tests
+### Optimized IR Shape Tests
 
-File: `src/eval/test/eval_comptime_finalization_tests.zig` or a new focused
-test file under `src/eval/test`.
+Add tests that compile optimized iterator consumers and inspect post-check or
+LIR state. The exact test layer should be the earliest layer that can observe
+the intended invariant without parsing backend output.
 
-Use the existing publish/finalization helpers in `src/eval/test_helpers.zig`.
-Add tests for:
+For `List.iter` in a `for` loop:
 
-- unused top-level `crash` in the root module reports during `roc check`
-- unused top-level `crash` in an imported module reports during `roc check`
-- unused top-level `dbg` in an imported module reports during `roc check`
-- unused failed `expect` in an imported module reports during `roc check`
-- an unreachable successful top-level constant is evaluated but does not create
-  target static data
-- two selected roots that share a top-level dependency produce the diagnostic
-  once
+- no public `iter_from_step` call in the loop body
+- no zero-argument step closure call in the loop body
+- loop state carries list/index/len or equivalent fields
+- no public `One`/`Skip`/`Append`/`Done` value is built and immediately matched
 
-### Static-Data Tests
+For `Range`:
 
-File: `src/compile/test/hoisted_constants_test.zig`
+- loop state carries current/end/step fields
+- no public iterator record is constructed in the hot loop
 
-Add a static-data test for a reachable local `List.iter` value:
+For `Map`:
 
-```roc
-main! = |args| {
-    base = [{ x: 1.I64, y: 2.I64 }, { x: 3.I64, y: 4.I64 }].iter()
-    total = Iter.fold(base, 0.I64, |acc, point| acc + point.x + point.y + List.len(args).to_i64_wrap())
-    _ = total
-    Ok({})
-}
+- loop state carries source state plus mapping callable
+- produced items call the mapping function directly
+- source rest iterator is not materialized unless it escapes
+
+For `Filter`:
+
+- loop body can step source repeatedly until predicate success or done
+- `Skip` is internal control flow, not a public step value in the hot loop
+
+For `Append` and `Concat`:
+
+- generated loop state has an explicit phase or equivalent variant
+- branch code does not rebuild public `Iter.append`/`Iter.concat` records each
+  iteration
+
+## Phase 2: Define IteratorPlan Data
+
+Add explicit data structures in the post-check pipeline. The exact file names
+can change during implementation, but the ownership should be clear:
+
+- Monotype or Monotype Lifted owns type-specialized iterator plans.
+- LIR owns only lowered statements, layouts, and explicit ARC statements.
+- Backends consume LIR and do not know iterator semantics.
+
+Suggested new module:
+
+```text
+src/postcheck/iter_plan.zig
 ```
 
-Expected checked/LIR state:
+Suggested core data:
 
-- at least one hoisted constant exists for the iterator value
-- the stored `ConstStore` node for that hoisted constant contains a
-  `.fn_value`
-- lowering emits `.assign_literal .static_data` for the iterator use
-- the point-list payload bytes appear once in static exports
+```zig
+const IterPlanId = enum(u32) { _ };
 
-Add erased callable aggregate coverage:
+const IterPlan = union(enum) {
+    list: ListIter,
+    range: RangeIter,
+    unbounded_range: UnboundedRangeIter,
+    single: SingleIter,
+    append: AppendIter,
+    concat: ConcatIter,
+    map: MapIter,
+    filter: FilterIter,
+    custom: CustomIter,
+    public: PublicIter,
+};
+```
 
-- a record containing an erased callable that captures a list
-- expected static-data export has a relocation to an erased callable allocation
-- that erased callable allocation has a function-pointer relocation and a
-  relocation to the captured list backing
+Each plan stores explicit operands as Monotype expression ids, local ids,
+function ids, checked identities, or child plan ids. It must not store display
+names or source strings as semantic keys.
 
-Add finite callable aggregate coverage:
+The plan store should also expose:
 
-- zero-capture finite callable in a record
-- finite callable capturing a scalar
-- finite callable capturing a list
-- finite callable capturing another finite callable
-- finite callable in a multi-variant callable set, so the discriminant path is
-  tested
+- item type
+- known length information when available
+- whether `Done` is reachable
+- which public step variants can be produced
+- state fields needed by optimized consumers
+- materialization recipe for the public `Iter` value
 
-These tests should initially expose the `.fn_value` materialization invariant.
+Do not make variant reachability a backend-level wasm or LLVM optimization. It
+is a property of the plan.
 
-## Phase 2: Finish Checker Eligibility And Subsumption
+## Phase 3: Recognize Builtin Producers
 
-Files:
+Teach Monotype lowering to build plans for known builtin iterator producers.
 
-- `src/check/Check.zig`
-- `src/check/hoist_roots.zig`
-- `src/check/checked_artifact.zig`
-- `src/check/test/hoist_roots_test.zig`
+Initial producers:
+
+- `List.iter`
+- inclusive and exclusive numeric ranges
+- `Iter.single`
+- `Iter.append`
+- `Iter.concat`
+- `Iter.map`
+- `Iter.keep_if`
+- `Iter.drop_if` if it remains part of the public API
+- `Iter.custom`
+
+Recognition must use exact checked identity:
+
+- builtin method owner
+- method name id
+- resolved method target
+- checked function template
+- Monotype instantiation
+
+The recognition code should sit near existing static-dispatch lowering, because
+that is where the compiler already has the dispatch plan, method owner, target
+callable type, and monomorphic operand types.
+
+Tests:
+
+- each producer creates the expected plan when used by an optimized consumer
+- same source names from user modules do not get recognized as builtins
+- imported builtin methods are recognized by identity
+- local wrappers around builtin methods are recognized only when specialization
+  exposes the builtin call explicitly
+
+## Phase 4: Add Materialization Boundaries
+
+Implement materialization from a known plan to the public `Iter` representation.
+
+Materialization is required when:
+
+- the source calls `.step` directly
+- the source calls public `Iter.next` and the result escapes as a public value
+- the iterator value is stored in an aggregate that survives as a public value
+- the iterator value is returned from a function without a specialized plan
+- the iterator value is passed to a call that is not being specialized with a
+  plan
+- the compiler reaches `Public(iter_value)`
+
+Materialization should reuse the existing public builtin semantics. It may call
+or lower the public constructors, but the result must be ordinary Monotype/LIR,
+not hidden backend behavior.
+
+Tests:
+
+- `saved = iter` followed by optimized consumption of `iter` keeps `saved`
+  correct
+- returning `List.iter(list)` from a function still returns a public iterator
+- manually calling `.step` on a returned iterator works
+- matching on public `Iter.next` works
+- a materialized rest iterator from `Iter.next` can be consumed later
+
+## Phase 5: Lower Optimized Consumers
+
+Teach consumers to accept `IterPlan` directly.
+
+Initial consumers:
+
+- source `for`
+- `Iter.fold`
+- `List.from_iter`
+
+For each consumer, lowering should produce loops over plan state fields.
+
+### `for`
+
+Current `for` lowering creates one loop iterator parameter, calls `.next`,
+matches the public step union, and updates the loop iterator to `rest`.
+
+New optimized lowering:
+
+- lower the iterable source to an `IterPlan`
+- allocate loop parameters for the plan state fields plus source loop carries
+- generate direct step code for the plan
+- bind produced item to the source pattern
+- continue with updated private state
+- break on the plan's done condition
+
+The optimized path is selected only when the source iterator has a known plan.
+If the source is `Public(iter_value)`, lower through the existing public
+`Iter.next` semantics.
+
+### `Iter.fold`
+
+Specialize the builtin consumer so that:
+
+- accumulator is a loop parameter
+- plan state fields are loop parameters
+- mapping/folding function is called directly
+- public step values are not constructed in the hot loop
+
+### `List.from_iter`
+
+Specialize collection so that:
+
+- initial capacity consumes plan known-length information when available
+- the list accumulator is updated through existing list append low-levels
+- plan state fields are loop parameters
+- public iterator records and step closures are not rebuilt in the hot loop
+
+Tests:
+
+- optimized `for` over list/range/map/filter/append/concat
+- optimized `Iter.fold` over the same producers
+- optimized `List.from_iter` over the same producers
+- public behavior is identical to the current implementation
+- dev or non-optimized builds may use the public representation, but optimized
+  builds must satisfy the IR shape tests
+
+## Phase 6: Integrate With Existing Optimization Passes
+
+Keep existing passes, but make their responsibilities explicit.
+
+### SpecConstr
+
+SpecConstr may still optimize ordinary known constructor call patterns. It is
+not the long-term owner of builtin iterator semantics.
 
 Tasks:
 
-1. Audit every remaining root-selection suppression path in `Check.zig`.
-   Valid suppressions are only:
+- remove iterator-specific assumptions from comments once `IterPlan` owns the
+  model
+- keep generic call-pattern specialization for non-builtin record/tag/callable
+  cases
+- ensure specialized wrappers can expose builtin producer calls to
+  `IterPlan`
 
-   - runtime data dependency
-   - runtime control dependency
-   - effectful call
-   - checker-error poison
-   - unsupported control-transfer root shape until continuation roots exist
+### ScalarizeJoins
 
-2. Remove or rewrite any remaining source-shape filters that reject leaves,
-   strings, numbers, empty lists, records, calls, `crash`, `dbg`, or `expect`
-   as a category.
-
-3. Keep lambda body root selection detached from function value creation, but
-   ensure detached bodies publish their own eligible final-expression roots
-   only when those bodies are unconditionally evaluated in their own context.
-
-4. Add debug assertions after
-   `filterSelectedHoistedRootsForConstStorage` proving:
-
-   - selected stored roots are not function-typed at the root boundary
-   - selected stored roots can contain nested function-typed leaves
-   - every selected root that survives filtering gets a `HoistedConstTable`
-     entry
-
-5. Strengthen maximal-root tests:
-
-   - parent record over child list
-   - parent record over child list plus function field
-   - parent iterator over child list plus step closure
-   - runtime-dependent parent preserving child iterator
-   - delayed pure dispatch replacing children
-   - delayed effectful dispatch preserving children
-   - runtime-controlled branch body not publishing a closed child root
-   - compile-time-known branch with `crash` reporting at check time
-   - untaken runtime branch with `crash` not reporting at check time
-
-Success criteria:
-
-- `zig build run-test-zig-module-check` passes.
-- There is still exactly one parent-over-child interval replacement rule.
-- The `List.iter` checker tests prove inline and named iterator shapes are
-  equivalent when dependencies/effects/control are equivalent.
-
-## Phase 3: Prove Compile-Time Evaluation Covers All Modules
-
-Files:
-
-- `src/check/checked_artifact.zig`
-- `src/eval/compile_time_finalization.zig`
-- `src/eval/test_helpers.zig`
-- `src/eval/test/eval_comptime_finalization_tests.zig`
-
-Current architecture:
-
-- `CompileTimeRootTable.fromModule` publishes top-level values, selected
-  hoisted roots, literal conversion roots, and `expect` roots for one module.
-- `RootRequestTable.fromModule` requests concrete compile-time roots and test
-  expects.
-- `CompileTimeRequestScheduler` sorts each module's compile-time requests by
-  explicit const dependencies.
-- `compile_time_finalization.zig` lowers and evaluates those requests, fills
-  root payloads, and fills stored const templates.
-- imported modules are published before dependents, so their finalizers should
-  run as each artifact is published.
+ScalarizeJoins should become a cleanup improvement, not a requirement for basic
+iterator plan lowering.
 
 Tasks:
 
-1. Audit package/coordinator publication paths to prove every imported module
-   goes through `publishFromTypedModule` with `CompileTimeFinalization.finalizer()`.
+- verify optimized iterator loops already carry fields directly before LIR
+- keep ScalarizeJoins useful for residual aggregate state
+- add tests proving iterator loops do not regress if ScalarizeJoins changes
 
-2. Add tests that would fail if imported modules were published without
-   compile-time finalization.
+### TagReachability
 
-3. Add tests that would fail if compile-time request sorting skipped a
-   dependency or let a dependent run before its stored const dependency.
-
-4. Add tests that successful unreachable constants are evaluated for
-   diagnostics but not emitted as target static data when no reachable root
-   references them.
-
-5. Add tests that `dbg` and `expect` diagnostics dedupe by source/root and are
-   not duplicated when a dependency is shared by multiple selected roots.
-
-Success criteria:
-
-- `roc check` reports compile-time `crash`, `dbg`, and failed `expect` from
-  eligible top-level roots in every module in the import graph.
-- successful unreachable constants do not appear in `static_data_values` or
-  static-data exports unless a reachable root references them.
-
-## Phase 4: Make Static-Data Selection Explicit And Type-Aware
-
-Files:
-
-- `src/postcheck/monotype/lower.zig`
-- `src/postcheck/monotype/ast.zig` only if a new expression/data marker is
-  needed
-- `src/postcheck/monotype_lifted/*` only if a new marker must pass through
-  lifting
-- `src/postcheck/lambda_solved/*` only if a new marker must pass through
-  solving
-- `src/postcheck/lambda_mono/*` only if a new marker must pass through lambda
-  mono
-- `src/postcheck/solved_lir_lower.zig`
-- `src/compile/test/hoisted_constants_test.zig`
-
-The current `constNodeNeedsStaticData(view, node)` must be replaced. It is
-wrong because it looks only at the `ConstStore` value tag. It cannot tell the
-difference between:
-
-- a bare finite callable constant, which should restore as a callable value
-- a record/opaque/iterator value whose runtime representation contains a
-  callable payload that must be stored as part of the aggregate
-
-Implement the smallest architecture change that still obeys the pipeline
-boundaries:
-
-1. Replace `constNodeNeedsStaticData(view, node)` with a function whose inputs
-   include:
-
-   - the `ConstStore` node
-   - whether this is the root node or a nested child
-   - the lowered Monotype type at the use site
-   - the checked type used for the static-data request
-
-2. Recurse through the `ConstStore` node and Monotype type together. The
-   recursion must unwrap named/nominal backing types through explicit checked
-   backing data. It must assert if the value shape and type shape disagree.
-
-3. Return `true` for reachable stored const uses whose target runtime
-   representation needs backing/static bytes or relocations:
-
-   - non-empty lists
-   - strings that are not fully small/direct
-   - boxes with non-ZST payloads
-   - erased callable values
-   - nested finite callable values whose stored function has capture payload or
-     whose callable set needs a runtime discriminant
-   - aggregates containing any child that needs static data
-
-4. Return `false` for:
-
-   - scalars
-   - ZSTs
-   - small/direct strings
-   - empty lists
-   - bare callable constants that should restore through callable handling
-   - finite callables whose runtime representation is ZST
-
-5. Update both Monotype stored-const restore paths:
-
-   - `restoredHoistedConstAtType`
-   - `restoreConstUseAtType`
-
-6. If Monotype type information is still not precise enough to distinguish a
-   finite callable with runtime tag payload from a ZST callable, do not add a
-   source-shape guess. Instead, carry an explicit stored-const marker farther
-   through the post-check pipeline until `solved_lir_lower.zig` has the
-   callable const plan and layout, then make the `.static_data` decision there.
-   That is a larger change, but it is the correct escape hatch if Monotype
-   lacks explicit data.
-
-   Current evidence says this larger path is required. A stored `ConstFn` can
-   have `ConstStore` captures while its committed runtime callable layout is
-   ZST, as happens in the iterator proof case. Therefore Monotype must not infer
-   "needs static data" from `fn_value.captures.len`; the decision needs the
-   callable layout and const plan from the later LIR lowering stage.
-
-Success criteria:
-
-- an `Iter` record use lowers to `.assign_literal .static_data`
-- a bare function-valued constant still restores without static-data literals
-- static-data selection uses explicit checked/Monotype/LIR data only
-- no backend or wasm post-pass participates in the decision
-
-## Phase 5: Complete Callable Static-Data Materialization
-
-File: `src/compile/static_data_exports.zig`
-
-Current erased callable support:
-
-- `.erased_fn` writes a pointer to an erased-callable allocation
-- the erased-callable allocation contains a function-pointer relocation
-- captures are written by `writeCaptures` using explicit capture slots and
-  child const plans
-
-Keep that path and cover it with tests.
-
-Implement finite callable materialization for `.fn_value` const plans.
+Plan lowering should emit only reachable internal control flow where possible.
+TagReachability should remove residual impossible public-tag branches.
 
 Tasks:
 
-1. Replace the `.fn_value => staticDataInvariant(...)` branch in `writeValue`
-   with `writeFnValue`.
+- expose plan variant reachability as explicit lowering data
+- verify `ListIter` does not keep `Append`/`Skip` hot-path branches
+- verify `Filter` uses internal skip control instead of public `Skip` values
 
-2. Add `fnVariantForConstFn(set_id, fn_value)`:
+### ARC
 
-   - load `lir.Program.FnSet`
-   - select the `FnVariant` whose template matches the stored `ConstFn`
-   - use the same template equality as erased callable materialization
-   - assert if no variant matches
-
-3. Implement `writeFnValue`:
-
-   - verify the `ConstStore` node is `.fn_value`
-   - verify the requested layout matches the `FnSet.layout`
-   - if the callable value layout is ZST, verify all selected capture layout
-     data is ZST and write no bytes
-   - if the callable value layout is a single-variant capture payload, write
-     captures directly at `base_offset` with `writeCaptures`
-   - if the callable value layout is a tag union, write the selected variant
-     discriminant and write captures into the selected payload layout
-   - if the selected variant has no captures but the callable layout is a tag
-     union, still write the discriminant
-
-4. Reuse `writeCaptures` for finite callables. Do not duplicate capture field
-   ordering logic.
-
-5. Make capture recursion support:
-
-   - scalar captures
-   - list captures
-   - string captures
-   - box captures
-   - finite callable captures
-   - erased callable captures
-   - nominal/opaque captured values
-
-6. Make static allocation dedup include callable allocations by bytes plus
-   relocations, as it already does for list/string/box allocations.
-
-Success criteria:
-
-- static-data export generation succeeds for erased and finite callable
-  aggregates
-- unsupported callable shapes fail only because explicit producer data is
-  missing or inconsistent
-- no source-shape fallback is introduced
-
-## Phase 6: Keep Reachability And Target Emission Separate
-
-Files:
-
-- `src/lir/checked_pipeline.zig`
-- `src/lir/reachable_procs.zig`
-- `src/compile/static_data_exports.zig`
-- `src/compile/test/hoisted_constants_test.zig`
+ARC remains the only owner of reference-counting policy.
 
 Tasks:
 
-1. Verify `collectStaticDataRequests` is only for provided data roots and does
-   not accidentally emit unreachable compile-time values.
+- verify plan state fields containing lists/strings/callables receive correct
+  ARC statements
+- verify no pass adds iterator-wrapper refcounts
+- verify list payloads shared by public saved iterators and private cursors
+  are retained/released correctly
 
-2. Verify internal hoisted/static values are emitted only when runtime LIR has
-   an `.assign_literal .static_data` use.
+## Phase 7: Custom Iterators
 
-3. Verify imported static consts referenced by the root module can be
-   materialized from imported module `ConstStore` data.
+`Iter.custom` must remain possible. It is the public escape hatch for arbitrary
+state machines, including infinite ones.
 
-4. Verify `ReachableProcs.run` marks procedures reachable through erased
-   callable static data and marks capture const plans through both erased and
-   finite callable plans.
+The compiler can represent custom iterators as:
 
-   Status: covered for reachable internal `static_data` literals with erased
-   callable plans and finite callable capture plans. The direct regressions
-   build root statements that point at `StaticDataValue`s; the only edge to the
-   callable procedure is through the static value's erased callable const plan,
-   either directly or through a finite callable capture plan, and the pass must
-   keep and remap that procedure.
+```text
+Custom(state, step_fn)
+```
 
-5. Add tests for:
+where `state` is a public Roc value and `step_fn` is a known callable when
+available.
 
-   - reachable imported static list
-   - reachable imported iterator/callable aggregate
-   - unreachable imported successful constant not emitted
-   - provided data root containing function field
-   - internal hoisted data root containing function field
+Optimization levels:
 
-Success criteria:
+1. If the custom step function and state are known, specialize the consuming
+   loop over the custom state directly.
+2. If the custom step function is not known, materialize or use the public
+   representation.
+3. If the custom step result is public, preserve exact public `One`/`Skip`/
+   `Append`/`Done` semantics.
 
-- evaluation coverage does not imply target emission
-- target emission is strictly reachability-driven
-- callable static data marks the procedures and child const plans it needs
+Do not use function names or closure layout shape to decide this. Use checked
+callable identity and Monotype function ids.
 
-## Phase 7: Rocci Bird Proof
+Tests:
 
-Keep the `.iter()` change in Rocci Bird.
+- finite custom iterator
+- infinite custom iterator consumed by finite loop
+- custom iterator whose state contains refcounted values
+- custom iterator reused after one consuming loop
+- unknown custom iterator passed through public API
+
+## Phase 8: Static Data And Compile-Time Constants
+
+Iterator plans must compose with the existing compile-time root and static-data
+work.
+
+Required behavior:
+
+- a top-level or hoisted `List.iter(static_list)` may evaluate during checking
+- reachable static list payloads are emitted once as static data
+- optimized consumers of that iterator should read the static list directly
+  through plan state
+- public materialization of that iterator should still produce a valid public
+  `Iter` value
+- inlining a named static iterator back into source should not change optimized
+  code shape
+
+Tests:
+
+- named static list iterator consumed by `for`
+- inline static list iterator consumed by `for`
+- named and inline forms produce equivalent optimized IR
+- static iterator saved as public value and also consumed privately remains
+  correct
+- Rocci Bird `base_points = [...].iter()` stays static and shared
+
+## Phase 9: Rocci Bird Proof
+
+Use Rocci Bird as the integration proof after unit tests pass.
 
 Source repo:
 
@@ -610,226 +649,137 @@ Compiler repo:
 cd /home/rtfeldman/code/worktrees/roc/vivid-canyon/roc
 ```
 
-Steps:
-
-1. Build the compiler:
+Build steps:
 
 ```sh
 zig build
 ```
 
-2. Build the wasm4 host in size mode:
+Then rebuild Rocci Bird with the current compiler and the wasm4 platform:
 
 ```sh
-cd /home/rtfeldman/code/roc-wasm4
-zig build -Doptimize=ReleaseSmall
+roc build --opt=size rocci-bird.roc
 ```
 
-3. Build Rocci Bird:
+Run Binaryen optimization through the integrated wrapper used by the compiler
+pipeline for wasm size builds.
+
+Record:
+
+- raw wasm size
+- optimized wasm size
+- function count
+- call count
+- indirect call count
+- branch-table count
+- presence or absence of public iterator helper calls
+- presence or absence of public step closure calls in `update`
+
+Disassembly success criteria:
+
+- static sprite and collision-point data are in static data, not rebuilt in
+  `update`
+- `on_screen_collided!` does not rebuild the base points list
+- the collision-point iterator loop carries direct cursor state
+- `Iter.append`, `Iter.concat`, `iter_from_step`, and generic public step
+  helper calls are absent from the normal gameplay hot path unless the source
+  genuinely crosses a public materialization boundary
+- no new heap allocation appears in normal gameplay iteration
+
+Runtime success criteria:
+
+- optimized wasm4 build runs correctly
+- dev wasm4 build runs correctly
+- gameplay behavior matches the current working build
+- size is no worse than the current `.iter()` build, and the expected direction
+  is smaller code in `update`
+
+## Phase 10: Cleanup The Public Builtin Implementation
+
+After optimized lowering no longer depends on the pure Roc implementation for
+hot paths, simplify the public builtin implementation only where it remains the
+best semantic definition.
+
+Rules:
+
+- keep public methods readable and obviously correct
+- do not contort public Roc code to help optimized hot paths
+- keep `Append` as part of the public step union if that is the desired public
+  API
+- keep public `Iter.next` behavior exact
+- remove comments that claim a source-level workaround is required for compiler
+  limitations once the compiler limitation is fixed
+
+Tests:
+
+- full builtin iterator test suite
+- public `.step` tests
+- public `Iter.next` tests
+- optimized consumer IR shape tests
+
+## Completion Checklist
+
+- [ ] `design.md` documents internal iterator plans and public materialization
+      boundaries.
+- [ ] `IterPlan` data exists in the post-check pipeline.
+- [ ] Plans are keyed by explicit checked/Monotype identity, never names or
+      generated code shape.
+- [ ] `List.iter` produces a `ListIter` plan for optimized consumers.
+- [ ] Numeric ranges produce finite or unbounded range plans.
+- [ ] `Iter.single` produces a `Single` plan.
+- [ ] `Iter.append` produces an `Append` plan.
+- [ ] `Iter.concat` produces a `Concat` plan.
+- [ ] `Iter.map` produces a `Map` plan.
+- [ ] `Iter.keep_if` and `Iter.drop_if` produce filter-like plans.
+- [ ] `Iter.custom` remains supported.
+- [ ] Public materialization from every plan is implemented.
+- [ ] Public alias/reuse tests pass.
+- [ ] Rest-escaping tests pass.
+- [ ] Infinite iterator tests pass.
+- [ ] Refcounted payload tests pass under ARC.
+- [ ] Optimized `for` lowers known plans without public step values in the hot
+      loop.
+- [ ] Optimized `Iter.fold` lowers known plans without public step values in
+      the hot loop.
+- [ ] Optimized `List.from_iter` lowers known plans without public step values
+      in the hot loop.
+- [ ] Static named and inline iterator constants optimize equivalently.
+- [ ] No backend knows iterator semantics.
+- [ ] No iterator-wrapper heap allocation is required for optimized consumers.
+- [ ] No iterator-wrapper refcount uniqueness check is introduced.
+- [ ] Rocci Bird optimized wasm builds and runs.
+- [ ] Rocci Bird disassembly proves normal gameplay iteration uses direct
+      cursor state.
+- [ ] Rocci Bird size is recorded against the current baseline and the Rust
+      comparison build.
+
+## Verification Commands
+
+Run focused tests first:
 
 ```sh
-/home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc build \
-  examples/rocci-bird.roc \
-  --opt=size \
-  --output=rocci-bird.wasm
-```
-
-4. Record:
-
-- byte size
-- sha256
-- compiler commit
-- wasm4 commit
-
-5. Disassemble the wasm.
-
-6. Confirm in the disassembly:
-
-- the point list bytes appear in static data
-- the point list bytes appear once
-- the `Iter` record is loaded from static data
-- the `step` callable is loaded from static callable data
-- the callable capture references the same static point-list allocation
-- `on_screen_collided!` does not contain runtime construction of
-  `base_points.iter()`
-- any remaining iterator append code corresponds to runtime-controlled branch
-  expressions, not rebuilding the base iterator
-
-7. Run the game through wasm4 and verify behavior still matches the current
-   working build.
-
-Success criteria:
-
-- Rocci Bird builds with `--opt=size`
-- the `.iter()` version is no larger because of runtime base-iterator rebuilds
-- the disassembly proves static sharing, not merely a smaller byte count
-
-Completed evidence from the current verification pass:
-
-- compiler code commit: `959c457e6933`
-- wasm4 commit: `deae1505a67a`
-- `zig build` passed in the compiler repo
-- `zig build -Doptimize=ReleaseSmall` passed in the wasm4 repo
-- Rocci Bird built successfully with `--opt=size`
-- output size: 33,777 bytes
-- output sha256:
-  `24a33e32fea80d05da5795bd7c0768198006447882a85f369c2ab96c97dc59c2`
-- `w4 run /home/rtfeldman/code/roc-wasm4/rocci-bird.wasm --port 4445
-  --no-open --no-qr` serves `/cart.wasm` on `http://127.0.0.1:4445/`
-  with the same size and sha256
-- section-aware wasm inspection found the base point backing bytes once, in
-  active data segment 45 at memory `0x2be0`; its explicit payload is 61 bytes
-  because the remaining trailing zero bytes are supplied by wasm's zero-filled
-  memory
-- data segment 46 at memory `0x2c30` is the static list allocation and points
-  at the `0x2be0` point backing
-- the update function copies the base iterator fields from static memory
-  addresses `0x2c50`, `0x2c58`, and `0x2c60`
-- static memory `0x2c60` stores pointer `0x2c28`, the allocation base for the
-  same list whose payload is at `0x2c30`
-- the code section contains zero raw copies of the full base point payload and
-  zero instruction-level consecutive `i32.const` sequences for the base point
-  values, so the base point list is not rebuilt in the function body
-- the instruction-level scan found static iterator field loads from memory
-  addresses `0x2c50`, `0x2c58`, and `0x2c60`, and no `i32.const` references to
-  the base point backing address `0x2be0`
-
-## Phase 8: Required Verification Commands
-
-Run targeted tests as each phase lands:
-
-```sh
-zig build run-test-zig-module-check -- --test-filter "hoist roots"
+zig build run-test-eval -- --filter "Iter." --threads 1
+zig build run-test-zig-module-postcheck
+zig build run-test-zig-module-lir
 zig build run-test-zig-module-compile -- --test-filter "static data"
-zig build run-test-zig-module-compile -- --test-filter "hoisted"
-zig build run-test-eval
 ```
 
-Then run the full relevant suites:
+Then run the broader compiler checks that cover the touched stages:
 
 ```sh
-zig build run-test-zig-module-check
-zig build run-test-zig-module-compile
-zig build run-test-eval
+zig build test
 ```
 
-Before each commit:
+For wasm4/Rocci Bird verification:
 
 ```sh
-zig fmt <changed .zig files>
-git diff --check
-```
-
-Final integration verification:
-
-```sh
+cd /home/rtfeldman/code/worktrees/roc/vivid-canyon/roc
 zig build
+
 cd /home/rtfeldman/code/roc-wasm4
-zig build -Doptimize=ReleaseSmall
-/home/rtfeldman/code/worktrees/roc/vivid-canyon/roc/zig-out/bin/roc build examples/rocci-bird.roc --opt=size --output=rocci-bird.wasm
+roc build --opt=size rocci-bird.roc
 ```
 
-Completed verification sweep on compiler code commit `959c457e6933`:
-
-- `zig build run-test-zig-module-check -- --test-filter "hoist roots"` passed
-- `zig build run-test-zig-module-compile -- --test-filter "static data"`
-  passed
-- `zig build run-test-zig-module-compile -- --test-filter "hoisted"` passed
-- `zig build run-test-zig-module-lir` passed
-- `zig build run-test-eval` passed with 1,443 passed, 0 failed, 0 crashed,
-  and 0 skipped
-- `zig build run-test-zig-module-check` passed
-- `zig build run-test-zig-module-compile` passed
-- `zig build` passed
-- `zig build -Doptimize=ReleaseSmall` passed in `/home/rtfeldman/code/roc-wasm4`
-- Rocci Bird rebuilt with `--opt=size` and produced the recorded 33,777 byte
-  wasm with sha256
-  `24a33e32fea80d05da5795bd7c0768198006447882a85f369c2ab96c97dc59c2`
-- `http://127.0.0.1:4445/cart.wasm` serves the same 33,777 byte wasm with
-  the same sha256
-
-## Completion Audit
-
-Phase 1 is complete: the regression coverage lives in
-`src/check/test/hoist_roots_test.zig`,
-`src/compile/test/hoisted_constants_test.zig`, and
-`src/lir/reachable_procs.zig`. The named tests cover local `List.iter` root
-selection, runtime-dependent parent/closed-child selection, callable aggregate
-subsumption, checker-error poison locality, compile-time diagnostics, static
-data emission, erased callable aggregates, finite callable capture shapes, and
-reachable callable const-plan preservation.
-
-Phase 2 is complete: root selection in `src/check/Check.zig` uses checked
-summary data for runtime dependency, control dependency, effectful calls, and
-checker-error poison. The hoist-root suite covers leaves, strings, numbers,
-empty lists, records, calls, `crash`, `dbg`, and `expect` so they are not
-categorical blockers, and the parent-over-child interval replacement behavior
-is covered for records, callable aggregates, and iterators.
-
-Phase 3 is complete: compile-time finalization tests in
-`src/compile/test/hoisted_constants_test.zig` cover unreachable top-level
-`crash`, `dbg`, and failed `expect`, imported-module diagnostics, shared
-dependency diagnostic dedupe, effectful-call rejection, and successful
-unreachable constants not creating target static data.
-
-Phase 4 is complete: Monotype carries static-data candidates as explicit
-stored-const requests, and the final decision happens during LIR lowering from
-the explicit const plan, use-site type, and committed layout. The bare
-function-valued constant test proves callable roots still restore through the
-callable path instead of being forced into data roots.
-
-Phase 5 is complete: `src/compile/static_data_exports.zig` materializes finite
-callables through `writeFnValue`, chooses variants by explicit function
-template identity, writes captures through the shared capture writer, and
-deduplicates callable allocations through the same byte-plus-relocation static
-allocation path as other static data. The finite callable tests cover
-zero-capture, scalar capture, list capture, nested callable capture, and
-multi-variant callable sets.
-
-Phase 6 is complete: provided data exports remain separate from internal
-runtime-reachable static-data uses, and `ReachableProcs.run` marks procedures
-and child const plans reached only through callable static data before
-compaction. The `reachable_procs` tests cover erased callable plans and finite
-callable capture plans.
-
-Phase 7 is complete: Rocci Bird keeps `base_points = [...].iter()`, builds with
-`--opt=size`, serves through wasm4 on port 4445, and the wasm section scan
-shows the point backing bytes once in active data segment 45 and zero times in
-the code section. Segment 46 is the static list allocation pointing at that
-backing, and the unchanged sha256 ties this rebuild to the inspected static
-iterator/callable-data artifact.
-
-Final current-state audit on compiler commit `959c457e6933`:
-
-- The checklist below has no unchecked items, and the targeted/full verification
-  commands in Phase 8 passed on this commit.
-- The checker-root requirements are covered by the `hoist roots` suite and the
-  static policy tests in `src/check/test/hoist_roots_test.zig`.
-- The compile-time diagnostic requirements are covered by the eval suite and
-  the focused diagnostics/static-data tests in
-  `src/compile/test/hoisted_constants_test.zig` and
-  `src/compile/test/comptime_diagnostics_test.zig`.
-- The static-data, callable materialization, and reachability requirements are
-  covered by `src/compile/test/hoisted_constants_test.zig`,
-  `src/lir/reachable_procs.zig`, and `src/lir/arc.zig`.
-- The Rocci Bird proof was rerun from source with the current compiler and the
-  current wasm4 branch, and the rebuilt wasm matches the recorded byte size,
-  sha256, static data section layout, and served `/cart.wasm` artifact.
-
-## Final Checklist
-
-- [x] Failing tests capture local `List.iter` root selection.
-- [x] Failing tests capture local `List.iter` static-data emission.
-- [x] Function-containing aggregates are allowed stored hoisted constants.
-- [x] Bare function roots still use callable-root handling, not data roots.
-- [x] Root selection has no invalid leaf/source-shape/observable filters.
-- [x] Imported eligible top-level diagnostics run during checking.
-- [x] Unreachable successful evaluated constants do not emit target static data.
-- [x] Maximal root subsumption is tested for callable-containing aggregates.
-- [x] Finite callable static data materializes a captured static list.
-- [x] Static-data selection consumes explicit value and type/layout data.
-- [x] Erased callable static data is covered by tests.
-- [x] Finite callable static data has full zero/scalar/list/nested/multi-variant coverage.
-- [x] Reachability marks callable static-data procedures and capture plans.
-- [x] Rocci Bird with `base_points.iter()` builds with `--opt=size`.
-- [x] Rocci Bird disassembly proves the base iterator is static, shared data.
+Use the existing wasm disassembly tools in `/tmp` or the repo-local scripts
+already used on this branch to compare `update`, `on_screen_collided!`, helper
+reachability, and final binary size.

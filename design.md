@@ -1334,6 +1334,124 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
+### Builtin Iterator Internal Plans
+
+`Iter` is a public Roc builtin whose methods are pure functions. The public
+API remains ordinary Roc: iterator-producing methods return `Iter(item)`,
+`Iter.next` returns a step value, and reusing an iterator value must observe the
+same value every time.
+
+This public model is not the optimized internal representation. In optimized
+post-check code, builtin iterator operations may lower to compiler-owned
+iterator plans. An iterator plan is a value-level state machine described by
+explicit checked and Monotype data, not by source syntax, names, closure bytes,
+or backend inspection. It exists only inside post-check lowering and later IR
+stages that consume its explicit output.
+
+The reason for the split is purity. Source such as:
+
+```roc
+iter = [1, 2].iter()
+saved = iter
+
+for item in iter {
+    {}
+}
+
+use(saved)
+```
+
+must not mutate `saved`. If optimized iteration advances a cursor, that cursor
+is a private compiler-created loop state copied or derived from `iter`; it is
+not the public Roc value that other bindings can still observe. Public `Iter`
+values remain immutable and reusable. Internal cursors may be mutated only
+because they are fresh lowering state whose mutation is not observable by Roc
+source.
+
+Iterator plans must not require heap allocation or reference counting for the
+`Iter` wrapper itself. A plan carries state as fields, loop parameters, local
+values, static data references, or nested plans. Refcounted payloads inside the
+state, such as lists, strings, elements, or captured function values, are still
+ordinary Roc values and are managed only by LIR ARC insertion through explicit
+`incref`, `decref`, and `free` statements. ARC may optimize those payloads, but
+ARC must not be used to decide whether an `Iter` wrapper is unique.
+
+The internal plan vocabulary is extensible, but the core cases are:
+
+```text
+ListIter(list, index, len)
+Range(current, end, inclusivity, step)
+UnboundedRange(current, step)
+Single(item, emitted)
+Append(before, after, phase)
+Concat(first, second, phase)
+Map(source, mapping_fn)
+Filter(source, predicate_fn)
+Custom(state, step_fn)
+Public(iter_value)
+```
+
+Finite and infinite iterators use the same model. A finite plan can produce a
+`Done` state. An infinite plan, such as an unbounded range or Fibonacci-like
+custom state machine, simply has no reachable `Done` transition unless a later
+adapter or consumer introduces one. Consumers such as `for`, `Iter.fold`, and
+`List.from_iter` must still be ordinary finite or potentially nonterminating
+Roc computations according to the source iterator they consume.
+
+The `Public(iter_value)` plan is the materialization boundary. It represents an
+iterator value whose public record/step representation must be preserved
+because the compiler has no explicit plan for the producer or because the value
+is being observed in a way that requires the public API. Examples include:
+
+- calling the `.step` field directly
+- storing or returning an iterator value as an ordinary Roc value
+- passing an iterator to code that is not being specialized with an internal
+  iterator plan
+- matching on the exact result of public `Iter.next` outside an optimized
+  consumer
+
+Materialization is a semantic operation, not a size cleanup. When a known plan
+crosses this boundary, lowering constructs the ordinary public `Iter` value and
+public step values with the same meaning as the Roc builtin implementation. A
+later consumer that receives only a public iterator value must treat it as a
+`Public` plan unless explicit specialization data proves a more concrete plan.
+
+Optimized consumers lower plans directly. For example, consuming a
+`ListIter(list, index, len)` in a `for` loop produces loop state carrying the
+list and index fields. Each iteration checks the index against the length,
+loads the current element, advances the private index, and runs the loop body.
+It must not construct a public `Iter` record, call a zero-argument step
+closure, construct a public `One`/`Skip`/`Append`/`Done` step value, then
+immediately destructure that value again.
+
+Adapter plans compose without allocating iterator wrappers. `Map(source, f)`
+steps the source plan and applies `f` only to produced items. `Filter(source,
+p)` steps the source plan until it finds an item for which `p` returns true or
+until the source is done. `Append(before, after, phase)` and `Concat(first,
+second, phase)` are explicit state machines rather than public iterator-record
+rebuilds. If a source plan can only produce `One` and `Done`, later lowering
+must not keep unreachable `Append` or `Skip` branches alive.
+
+Post-check must recognize builtin iterator operations by exact checked identity:
+the builtin method owner, method name id, checked function template, static
+dispatch plan, and Monotype instantiation. It must not recognize iterator
+operations by source names, display strings, generated symbol names, closure
+layout shape, wasm bytes, or backend output. If a stage needs to know that an
+expression is builtin `Iter.map`, the checked stage must have produced explicit
+identity data that makes that fact available.
+
+This design deliberately mirrors the useful part of Rust iterators: optimized
+code sees concrete state machines whose `next` operation mutates private
+cursor state. Roc differs at the public boundary: Roc methods remain pure, and
+public `Iter` values are immutable. The compiler may lower pure iterator code
+to mutable private state only when doing so preserves that public meaning.
+
+The existing call-pattern specialization pass is a useful precedent and may
+remain part of the implementation, but the long-term source of truth for
+iterator optimization is the explicit iterator-plan representation. General
+constructor/call-pattern specialization should not be responsible for
+rediscovering builtin iterator semantics from the public Roc implementation.
+
 ### Structural Serialization Methods
 
 Parsing and encoding are ordinary static-dispatch methods. Roc does not expose a
