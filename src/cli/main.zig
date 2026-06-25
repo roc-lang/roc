@@ -4511,10 +4511,6 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
     };
 }
 
-fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) *ipc.hot_reload.ImageDescriptor {
-    return @ptrCast(@alignCast(shm.base_ptr + offset));
-}
-
 fn testingPrepareHotReloadDescriptor(
     shm: *SharedMemoryAllocator,
     generation: u64,
