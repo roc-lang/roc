@@ -643,6 +643,8 @@ Tasks:
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     `List.from_iter` and list-result `Iter.collect` as exact-capacity list
     loops using list low-level operations.
+  - [x] Direct `Single` plans are consumed by `List.from_iter` and list-result
+    `Iter.collect` without public iterator step values.
   - [x] Direct `Map(Range, fn)` plans are consumed by list-result
     `Iter.collect` as direct grow-list loops without public collect-worker
     specialization.
@@ -662,6 +664,8 @@ Tasks:
   - [x] Direct single operands and accumulator operands consumed by `Iter.fold`
     preserve `dbg` ordering relative to the fold result and following
     expressions.
+  - [x] Direct single operands consumed by `List.from_iter` preserve `dbg`
+    ordering relative to collection and following expressions.
   - [x] Direct mapped append operands and accumulator operands consumed by
     `Iter.fold` preserve `dbg` ordering relative to the fold result and
     following expressions.
@@ -672,6 +676,8 @@ Tasks:
     interpretation with the expected string accumulator result.
   - [x] Direct `Iter.fold(Iter.single(Str))` passes optimized LIR
     interpretation with the expected string accumulator result.
+  - [x] Direct `List.from_iter(Iter.single(Str))` passes optimized LIR
+    interpretation with the expected string list.
 - [ ] Infinite iterator tests pass.
 - [ ] Full builtin iterator behavior tests pass.
 - [ ] Post-check and LIR module tests pass.

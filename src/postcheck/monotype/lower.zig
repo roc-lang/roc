@@ -16387,10 +16387,38 @@ const BodyContext = struct {
 
         const plan = self.builder.program.iterPlan(plan_id);
         switch (plan.data) {
+            .single => |single| return try self.lowerSingleIteratorPlanToList(single, plan.item_ty, list_ty),
             .range => |range| return try self.lowerRangeIteratorPlanToList(range, plan.item_ty, list_ty, plan.length, .none),
             .map => |map| return try self.lowerMapIteratorPlanToList(map, plan.item_ty, list_ty),
             else => return null,
         }
+    }
+
+    fn lowerSingleIteratorPlanToList(
+        self: *BodyContext,
+        single: Ast.IterPlan.SingleIter,
+        item_ty: Type.TypeId,
+        list_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const list_item_ty = switch (self.builder.shapeContent(list_ty)) {
+            .list => |elem_ty| elem_ty,
+            else => Common.invariant("iterator list consumer result type was not a list"),
+        };
+        if (!self.sameType(item_ty, list_item_ty)) {
+            Common.invariant("single iterator collection item type differed from result list element type");
+        }
+
+        const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const item_expr = try self.builder.localExpr(item_local, item_ty);
+
+        const one_list = try self.builder.lowLevelExpr(
+            .list_with_capacity,
+            &.{try self.builder.intLiteralExpr(1, u64_ty)},
+            list_ty,
+        );
+        const with_item = try self.builder.lowLevelExpr(.list_append_unsafe, &.{ one_list, item_expr }, list_ty);
+        return try self.wrapLet(item_local, item_ty, single.item, with_item, list_ty);
     }
 
     fn lowerListAppendIteratorPlanToList(
