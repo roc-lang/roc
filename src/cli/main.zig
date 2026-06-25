@@ -4512,7 +4512,9 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
 }
 
 fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) *ipc.hot_reload.ImageDescriptor {
-    return @ptrCast(@alignCast(shm.base_ptr + offset));
+    // Route through the production helper so tests commit the descriptor's page on
+    // Windows (SEC_RESERVE leaves it reserved-but-uncommitted) exactly as a real run does.
+    return hotReloadDescriptorForWrite(shm, offset) catch unreachable;
 }
 
 fn testingPrepareHotReloadDescriptor(
