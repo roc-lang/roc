@@ -1678,6 +1678,37 @@ test "optimized List.from_iter over direct list append consumes iterator plan" {
     try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_append_unsafe_count"));
 }
 
+test "optimized List.from_iter over direct append preserves producer operand effects" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg List.from_iter([1.I64].iter().append(tap(2.I64)))
+        \\    dbg 3.I64
+        \\    {}
+        \\}
+    , &.{ "2", "[1, 2]", "3" });
+}
+
+test "optimized List.from_iter over direct append keeps refcounted items" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg List.from_iter(["a", "b"].iter().append("c"))
+        \\    {}
+        \\}
+    , &.{"[\"a\", \"b\", \"c\"]"});
+}
+
 test "optimized Iter.collect to List over direct list append consumes iterator plan" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,

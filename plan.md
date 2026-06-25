@@ -638,7 +638,11 @@ Tasks:
   - [x] Local `List.iter` with a public alias preserves public iterator behavior.
 - [ ] `dbg`, `expect`, and `crash` in producer operands are not duplicated or
   moved.
+  - [x] Direct append operands consumed by `List.from_iter` preserve `dbg`
+    ordering relative to collection and following expressions.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
+  - [x] Direct `List.from_iter(List(Str).iter().append(...))` passes optimized
+    LIR interpretation with the expected string list.
 - [ ] Infinite iterator tests pass.
 - [ ] Full builtin iterator behavior tests pass.
 - [ ] Post-check and LIR module tests pass.
