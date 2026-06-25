@@ -4995,6 +4995,83 @@ test "check type - opaque nominal construction in defining module" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Secret");
 }
 
+// ===========================================================================
+// CONSOLIDATED NOMINAL-COERCION CHAIN COMPOSITION (executable spec)
+//
+// These pin the *target* behavior for the consolidated coercion refactor (see
+// docs/superpowers/specs/2026-06-25-consolidated-nominal-coercion-chain-composition.md).
+// The "single level" controls pass today. The "through a chain" / "mid-chain"
+// cases are EXPECTED TO FAIL until the refactor lands: coercion should compose
+// through transparent newtype chains uniformly (records, tags, and literals),
+// and a mid-chain custom from_numeral should win over the builtin-backing walk.
+// ===========================================================================
+
+test "consolidated - record literal lifts into record-backed nominal (control)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Point := { x : U64 }
+        \\
+        \\p : Point
+        \\p = { x: 1 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Point");
+}
+
+test "consolidated - record literal lifts through a newtype chain (TARGET, currently red)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := { x : U64 }
+        \\Outer := Inner
+        \\
+        \\p : Outer
+        \\p = { x: 1 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "consolidated - tag lifts into tag-backed nominal (control)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color := [Red, Green]
+        \\
+        \\c : Color
+        \\c = Red
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Color");
+}
+
+test "consolidated - tag lifts through a newtype chain (TARGET, currently red)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\InnerC := [Red, Green]
+        \\OuterC := InnerC
+        \\
+        \\c : OuterC
+        \\c = Red
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "OuterC");
+}
+
+test "consolidated - mid-chain custom from_numeral wins (TARGET, currently red)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := U8.{
+        \\    from_numeral : Numeral -> Try(Inner, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Inner.(0))
+        \\}
+        \\Outer := Inner
+        \\
+        \\x : Outer
+        \\x = 300
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
 // early return //
 
 test "check type - early return - pass" {
