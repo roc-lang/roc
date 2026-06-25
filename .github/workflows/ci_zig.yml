@@ -33,11 +33,7 @@ jobs:
           use-cache: true
 
       - name: zig lints
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build run-check-zig-lints"
-          error_string_contains: "build.zig.zon"
-          retry_count: 3
+        run: zig build run-check-zig-lints
 
       - name: code tidiness
         run: zig build run-check-tidy
@@ -193,11 +189,7 @@ jobs:
 
       - name: Run eval tests with LLVM backend
         if: runner.os != 'Windows'
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build run-test-eval -- --llvm"
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout"
-          retry_count: 3
+        run: zig build run-test-eval -- --llvm
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
       # test that compiles the whole program (front-end + LIR lowering) before
@@ -209,19 +201,11 @@ jobs:
       # runners where 30s is plenty. Give Windows a larger hang budget.
       - name: Run eval tests with LLVM backend (Windows)
         if: runner.os == 'Windows'
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build run-test-eval -- --llvm --timeout 120000"
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout"
-          retry_count: 3
+        run: zig build run-test-eval -- --llvm --timeout 120000
 
       - name: Run CLI platform tests (LLVM size/speed backends)
         if: runner.os != 'Windows'
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
-          error_string_contains: "build.zig.zon"
-          retry_count: 3
+        run: zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
 
       - name: Run CLI platform tests (LLVM size/speed backends, Windows)
         if: runner.os == 'Windows'
@@ -280,19 +264,11 @@ jobs:
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
       - name: build roc + repro executables
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "build.zig.zon"
-          retry_count: 3
+        run: zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build run-test-cli ${{ matrix.target_flag }}"
-          error_string_contains: "unhandled file type|build executable runs correctly|undefined symbol"
-          retry_count: 3
+        run: zig build run-test-cli ${{ matrix.target_flag }}
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -320,19 +296,11 @@ jobs:
 
       # 1) in debug mode
       - name: build and execute tests, build repro executables
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal|stuck|REPL output mismatch at index [0-9]+: got 'OutOfMemory'"
-          retry_count: 3
+        run: zig build run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
 
       # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build ${{ matrix.release_jobs_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal|stuck|REPL output mismatch at index [0-9]+: got 'OutOfMemory'"
-          retry_count: 3
+        run: zig build ${{ matrix.release_jobs_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
 
       - name: Check for snapshot changes
         run: |
@@ -405,11 +373,7 @@ jobs:
           use-cache: true
 
       - name: build roc + repro executables for valgrind
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "git clean -fdx && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456"
-          error_string_contains: "EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon"
-          retry_count: 3
+        run: git clean -fdx && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
 
       - name: install valgrind
         run: |
@@ -450,10 +414,7 @@ jobs:
           use-cache: true
 
       - name: cross compile with llvm
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout|stuck|build.zig.zon"
+        run: zig build -Dtarget=${{ matrix.target }}
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:

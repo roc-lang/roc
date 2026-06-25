@@ -36,11 +36,7 @@ jobs:
         run: rm -rf zig-out "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
       - name: Build main branch release binary
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "nix develop ./src/ -c bash -c 'zig build build-release'"
-          error_string_contains: "build.zig.zon"
-          retry_count: 3
+        run: nix develop ./src/ -c bash -c 'zig build build-release'
 
       - name: Prepare main artifacts
         run: |
@@ -57,11 +53,7 @@ jobs:
         run: rm -rf zig-out "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
       - name: Build PR branch release binary
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "nix develop ./src/ -c bash -c 'zig build build-release'"
-          error_string_contains: "build.zig.zon"
-          retry_count: 3
+        run: nix develop ./src/ -c bash -c 'zig build build-release'
 
       - name: Prepare PR artifacts
         run: |

@@ -39,18 +39,10 @@ jobs:
               # When free space drops below min-free (1 GB), nix GCs until max-free (5 GB) is available. This avoids "No space left on device" on CI.
 
       - name: Build inside a nix dev shell
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}'
-          error_string_contains: "double roundtrip bundle|build.zig.zon"
-          retry_count: 3
+        run: nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}
 
       - name: Build Nix package
         if: ${{ runner.os == 'Linux'  }}
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: |
-            nix build ./src#roc
-            result/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc
-          error_string_contains: "TemporaryNameServerFailure|build.zig.zon|error: cannot download"
-          retry_count: 3
+        run: |
+          nix build ./src#roc
+          result/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc
