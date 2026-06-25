@@ -169,7 +169,7 @@ In coverage mode, only the interpreter backend runs. Tests that skip the interpr
 
 ## How It Works
 
-Under the hood, `zig build coverage-eval` does the following:
+Under the hood, `zig build run-coverage-eval` does the following:
 
 1. Builds kcov from source (a lazy Zig dependency)
 2. On macOS, codesigns kcov for `task_for_pid` access

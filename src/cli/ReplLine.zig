@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const ansi_term = @import("ansi_term.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
+const base = @import("base");
 
 const SupportedOS = enum { windows, linux, macos };
 
@@ -168,7 +169,7 @@ pub const InputParser = struct {
 ///
 /// Both `\n` and standalone `\r` trigger indentation; the `\r` of a `\r\n`
 /// pair is left unindented to avoid double-padding.
-fn writeAlignedToPrompt(out: *std.Io.Writer, buf: []const u8, indent: usize) !void {
+fn writeAlignedToPrompt(out: *std.Io.Writer, buf: []const u8, indent: usize) error{WriteFailed}!void {
     var i: usize = 0;
     while (i < buf.len) : (i += 1) {
         const b = buf[i];
@@ -201,7 +202,7 @@ const History = struct {
         self.entries.deinit(self.allocator);
     }
 
-    pub fn append(self: *History, input: []const u8) !void {
+    pub fn append(self: *History, input: []const u8) Allocator.Error!void {
         const input_copy = try self.allocator.alloc(u8, input.len);
         @memcpy(input_copy, input);
         try self.entries.append(self.allocator, input_copy);
@@ -225,7 +226,7 @@ pub fn deinit(self: *ReplLine) void {
 const CommandError =
     error{ DeleteEmptyLineBuffer, NewLine, ExitRepl } ||
     Allocator.Error ||
-    std.fs.File.ReadError ||
+    std.Io.File.ReadStreamingError ||
     std.Io.Writer.Error;
 
 const CommandFn = *const fn (*LineState) CommandError!void;
@@ -236,16 +237,19 @@ const LineState = struct {
     prompt: []const u8,
     prompt_width: usize,
     out: *std.Io.Writer,
-    in: std.fs.File,
+    in: std.Io.File,
     col_offset: usize,
     line_buffer: std.ArrayList(u8),
     bytes_read: usize,
     in_buffer: [8]u8,
     history: *History,
     history_index: ?usize,
+    /// Set after a Ctrl-C so that a second consecutive Ctrl-C quits. Any other
+    /// input event clears it, so the two presses must be back-to-back.
+    ctrl_c_armed: bool,
 };
 
-fn printChar(state: *LineState) !void {
+fn printChar(state: *LineState) CommandError!void {
     // Reset history navigation on new input
     state.history_index = null;
 
@@ -262,7 +266,7 @@ fn printChar(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn deleteBefore(state: *LineState) !void {
+fn deleteBefore(state: *LineState) CommandError!void {
     if (state.col_offset == 0) return;
     state.col_offset -= 1;
     _ = state.line_buffer.orderedRemove(state.col_offset);
@@ -272,29 +276,35 @@ fn deleteBefore(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn doNothing(_: *LineState) !void {}
+fn doNothing(_: *LineState) Allocator.Error!void {}
 
-fn exitRepl(_: *LineState) !void {
+fn exitRepl(_: *LineState) CommandError!void {
     return error.ExitRepl;
 }
 
-fn acceptLine(_: *LineState) !void {
+fn acceptLine(_: *LineState) CommandError!void {
     return error.NewLine;
 }
 
-fn cancelLine(state: *LineState) !void {
-    // Clear the buffer and reset cursor position
+fn handleCtrlC(state: *LineState) CommandError!void {
+    // Discard whatever was on the current line.
     state.line_buffer.clearAndFree(state.temp);
     state.col_offset = 0;
+    state.history_index = null;
 
-    // Move cursor to start of line, print prompt, clear rest of line
-    try ansi_term.setCursorColumn(state.out, 0);
+    // A second consecutive Ctrl-C (with no other input in between) quits.
+    if (state.ctrl_c_armed) return error.ExitRepl;
+    state.ctrl_c_armed = true;
+
+    // Move to a fresh line, show the hint, and redraw the prompt.
+    try state.out.writeAll(NEW_LINE);
+    try state.out.writeAll("Ctrl-C again to quit (or enter :quit, :q, or :exit)");
+    try state.out.writeAll(NEW_LINE);
     try state.out.writeAll(state.prompt);
-    try ansi_term.clearFromCursorToLineEnd(state.out);
     try ansi_term.setCursorColumn(state.out, state.prompt_width);
 }
 
-fn clearScreen(state: *LineState) !void {
+fn clearScreen(state: *LineState) CommandError!void {
     try ansi_term.clearEntireScreen(state.out);
     try ansi_term.setCursor(state.out, 0, 0);
 
@@ -305,17 +315,17 @@ fn clearScreen(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn moveCursorRight(state: *LineState) !void {
+fn moveCursorRight(state: *LineState) CommandError!void {
     state.col_offset = @min(state.col_offset + 1, state.line_buffer.items.len);
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn moveCursorLeft(state: *LineState) !void {
+fn moveCursorLeft(state: *LineState) CommandError!void {
     state.col_offset -|= 1;
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn historyBackward(state: *LineState) !void {
+fn historyBackward(state: *LineState) CommandError!void {
     const hist_len = state.history.entries.items.len;
     if (hist_len == 0) return;
 
@@ -336,7 +346,7 @@ fn historyBackward(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn historyForward(state: *LineState) !void {
+fn historyForward(state: *LineState) CommandError!void {
     const hist_len = state.history.entries.items.len;
     if (hist_len == 0 or state.history_index == null) return;
 
@@ -366,7 +376,7 @@ fn findCommandFn(state: *LineState) CommandFn {
         ansi_term.BACKSPACE => deleteBefore,
         ansi_term.ctrlKey('D') => exitRepl,
         ansi_term.ctrlKey('L') => clearScreen,
-        ansi_term.ctrlKey('C') => cancelLine,
+        ansi_term.ctrlKey('C') => handleCtrlC,
         control_code.lf, control_code.cr => acceptLine,
         control_code.esc => {
             if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
@@ -389,7 +399,7 @@ fn findCommandFn(state: *LineState) CommandFn {
 pub const ReadLineError =
     error{InvalidUtf8} ||
     Allocator.Error ||
-    std.fs.File.ReadError ||
+    std.Io.File.ReadStreamingError ||
     std.Io.Writer.Error ||
     CommandError ||
     switch (SUPPORTED_OS) {
@@ -397,36 +407,56 @@ pub const ReadLineError =
         .windows => Windows.Error,
     };
 
+/// Result of reading a line of input: either the line bytes or end-of-input.
+pub const ReadLineResult = union(enum) {
+    line: []u8,
+    eof,
+};
+
 /// Reads a line of input from stdin with line editing and history support.
 /// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
-pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: std.fs.File) ReadLineError![]u8 {
+pub fn readLine(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, stdin: std.Io.File) ReadLineError!ReadLineResult {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std_io, &stdout_buffer);
 
     // Use simple line reading for non-TTY input (pipes, redirects, tests)
-    if (!stdin.isTty()) {
-        return readLineSimple(outlive, prompt, &stdout_writer.interface, stdin);
+    if (!(stdin.isTty(std_io) catch false)) {
+        return readLineSimple(outlive, std_io, prompt, &stdout_writer.interface, stdin);
     }
 
-    return helper(self, outlive, prompt, &stdout_writer.interface, stdin);
+    return helper(self, outlive, std_io, prompt, &stdout_writer.interface, stdin);
 }
 
 /// Simple line reading for non-TTY input (no raw mode, no escape sequences).
-fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ReadLineError![]u8 {
-    // Print the prompt
-    try out.writeAll(prompt);
-    try out.flush();
+fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError!ReadLineResult {
+    if (prompt.len > 0) {
+        try out.writeAll(prompt);
+        try out.flush();
+    }
 
     // Read until newline or EOF
     var line_buffer = std.ArrayList(u8).empty;
     var read_buffer: [1]u8 = undefined;
 
     while (true) {
-        const bytes_read = try in.read(&read_buffer);
+        const bytes_read = in.readStreaming(std_io, &.{&read_buffer}) catch |err| switch (err) {
+            // std.Io streaming returns error.EndOfStream on EOF rather than returning 0 bytes.
+            error.EndOfStream => {
+                if (line_buffer.items.len == 0) {
+                    line_buffer.deinit(outlive);
+                    return .eof;
+                }
+                return .{ .line = try line_buffer.toOwnedSlice(outlive) };
+            },
+            else => return err,
+        };
         if (bytes_read == 0) {
-            // EOF - return "exit" to signal REPL should exit
-            line_buffer.deinit(outlive);
-            return try outlive.dupe(u8, "exit");
+            // Belt-and-suspenders: treat a zero-byte read as EOF as well.
+            if (line_buffer.items.len == 0) {
+                line_buffer.deinit(outlive);
+                return .eof;
+            }
+            return .{ .line = try line_buffer.toOwnedSlice(outlive) };
         }
 
         const char = read_buffer[0];
@@ -436,14 +466,16 @@ fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, i
         try line_buffer.append(outlive, char);
     }
 
-    try out.writeAll(NEW_LINE);
-    try out.flush();
+    if (prompt.len > 0) {
+        try out.writeAll(NEW_LINE);
+        try out.flush();
+    }
 
-    return try line_buffer.toOwnedSlice(outlive);
+    return .{ .line = try line_buffer.toOwnedSlice(outlive) };
 }
 
-fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ![]u8 {
-    var arena_allocator = std.heap.ArenaAllocator.init(outlive);
+fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError!ReplLine.ReadLineResult {
+    var arena_allocator = base.SingleThreadArena.init(outlive);
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();
 
@@ -462,6 +494,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
         .in_buffer = undefined,
         .history = &self.history,
         .history_index = null,
+        .ctrl_c_armed = false,
     };
 
     const old = switch (SUPPORTED_OS) {
@@ -496,7 +529,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
     while (true) : ({
         try out.flush();
     }) {
-        const new_bytes = try in.read(&read_buf);
+        const new_bytes = try in.readStreaming(std_io, &.{&read_buf});
         if (new_bytes == 0) continue;
 
         events.clearRetainingCapacity();
@@ -504,6 +537,14 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
 
         var done = false;
         for (events.items) |event| {
+            // The Ctrl-C "press again to quit" arming only survives consecutive
+            // Ctrl-C presses; any other input event disarms it.
+            const is_ctrl_c = switch (event) {
+                .byte => |b| b == ansi_term.ctrlKey('C'),
+                else => false,
+            };
+            if (!is_ctrl_c) state.ctrl_c_armed = false;
+
             switch (event) {
                 .byte => |b| {
                     state.in_buffer[0] = b;
@@ -529,7 +570,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
                     state.col_offset += paste_buffer.items.len;
                     state.history_index = null;
 
-                    const has_newline = std.mem.indexOfAny(u8, paste_buffer.items, "\n\r") != null;
+                    const has_newline = std.mem.findAny(u8, paste_buffer.items, "\n\r") != null;
                     paste_buffer.clearRetainingCapacity();
 
                     // Redraw so the user sees the pasted text. For a multi-line
@@ -557,7 +598,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
             const cmd = ReplLine.findCommandFn(&state);
             cmd(&state) catch |err| {
                 switch (err) {
-                    error.ExitRepl => return try outlive.dupe(u8, "exit"),
+                    error.ExitRepl => return .eof,
                     error.NewLine => {
                         done = true;
                         break;
@@ -570,14 +611,14 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
     }
     try out.writeAll(NEW_LINE);
     try out.flush();
-    return try outlive.dupe(u8, state.line_buffer.items);
+    return .{ .line = try outlive.dupe(u8, state.line_buffer.items) };
 }
 
 const testing = std.testing;
 
 /// Run `parser.feed` for each chunk in `chunks` against a fresh event list and
 /// return the accumulated events. Caller owns the returned ArrayList.
-fn collectEvents(parser: *InputParser, chunks: []const []const u8) !std.ArrayList(InputEvent) {
+fn collectEvents(parser: *InputParser, chunks: []const []const u8) Allocator.Error!std.ArrayList(InputEvent) {
     var events = std.ArrayList(InputEvent).empty;
     errdefer events.deinit(testing.allocator);
     for (chunks) |chunk| {
@@ -586,7 +627,7 @@ fn collectEvents(parser: *InputParser, chunks: []const []const u8) !std.ArrayLis
     return events;
 }
 
-fn expectEventsEqual(expected: []const InputEvent, actual: []const InputEvent) !void {
+fn expectEventsEqual(expected: []const InputEvent, actual: []const InputEvent) error{TestExpectedEqual}!void {
     try testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |e, a| {
         try testing.expectEqualDeep(e, a);
@@ -895,7 +936,7 @@ test "InputParser: bytes around a paste in the same chunk" {
     }, events.items);
 }
 
-fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) !void {
+fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) (std.mem.Allocator.Error || error{WriteFailed} || error{TestExpectedEqual})!void {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try writeAlignedToPrompt(&aw.writer, input, indent);

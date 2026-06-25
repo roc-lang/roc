@@ -28,7 +28,7 @@ The first argument being passed to this function has the wrong type:
 
 This argument has the type:
 
-    List(Str)
+    List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
 
 But `f` needs the first argument to be:
 
@@ -113,7 +113,7 @@ EndOfFile,
 					(elems
 						(e-string
 							(e-literal (string "hello"))))))))
-	(e-call (constraint-fn-var 73)
+	(e-call (constraint-fn-var 110)
 		(e-lookup-local
 			(p-assign (ident "needs_string")))
 		(e-lookup-local

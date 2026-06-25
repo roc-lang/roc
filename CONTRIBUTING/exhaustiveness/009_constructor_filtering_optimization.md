@@ -90,7 +90,3 @@ For a type like `Try(A, [])`:
 - With optimization: Only explores `Ok` path
 
 For most code this is negligible, but for deeply nested types with many uninhabited branches, it matters.
-
-## Comparison to Rust Implementation
-
-The Rust implementation in `crates/compiler/can/src/exhaustive.rs` filters uninhabited constructors at union construction time in `convert_tag`. The Zig implementation intentionally differs by filtering during checking to preserve redundancy detection for patterns on uninhabited constructors.

@@ -1,3 +1,0 @@
-P := W
-    implements []
-t

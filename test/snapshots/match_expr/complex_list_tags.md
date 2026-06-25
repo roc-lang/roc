@@ -156,18 +156,29 @@ match events {
 							(patterns
 								(p-applied-tag)))))
 				(value
-					(e-string
-						(e-literal (string "single click at ("))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(e-literal (string ", "))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "y"))))
-						(e-literal (string ")")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "x")))))
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "y")))))
+						(e-interpolation
+							(first
+								(e-literal (string "single click at (")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ", "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string ")")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -177,19 +188,30 @@ match events {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-string
-						(e-literal (string "key "))
-						(e-lookup-local
-							(p-assign (ident "key")))
-						(e-literal (string " pressed, "))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_2"))
+							(e-lookup-local
+								(p-assign (ident "key"))))
+						(s-let
+							(p-assign (ident "#interp_3"))
 							(e-call
-								(e-lookup-external
-									(builtin))
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-call
+									(e-lookup-external
+										(builtin))
+									(e-lookup-local
+										(p-assign (ident "rest"))))))
+						(e-interpolation
+							(first
+								(e-literal (string "key ")))
+							(parts
 								(e-lookup-local
-									(p-assign (ident "rest")))))
-						(e-literal (string " more events")))))
+									(p-assign (ident "#interp_2")))
+								(e-literal (string " pressed, "))
+								(e-lookup-local
+									(p-assign (ident "#interp_3")))
+								(e-literal (string " more events")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -200,28 +222,47 @@ match events {
 							(rest-at (index 2)
 								(p-assign (ident "others"))))))
 				(value
-					(e-string
-						(e-literal (string "moved "))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "dx"))))
-						(e-literal (string ","))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "dy"))))
-						(e-literal (string " then "))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "dx2"))))
-						(e-literal (string ","))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "dy2"))))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_4"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "dx")))))
+						(s-let
+							(p-assign (ident "#interp_5"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "dy")))))
+						(s-let
+							(p-assign (ident "#interp_6"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "dx2")))))
+						(s-let
+							(p-assign (ident "#interp_7"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "dy2")))))
+						(e-interpolation
+							(first
+								(e-literal (string "moved ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_4")))
+								(e-literal (string ","))
+								(e-lookup-local
+									(p-assign (ident "#interp_5")))
+								(e-literal (string " then "))
+								(e-lookup-local
+									(p-assign (ident "#interp_6")))
+								(e-literal (string ","))
+								(e-lookup-local
+									(p-assign (ident "#interp_7")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -232,23 +273,38 @@ match events {
 							(rest-at (index 2)
 								(p-assign (ident "remaining"))))))
 				(value
-					(e-string
-						(e-literal (string "scroll "))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "amount"))))
-						(e-literal (string " then click at "))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(e-literal (string ","))
-						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
-							(e-lookup-local
-								(p-assign (ident "y"))))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_8"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "amount")))))
+						(s-let
+							(p-assign (ident "#interp_9"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "x")))))
+						(s-let
+							(p-assign (ident "#interp_10"))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "y")))))
+						(e-interpolation
+							(first
+								(e-literal (string "scroll ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_8")))
+								(e-literal (string " then click at "))
+								(e-lookup-local
+									(p-assign (ident "#interp_9")))
+								(e-literal (string ","))
+								(e-lookup-local
+									(p-assign (ident "#interp_10")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

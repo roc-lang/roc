@@ -84,19 +84,21 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 88)
-	(e-call (constraint-fn-var 77)
-		(e-call (constraint-fn-var 63)
+(e-call (constraint-fn-var 180)
+	(e-call (constraint-fn-var 146)
+		(e-call (constraint-fn-var 109)
 			(e-lambda
 				(args
 					(p-assign (ident "a")))
 				(e-block
 					(s-let
 						(p-assign (ident "a_loc"))
-						(e-binop (op "mul")
-							(e-lookup-local
-								(p-assign (ident "a")))
-							(e-num (value "2"))))
+						(e-dispatch-call (method "times") (constraint-fn-var 70)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "a"))))
+							(args
+								(e-num (value "2")))))
 					(e-closure
 						(captures
 							(capture (ident "a_loc")))
@@ -106,22 +108,26 @@ EndOfFile,
 							(e-block
 								(s-let
 									(p-assign (ident "b_loc"))
-									(e-binop (op "add")
-										(e-lookup-local
-											(p-assign (ident "a_loc")))
-										(e-lookup-local
-											(p-assign (ident "b")))))
+									(e-dispatch-call (method "plus") (constraint-fn-var 72)
+										(receiver
+											(e-lookup-local
+												(p-assign (ident "a_loc"))))
+										(args
+											(e-lookup-local
+												(p-assign (ident "b"))))))
 								(e-closure
 									(captures
 										(capture (ident "b_loc")))
 									(e-lambda
 										(args
 											(p-assign (ident "c")))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "b_loc")))
-											(e-lookup-local
-												(p-assign (ident "c")))))))))))
+										(e-dispatch-call (method "plus") (constraint-fn-var 74)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "b_loc"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "c"))))))))))))
 			(e-num (value "100")))
 		(e-num (value "20")))
 	(e-num (value "3")))

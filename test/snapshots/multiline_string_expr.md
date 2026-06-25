@@ -31,10 +31,8 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-string
-	(e-literal (string "This is a string"))
-	(e-literal (string "
-"))
-	(e-literal (string "With multiple lines")))
+	(e-literal (string "This is a string
+With multiple lines")))
 ~~~
 # TYPES
 ~~~clojure

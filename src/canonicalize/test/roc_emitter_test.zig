@@ -4,6 +4,7 @@
 //! to valid Roc source code using manually constructed CIR nodes.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const Emitter = @import("../RocEmitter.zig");
@@ -13,7 +14,7 @@ const CIR = @import("../CIR.zig");
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
-fn createTestEnv(allocator: std.mem.Allocator, source: []const u8) !*ModuleEnv {
+fn createTestEnv(allocator: std.mem.Allocator, source: []const u8) Allocator.Error!*ModuleEnv {
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
     return module_env;

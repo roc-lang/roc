@@ -35,7 +35,7 @@ pub const DocCommentExtract = struct {
 ///
 /// Module doc comments are consecutive `##` lines at the very beginning of the
 /// file, before any non-comment content. Returns null if none found.
-pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?DocCommentExtract {
+pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) Allocator.Error!?DocCommentExtract {
     var lines = std.ArrayList([]const u8).empty;
     defer lines.deinit(gpa);
 
@@ -99,7 +99,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?DocCommentE
 ///
 /// Scans backwards from `def_start_offset` to find consecutive `##` lines.
 /// Returns null if no doc comment is found.
-pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32) !?DocCommentExtract {
+pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32) Allocator.Error!?DocCommentExtract {
     if (def_start_offset == 0 or def_start_offset > source.len) return null;
 
     var lines = std.ArrayList([]const u8).empty;
@@ -199,7 +199,7 @@ pub fn extractModuleDocs(
     module_env: *const ModuleEnv,
     package_name: []const u8,
     source_path: ?[]const u8,
-) !DocModel.ModuleDocs {
+) Allocator.Error!DocModel.ModuleDocs {
     const source = module_env.getSourceAll();
 
     // Extract module-level doc comment
@@ -334,7 +334,7 @@ pub fn extractModuleDocs(
         const entry = &entries_list.items[i];
 
         // Check if this is a method (name contains ".")
-        if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |dot_idx| {
+        if (std.mem.findScalarLast(u8, entry.name, '.')) |dot_idx| {
             const parent_name = entry.name[0..dot_idx];
             const method_short_name = entry.name[dot_idx + 1 ..];
 
@@ -413,7 +413,7 @@ fn filterTypeModuleEntries(
     gpa: Allocator,
     entries_list: *std.ArrayList(DocModel.DocEntry),
     module_name: []const u8,
-) !void {
+) Allocator.Error!void {
     var idx: usize = 0;
     while (idx < entries_list.items.len) {
         const entry = &entries_list.items[idx];
@@ -434,10 +434,7 @@ fn filterTypeModuleEntries(
     }
 }
 
-/// Find the `Builtin` opaque entry, re-parent its dotted children under the
-/// matching top-level types, and remove the `Builtin` entry itself.
-/// Also strip "Builtin." prefix from top-level entries and re-parent them.
-fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel.DocEntry)) !void {
+fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel.DocEntry)) Allocator.Error!void {
     // Find the Builtin opaque entry
     var builtin_idx: ?usize = null;
     for (entries_list.items, 0..) |*entry, idx| {
@@ -463,9 +460,6 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     builtin_entry.deinit(gpa);
 
     // Also strip "Builtin." prefix from top-level entries and re-parent them.
-    // Entries like "Builtin.Bool.decode" survived the earlier hierarchical pass
-    // because lastIndexOf('.') gave parent "Builtin.Bool" which didn't exist.
-    // First pass: strip "Builtin." prefix from all matching entries
     const prefix = "Builtin.";
     for (entries_list.items) |*entry| {
         if (std.mem.startsWith(u8, entry.name, prefix)) {
@@ -478,15 +472,13 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     }
 
     // Second pass: re-parent dotted entries under their parent types
-    // (same logic as the original hierarchical pass)
     var j: usize = 0;
     while (j < entries_list.items.len) {
         const entry = &entries_list.items[j];
-        if (std.mem.indexOfScalar(u8, entry.name, '.')) |dot_idx| {
+        if (std.mem.findScalar(u8, entry.name, '.')) |dot_idx| {
             const parent_name = entry.name[0..dot_idx];
             const method_short_name = entry.name[dot_idx + 1 ..];
 
-            // Find parent in entries_list
             var parent_idx_opt: ?usize = null;
             for (entries_list.items, 0..) |*potential_parent, idx| {
                 if (idx != j and std.mem.eql(u8, potential_parent.name, parent_name)) {
@@ -497,11 +489,9 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
 
             if (parent_idx_opt) |parent_idx| {
                 const parent_ptr = &entries_list.items[parent_idx];
-
                 const method_entry = try moveEntryForReparenting(gpa, entry, method_short_name);
 
-                // Check if remainder has more dots — if so, use reparentDottedChildInto
-                if (std.mem.indexOfScalar(u8, method_short_name, '.')) |_| {
+                if (std.mem.findScalar(u8, method_short_name, '.')) |_| {
                     var children_list = std.ArrayList(DocModel.DocEntry).empty;
                     for (parent_ptr.children) |c| {
                         try children_list.append(gpa, c);
@@ -513,7 +503,6 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
                     try appendChildEntry(gpa, parent_ptr, method_entry);
                 }
 
-                // Remove from top-level list (preserving source order)
                 var removed = entries_list.orderedRemove(j);
                 removed.deinit(gpa);
                 continue;
@@ -522,10 +511,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
         j += 1;
     }
 
-    // Remove top-level value entries that are NOT part of the Builtin opaque's
-    // public API. In Builtin.roc, all public items are type declarations inside
-    // `Builtin :: [].{...}`. Standalone value entries like range_to, range_until
-    // are module-private helpers and should not appear in documentation.
+    // Remove top-level value entries that are not part of the public API.
     var k: usize = 0;
     while (k < entries_list.items.len) {
         const entry = &entries_list.items[k];
@@ -538,18 +524,13 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     }
 }
 
-/// Recursively re-parent a child with a dotted name (e.g. "Bool.not" or "Dec.abs")
-/// into the correct position in entries_list. If the target parent doesn't exist
-/// as a top-level entry, create a group entry for it.
+/// Recursively re-parent a child with a dotted name into the correct position in entries_list.
 fn reparentDottedChild(
     gpa: Allocator,
     entries_list: *std.ArrayList(DocModel.DocEntry),
     child: DocModel.DocEntry,
-) !void {
-    // Split on first dot
-    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
-        // No dot — this is a direct child. Nothing to re-parent into a subgroup;
-        // it stays at top level as-is (shouldn't normally happen for Builtin children).
+) Allocator.Error!void {
+    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         try entries_list.append(gpa, child);
         return;
     };
@@ -557,7 +538,6 @@ fn reparentDottedChild(
     const parent_name = child.name[0..dot_idx];
     const remainder = child.name[dot_idx + 1 ..];
 
-    // Find the matching top-level entry
     var parent: ?*DocModel.DocEntry = null;
     for (entries_list.items) |*entry| {
         if (std.mem.eql(u8, entry.name, parent_name)) {
@@ -566,7 +546,6 @@ fn reparentDottedChild(
         }
     }
 
-    // If no parent exists, create a group entry
     if (parent == null) {
         const group_name = try gpa.dupe(u8, parent_name);
         errdefer gpa.free(group_name);
@@ -585,28 +564,20 @@ fn reparentDottedChild(
 
     const p = parent.?;
 
-    // Create the child entry with shortened name (remainder)
     var new_child = child;
-    // We need to allocate a new name for the remainder
     const short_name = try gpa.dupe(u8, remainder);
-    gpa.free(child.name); // free old dotted name
+    gpa.free(child.name);
     new_child.name = short_name;
 
-    // Check if remainder still has dots (multi-level, e.g. "Dec.abs")
-    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
-        // Recursively place into sub-children
-        // Convert parent's children to an ArrayList temporarily
+    if (std.mem.findScalar(u8, remainder, '.')) |_| {
         var children_list = std.ArrayList(DocModel.DocEntry).empty;
         for (p.children) |c| {
             try children_list.append(gpa, c);
         }
         gpa.free(p.children);
-
         try reparentDottedChildInto(gpa, &children_list, new_child);
-
         p.children = try children_list.toOwnedSlice(gpa);
     } else {
-        // Simple case — just append to parent's children
         try appendChildEntry(gpa, p, new_child);
     }
 }
@@ -616,9 +587,8 @@ fn reparentDottedChildInto(
     gpa: Allocator,
     children_list: *std.ArrayList(DocModel.DocEntry),
     child: DocModel.DocEntry,
-) !void {
-    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
-        // Leaf — just append
+) Allocator.Error!void {
+    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         try children_list.append(gpa, child);
         return;
     };
@@ -626,7 +596,6 @@ fn reparentDottedChildInto(
     const parent_name = child.name[0..dot_idx];
     const remainder = child.name[dot_idx + 1 ..];
 
-    // Find or create intermediate group
     var parent: ?*DocModel.DocEntry = null;
     for (children_list.items) |*entry| {
         if (std.mem.eql(u8, entry.name, parent_name)) {
@@ -653,14 +622,12 @@ fn reparentDottedChildInto(
 
     const p = parent.?;
 
-    // Shorten the child name
     var new_child = child;
     const short_name = try gpa.dupe(u8, remainder);
     gpa.free(child.name);
     new_child.name = short_name;
 
-    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
-        // Still has dots — recurse deeper
+    if (std.mem.findScalar(u8, remainder, '.')) |_| {
         var sub_children = std.ArrayList(DocModel.DocEntry).empty;
         for (p.children) |c| {
             try sub_children.append(gpa, c);
@@ -669,7 +636,6 @@ fn reparentDottedChildInto(
         try reparentDottedChildInto(gpa, &sub_children, new_child);
         p.children = try sub_children.toOwnedSlice(gpa);
     } else {
-        // Leaf — append to parent's children
         try appendChildEntry(gpa, p, new_child);
     }
 }
@@ -681,7 +647,7 @@ fn extractDefEntry(
     module_env: *const ModuleEnv,
     def_idx: CIR.Def.Idx,
     source: []const u8,
-) !?DocModel.DocEntry {
+) Allocator.Error!?DocModel.DocEntry {
     const def = module_env.store.getDef(def_idx);
     const pattern = module_env.store.getPattern(def.pattern);
 
@@ -708,12 +674,12 @@ fn extractDefEntry(
 
                 const def_var = ModuleEnv.varFrom(def_idx);
                 if (@intFromEnum(def_var) >= module_env.types.len()) break :blk null;
-                break :blk extractDocType(
+                break :blk try extractDocType(
                     gpa,
                     &module_env.types,
                     module_env.getIdentStoreConst(),
                     def_var,
-                ) catch break :blk null;
+                );
             };
             errdefer if (type_sig) |s| {
                 s.deinit(gpa);
@@ -800,7 +766,7 @@ fn extractNominalChildren(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     def: CIR.Def,
-) ![]DocModel.DocEntry {
+) Allocator.Error![]DocModel.DocEntry {
     const expr = module_env.store.getExpr(def.expr);
     switch (expr) {
         .e_nominal => |nom| {
@@ -821,7 +787,7 @@ fn extractRecordChildren(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     fields: CIR.RecordField.Span,
-) ![]DocModel.DocEntry {
+) Allocator.Error![]DocModel.DocEntry {
     const fields_slice = module_env.store.sliceRecordFields(fields);
     var children = std.ArrayList(DocModel.DocEntry).empty;
     errdefer {
@@ -856,7 +822,7 @@ fn extractDeclTypeSig(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     anno_idx: CIR.TypeAnno.Idx,
-) !?*const DocType {
+) Allocator.Error!?*const DocType {
     // Extract the backing type from the CIR annotation. The inferred type for a
     // nominal resolves to the nominal itself, so we use the annotation instead.
     // DocEntry.writeToSExpr generates the declaration prefix from kind + name.
@@ -867,7 +833,7 @@ fn extractAnnotationAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     annotation: CIR.Annotation,
-) !?*const DocType {
+) Allocator.Error!?*const DocType {
     const base_type = try extractTypeAnnoAsDocType(gpa, module_env, annotation.anno) orelse return null;
     var base_type_moved = false;
     errdefer if (!base_type_moved) {
@@ -933,7 +899,7 @@ fn extractWhereMethodConstraint(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
-) !DocType.Constraint {
+) Allocator.Error!DocType.Constraint {
     const type_var = try extractWhereTypeVarName(gpa, module_env, method.var_);
     errdefer gpa.free(type_var);
 
@@ -957,7 +923,7 @@ fn extractWhereMethodSignature(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
-) !*const DocType {
+) Allocator.Error!*const DocType {
     const args_slice = module_env.store.sliceTypeAnnos(method.args);
     const args = try gpa.alloc(*const DocType, args_slice.len);
     var args_len: usize = 0;
@@ -998,7 +964,7 @@ fn extractWhereTypeVarName(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     var_idx: CIR.TypeAnno.Idx,
-) ![]const u8 {
+) Allocator.Error![]const u8 {
     var current = var_idx;
     while (true) {
         switch (module_env.store.getTypeAnno(current)) {
@@ -1050,7 +1016,7 @@ fn extractTypeAnnoAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     type_anno_idx: CIR.TypeAnno.Idx,
-) !?*const DocType {
+) Allocator.Error!?*const DocType {
     const BuildFrame = union(enum) {
         visit: CIR.TypeAnno.Idx,
         malformed_tag,
@@ -1698,22 +1664,29 @@ fn extractDocTypeInner(
 
     switch (resolved.desc.content) {
         .flex => |flex| {
-            // Check for from_numeral constraint -> default to Dec
+            // Check for a literal-conversion constraint and default to the
+            // literal kind's default type (numeral -> Dec, quote -> Str).
             const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
-            var has_numeral = false;
+            var literal_kind: ?types_mod.StaticDispatchConstraint.LiteralKind = null;
             for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
-                    has_numeral = true;
+                if (constraint.origin.literalKind()) |kind| {
+                    literal_kind = kind;
                     break;
                 }
             }
 
-            if (has_numeral) {
-                // Default numeral types to Dec for display
-                return try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = try gpa.dupe(u8, "Num"),
-                    .type_name = try gpa.dupe(u8, "Dec"),
-                } });
+            if (literal_kind) |kind| {
+                // Default open literal types for display
+                return switch (kind) {
+                    .numeral => try allocDocType(gpa, .{ .type_ref = .{
+                        .module_path = try gpa.dupe(u8, "Num"),
+                        .type_name = try gpa.dupe(u8, "Dec"),
+                    } }),
+                    .quote, .interpolation => try allocDocType(gpa, .{ .type_ref = .{
+                        .module_path = try gpa.dupe(u8, ""),
+                        .type_name = try gpa.dupe(u8, "Str"),
+                    } }),
+                };
             }
 
             // Get the variable name
@@ -1724,7 +1697,7 @@ fn extractDocTypeInner(
 
             // Collect non-numeral constraints for where clause
             for (constraints) |constraint| {
-                if (constraint.origin != .from_numeral) {
+                if (constraint.origin != .from_literal) {
                     const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
                     try ctx.constraints_list.append(gpa, .{
                         .dispatcher_name = dispatcher_name,
@@ -1956,7 +1929,7 @@ fn extractRecord(
                 if (constraints.len > 0) {
                     const dispatcher_name = if (ident_text) |t| t else try ctx.getFlexVarName(ext_resolved.var_);
                     for (constraints) |constraint| {
-                        if (constraint.origin != .from_numeral) {
+                        if (constraint.origin != .from_literal) {
                             try ctx.constraints_list.append(gpa, .{
                                 .dispatcher_name = dispatcher_name,
                                 .fn_name_text = idents.getText(constraint.fn_name),
@@ -2241,10 +2214,10 @@ fn getDisplayName(origin_text: []const u8, ident_text: []const u8) []const u8 {
 
 /// Get the module path from the origin text.
 /// The origin_module text is the raw module path from the compiler.
-/// Returns empty string for "Builtin" since it's an implementation detail.
+/// Returns empty string for compiler-owned builtin types since Builtin is an implementation detail.
 fn getModulePath(origin_text: []const u8) []const u8 {
-    if (std.mem.eql(u8, origin_text, "Builtin")) {
-        return ""; // Don't expose "Builtin" module as it's an implementation detail
+    if (std.mem.eql(u8, origin_text, "Builtin") or CIR.Import.isCompilerBuiltinImportName(origin_text)) {
+        return "";
     }
     return origin_text;
 }
@@ -2252,10 +2225,11 @@ fn getModulePath(origin_text: []const u8) []const u8 {
 fn convertModuleKind(kind: ModuleEnv.ModuleKind) DocModel.ModuleKind {
     return switch (kind) {
         .app, .default_app => .app,
+        .module => .module,
         .package => .package,
         .platform => .platform,
         .type_module => .type_module,
-        else => .app, // deprecated_module, hosted, malformed → treat as app
+        else => .app, // hosted and malformed modules are not documented as package modules
     };
 }
 
@@ -2272,7 +2246,7 @@ fn findEntryByName(entries: []const DocModel.DocEntry, name: []const u8) bool {
     return false;
 }
 
-fn joinLines(gpa: Allocator, lines: []const []const u8) ![]u8 {
+fn joinLines(gpa: Allocator, lines: []const []const u8) Allocator.Error![]u8 {
     // Calculate total length
     var total_len: usize = 0;
     for (lines, 0..) |line, i| {
@@ -2296,7 +2270,7 @@ fn joinLines(gpa: Allocator, lines: []const []const u8) ![]u8 {
 /// Append a child entry to a parent's children slice, reallocating in place.
 /// This replaces the repeated pattern of: create ArrayList, copy all old children,
 /// append new child, free old slice, toOwnedSlice.
-fn appendChildEntry(gpa: Allocator, parent: *DocModel.DocEntry, child: DocModel.DocEntry) !void {
+fn appendChildEntry(gpa: Allocator, parent: *DocModel.DocEntry, child: DocModel.DocEntry) Allocator.Error!void {
     const old = parent.children;
     const new_children = try gpa.alloc(DocModel.DocEntry, old.len + 1);
     @memcpy(new_children[0..old.len], old);
@@ -2309,7 +2283,7 @@ fn moveEntryForReparenting(
     gpa: Allocator,
     entry: *DocModel.DocEntry,
     short_name: []const u8,
-) !DocModel.DocEntry {
+) Allocator.Error!DocModel.DocEntry {
     const new_name = try gpa.dupe(u8, short_name);
     errdefer gpa.free(new_name);
 

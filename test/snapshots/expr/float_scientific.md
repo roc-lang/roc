@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec (value "0.000123"))
+(e-dec-small (numerator "123") (denominator-power-of-ten "6") (value "0.000123"))
 ~~~
 # TYPES
 ~~~clojure

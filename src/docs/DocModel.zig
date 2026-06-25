@@ -19,11 +19,11 @@ pub const PackageDocs = struct {
         gpa.free(self.name);
     }
 
-    pub fn writeToSExpr(self: *const PackageDocs, writer: anytype) !void {
+    pub fn writeToSExpr(self: *const PackageDocs, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
         try self.writeToSExprIndented(writer, 0);
     }
 
-    pub fn writeToSExprIndented(self: *const PackageDocs, writer: anytype, depth: usize) !void {
+    pub fn writeToSExprIndented(self: *const PackageDocs, writer: anytype, depth: usize) (Allocator.Error || error{WriteFailed})!void {
         try writeIndent(writer, depth);
         try writer.writeAll("(package-docs\n");
         try writeIndent(writer, depth + 1);
@@ -65,7 +65,7 @@ pub const AppDocs = struct {
         gpa.free(self.name);
     }
 
-    pub fn writeToSExpr(self: *const AppDocs, writer: anytype) !void {
+    pub fn writeToSExpr(self: *const AppDocs, writer: anytype) Allocator.Error!void {
         try writer.writeAll("(app-docs\n");
         try writer.writeAll("  (name \"");
         try writeEscaped(writer, self.name);
@@ -104,7 +104,7 @@ pub const PlatformDocs = struct {
         gpa.free(self.name);
     }
 
-    pub fn writeToSExpr(self: *const PlatformDocs, writer: anytype) !void {
+    pub fn writeToSExpr(self: *const PlatformDocs, writer: anytype) Allocator.Error!void {
         try writer.writeAll("(platform-docs\n");
         try writer.writeAll("  (name \"");
         try writeEscaped(writer, self.name);
@@ -122,6 +122,7 @@ pub const PlatformDocs = struct {
 /// The kind of module.
 pub const ModuleKind = enum {
     app,
+    module,
     package,
     platform,
     type_module,
@@ -129,12 +130,21 @@ pub const ModuleKind = enum {
     pub fn toStr(self: ModuleKind) []const u8 {
         return switch (self) {
             .app => "app",
+            .module => "module",
             .package => "package",
             .platform => "platform",
             .type_module => "type_module",
         };
     }
 };
+
+/// Orders modules by (package name, module name) so docs output is
+/// deterministic regardless of the hash-map order modules are collected in.
+pub fn moduleDocsLessThan(_: void, a: ModuleDocs, b: ModuleDocs) bool {
+    const package_order = std.mem.order(u8, a.package_name, b.package_name);
+    if (package_order != .eq) return package_order == .lt;
+    return std.mem.order(u8, a.name, b.name) == .lt;
+}
 
 /// Documentation for a single module.
 pub const ModuleDocs = struct {
@@ -162,7 +172,7 @@ pub const ModuleDocs = struct {
         gpa.free(self.package_name);
     }
 
-    pub fn writeToSExpr(self: *const ModuleDocs, writer: anytype, depth: usize) !void {
+    pub fn writeToSExpr(self: *const ModuleDocs, writer: anytype, depth: usize) (Allocator.Error || error{WriteFailed})!void {
         try writeIndent(writer, depth);
         try writer.writeAll("(module\n");
         try writeIndent(writer, depth + 1);
@@ -300,7 +310,7 @@ pub const DocType = union(enum) {
         signature: *const DocType, // the method's type signature
     };
 
-    pub fn writeToSExpr(self: *const DocType, writer: anytype, depth: usize) !void {
+    pub fn writeToSExpr(self: *const DocType, writer: anytype, depth: usize) (Allocator.Error || error{WriteFailed})!void {
         switch (self.*) {
             .type_ref => |ref| {
                 try writer.writeAll("(type-ref");
@@ -567,7 +577,7 @@ pub const DocEntry = struct {
         gpa.free(self.name);
     }
 
-    pub fn writeToSExpr(self: *const DocEntry, writer: anytype, depth: usize) !void {
+    pub fn writeToSExpr(self: *const DocEntry, writer: anytype, depth: usize) (Allocator.Error || error{WriteFailed})!void {
         try writeIndent(writer, depth);
         try writer.writeAll("(entry\n");
         try writeIndent(writer, depth + 1);
@@ -626,13 +636,13 @@ pub const DocEntry = struct {
 
 // --- Helpers ---
 
-fn writeIndent(writer: anytype, depth: usize) !void {
+fn writeIndent(writer: anytype, depth: usize) error{WriteFailed}!void {
     for (0..depth) |_| {
         try writer.writeAll("  ");
     }
 }
 
-fn writeEscaped(writer: anytype, s: []const u8) !void {
+fn writeEscaped(writer: anytype, s: []const u8) (Allocator.Error || error{WriteFailed})!void {
     for (s) |c| {
         switch (c) {
             '"' => try writer.writeAll("\\\""),

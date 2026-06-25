@@ -236,7 +236,7 @@ main = |_| "done"
 								(value
 									(e-tag (name "Ok")
 										(args
-											(e-call (constraint-fn-var 129)
+											(e-call (constraint-fn-var 130)
 												(e-lookup-local
 													(p-assign (ident "transform")))
 												(e-lookup-local
@@ -343,12 +343,12 @@ main = |_| "done"
 		(patt (type "a, b -> { first: a, second: b }"))
 		(patt (type "List(_a) -> U64"))
 		(patt (type "a -> Try(Try(a, Str), Str)"))
-		(patt (type "_arg -> Str")))
+		(patt (type "_arg -> c where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]")))
 	(expressions
 		(expr (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
 		(expr (type "List(_a) -> U64"))
 		(expr (type "a -> Try(Try(a, Str), Str)"))
-		(expr (type "_arg -> Str"))))
+		(expr (type "_arg -> c where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))))
 ~~~

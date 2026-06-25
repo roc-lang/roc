@@ -1,4 +1,0 @@
-P:=W
-  implements
-   []
-t

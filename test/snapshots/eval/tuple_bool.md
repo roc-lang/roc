@@ -102,18 +102,38 @@ NO CHANGE
 		(e-nominal-external
 			(builtin)
 			(e-tag (name "False")))
-		(e-unary-not
-			(e-tag (name "True")))
-		(e-unary-not
-			(e-tag (name "False")))
-		(e-binop (op "and")
-			(e-tag (name "True"))
-			(e-tag (name "False")))
-		(e-binop (op "or")
-			(e-unary-not
+		(e-dispatch-call (method "not") (constraint-fn-var 47)
+			(receiver
 				(e-tag (name "True")))
-			(e-unary-not
-				(e-tag (name "True"))))))
+			(args))
+		(e-dispatch-call (method "not") (constraint-fn-var 51)
+			(receiver
+				(e-tag (name "False")))
+			(args))
+		(e-if
+			(if-branches
+				(if-branch
+					(e-tag (name "True"))
+					(e-tag (name "False"))))
+			(if-else
+				(e-nominal-external
+					(builtin)
+					(e-tag (name "False")))))
+		(e-if
+			(if-branches
+				(if-branch
+					(e-dispatch-call (method "not") (constraint-fn-var 67)
+						(receiver
+							(e-tag (name "True")))
+						(args))
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "True")))))
+			(if-else
+				(e-dispatch-call (method "not") (constraint-fn-var 79)
+					(receiver
+						(e-tag (name "True")))
+					(args))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -8,26 +8,19 @@ type=expr
 [42, 4.2, "hello"]
 ~~~
 # EXPECTED
-TYPE MISMATCH - let_polymorphism_error.md:1:6:1:9
+TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**let_polymorphism_error.md:1:6:1:9:**
-```roc
-[42, 4.2, "hello"]
-```
-     ^^^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **let_polymorphism_error.md:1:11:1:18:**
 ```roc
 [42, 4.2, "hello"]
 ```
           ^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -57,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Dec)"))
 ~~~

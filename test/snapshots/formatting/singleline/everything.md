@@ -232,7 +232,7 @@ This `match` expression doesn't cover all possible cases:
 ```
 
 The value being matched on has type:
-        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field, .. }), Z4(List(c))]_
+        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]_
 
 Missing patterns:
         Z4 []
@@ -513,6 +513,14 @@ NO CHANGE
 								(value
 									(e-lookup-local
 										(p-assign (ident "a")))))))))))
+	(s-import (module "I1")
+		(exposes
+			(exposed (name "I11") (wildcard false))
+			(exposed (name "I12") (wildcard false))))
+	(s-import (module "I2")
+		(exposes
+			(exposed (name "I21") (alias "Ias1") (wildcard false))
+			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-alias-decl
 		(ty-header (name "A")
 			(ty-args
@@ -554,22 +562,14 @@ NO CHANGE
 	(s-alias-decl
 		(ty-header (name "G"))
 		(ty-fn (effectful false)
-			(ty-lookup (name "Str") (builtin))))
-	(s-import (module "I1")
-		(exposes
-			(exposed (name "I11") (wildcard false))
-			(exposed (name "I12") (wildcard false))))
-	(s-import (module "I2")
-		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false)))))
+			(ty-lookup (name "Str") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -597,5 +597,5 @@ NO CHANGE
 			(ty-header (name "G"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))] -> c"))))
 ~~~

@@ -14,7 +14,7 @@ A GitHub Action that retries a command if it fails with a specific error string.
 - name: Run flaky test
   uses: ./.github/actions/flaky-retry
   with:
-    command: 'cargo test my_flaky_test'
+    command: 'zig build my_flaky_cmd'
     error_string_contains: 'connection timeout'
     retry_count: 5
 ```

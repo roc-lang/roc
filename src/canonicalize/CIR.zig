@@ -2,6 +2,7 @@
 //! This module contains type definitions and utilities used across the canonicalization IR.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
@@ -35,8 +36,14 @@ pub const BuiltinIndices = struct {
     dict_type: Statement.Idx,
     set_type: Statement.Idx,
     str_type: Statement.Idx,
+    hasher_type: Statement.Idx,
+    iter_type: Statement.Idx,
+    stream_type: Statement.Idx,
     list_type: Statement.Idx,
     box_type: Statement.Idx,
+    parse_tag_union_spec_type: Statement.Idx,
+    fields_type: Statement.Idx,
+    field_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
@@ -59,8 +66,14 @@ pub const BuiltinIndices = struct {
     dict_ident: Ident.Idx,
     set_ident: Ident.Idx,
     str_ident: Ident.Idx,
+    hasher_ident: Ident.Idx,
+    iter_ident: Ident.Idx,
+    stream_ident: Ident.Idx,
     list_ident: Ident.Idx,
     box_ident: Ident.Idx,
+    parse_tag_union_spec_ident: Ident.Idx,
+    fields_ident: Ident.Idx,
+    field_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
@@ -139,7 +152,7 @@ pub const Def = struct {
         }
     };
 
-    pub fn pushToSExprTree(self: *const Def, cir: anytype, tree: anytype) !void {
+    pub fn pushToSExprTree(self: *const Def, cir: anytype, tree: anytype) Allocator.Error!void {
         const begin = tree.beginNode();
         const name: []const u8 = switch (self.kind) {
             .let => "d-let",
@@ -169,6 +182,7 @@ pub const Def = struct {
             .pattern_f64_literal,
             .pattern_small_dec_literal,
             .pattern_str_literal,
+            .pattern_str_interpolation,
             .pattern_underscore,
             => true,
             else => false,
@@ -203,7 +217,7 @@ pub const TypeHeader = struct {
     relative_name: base.Ident.Idx,
     args: TypeAnno.Span,
 
-    pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) !void {
+    pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("ty-header");
 
@@ -250,7 +264,7 @@ pub const WhereClause = union(enum) {
         diagnostic: Diagnostic.Idx,
     },
 
-    pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
+    pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) Allocator.Error!void {
         switch (self.*) {
             .w_method => |method| {
                 const begin = tree.beginNode();
@@ -321,8 +335,16 @@ pub const Annotation = struct {
 
     anno: TypeAnno.Idx,
     where: ?WhereClause.Span,
+    /// Whether `anno` mentions any type variable (a fresh `.rigid_var` or a
+    /// `.rigid_var_lookup` to an enclosing one). Derived from `anno` by
+    /// `addAnnotation` and populated on read by `getAnnotation`; the value passed
+    /// at construction is ignored.
+    mentions_type_var: bool = false,
+    /// Whether `anno` *introduces* a type variable (`.rigid_var`). Derived and
+    /// populated like `mentions_type_var`.
+    introduces_type_var: bool = false,
 
-    pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) !void {
+    pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
 
         const begin = tree.beginNode();
@@ -362,7 +384,7 @@ pub const ExposedItem = struct {
     alias: ?base.Ident.Idx,
     is_wildcard: bool,
 
-    pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) !void {
+    pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("exposed");
 
@@ -497,7 +519,7 @@ pub const IntValue = struct {
         return @bitCast(self.bytes);
     }
 
-    pub fn bufPrint(self: IntValue, buf: []u8) ![]u8 {
+    pub fn bufPrint(self: IntValue, buf: []u8) Allocator.Error![]u8 {
         const i128h = builtins.compiler_rt_128;
         switch (self.kind) {
             .i128 => {
@@ -511,6 +533,13 @@ pub const IntValue = struct {
                 return buf[result.start..buf.len];
             },
         }
+    }
+
+    pub fn pushStringPair(self: IntValue, tree: *SExprTree, key: []const u8) std.mem.Allocator.Error!void {
+        const begin = try tree.reserveStringBuffer(40);
+        errdefer tree.discardReservedStringBuffer(begin);
+        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
+        try tree.pushReservedStringPair(key, begin, value_str);
     }
 
     /// Calculate the int requirements of an IntValue
@@ -623,11 +652,13 @@ pub const NumKind = enum {
 /// - is_negative: Bool (whether there was a minus sign)
 /// - digits_before_pt: List(U8) (base-256 digits before decimal point)
 /// - digits_after_pt: List(U8) (base-256 digits after decimal point)
+/// - digits_after_pt_count: U64 (how many decimal digits appeared after the point)
 ///
-/// Example: "356.517" becomes:
+/// Example: "356.5170" becomes:
 /// - is_negative = false
 /// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
-/// - digits_after_pt = [2, 5] (because 517 = 2*256 + 5)
+/// - digits_after_pt = [20, 50] (because 5170 = 20*256 + 50)
+/// - digits_after_pt_count = 4
 pub const NumeralDigits = struct {
     /// Index into the shared digit byte array in ModuleEnv
     digits_start: u32,
@@ -635,6 +666,8 @@ pub const NumeralDigits = struct {
     before_pt_len: u16,
     /// Number of bytes for digits_after_pt
     after_pt_len: u16,
+    /// Number of decimal digits after the point before base-256 encoding
+    after_pt_digit_count: u32,
     /// Whether the literal had a minus sign
     is_negative: bool,
 
@@ -653,80 +686,7 @@ pub const NumeralDigits = struct {
         const after_start = self.digits_start + self.before_pt_len;
         return digit_bytes[after_start..][0..self.after_pt_len];
     }
-
-    /// Format the base-256 encoded numeral back to a human-readable decimal string.
-    /// Writes to the provided buffer and returns a slice of the written content.
-    /// Buffer should be at least 128 bytes to handle most numbers.
-    pub fn formatDecimal(self: NumeralDigits, digit_bytes: []const u8, buf: []u8) []const u8 {
-        return formatBase256ToDecimal(
-            self.is_negative,
-            self.getDigitsBeforePt(digit_bytes),
-            self.getDigitsAfterPt(digit_bytes),
-            buf,
-        );
-    }
 };
-
-/// Format base-256 encoded digits to a human-readable decimal string.
-/// This is useful for error messages where we need to show the user what number
-/// was invalid (e.g., "The number 999999999 is not a valid U8").
-///
-/// Parameters:
-/// - is_negative: whether the number had a minus sign
-/// - digits_before_pt: base-256 encoded integer part
-/// - digits_after_pt: base-256 encoded fractional part
-/// - buf: output buffer (should be at least 128 bytes)
-///
-/// Returns a slice of buf containing the formatted decimal string.
-pub fn formatBase256ToDecimal(
-    is_negative: bool,
-    digits_before_pt: []const u8,
-    digits_after_pt: []const u8,
-    buf: []u8,
-) []const u8 {
-    var writer = std.io.fixedBufferStream(buf);
-    const w = writer.writer();
-
-    // Write sign if negative
-    if (is_negative) w.writeAll("-") catch {};
-
-    // Convert base-256 integer part to decimal
-    var value: u128 = 0;
-    for (digits_before_pt) |digit| {
-        value = value * 256 + digit;
-    }
-    var int_buf: [40]u8 = undefined;
-    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
-
-    // Format fractional part if present and non-zero
-    if (digits_after_pt.len > 0) {
-        var has_nonzero = false;
-        for (digits_after_pt) |d| {
-            if (d != 0) {
-                has_nonzero = true;
-                break;
-            }
-        }
-        if (has_nonzero) {
-            w.writeAll(".") catch {};
-            // Convert base-256 fractional digits to decimal
-            var frac: f64 = 0;
-            var frac_mult: f64 = 1.0 / 256.0;
-            for (digits_after_pt) |digit| {
-                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
-                frac_mult /= 256.0;
-            }
-            // Print fractional part (removing leading "0.")
-            var frac_buf: [400]u8 = undefined;
-            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
-            if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                w.writeAll(frac_str[2..]) catch {};
-            }
-        }
-    }
-
-    return buf[0..writer.pos];
-}
 
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
@@ -746,6 +706,12 @@ pub fn fromF64(f: f64) ?RocDec {
 
 /// Represents an import statement in a module
 pub const Import = struct {
+    pub const compiler_builtin_import_name = "\x00compiler.Builtin";
+
+    pub fn isCompilerBuiltinImportName(module_name: []const u8) bool {
+        return std.mem.eql(u8, module_name, compiler_builtin_import_name);
+    }
+
     pub const Idx = enum(u32) {
         first = 0,
         _,
@@ -820,7 +786,7 @@ pub const Import = struct {
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
-        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
+        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) Allocator.Error!Import.Idx {
             return self.getOrPutWithIdent(allocator, strings, module_name, null);
         }
 
@@ -828,7 +794,7 @@ pub const Import = struct {
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
-        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) !Import.Idx {
+        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
             // First check if we already have this module name by comparing strings
             for (self.imports.items.items, 0..) |existing_string_idx, i| {
                 const existing_name = strings.get(existing_string_idx);
@@ -938,8 +904,25 @@ pub const Import = struct {
             self: *Store,
             env: anytype,
             available_modules: []const *const @import("ModuleEnv.zig"),
-        ) void {
+        ) std.mem.Allocator.Error!void {
             const import_count: usize = @intCast(self.imports.len());
+            if (import_count == 0) return;
+
+            // Index modules by name once. First occurrence wins, matching the
+            // "first match in iteration order" semantics of the previous linear scan.
+            var name_to_idx = std.StringHashMap(u32).init(env.gpa);
+            defer name_to_idx.deinit();
+            try name_to_idx.ensureTotalCapacity(@intCast(available_modules.len));
+            var compiler_builtin_module_idx: ?u32 = null;
+            for (available_modules, 0..) |module_env, module_idx| {
+                if (module_env.module_role == .builtin and compiler_builtin_module_idx == null) {
+                    compiler_builtin_module_idx = @intCast(module_idx);
+                    continue;
+                }
+                const gop = name_to_idx.getOrPutAssumeCapacity(module_env.module_name);
+                if (!gop.found_existing) gop.value_ptr.* = @intCast(module_idx);
+            }
+
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
                 const current = self.resolved_modules.items.items[i];
@@ -947,12 +930,15 @@ pub const Import = struct {
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                // Find matching module in available_modules by comparing module names
-                for (available_modules, 0..) |module_env, module_idx| {
-                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
-                        self.setResolvedModule(import_idx, @intCast(module_idx));
-                        break;
+                if (Import.isCompilerBuiltinImportName(import_name)) {
+                    if (compiler_builtin_module_idx) |module_idx| {
+                        self.setResolvedModule(import_idx, module_idx);
                     }
+                    continue;
+                }
+
+                if (name_to_idx.get(import_name)) |module_idx| {
+                    self.setResolvedModule(import_idx, module_idx);
                 }
             }
         }
@@ -1052,7 +1038,7 @@ pub const RecordField = struct {
     name: base.Ident.Idx,
     value: Expr.Idx,
 
-    pub fn pushToSExprTree(self: *const RecordField, cir: anytype, tree: anytype) !void {
+    pub fn pushToSExprTree(self: *const RecordField, cir: anytype, tree: anytype) Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
@@ -1082,7 +1068,7 @@ pub const ExternalDecl = struct {
     /// A safe list of external declarations
     pub const SafeList = collections.SafeList(ExternalDecl);
 
-    pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) !void {
+    pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) Allocator.Error!void {
         const node = tree.beginNode();
         try tree.pushStaticAtom("ext-decl");
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
@@ -1100,7 +1086,7 @@ pub const ExternalDecl = struct {
         try tree.endNode(node, attrs);
     }
 
-    pub fn pushToSExprTreeWithRegion(self: *const ExternalDecl, cir: anytype, tree: anytype, region: Region) !void {
+    pub fn pushToSExprTreeWithRegion(self: *const ExternalDecl, cir: anytype, tree: anytype, region: Region) Allocator.Error!void {
         const node = tree.beginNode();
         try tree.pushStaticAtom("ext-decl");
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);

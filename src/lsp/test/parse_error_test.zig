@@ -1,12 +1,25 @@
 //! Regression tests for surfacing parser failures as LSP diagnostics.
 
 const std = @import("std");
-const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
+const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
+const integration_spec = @import("integration_spec.zig");
+const test_env = @import("integration_env.zig");
 
-test "parse errors are reported as diagnostics" {
-    const allocator = std.testing.allocator;
+/// Parse-error integration specs exported to the LSP harness.
+pub const specs = [_]integration_spec.Spec{
+    .{ .name = "parse errors are reported as diagnostics", .run = parseErrorsAreReportedAsDiagnostics },
+};
 
-    var checker = SyntaxChecker.init(allocator, .{}, null);
+/// Verifies parser failures are returned as concrete LSP diagnostics.
+pub fn parseErrorsAreReportedAsDiagnostics() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const cache_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(cache_path);
+
+    var checker = SyntaxChecker.init(allocator, test_env.io, .{}, null);
+    test_env.configureChecker(&checker, cache_path);
     defer checker.deinit();
 
     // File content with parse error (unclosed string)
@@ -41,9 +54,9 @@ test "parse errors are reported as diagnostics" {
 
         // Parse errors should mention the actual issue (unclosed string, parse error, etc.)
         const mentions_parse_issue =
-            std.mem.indexOf(u8, first_diag.message, "UNCLOSED") != null or
-            std.mem.indexOf(u8, first_diag.message, "PARSE") != null or
-            std.mem.indexOf(u8, first_diag.message, "string") != null;
+            std.mem.find(u8, first_diag.message, "UNCLOSED") != null or
+            std.mem.find(u8, first_diag.message, "PARSE") != null or
+            std.mem.find(u8, first_diag.message, "string") != null;
         try std.testing.expect(mentions_parse_issue);
     }
 }

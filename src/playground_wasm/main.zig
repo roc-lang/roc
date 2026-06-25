@@ -24,6 +24,7 @@ const eval = @import("eval");
 const lir = @import("lir");
 const types = @import("types");
 const can = @import("can");
+const CoreCtx = can.CoreCtx;
 const check = @import("check");
 const unbundle = @import("unbundle");
 const fmt = @import("fmt");
@@ -32,17 +33,31 @@ const WasmFilesystem = @import("WasmFilesystem.zig");
 // WASM filesystem context — module-level so it persists across compilations.
 var wasm_ctx: WasmFilesystem.WasmContext = .{};
 const layout = @import("layout");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
+const LoadedBuiltinModule = eval.builtin_loading.LoadedModule;
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
 
 var allocator: Allocator = std.heap.wasm_allocator;
+
+const PlaygroundCompileError =
+    Allocator.Error ||
+    fmt.FormatAstError ||
+    eval.test_helpers.TestHelperError ||
+    check.CheckedArtifact.CompileTimeFinalizer.Error ||
+    error{
+        ErrFinalizingHTMLWriter,
+        Internal,
+        TypeCheckError,
+        WriteFailed,
+    };
+
+const PlaygroundEvaluateTestsError = PlaygroundCompileError || lir.CheckedPipeline.LowerResourceError || eval.LirInterpreter.Error;
 
 /// Playground-specific std options, including a freestanding-safe log sink.
 pub const std_options: std.Options = .{
@@ -139,11 +154,11 @@ const Diagnostic = struct {
 /// Compiler stage data
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
+    owned_source: ?[]const u8 = null,
     parse_ast: ?*parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
-    builtin_module: ?BuiltinModule = null,
     imported_modules: ?[]const *const ModuleEnv = null,
     auto_imported_types: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null,
 
@@ -157,70 +172,6 @@ const CompilerStageData = struct {
     parse_reports: std.array_list.Managed(reporting.Report),
     can_reports: std.array_list.Managed(reporting.Report),
     type_reports: std.array_list.Managed(reporting.Report),
-
-    const BuiltinModule = struct {
-        env: *ModuleEnv,
-        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-        gpa: Allocator,
-
-        fn deinit(self: *@This()) void {
-            self.env.imports.map.deinit(self.gpa);
-            self.gpa.free(self.buffer);
-            self.gpa.destroy(self.env);
-        }
-
-        fn loadCompiled(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
-            const CompactWriter = collections.CompactWriter;
-            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-            @memcpy(buffer, bin_data);
-
-            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
-
-            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
-                serialized_ptr.all_statements.span.start,
-                serialized_ptr.all_statements.span.len,
-            });
-
-            const module_env_ptr = try gpa.create(ModuleEnv);
-            errdefer gpa.destroy(module_env_ptr);
-
-            const base_ptr = @intFromPtr(buffer.ptr);
-
-            logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
-
-            logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
-            module_env_ptr.* = ModuleEnv{
-                .gpa = gpa,
-                .common = common,
-                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
-                .module_kind = serialized_ptr.module_kind.decode(),
-                .all_defs = serialized_ptr.all_defs,
-                .all_statements = serialized_ptr.all_statements,
-                .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
-                .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
-                .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
-                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
-                .module_name = module_name_param,
-                .display_module_name_idx = base.Ident.Idx.NONE,
-                .qualified_module_ident = base.Ident.Idx.NONE,
-                .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
-                .evaluation_order = null,
-                .idents = ModuleEnv.CommonIdents.find(&common),
-                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-            };
-            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
-            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
-        }
-    };
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
         return CompilerStageData{
@@ -282,9 +233,8 @@ const CompilerStageData = struct {
         self.module_env.deinit();
         allocator.destroy(self.module_env);
 
-        // Deinit the builtin module if it was loaded
-        if (self.builtin_module) |*bm| {
-            bm.deinit();
+        if (self.owned_source) |source| {
+            allocator.free(source);
         }
     }
 };
@@ -292,7 +242,7 @@ const CompilerStageData = struct {
 /// Global state machine
 var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
-var cached_builtin_module: ?CompilerStageData.BuiltinModule = null;
+var cached_builtin_module: ?LoadedBuiltinModule = null;
 
 /// REPL state management
 const ReplDefinitionKind = enum {
@@ -378,7 +328,7 @@ const ReplTryType = enum {
     definition,
     @"error",
 
-    pub fn jsonStringify(self: ReplTryType, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplTryType, writer: anytype) error{WriteFailed}!void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -396,7 +346,7 @@ const ReplErrorStage = enum {
     runtime,
     unknown,
 
-    pub fn jsonStringify(self: ReplErrorStage, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplErrorStage, writer: anytype) error{WriteFailed}!void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -505,10 +455,10 @@ export fn clearDebugLog() void {
     debug_log_oom = false;
 }
 
-fn getCachedBuiltinModule() !*CompilerStageData.BuiltinModule {
+fn getCachedBuiltinModule() (Allocator.Error || error{Internal})!*LoadedBuiltinModule {
     if (cached_builtin_module == null) {
         logDebug("compileSource: Loading Builtin module\n", .{});
-        cached_builtin_module = try CompilerStageData.BuiltinModule.loadCompiled(
+        cached_builtin_module = try eval.builtin_loading.loadCompiledModule(
             allocator,
             compiled_builtins.builtin_bin,
             "Builtin",
@@ -537,6 +487,7 @@ pub const WasmError = enum(u8) {
 const ResponseWriteError = error{
     OutOfBufferSpace,
     WriteFailed,
+    OutOfMemory,
 };
 
 fn cleanupReplState() void {
@@ -651,7 +602,7 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
         error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
-        error.WriteFailed => @intFromEnum(WasmError.internal_error),
+        error.WriteFailed, error.OutOfMemory => @intFromEnum(WasmError.internal_error),
     };
 }
 
@@ -874,17 +825,13 @@ const ReplDefinitionIdentity = struct {
     name: []const u8,
 };
 
-fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
+fn resolveReplInputKind(line: []const u8) std.mem.Allocator.Error!?ReplInputKind {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = try parse.statement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -910,17 +857,13 @@ fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     };
 }
 
-fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
+fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinitionIdentity {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = try parse.statement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -954,7 +897,7 @@ fn writeDefinitionsWithReplacement(
     session: *const ReplSession,
     replacement: ?ReplDefinitionIdentity,
     replacement_source: ?[]const u8,
-) !void {
+) error{WriteFailed}!void {
     var replaced = false;
     for (session.definitions.items) |definition| {
         if (replacement) |identity| {
@@ -983,7 +926,7 @@ fn buildReplModuleSource(
     replacement: ?ReplDefinitionIdentity,
     replacement_source: ?[]const u8,
     main_expr: ?[]const u8,
-) ![]u8 {
+) (Allocator.Error || error{WriteFailed})![]u8 {
     var source_writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer source_writer.deinit();
 
@@ -1001,8 +944,90 @@ fn buildReplModuleSource(
     return source_writer.toOwnedSlice();
 }
 
-fn compileReplInspectedModule(source: []const u8) !eval.test_helpers.CompiledTargetProgram {
-    return eval.test_helpers.compileProgramForTarget(allocator, .module, source, &.{}, .u32);
+const ReplCompiledModule = struct {
+    lowered: eval.test_helpers.LoweredProgram,
+
+    fn deinit(self: *@This()) void {
+        self.lowered.deinit(allocator);
+    }
+};
+
+fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
+    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        const ident = switch (pattern) {
+            .assign => |assign| assign.ident,
+            .as => |as_pattern| as_pattern.ident,
+            else => continue,
+        };
+        if (std.mem.eql(u8, module_env.getIdent(ident), name)) return def_idx;
+    }
+    return null;
+}
+
+fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCompiledModule {
+    var checked_module = try compileCheckedReplModuleSource(source);
+    errdefer checked_module.deinit();
+
+    const builtin_module = try getCachedBuiltinModule();
+
+    var source_modules = [_]check.TypedCIR.Modules.SourceModule{
+        .{ .precompiled = checked_module.module_env },
+        .{ .precompiled = builtin_module.env },
+    };
+    var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
+    defer typed_cir_modules.deinit();
+
+    var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        allocator,
+        &typed_cir_modules,
+        1,
+        .{
+            .module_env_storage = .{ .compiled_buffer = .{
+                .env = builtin_module.env,
+                .buffer = builtin_module.buffer,
+            } },
+            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+        },
+    );
+    errdefer builtin_artifact.deinitRetainingModuleEnv(allocator);
+
+    var publish_imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = builtin_artifact.key,
+        .view = check.CheckedArtifact.importedView(&builtin_artifact),
+    }};
+
+    const main_def = findDefByName(checked_module.module_env, "main") orelse return error.TypeCheckError;
+    var explicit_roots = [_]check.CheckedArtifact.ExplicitRootRequestInput{.{
+        .kind = .dev_expr,
+        .source = .{ .def = main_def },
+        .abi = .roc,
+        .exposure = .private,
+    }};
+
+    var root_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        allocator,
+        &typed_cir_modules,
+        0,
+        .{
+            .module_env_storage = .{ .checked_source = checked_module.module_env },
+            .imports = &publish_imports,
+            .explicit_roots = &explicit_roots,
+            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+        },
+    );
+    errdefer root_artifact.deinitRetainingModuleEnv(allocator);
+
+    var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
+    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+
+    root_artifact.deinitRetainingModuleEnv(allocator);
+    import_artifacts[0].deinitRetainingModuleEnv(allocator);
+    checked_module.deinit();
+
+    return .{ .lowered = lowered };
 }
 
 fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
@@ -1015,7 +1040,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
     return false;
 }
 
-fn compileCheckedReplModuleSource(source: []const u8) !CompilerStageData {
+fn compileCheckedReplModuleSource(source: []const u8) PlaygroundCompileError!CompilerStageData {
     var data = try compileSource(source, "main");
     errdefer data.deinit();
 
@@ -1039,7 +1064,7 @@ fn replaceCompilerData(new_data: CompilerStageData) void {
     compiler_data = new_data;
 }
 
-fn replaceCompilerDataFromReplSource(source: []const u8) !void {
+fn replaceCompilerDataFromReplSource(source: []const u8) PlaygroundCompileError!void {
     replaceCompilerData(try compileSource(source, "main"));
 }
 
@@ -1127,7 +1152,7 @@ fn runReplExpression(
         try writeReplStaticError(response_buffer, @errorName(err), .typecheck);
         return;
     };
-    defer compiled.deinit(allocator);
+    defer compiled.deinit();
 
     const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
@@ -1170,59 +1195,69 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
 
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
-fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData {
+fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(module_env);
 
-        module_env.* = try ModuleEnv.init(allocator, source);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
+
+        module_env.* = try ModuleEnv.init(allocator, owned_source);
+        errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        return CompilerStageData.init(allocator, module_env);
+        var result = CompilerStageData.init(allocator, module_env);
+        result.owned_source = owned_source;
+        return result;
     }
 
     const trimmed_source = std.mem.trim(u8, source, " \t\n\r");
     if (trimmed_source.len == 0) {
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(module_env);
 
-        module_env.* = try ModuleEnv.init(allocator, source);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
+
+        module_env.* = try ModuleEnv.init(allocator, owned_source);
+        errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        return CompilerStageData.init(allocator, module_env);
+        var result = CompilerStageData.init(allocator, module_env);
+        result.owned_source = owned_source;
+        return result;
     }
 
-    // Set up the source in WASM filesystem - this creates a properly allocated copy
     wasm_ctx.setSource(allocator, source);
 
-    // Use the duplicated source from WasmContext for the rest of compilation.
-    // The original `source` slice points to JSON parser memory which will be freed
-    // when processMessage returns, so we must use the stable copy stored in wasm_ctx.source.
-    const stable_source = wasm_ctx.source orelse return error.OutOfMemory;
+    const stable_source = try allocator.dupe(u8, source);
+    errdefer allocator.free(stable_source);
 
     logDebug("compileSource: Starting compilation (source len={})\n", .{stable_source.len});
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
+    errdefer allocator.destroy(module_env);
 
     module_env.* = try ModuleEnv.init(allocator, stable_source);
+    errdefer module_env.deinit();
     try module_env.common.calcLineStarts(module_env.gpa);
     logDebug("compileSource: ModuleEnv initialized\n", .{});
 
     var result = CompilerStageData.init(allocator, module_env);
+    result.owned_source = stable_source;
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    // NOTE: allocators is not freed here - cleanup happens in CompilerStageData.deinit
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.file(allocator, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 
     // Generate and store HTML before canonicalization corrupts the AST/tokens
     logDebug("compileSource: Starting HTML generation\n", .{});
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    var local_arena = base.SingleThreadArena.init(allocator);
     defer local_arena.deinit();
     const temp_alloc = local_arena.allocator();
 
@@ -1282,7 +1317,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.tokenize_reports.append(report) catch continue;
+        try result.tokenize_reports.append(report);
     }
 
     // Collect parse diagnostics with additional error handling
@@ -1292,7 +1327,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.parse_reports.append(report) catch continue;
+        try result.parse_reports.append(report);
     }
 
     // Stage 2: Canonicalization (always run, even with parse errors)
@@ -1304,13 +1339,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
-    const builtin_indices = blk: {
-        const aligned_buffer = try allocator.alignedAlloc(u8, @enumFromInt(@alignOf(can.CIR.BuiltinIndices)), compiled_builtins.builtin_indices_bin.len);
-        defer allocator.free(aligned_buffer);
-        @memcpy(aligned_buffer, compiled_builtins.builtin_indices_bin);
-        const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-        break :blk indices_ptr.*;
-    };
+    const builtin_indices = try eval.builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();
@@ -1341,7 +1370,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     };
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.initModule(&allocators, env, result.parse_ast.?, .{
+    const roc_ctx = CoreCtx.default(allocator, allocator, @as(std.Io, undefined));
+    var czer = try Can.initModule(roc_ctx, env, result.parse_ast.?, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -1375,7 +1405,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.can_reports.append(report) catch continue;
+        try result.can_reports.append(report);
     }
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
@@ -1383,19 +1413,10 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     logDebug("compileSource: Starting type checking\n", .{});
     {
         const type_can_ir = result.module_env;
-        var imported_envs_builder = std.array_list.Managed(*const ModuleEnv).init(allocator);
-        errdefer imported_envs_builder.deinit();
-
-        const import_count = type_can_ir.imports.imports.items.items.len;
-        for (type_can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
-            const import_name = type_can_ir.getString(str_idx);
-            if (std.mem.eql(u8, import_name, "Builtin")) {
-                try imported_envs_builder.append(builtin_module.env);
-            }
-        }
-
-        const imported_envs = try imported_envs_builder.toOwnedSlice();
+        const imported_envs = try allocator.alloc(*const ModuleEnv, 2);
         errdefer allocator.free(imported_envs);
+        imported_envs[0] = type_can_ir;
+        imported_envs[1] = builtin_module.env;
         result.imported_modules = imported_envs;
 
         const auto_imported_types = try allocator.create(std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType));
@@ -1408,17 +1429,16 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
         // Resolve imports - map each import to its index in imported_envs
         type_can_ir.imports.clearResolvedModules();
-        type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
+        try type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
         type_can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
-        result.solver = solver;
+        result.solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
+        var solver = &result.solver.?;
+        solver.fixupTypeWriter();
 
         solver.checkFile() catch |check_err| {
             logDebug("compileSource: checkFile failed: {}\n", .{check_err});
-            // OOM during type checking is critical.
-            // Deinit solver and propagate error.
             solver.deinit();
             result.solver = null; // Prevent double deinit in CompilerStageData.deinit
             return check_err;
@@ -1512,7 +1532,7 @@ const ResponseWriter = struct {
 };
 
 /// Write an error response.
-fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) ResponseWriteError!void {
+fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     // Advance past length prefix, will be written by finalize
     resp_writer.pos = @sizeOf(u32);
@@ -1526,7 +1546,7 @@ fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []
 }
 
 /// Write a success response
-fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) ResponseWriteError!void {
+fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
 
@@ -1546,7 +1566,7 @@ fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]con
 }
 
 /// Write response for LOADED state with diagnostics
-fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
 
@@ -1555,10 +1575,10 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
     var diagnostics = std.array_list.Managed(Diagnostic).init(allocator);
     defer diagnostics.deinit();
-    extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.parse_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.can_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.type_reports) catch {};
+    try extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.parse_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.can_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.type_reports);
 
     // TIER 2: Count ALL diagnostics from reports (for SUMMARY display)
     var total_errors: u32 = 0;
@@ -1587,7 +1607,7 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     // Collect HTML in a buffer first, then escape it for JSON
     var html_buffer: [65536]u8 = undefined;
-    var html_writer = std.io.Writer.fixed(&html_buffer);
+    var html_writer = std.Io.Writer.fixed(&html_buffer);
 
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
@@ -1631,7 +1651,8 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
+/// Write REPL step result as JSON
+fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1681,7 +1702,7 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
 }
 
 /// Write tokens response with direct HTML generation
-fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1699,7 +1720,7 @@ fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 }
 
 /// Write parse AST response in S-expression format
-fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1717,7 +1738,7 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
 }
 
 /// Write formatted response with formatted Roc code
-fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1735,7 +1756,7 @@ fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) Respon
 }
 
 /// Write canonicalized CIR response in S-expression format
-fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1743,7 +1764,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
     const cir = data.module_env;
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    var local_arena = base.SingleThreadArena.init(allocator);
     defer local_arena.deinit();
     var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
 
@@ -1755,16 +1776,19 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     if (defs_count == 0 and stmts_count == 0) {
         const debug_begin = tree.beginNode();
-        tree.pushStaticAtom("empty-cir-debug") catch {};
-        tree.pushStaticAtom("no-defs-or-statements") catch {};
+        try tree.pushStaticAtom("empty-cir-debug");
+        try tree.pushStaticAtom("no-defs-or-statements");
         const debug_attrs = tree.beginNode();
-        tree.endNode(debug_begin, debug_attrs) catch {};
+        try tree.endNode(debug_begin, debug_attrs);
     }
 
     const mutable_cir = @constCast(cir);
-    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    try ModuleEnv.pushToSExprTree(mutable_cir, null, &tree);
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
@@ -1774,7 +1798,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 fn collectPlaygroundTestRootRequests(
     alloc: Allocator,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) ![]check.CheckedArtifact.RootRequest {
+) Allocator.Error![]check.CheckedArtifact.RootRequest {
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(alloc);
 
@@ -1803,7 +1827,7 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
+fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
     var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
         allocator,
         .module,
@@ -1832,7 +1856,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
         import_views[i] = check.CheckedArtifact.importedView(artifact);
     }
 
-    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
@@ -1899,7 +1923,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
     return html_writer_allocating.toOwnedSlice();
 }
 
-fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     const html = buildEvaluateTestsHtml(data) catch |err| {
         try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
         return;
@@ -1931,7 +1955,7 @@ const HoverInfo = struct {
 };
 
 /// Write hover info response for a specific position
-fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) ResponseWriteError!void {
+fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1991,9 +2015,12 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         return;
     }
 
-    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
-        return;
+    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
+            return;
+        },
     };
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"hover_info\":");
@@ -2029,7 +2056,7 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
 }
 
 /// Find hover information for an identifier at a specific byte position
-fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?HoverInfo {
+fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) (Allocator.Error || error{WriteFailed})!?HoverInfo {
     const cir = data.module_env;
     const local_allocator = allocator;
 
@@ -2087,7 +2114,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
 }
 
 /// Write types response in S-expression format
-fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -2098,7 +2125,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     }
 
     const cir = data.module_env;
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    var local_arena = base.SingleThreadArena.init(allocator);
     defer local_arena.deinit();
     var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
     var tree = SExprTree.init(local_arena.allocator());
@@ -2108,13 +2135,16 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     mutable_cir.pushTypesToSExprTree(null, &tree) catch |err| {
         const error_msg = switch (err) {
             error.OutOfMemory => "Out of memory while generating types",
-            // Add other specific error messages if pushTypesToSExprTree can return other errors
+            error.WriteFailed => "Write failed while generating types",
         };
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
     };
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
     try writeJsonString(w, sexpr_writer_allocating.written());
@@ -2123,7 +2153,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticHtml(writer: *std.io.Writer, report: reporting.Report) !void {
+fn writeDiagnosticHtml(writer: *std.Io.Writer, report: reporting.Report) (Allocator.Error || error{WriteFailed})!void {
     try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
 }
 
@@ -2143,7 +2173,7 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
 fn extractDiagnosticsFromReports(
     diagnostics: *std.array_list.Managed(Diagnostic),
     reports: std.array_list.Managed(reporting.Report),
-) !void {
+) Allocator.Error!void {
     var count: usize = 0;
     const max_diagnostics = 100;
     for (reports.items) |*report| {
@@ -2175,7 +2205,7 @@ fn extractDiagnosticsFromReports(
     }
 }
 
-fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
+fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) error{WriteFailed}!void {
     try writer.print("{{\"severity\":\"{s}\",\"message\":\"", .{@tagName(diagnostic.severity)});
     try writeJsonString(writer, diagnostic.message);
     try writer.print("\",\"region\":{{\"start_line\":{d},\"start_column\":{d},\"end_line\":{d},\"end_column\":{d}}}}}", .{
@@ -2185,7 +2215,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping (without surrounding quotes)
-fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
+fn writeJsonString(writer: *std.Io.Writer, str: []const u8) error{WriteFailed}!void {
     try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 
@@ -2269,10 +2299,9 @@ export fn freeWasmString(ptr: [*]u8) void {
 /// Helper to create a simple error JSON string, following the length-prefix allocation pattern.
 fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
     // 1. Format the string into a temporary buffer to determine its length.
-    var temp_buffer = std.array_list.Managed(u8).init(allocator);
-    defer temp_buffer.deinit();
-    temp_buffer.writer().print("{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
-    const json_len = temp_buffer.items.len;
+    var fmt_buf: [4096]u8 = undefined;
+    const json_str = std.fmt.bufPrint(&fmt_buf, "{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
+    const json_len = json_str.len;
 
     // 2. Allocate memory for [u32: length][u8...: data][u8: null terminator]
     const total_len = @sizeOf(u32) + json_len + 1;
@@ -2283,7 +2312,7 @@ fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
 
     // 4. Copy the JSON data
     const data_ptr = final_buffer.ptr + @sizeOf(u32);
-    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], temp_buffer.items);
+    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], json_str);
 
     // 5. Null-terminate
     final_buffer[@sizeOf(u32) + json_len] = 0;
@@ -2343,12 +2372,13 @@ export fn unbundleToBuffer(
     defer buffer_writer.deinit();
 
     // Perform unbundling
-    unbundle.unbundleStream(
+    _ = unbundle.unbundleStream(
         allocator,
         &fixed_reader,
         buffer_writer.extractWriter(),
         &expected_hash,
         null,
+        .{},
     ) catch |err| {
         // Write error response
         return writeUnbundleErrorResponse(response_ptr[0..response_len], err);
@@ -2361,6 +2391,7 @@ export fn unbundleToBuffer(
 fn writeUnbundleErrorResponse(response: []u8, err: unbundle.UnbundleError) u8 {
     const error_msg = switch (err) {
         error.DecompressionFailed => "Decompression failed",
+        error.ExpandedSizeLimitExceeded => "Expanded size limit exceeded",
         error.InvalidTarHeader => "Invalid tar header",
         error.UnexpectedEndOfStream => "Unexpected end of stream",
         error.FileCreateFailed => "File create failed",

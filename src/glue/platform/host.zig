@@ -6,12 +6,20 @@
 //!
 //! Entry point: make_glue : List Types -> Result (List File) Str
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const shim_io = @import("shim_io");
 const builtin = @import("builtin");
+const base = @import("base");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
-const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
 const trace_refcount = build_options.trace_refcount;
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
 
 /// Zig logging configuration override
 pub const std_options: std.Options = .{
@@ -23,15 +31,14 @@ pub const std_options: std.Options = .{
 pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
-    const stderr: std.fs.File = .stderr();
-    stderr.writeAll("\n=== PANIC (no stack trace) ===\n") catch {};
-    stderr.writeAll(msg) catch {};
+    std.debug.print("{s}", .{"\n=== PANIC (no stack trace) ===\n"});
+    std.debug.print("{s}", .{msg});
     if (addr) |a| {
         var buf: [32]u8 = undefined;
         const hex = std.fmt.bufPrint(&buf, " at address 0x{x}\n", .{a}) catch "";
-        stderr.writeAll(hex) catch {};
+        std.debug.print("{s}", .{hex});
     } else {
-        stderr.writeAll("\n") catch {};
+        std.debug.print("{s}", .{"\n"});
     }
     std.process.abort();
 }
@@ -60,15 +67,15 @@ fn handleRocStackOverflow() noreturn {
         _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
-        posix.exit(134);
+        std.debug.print("{s}", .{STACK_OVERFLOW_MESSAGE});
+        std.process.exit(134);
     } else {
         std.process.exit(134);
     }
 }
 
 /// Callback for access violation in a Roc program
-fn handleRocAccessViolation(fault_addr: usize) noreturn {
+fn handleRocAccessViolation(fault_addr: usize, _: base.signal_handler.AccessViolationContext) noreturn {
     if (comptime builtin.os.tag == .windows) {
         const DWORD = u32;
         const HANDLE = ?*anyopaque;
@@ -81,7 +88,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         const msg2 = "\n\n";
@@ -94,13 +101,13 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
     } else {
         // POSIX (and WASI fallback)
         const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+        std.debug.print("{s}", .{msg});
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
-        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
-        posix.exit(139);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
+        std.debug.print("{s}", .{addr_str});
+        std.debug.print("{s}", .{"\n\n"});
+        std.process.exit(139);
     }
 }
 
@@ -125,8 +132,8 @@ fn handleRocArithmeticError() noreturn {
         _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
-        posix.exit(136); // 128 + 8 (SIGFPE)
+        std.debug.print("{s}", .{DIVISION_BY_ZERO_MESSAGE});
+        std.process.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
     }
@@ -139,23 +146,29 @@ const RocAllocation = struct {
     alignment: std.mem.Alignment,
 };
 
-/// Host environment - contains GeneralPurposeAllocator for leak detection
+/// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{ .safety = true }),
+    gpa: std.heap.DebugAllocator(.{ .safety = true }),
+    std_io: std.Io,
     /// Track Roc allocations for cleanup on test failure
-    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .{},
+    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .{ .items = &.{}, .capacity = 0 },
     /// Allocation counters for diagnostics
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
 };
 
-/// Roc allocation function with size-tracking metadata
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-    const roc_alloc_addr = @intFromPtr(roc_alloc);
-    if (roc_alloc_addr % @alignOf(builtins.host_abi.RocAlloc) != 0) {
-        std.debug.panic("[rocAllocFn] roc_alloc ptr not aligned! addr=0x{x} required={}", .{ roc_alloc_addr, @alignOf(builtins.host_abi.RocAlloc) });
-    }
+/// Report an out-of-memory failure from a Roc host allocation callback and
+/// abort. These callbacks use the C ABI and cannot return a Zig error, so a
+/// reported `exit(1)` is the graceful failure path.
+fn hostAllocFailed(host: *HostEnv) noreturn {
+    const stderr: std.Io.File = .stderr();
+    stderr.writeStreamingAll(host.std_io, "\x1b[31mHost error:\x1b[0m out of memory\n") catch {};
+    std.process.exit(1);
+}
 
+/// Roc allocation function with size-tracking metadata
+fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const env = ops.env;
     const env_addr = @intFromPtr(env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("rocAllocFn: env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
@@ -164,24 +177,15 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
-    const size_storage_bytes = @max(roc_alloc.alignment, @alignOf(usize));
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const total_size = length + size_storage_bytes;
 
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
-    const base_ptr = result orelse {
-        const stderr: std.fs.File = .stderr();
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
-            total_size,
-            roc_alloc.alignment,
-        }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        stderr.writeAll(msg) catch {};
-        std.process.exit(1);
-    };
+    const base_ptr = result orelse hostAllocFailed(host);
 
     const base_addr = @intFromPtr(base_ptr);
     if (base_addr % min_alignment != 0) {
@@ -191,10 +195,10 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
 
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 
-    const answer_addr = @intFromPtr(roc_alloc.answer);
-    if (answer_addr % roc_alloc.alignment != 0) {
+    const answer_addr = @intFromPtr(answer);
+    if (answer_addr % alignment != 0) {
         @panic("Host allocator returned misaligned answer in rocAllocFn");
     }
 
@@ -202,16 +206,19 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
         .ptr = base_ptr,
         .total_size = total_size,
         .alignment = align_enum,
-    }) catch {};
+    }) catch hostAllocFailed(host);
     host.alloc_count += 1;
 
     if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
-        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
+        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ answer_addr, length, alignment });
     }
+
+    return answer;
 }
 
 /// Roc deallocation function with size-tracking metadata
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
+fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const env = ops.env;
     const env_addr = @intFromPtr(env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("[rocDeallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
@@ -219,23 +226,23 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
-    const size_storage_bytes = @max(roc_dealloc.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
 
     if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
-            @intFromPtr(roc_dealloc.ptr),
-            roc_dealloc.alignment,
+            @intFromPtr(ptr),
+            alignment,
             total_size,
             size_storage_bytes,
         });
     }
 
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == base_ptr) {
@@ -250,7 +257,8 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 }
 
 /// Roc reallocation function with size-tracking metadata
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
+fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const env = ops.env;
     const env_addr = @intFromPtr(env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("[rocReallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
@@ -258,25 +266,21 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
-    const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
 
     const old_total_size = old_size_ptr.*;
 
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
 
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
 
-    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-        const stderr: std.fs.File = .stderr();
-        stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
-        std.process.exit(1);
-    };
+    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse hostAllocFailed(host);
 
     const copy_size = @min(old_total_size, new_total_size);
     @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
@@ -291,7 +295,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
         .ptr = new_ptr,
         .total_size = new_total_size,
         .alignment = align_enum,
-    }) catch {};
+    }) catch hostAllocFailed(host);
 
     allocator.rawFree(old_slice, align_enum, @returnAddress());
 
@@ -300,32 +304,35 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
 
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 
     if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
-        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
+        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(answer), new_length });
     }
+
+    return answer;
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
-    const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
+fn rocDbgFn(_: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const message = bytes[0..len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+fn rocExpectFailedFn(_: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const source_bytes = bytes[0..len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-    const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.fs.File = .stderr();
+fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    const message = bytes[0..len];
+    const stderr: std.Io.File = .stderr();
     var buf: [256]u8 = undefined;
-    var w = stderr.writer(&buf);
+    var w = stderr.writer(host.std_io, &buf);
     w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
     w.interface.flush() catch {};
     std.process.exit(1);
@@ -411,15 +418,47 @@ const ResultListFileStr = extern struct {
     tag: ResultTag,
 };
 
-// External Roc entry point
-// Follows RocCall ABI: ops, ret_ptr, then argument pointers
-// External Roc entry point - name comes from "provides { make_glue_for_host: "make_glue" }"
-// The extern symbol is "roc__" + the quoted name ("make_glue")
-extern fn roc__make_glue(
-    ops: *builtins.host_abi.RocOps,
-    ret_ptr: *ResultListFileStr,
-    args_ptr: *RocList,
-) callconv(.c) void;
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI: make_glue_for_host takes List(Types) and returns Try(List(File), Str).
+extern fn roc_make_glue(types_list: RocList) callconv(.c) ResultListFileStr;
+
+// The host's private RocOps. The exported runtime symbols below and the
+// builtins helpers reach the host allocator through this global, set by
+// platform_main before any Roc code runs.
+var g_roc_ops: ?*builtins.host_abi.RocOps = null;
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
+
+comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 // OS-specific entry point handling
 comptime {
@@ -433,29 +472,27 @@ comptime {
 fn __main() callconv(.c) void {}
 
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    const stderr_file: std.fs.File = .stderr();
+    const std_io = shim_io.io();
+    const stderr_file: std.Io.File = .stderr();
 
     // Expect platform source path as first argument
     const arg_count: usize = @intCast(argc);
     if (arg_count < 2) {
-        stderr_file.writeAll("HOST ERROR: Expected platform source path as argument\n") catch {};
+        stderr_file.writeStreamingAll(std_io, "HOST ERROR: Expected platform source path as argument\n") catch {};
         return 1;
     }
 
     // Convert argv to slice, skipping program name (argv[0])
     const args = argv[1..arg_count];
 
-    const exit_code = platform_main(args) catch |err| {
-        stderr_file.writeAll("HOST ERROR: ") catch {};
-        stderr_file.writeAll(@errorName(err)) catch {};
-        stderr_file.writeAll("\n") catch {};
+    const exit_code = platform_main(args, std_io) catch |err| {
+        stderr_file.writeStreamingAll(std_io, "HOST ERROR: ") catch {};
+        stderr_file.writeStreamingAll(std_io, @errorName(err)) catch {};
+        stderr_file.writeStreamingAll(std_io, "\n") catch {};
         return 1;
     };
     return exit_code;
 }
-
-/// No hosted functions for glue platform
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
 
@@ -474,8 +511,8 @@ fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
 
         return RocStr{
             .bytes = first_element,
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(SMALL_STRING_SIZE),
             .length = str.len,
-            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
         };
     } else {
         return RocStr.fromSlice(str, roc_ops);
@@ -501,7 +538,7 @@ const JsonModuleTypeInfo = struct {
     hosted_functions: []const JsonHostedFunctionInfo,
 };
 
-/// Clean up result payload from roc__make_glue
+/// Clean up result payload from roc_make_glue
 fn cleanupResult(result: *ResultListFileStr, roc_ops: *builtins.host_abi.RocOps) void {
     switch (result.tag) {
         .Ok => {
@@ -529,14 +566,15 @@ fn parseTypesJson(
     allocator: std.mem.Allocator,
     json_str: []const u8,
     roc_ops: *builtins.host_abi.RocOps,
-) !RocList {
+) Allocator.Error!RocList {
+    const host: *HostEnv = @ptrCast(@alignCast(roc_ops.env));
     // Parse the JSON
     const parsed = std.json.parseFromSlice([]const JsonModuleTypeInfo, allocator, json_str, .{}) catch |err| {
-        const stderr: std.fs.File = .stderr();
-        stderr.writeAll("Error parsing types JSON: ") catch {};
+        const stderr: std.Io.File = .stderr();
+        stderr.writeStreamingAll(host.std_io, "Error parsing types JSON: ") catch {};
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "{}\n", .{err}) catch "unknown error\n";
-        stderr.writeAll(msg) catch {};
+        stderr.writeStreamingAll(host.std_io, msg) catch {};
         return RocList.empty();
     };
     defer parsed.deinit();
@@ -582,7 +620,7 @@ fn parseTypesJson(
             break :blk RocList{
                 .bytes = funcs_bytes,
                 .length = mod.functions.len,
-                .capacity_or_alloc_ptr = mod.functions.len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(mod.functions.len),
             };
         } else RocList.empty();
 
@@ -610,7 +648,7 @@ fn parseTypesJson(
             break :blk RocList{
                 .bytes = hosted_bytes,
                 .length = mod.hosted_functions.len,
-                .capacity_or_alloc_ptr = mod.hosted_functions.len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(mod.hosted_functions.len),
             };
         } else RocList.empty();
 
@@ -625,13 +663,14 @@ fn parseTypesJson(
     return RocList{
         .bytes = modules_bytes,
         .length = modules.len,
-        .capacity_or_alloc_ptr = modules.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(modules.len),
     };
 }
 
 /// Platform host entrypoint
 /// Receives args: [platform_path, --types-json=<json>, entry_point_names...]
-fn platform_main(args: [][*:0]u8) !c_int {
+/// If no entry point names are provided, defaults to ["main"].
+fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ MissingPlatformPath, MissingEntrypointNames })!c_int {
     if (args.len < 1) {
         return error.MissingPlatformPath;
     }
@@ -655,13 +694,18 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
 
     // Install signal handlers
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = base.signal_handler.installForCurrentThread(.{
+        .stack_overflow = handleRocStackOverflow,
+        .access_violation = handleRocAccessViolation,
+        .arithmetic_error = handleRocArithmeticError,
+    });
     if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
         builtins.utils.DebugRefcountTracker.enable();
     }
 
     var host_env = HostEnv{
-        .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
+        .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
+        .std_io = std_io,
     };
 
     defer {
@@ -672,14 +716,14 @@ fn platform_main(args: [][*:0]u8) !c_int {
             if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
                 _ = builtins.utils.DebugRefcountTracker.reportLeaks();
             }
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,
                 \\[Roc Memory Info] {d} allocation(s) not freed by Roc runtime.
                 \\  Cleaning up {d} allocations...
                 \\
             , .{ remaining_count, remaining_count }) catch "";
-            stderr_file.writeAll(msg) catch {};
+            stderr_file.writeStreamingAll(host_env.std_io, msg) catch {};
         }
 
         for (host_env.roc_allocations.items) |alloc| {
@@ -690,8 +734,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
         const leaked = host_env.gpa.deinit();
         if (leaked == .leak) {
-            const stderr_file: std.fs.File = .stderr();
-            stderr_file.writeAll(
+            const stderr_file: std.Io.File = .stderr();
+            stderr_file.writeStreamingAll(host_env.std_io,
                 \\
                 \\[Roc Memory Info] Additional memory leak detected by GPA.
                 \\
@@ -699,7 +743,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
         }
     }
 
-    // Create the RocOps struct
+    // The host's private RocOps for using builtins helpers (RocStr/RocList
+    // allocation, decref). Not part of the ABI.
     var roc_ops = builtins.host_abi.RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
         .roc_alloc = rocAllocFn,
@@ -708,15 +753,13 @@ fn platform_main(args: [][*:0]u8) !c_int {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
+    g_roc_ops = &roc_ops;
 
     const allocator = host_env.gpa.allocator();
 
-    const stdout: std.fs.File = .stdout();
+    const stdout: std.Io.File = .stdout();
 
     if (args.len <= entry_point_start_idx) return error.MissingEntrypointNames;
     const entry_point_names = allocator.alloc([]const u8, args.len - entry_point_start_idx) catch return error.OutOfMemory;
@@ -760,8 +803,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
             break :blk RocStr{
                 .bytes = first_element,
+                .capacity_or_alloc_ptr = RocStr.encodeCapacity(SMALL_STRING_SIZE),
                 .length = name.len,
-                .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
             };
         } else blk: {
             // For strings >= 24 bytes, fromSlice already creates a big string
@@ -778,7 +821,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     const entrypoints_list = RocList{
         .bytes = entrypoints_bytes,
         .length = entry_point_names.len,
-        .capacity_or_alloc_ptr = entry_point_names.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(entry_point_names.len),
     };
 
     // Parse types_json to create modules list
@@ -810,7 +853,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
         break :pblk RocList{
             .bytes = prov_bytes,
             .length = entry_point_names.len,
-            .capacity_or_alloc_ptr = entry_point_names.len,
+            .capacity_or_alloc_ptr = RocList.encodeCapacity(entry_point_names.len),
         };
     } else RocList.empty();
 
@@ -834,57 +877,63 @@ fn platform_main(args: [][*:0]u8) !c_int {
     };
 
     // Create a List Types with one element (the Types structure)
-    var types_list = RocList{
+    const types_list = RocList{
         .bytes = types_inner_bytes,
         .length = 1,
-        .capacity_or_alloc_ptr = 1,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(1),
     };
 
     // Call the Roc glue spec
     // Note: Roc consumes types_list (takes ownership), so it handles cleanup
     // of all nested structures. We must NOT manually clean up after this call.
-    var result: ResultListFileStr = undefined;
-    roc__make_glue(&roc_ops, &result, &types_list);
+    var result: ResultListFileStr = roc_make_glue(types_list);
     defer cleanupResult(&result, &roc_ops);
 
     // Handle the result
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
 
     switch (result.tag) {
         .Err => {
             const err_str = result.payload.err;
-            stderr.writeAll("Glue spec error: ") catch {};
-            stderr.writeAll(err_str.asSlice()) catch {};
-            stderr.writeAll("\n") catch {};
+            stderr.writeStreamingAll(host_env.std_io, "Glue spec error: ") catch {};
+            stderr.writeStreamingAll(host_env.std_io, err_str.asSlice()) catch {};
+            stderr.writeStreamingAll(host_env.std_io, "\n") catch {};
             return 1;
         },
 
         .Ok => {
             const files = result.payload.ok;
             if (files.len() == 0) {
-                stdout.writeAll("Glue spec returned 0 files.\n") catch {};
+                stdout.writeStreamingAll(host_env.std_io, "Glue spec returned 0 files.\n") catch {};
                 return 0;
             }
 
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Glue spec returned {d} file(s):\n", .{files.len()}) catch "Glue spec returned files:\n";
-            stdout.writeAll(msg) catch {};
+            stdout.writeStreamingAll(host_env.std_io, msg) catch {};
 
             // Write files to output directory if provided
             const file_bytes = files.bytes orelse return 0;
             const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
 
             const out_dir = output_dir orelse {
-                stderr.writeAll("Error: No --output-dir specified; cannot write glue files\n") catch {};
+                stderr.writeStreamingAll(host_env.std_io, "Error: No --output-dir specified; cannot write glue files\n") catch {};
                 return 1;
             };
 
+            // For real filesystem writes (createDirPath / writeFile) we need the
+            // full threaded std.Io vtable rather than the minimal shim_io one,
+            // which only implements stdio + futex + a few read helpers. The glue
+            // host is a build-time tool (invoked during `zig build` to generate
+            // glue code), so pulling in std.Io.Threaded here is fine.
+            const fs_io = std.Io.Threaded.global_single_threaded.io();
+
             // Create output directory if needed
-            std.fs.cwd().makePath(out_dir) catch |err| {
-                stderr.writeAll("Error: Could not create output directory: ") catch {};
+            std.Io.Dir.cwd().createDirPath(fs_io, out_dir) catch |err| {
+                stderr.writeStreamingAll(host_env.std_io, "Error: Could not create output directory: ") catch {};
                 var err_buf: [256]u8 = undefined;
                 const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                stderr.writeAll(err_msg) catch {};
+                stderr.writeStreamingAll(host_env.std_io, err_msg) catch {};
                 return 1;
             };
 
@@ -893,27 +942,27 @@ fn platform_main(args: [][*:0]u8) !c_int {
                 const file = file_slice[i];
                 const file_name = file.name.asSlice();
                 const file_path = std.fs.path.join(allocator, &.{ out_dir, file_name }) catch {
-                    stderr.writeAll("Error: Out of memory allocating file path\n") catch {};
+                    stderr.writeStreamingAll(host_env.std_io, "Error: Out of memory allocating file path\n") catch {};
                     return 1;
                 };
                 defer allocator.free(file_path);
 
-                std.fs.cwd().writeFile(.{
+                std.Io.Dir.cwd().writeFile(fs_io, .{
                     .sub_path = file_path,
                     .data = file.content.asSlice(),
                 }) catch |err| {
-                    stderr.writeAll("Error: Could not write file '") catch {};
-                    stderr.writeAll(file_path) catch {};
-                    stderr.writeAll("': ") catch {};
+                    stderr.writeStreamingAll(host_env.std_io, "Error: Could not write file '") catch {};
+                    stderr.writeStreamingAll(host_env.std_io, file_path) catch {};
+                    stderr.writeStreamingAll(host_env.std_io, "': ") catch {};
                     var err_buf: [256]u8 = undefined;
                     const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                    stderr.writeAll(err_msg) catch {};
+                    stderr.writeStreamingAll(host_env.std_io, err_msg) catch {};
                     return 1;
                 };
 
-                stdout.writeAll("  Wrote: ") catch {};
-                stdout.writeAll(file_path) catch {};
-                stdout.writeAll("\n") catch {};
+                stdout.writeStreamingAll(host_env.std_io, "  Wrote: ") catch {};
+                stdout.writeStreamingAll(host_env.std_io, file_path) catch {};
+                stdout.writeStreamingAll(host_env.std_io, "\n") catch {};
             }
 
             return 0;

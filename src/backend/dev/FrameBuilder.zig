@@ -16,6 +16,7 @@
 //! - ForwardFrameBuilder: Takes explicit register list, saves in order specified
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Policy for whether a function frame should establish a dedicated frame pointer.
 pub const FramePointerPolicy = enum {
@@ -87,6 +88,13 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// This does NOT include space for callee-saved registers.
         stack_size: u32 = 0,
 
+        /// AArch64-only register that should hold the caller's stack-argument
+        /// base, which is the value of SP on callee entry. Deferred AArch64
+        /// prologues set FP to the bottom of the allocated frame, so incoming
+        /// stack arguments are at FP + actual_stack_alloc rather than a fixed
+        /// FP offset.
+        caller_stack_arg_base_reg: ?GeneralReg = null,
+
         /// Frame-pointer strategy for this function.
         frame_pointer_policy: FramePointerPolicy = FramePointerPolicy.forTarget(roc_target),
 
@@ -107,6 +115,20 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// Set the stack space needed for local variables.
         pub fn setStackSize(self: *Self, size: u32) void {
             self.stack_size = size;
+        }
+
+        /// Ask the AArch64 prologue to materialize the caller's stack-argument
+        /// base into a callee-saved register. The caller is responsible for
+        /// marking that register as used so the normal callee-saved save/restore
+        /// path preserves the incoming value before this prologue overwrites it.
+        pub fn setCallerStackArgBaseReg(self: *Self, reg: GeneralReg) void {
+            if (!is_aarch64) {
+                if (std.debug.runtime_safety) {
+                    @panic("caller stack-argument base register is only meaningful on aarch64");
+                }
+                unreachable;
+            }
+            self.caller_stack_arg_base_reg = reg;
         }
 
         /// Override the frame-pointer strategy for this function.
@@ -135,7 +157,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
         /// Emit function prologue.
         /// Returns the initial stack_offset for use with stack slot allocation.
-        pub fn emitPrologue(self: *Self, emit: *EmitType) !i32 {
+        pub fn emitPrologue(self: *Self, emit: *EmitType) Allocator.Error!i32 {
             if (!self.usesFramePointer()) {
                 self.actual_stack_alloc = 0;
                 return 0;
@@ -151,7 +173,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         }
 
         /// Emit function epilogue.
-        pub fn emitEpilogue(self: *Self, emit: *EmitType) !void {
+        pub fn emitEpilogue(self: *Self, emit: *EmitType) Allocator.Error!void {
             if (!self.usesFramePointer()) {
                 try emit.ret();
                 return;
@@ -169,7 +191,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// Emit only callee-saved register saves (for pre-allocated frame pattern).
         /// Use this when the frame has already been set up and you just need to
         /// save the callee-saved registers at fixed offsets.
-        pub fn emitSaveCalleeSaved(self: *const Self, emit: *EmitType) !void {
+        pub fn emitSaveCalleeSaved(self: *const Self, emit: *EmitType) Allocator.Error!void {
             if (is_x86_64) {
                 return self.emitSaveCalleeSavedX86_64(emit);
             } else if (is_aarch64) {
@@ -180,7 +202,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         }
 
         /// Emit only callee-saved register restores (for pre-allocated frame pattern).
-        pub fn emitRestoreCalleeSaved(self: *const Self, emit: *EmitType) !void {
+        pub fn emitRestoreCalleeSaved(self: *const Self, emit: *EmitType) Allocator.Error!void {
             if (is_x86_64) {
                 return self.emitRestoreCalleeSavedX86_64(emit);
             } else if (is_aarch64) {
@@ -263,7 +285,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             return is_windows and aligned_size >= 0x1000;
         }
 
-        fn emitPrologueX86_64(self: *Self, emit: *EmitType) !i32 {
+        fn emitPrologueX86_64(self: *Self, emit: *EmitType) Allocator.Error!i32 {
             // 1. push rbp
             try emit.pushReg(.RBP);
 
@@ -315,7 +337,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         ///                                ; __chkstk probes every page including
         ///                                ; the partial one; without this probe
         ///                                ; the remainder slips past the guard.
-        fn emitWindowsStackProbe(emit: *EmitType, alloc_size: u32) !void {
+        fn emitWindowsStackProbe(emit: *EmitType, alloc_size: u32) Allocator.Error!void {
             const buf_before_emit = emit.buf.items.len;
             try emit.movRegImm32(.RAX, @intCast(alloc_size));
             const loop_start = emit.buf.items.len;
@@ -332,7 +354,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             std.debug.assert(emit.buf.items.len - buf_before_emit == windows_probe_loop_size);
         }
 
-        fn emitEpilogueX86_64(self: *Self, emit: *EmitType) !void {
+        fn emitEpilogueX86_64(self: *Self, emit: *EmitType) Allocator.Error!void {
             // Recompute if needed (for separate epilogue instances)
             if (self.actual_stack_alloc == 0 and self.stack_size > 0) {
                 const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
@@ -353,7 +375,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             try emit.ret();
         }
 
-        fn emitSaveCalleeSavedX86_64(self: *const Self, emit: *EmitType) !void {
+        fn emitSaveCalleeSavedX86_64(self: *const Self, emit: *EmitType) Allocator.Error!void {
             for (CalleeSavedInfo.SLOTS) |slot| {
                 if ((self.callee_saved_mask & (@as(u32, 1) << @intFromEnum(slot.reg))) != 0) {
                     try emit.movMemReg(.w64, .RBP, slot.offset, slot.reg);
@@ -361,7 +383,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
         }
 
-        fn emitRestoreCalleeSavedX86_64(self: *const Self, emit: *EmitType) !void {
+        fn emitRestoreCalleeSavedX86_64(self: *const Self, emit: *EmitType) Allocator.Error!void {
             for (CalleeSavedInfo.SLOTS) |slot| {
                 if ((self.callee_saved_mask & (@as(u32, 1) << @intFromEnum(slot.reg))) != 0) {
                     try emit.movRegMem(.w64, slot.reg, .RBP, slot.offset);
@@ -381,6 +403,10 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             if (aligned_frame <= 504) {
                 // stp x29, x30, [sp, #-N]! (4 bytes)
                 size += 4;
+            } else if (windowsNeedsStackProbe(aligned_frame)) {
+                size += windowsStackProbeSizeAarch64(aligned_frame);
+                // stp x29, x30, [sp]
+                size += 4;
             } else {
                 // sub sp, sp, #N (4 bytes) + stp x29, x30, [sp] (4 bytes)
                 size += 8;
@@ -396,10 +422,70 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 }
             }
 
+            if (self.caller_stack_arg_base_reg != null) {
+                size += if (aligned_frame <= 4095) 4 else 8;
+            }
+
             return size;
         }
 
-        fn emitPrologueAarch64(self: *Self, emit: *EmitType) !i32 {
+        fn emitStackSubAarch64(emit: *EmitType, size: u32) Allocator.Error!void {
+            std.debug.assert(size > 0);
+            std.debug.assert(size <= 0x1000);
+            if (size == 0x1000) {
+                try emit.subRegRegImm12Shifted(.w64, .ZRSP, .ZRSP, 1, true);
+            } else {
+                try emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(size));
+            }
+        }
+
+        fn emitStackAddAarch64(emit: *EmitType, size: u32) Allocator.Error!void {
+            std.debug.assert(size > 0);
+            std.debug.assert(size <= 0x1000);
+            if (size == 0x1000) {
+                try emit.addRegRegImm12Shifted(.w64, .ZRSP, .ZRSP, 1, true);
+            } else {
+                try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(size));
+            }
+        }
+
+        fn windowsStackProbeSizeAarch64(alloc_size: u32) u32 {
+            std.debug.assert(alloc_size >= 0x1000);
+            return @intCast(((alloc_size + 0x0fff) / 0x1000) * 8);
+        }
+
+        fn emitWindowsStackProbeAarch64(emit: *EmitType, alloc_size: u32) Allocator.Error!void {
+            std.debug.assert(alloc_size >= 0x1000);
+            var remaining = alloc_size;
+            while (remaining > 0) {
+                const chunk = @min(remaining, 0x1000);
+                try emitStackSubAarch64(emit, chunk);
+                try emit.ldrRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
+                remaining -= chunk;
+            }
+        }
+
+        fn emitWindowsStackReleaseAarch64(emit: *EmitType, alloc_size: u32) Allocator.Error!void {
+            std.debug.assert(alloc_size >= 0x1000);
+            var remaining = alloc_size;
+            while (remaining > 0) {
+                const chunk = @min(remaining, 0x1000);
+                try emitStackAddAarch64(emit, chunk);
+                remaining -= chunk;
+            }
+        }
+
+        fn emitCallerStackArgBaseAarch64(self: *Self, emit: *EmitType, aligned_frame: u32) Allocator.Error!void {
+            const reg = self.caller_stack_arg_base_reg orelse return;
+            if (aligned_frame <= 4095) {
+                try emit.addRegRegImm12(.w64, reg, .FP, @intCast(aligned_frame));
+            } else {
+                try emit.movRegImm64(.IP0, aligned_frame);
+                try emit.addRegRegReg(.w64, reg, .FP, .IP0);
+            }
+        }
+
+        fn emitPrologueAarch64(self: *Self, emit: *EmitType) Allocator.Error!i32 {
             // Calculate total frame size.
             // Use the FULL callee-saved area size (not just used pairs) because
             // saves are at fixed offsets: pair 0 at [FP+16], pair 4 at [FP+80], etc.
@@ -434,6 +520,11 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // 3. Save callee-saved register pairs at fixed FP offsets
             try self.emitSaveCalleeSavedAarch64(emit);
 
+            // 4. The caller's outgoing stack arguments are above this frame.
+            // Materialize their base after saving callee-saved registers so the
+            // original value of this register is preserved in the save area.
+            try self.emitCallerStackArgBaseAarch64(emit, aligned_frame);
+
             self.actual_stack_alloc = aligned_frame;
 
             // Return initial stack offset (positive from FP for aarch64)
@@ -441,51 +532,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             return 16 + @as(i32, @intCast(callee_saved_space));
         }
 
-        /// Emit an inline stack-probe loop equivalent to MSVC's `__chkstk` for
-        /// AArch64. The x86_64 prologue grew the same logic in commit 8964805938
-        /// — without it, a direct `sub sp, N` for frames ≥ one page skips
-        /// guard pages and the program later faults with STATUS_ACCESS_VIOLATION
-        /// on the first access to an uncommitted page. On Windows ARM64 the
-        /// default stack commit is also 4 KB, so the same bug reproduces (CI:
-        /// test/fx/record_builder_cli_parser.roc [dev] on Windows 11 ARM).
-        ///
-        /// Counter in IP0 (x16), page-size constant in IP1 (x17). Both are
-        /// caller-saved scratch in every AArch64 ABI we target.
-        ///
-        ///   mov   x16, alloc_size       ; counter
-        ///   mov   x17, #0x1000          ; page size (movz, lsl #12 → single insn)
-        /// .loop:
-        ///   sub   sp, sp, x17           ; lower one page
-        ///   str   xzr, [sp]             ; touch the new top to commit it
-        ///   sub   x16, x16, x17
-        ///   cmp   x16, x17
-        ///   b.hi  .loop                 ; while remaining > one page
-        ///   sub   sp, sp, x16           ; allocate remainder (may be zero)
-        ///   str   xzr, [sp]             ; probe the final page
-        ///
-        /// The trailing `stp fp, lr, [sp]` from the caller overwrites the final
-        /// probe at [sp+0] — that's intentional; the probe was only there to
-        /// commit the page.
-        fn emitWindowsStackProbeAarch64(emit: *EmitType, alloc_size: u32) !void {
-            try emit.movRegImm64(.IP0, alloc_size);
-            try emit.movRegImm32(.w64, .IP1, 0x1000);
-
-            const loop_start = emit.buf.items.len;
-            try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP1);
-            try emit.strRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
-            try emit.subRegRegReg(.w64, .IP0, .IP0, .IP1);
-            try emit.cmpRegReg(.w64, .IP0, .IP1);
-
-            // b.hi loop_start — branch if counter > page size (still ≥ one page left)
-            const bcond_pos: i64 = @intCast(emit.buf.items.len);
-            const target_pos: i64 = @intCast(loop_start);
-            try emit.bcond(.hi, @intCast(target_pos - bcond_pos));
-
-            try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
-            try emit.strRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
-        }
-
-        fn emitEpilogueAarch64(self: *Self, emit: *EmitType) !void {
+        fn emitEpilogueAarch64(self: *Self, emit: *EmitType) Allocator.Error!void {
             // Recompute if needed (use full callee-saved area size for fixed offsets)
             if (self.actual_stack_alloc == 0) {
                 const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
@@ -505,6 +552,9 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 // Medium frame: ldp without writeback, then add sp with imm12
                 try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
                 try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
+            } else if (is_windows) {
+                try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+                try emitWindowsStackReleaseAarch64(emit, self.actual_stack_alloc);
             } else {
                 // Large frame: ldp without writeback, then add sp via scratch register
                 try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
@@ -516,7 +566,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             try emit.ret();
         }
 
-        fn emitSaveCalleeSavedAarch64(self: *const Self, emit: *EmitType) !void {
+        fn emitSaveCalleeSavedAarch64(self: *const Self, emit: *EmitType) Allocator.Error!void {
             // Save at fixed FP offsets: [FP+16], [FP+32], etc.
             var scaled_offset: i7 = 2; // Start at 16 bytes (2 * 8)
             for (CalleeSavedInfo.PAIRS) |pair| {
@@ -527,7 +577,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
         }
 
-        fn emitRestoreCalleeSavedAarch64(self: *const Self, emit: *EmitType) !void {
+        fn emitRestoreCalleeSavedAarch64(self: *const Self, emit: *EmitType) Allocator.Error!void {
             // Restore from fixed FP offsets: [FP+16], [FP+32], etc.
             var scaled_offset: i7 = 2; // Start at 16 bytes (2 * 8)
             for (CalleeSavedInfo.PAIRS) |pair| {
@@ -618,7 +668,7 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
         /// 1. push rbp; mov rbp, rsp (establish frame pointer)
         /// 2. push <regs> (callee-saved via push, in order added)
         /// 3. sub rsp, <aligned_size> (allocate stack space)
-        pub fn emitPrologue(self: *Self) !i32 {
+        pub fn emitPrologue(self: *Self) Allocator.Error!i32 {
             if (comptime is_aarch64) {
                 return self.emitPrologueAarch64();
             } else {
@@ -626,7 +676,7 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
             }
         }
 
-        fn emitPrologueX86_64(self: *Self) !i32 {
+        fn emitPrologueX86_64(self: *Self) Allocator.Error!i32 {
             // 1. Establish frame pointer
             try self.emit.pushReg(.RBP);
             try self.emit.movRegReg(.w64, .RBP, .RSP);
@@ -655,7 +705,7 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
             return -push_bytes;
         }
 
-        fn emitPrologueAarch64(self: *Self) !i32 {
+        fn emitPrologueAarch64(self: *Self) Allocator.Error!i32 {
             // aarch64: Use STP for FP/LR and additional register pairs
             // stp x29, x30, [sp, #-16]!  (push FP and LR, pre-decrement)
             try self.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
@@ -706,7 +756,7 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
         /// 1. add rsp, <aligned_size> (deallocate stack)
         /// 2. pop <regs> (restore PUSH-saved registers, reverse order)
         /// 3. pop rbp; ret
-        pub fn emitEpilogue(self: *Self) !void {
+        pub fn emitEpilogue(self: *Self) Allocator.Error!void {
             if (comptime is_aarch64) {
                 return self.emitEpilogueAarch64();
             } else {
@@ -714,7 +764,7 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
             }
         }
 
-        fn emitEpilogueX86_64(self: *Self) !void {
+        fn emitEpilogueX86_64(self: *Self) Allocator.Error!void {
             // Compute actual_stack_alloc if not already set (allows separate prologue/epilogue instances)
             // Also trigger for odd push_count which needs alignment padding even with stack_size=0
             if (self.actual_stack_alloc == 0 and (self.stack_size > 0 or self.push_count % 2 == 1)) {
@@ -739,7 +789,7 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
             try self.emit.ret();
         }
 
-        fn emitEpilogueAarch64(self: *Self) !void {
+        fn emitEpilogueAarch64(self: *Self) Allocator.Error!void {
             // Compute actual_stack_alloc if not already set (allows separate prologue/epilogue instances)
             if (self.actual_stack_alloc == 0 and (self.stack_size > 0 or self.push_count % 2 == 1)) {
                 self.actual_stack_alloc = self.computeActualStackAlloc();
@@ -1018,6 +1068,45 @@ test "DeferredFrameBuilder calculatePrologueSize x86_64" {
     const calculated_size = frame.calculatePrologueSize();
     // Basic prologue: push rbp (1) + mov rbp,rsp (3) + sub rsp,N (7) = 11 bytes
     try std.testing.expect(calculated_size >= 11);
+}
+
+test "DeferredFrameBuilder Windows aarch64 large frame prologue size matches emitted bytes" {
+    const Emit = aarch64.WinEmit;
+    const Builder = DeferredFrameBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Builder.init();
+    const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+    frame.setCalleeSavedMask(x19_bit);
+    frame.setStackSize(4096);
+
+    const calculated_size = frame.calculatePrologueSize();
+    _ = try frame.emitPrologue(&emit);
+
+    try std.testing.expect(frame.actual_stack_alloc >= 4096);
+    try std.testing.expectEqual(calculated_size, @as(u32, @intCast(emit.buf.items.len)));
+}
+
+test "DeferredFrameBuilder aarch64 caller stack arg base prologue size matches emitted bytes" {
+    const Emit = aarch64.MacEmit;
+    const Builder = DeferredFrameBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Builder.init();
+    const x28_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X28);
+    frame.setCalleeSavedMask(x28_bit);
+    frame.setStackSize(64);
+    frame.setCallerStackArgBaseReg(.X28);
+
+    const calculated_size = frame.calculatePrologueSize();
+    _ = try frame.emitPrologue(&emit);
+
+    try std.testing.expect(frame.actual_stack_alloc >= 64);
+    try std.testing.expectEqual(calculated_size, @as(u32, @intCast(emit.buf.items.len)));
 }
 
 // Windows-specific tests

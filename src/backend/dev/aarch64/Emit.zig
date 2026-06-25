@@ -9,6 +9,7 @@
 //! Each target variant is specialized at comptime with the correct calling convention.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
@@ -97,8 +98,8 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
-                .buf = .{},
-                .relocs = .{},
+                .buf = .empty,
+                .relocs = .empty,
             };
         }
 
@@ -113,7 +114,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// Emit a 32-bit instruction (little-endian)
-        fn emit32(self: *Self, inst: u32) !void {
+        fn emit32(self: *Self, inst: u32) Allocator.Error!void {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(inst)));
         }
 
@@ -122,7 +123,7 @@ pub fn Emit(comptime target: RocTarget) type {
         /// MOV reg, reg (register to register)
         /// For normal registers: ORR Xd, XZR, Xm
         /// For SP as source: ADD Xd, SP, #0 (since ORR treats reg 31 as XZR, not SP)
-        pub fn movRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+        pub fn movRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             // Special case: when source is SP, use ADD Xd, SP, #0
             // because ORR treats register 31 as XZR, not SP
             if (src == .ZRSP) {
@@ -155,7 +156,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// MOVZ - Move with zero (load immediate, clearing other bits)
         /// Used for loading 16-bit immediates at specified position
-        pub fn movz(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) !void {
+        pub fn movz(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) Allocator.Error!void {
             // MOVZ <Xd>, #<imm16>, LSL #<shift>
             // 31 30 29 28 27 26 25 24 23 22 21 20               5 4    0
             // sf  1  0  1  0  0  1  0  1  hw[1:0]  imm16[15:0]  Rd[4:0]
@@ -171,7 +172,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// MOVK - Move with keep (load immediate, keeping other bits)
         /// Used for loading 16-bit immediates into specific position
-        pub fn movk(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) !void {
+        pub fn movk(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) Allocator.Error!void {
             // MOVK <Xd>, #<imm16>, LSL #<shift>
             // 31 30 29 28 27 26 25 24 23 22 21 20               5 4    0
             // sf  1  1  1  0  0  1  0  1  hw[1:0]  imm16[15:0]  Rd[4:0]
@@ -187,7 +188,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// MOVN - Move with NOT (load inverted immediate)
         /// Sets dst = ~(imm16 << shift), useful for loading negative values
-        pub fn movn(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) !void {
+        pub fn movn(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) Allocator.Error!void {
             // MOVN <Xd>, #<imm16>, LSL #<shift>
             // 31 30 29 28 27 26 25 24 23 22 21 20               5 4    0
             // sf  0  0  1  0  0  1  0  1  hw[1:0]  imm16[15:0]  Rd[4:0]
@@ -203,7 +204,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// Load a 64-bit immediate into a register
         /// Uses MOVZ + MOVK sequence as needed
-        pub fn movRegImm64(self: *Self, dst: GeneralReg, imm: u64) !void {
+        pub fn movRegImm64(self: *Self, dst: GeneralReg, imm: u64) Allocator.Error!void {
             // For 64-bit immediates, we need up to 4 MOVZ/MOVK instructions
             const imm16_0: u16 = @truncate(imm);
             const imm16_1: u16 = @truncate(imm >> 16);
@@ -230,7 +231,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// Load a 32-bit (or smaller) signed immediate into a register
         /// Uses MOVZ + MOVK sequence, treating the value as a bit pattern
-        pub fn movRegImm32(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: i32) !void {
+        pub fn movRegImm32(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: i32) Allocator.Error!void {
             // Treat as unsigned bit pattern (matches Rust implementation style)
             const val: u32 = @bitCast(imm);
             const low16: u16 = @truncate(val);
@@ -243,7 +244,7 @@ pub fn Emit(comptime target: RocTarget) type {
         // Arithmetic instructions
 
         /// ADD reg, reg, reg
-        pub fn addRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn addRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // When dst or src1 is SP, must use extended register encoding
             // (shifted register encoding treats reg 31 as XZR, not SP)
             if (dst == .ZRSP or src1 == .ZRSP) {
@@ -276,7 +277,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// SUB reg, reg, reg
-        pub fn subRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn subRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // When dst or src1 is SP, must use extended register encoding
             // (shifted register encoding treats reg 31 as XZR, not SP)
             if (dst == .ZRSP or src1 == .ZRSP) {
@@ -308,7 +309,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// ADDS reg, reg, reg (add and set flags)
-        pub fn addsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn addsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // ADDS <Xd>, <Xn>, <Xm> - same as ADD but with S bit set
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -323,7 +324,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// ADC reg, reg, reg (add with carry)
-        pub fn adcRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn adcRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // ADC <Xd>, <Xn>, <Xm>
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -335,8 +336,21 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// ADCS reg, reg, reg (add with carry, sets flags)
+        pub fn adcsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
+            // ADCS <Xd>, <Xn>, <Xm> - same as ADC but with S bit set
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0111010000 << 21) |
+                (@as(u32, src2.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src1.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// SUBS reg, reg, reg (subtract and set flags)
-        pub fn subsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn subsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // SUBS <Xd>, <Xn>, <Xm> - same as SUB but with S bit set
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -352,12 +366,12 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// CMP reg, reg (compare two registers by subtracting and setting flags)
         /// This is an alias for SUBS with destination XZR (discard result)
-        pub fn cmp(self: *Self, width: RegisterWidth, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn cmp(self: *Self, width: RegisterWidth, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             try self.subsRegRegReg(width, .ZRSP, src1, src2);
         }
 
         /// SBC reg, reg, reg (subtract with carry/borrow, no flag update)
-        pub fn sbcRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn sbcRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // SBC <Xd>, <Xn>, <Xm>
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -370,7 +384,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// SBCS reg, reg, reg (subtract with carry/borrow, sets flags)
-        pub fn sbcsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn sbcsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // SBCS <Xd>, <Xn>, <Xm> — same as SBC but with S bit (bit 29) set
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -383,7 +397,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// MUL reg, reg, reg (alias for MADD with XZR as addend)
-        pub fn mulRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn mulRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // MADD <Xd>, <Xn>, <Xm>, XZR
             // 31 30 29 28 27 26 25 24 23 21 20    16 15 14    10 9    5 4    0
             // sf  0  0  1  1  0  1  1  0  0  0  Rm[4:0]  0  Ra[4:0]  Rn[4:0]  Rd[4:0]
@@ -399,7 +413,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// UMULH reg, reg, reg (unsigned multiply high - gives high 64 bits of 64x64->128 multiply)
-        pub fn umulhRegRegReg(self: *Self, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn umulhRegRegReg(self: *Self, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // UMULH <Xd>, <Xn>, <Xm>
             // 1 0 0 1 1 0 1 1 1 1 0 Rm 0 1 1 1 1 1 Rn Rd
             const inst: u32 = (0b10011011110 << 21) |
@@ -411,7 +425,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// SMULH reg, reg, reg (signed multiply high - gives high 64 bits of 64x64->128 signed multiply)
-        pub fn smulhRegRegReg(self: *Self, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn smulhRegRegReg(self: *Self, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // SMULH <Xd>, <Xn>, <Xm>
             // 1 0 0 1 1 0 1 1 0 1 0 Rm 0 1 1 1 1 1 Rn Rd
             const inst: u32 = (0b10011011010 << 21) |
@@ -423,7 +437,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// SDIV reg, reg, reg (signed divide)
-        pub fn sdivRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn sdivRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // SDIV <Xd>, <Xn>, <Xm>
             // sf 0 0 1 1 0 1 0 1 1 0 Rm 0 0 0 0 1 1 Rn Rd
             const sf = width.sf();
@@ -437,7 +451,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// UDIV reg, reg, reg (unsigned divide)
-        pub fn udivRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn udivRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // UDIV <Xd>, <Xn>, <Xm>
             // sf 0 0 1 1 0 1 0 1 1 0 Rm 0 0 0 0 1 0 Rn Rd
             const sf = width.sf();
@@ -451,7 +465,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// MSUB reg, reg, reg, reg (multiply-subtract: dst = ra - rn * rm)
-        pub fn msubRegRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, rn: GeneralReg, rm: GeneralReg, ra: GeneralReg) !void {
+        pub fn msubRegRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, rn: GeneralReg, rm: GeneralReg, ra: GeneralReg) Allocator.Error!void {
             // MSUB <Xd>, <Xn>, <Xm>, <Xa>
             // sf 0 0 1 1 0 1 1 0 0 0 Rm 1 Ra Rn Rd
             // Result: Xa - Xn * Xm
@@ -467,13 +481,19 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// ADD reg, reg, imm12 (add immediate)
-        pub fn addRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) !void {
+        pub fn addRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) Allocator.Error!void {
+            try self.addRegRegImm12Shifted(width, dst, src, imm, false);
+        }
+
+        /// ADD reg, reg, imm12 (add immediate, with optional LSL #12)
+        pub fn addRegRegImm12Shifted(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12, lsl_12: bool) Allocator.Error!void {
             // ADD <Xd>, <Xn>, #<imm>{, <shift>}
             // sf 0 0 1 0 0 0 1 sh imm12 Rn Rd
             const sf = width.sf();
+            const sh: u32 = if (lsl_12) 1 else 0;
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b0010001 << 24) |
-                (0 << 22) | // sh=0 (no shift)
+                (sh << 22) |
                 (@as(u32, imm) << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();
@@ -481,13 +501,19 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// SUB reg, reg, imm12 (subtract immediate)
-        pub fn subRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) !void {
+        pub fn subRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) Allocator.Error!void {
+            try self.subRegRegImm12Shifted(width, dst, src, imm, false);
+        }
+
+        /// SUB reg, reg, imm12 (subtract immediate, with optional LSL #12)
+        pub fn subRegRegImm12Shifted(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12, lsl_12: bool) Allocator.Error!void {
             // SUB <Xd>, <Xn>, #<imm>{, <shift>}
             // sf 1 0 1 0 0 0 1 sh imm12 Rn Rd
             const sf = width.sf();
+            const sh: u32 = if (lsl_12) 1 else 0;
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b1010001 << 24) |
-                (0 << 22) |
+                (sh << 22) |
                 (@as(u32, imm) << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();
@@ -495,7 +521,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// NEG reg, reg (negate - alias for SUB from XZR)
-        pub fn negRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+        pub fn negRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             // NEG is SUB Xd, XZR, Xm (shifted register encoding).
             // Must NOT use subRegRegReg here because its SP detection would
             // emit extended register encoding, interpreting reg 31 as SP
@@ -514,7 +540,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CMP reg, reg (compare - alias for SUBS with XZR destination)
-        pub fn cmpRegReg(self: *Self, width: RegisterWidth, lhs: GeneralReg, rhs: GeneralReg) !void {
+        pub fn cmpRegReg(self: *Self, width: RegisterWidth, lhs: GeneralReg, rhs: GeneralReg) Allocator.Error!void {
             // SUBS XZR, Xn, Xm
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -529,7 +555,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CMP reg, imm12 (compare immediate - alias for SUBS with XZR destination)
-        pub fn cmpRegImm12(self: *Self, width: RegisterWidth, reg: GeneralReg, imm: u12) !void {
+        pub fn cmpRegImm12(self: *Self, width: RegisterWidth, reg: GeneralReg, imm: u12) Allocator.Error!void {
             // SUBS XZR, Xn, #imm
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -542,7 +568,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// AND reg, reg, reg
-        pub fn andRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn andRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // AND <Xd>, <Xn>, <Xm>
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -557,7 +583,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// ORR reg, reg, reg
-        pub fn orrRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn orrRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // ORR <Xd>, <Xn>, <Xm>
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -571,8 +597,24 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// ORN reg, reg, reg (OR NOT: dst = src1 | ~src2)
+        /// With src1 = XZR this computes dst = ~src2 (the MVN alias).
+        pub fn ornRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
+            // ORN <Xd>, <Xn>, <Xm> — same as ORR but with the N (negate) bit set.
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0101010 << 24) |
+                (0b00 << 22) |
+                (1 << 21) |
+                (@as(u32, src2.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src1.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// EOR reg, reg, reg (exclusive OR)
-        pub fn eorRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        pub fn eorRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             // EOR <Xd>, <Xn>, <Xm>
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -588,14 +630,14 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// EOR reg, reg, imm (exclusive OR with immediate)
         /// Uses IP0 as scratch register for the immediate
-        pub fn eorRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u64) !void {
+        pub fn eorRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u64) Allocator.Error!void {
             // Load immediate into IP0, then EOR
             try self.movRegImm64(.IP0, imm);
             try self.eorRegRegReg(width, dst, src, .IP0);
         }
 
         /// LSL reg, reg, imm (logical shift left by immediate)
-        pub fn lslRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, shift: u6) !void {
+        pub fn lslRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, shift: u6) Allocator.Error!void {
             // UBFM with special encoding for LSL
             // LSL <Xd>, <Xn>, #shift is UBFM <Xd>, <Xn>, #(-shift MOD 64), #(63-shift)
             const sf = width.sf();
@@ -615,7 +657,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LSR reg, reg, imm (logical shift right by immediate)
-        pub fn lsrRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, shift: u6) !void {
+        pub fn lsrRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, shift: u6) Allocator.Error!void {
             // UBFM <Xd>, <Xn>, #shift, #63 (or #31 for 32-bit)
             const sf = width.sf();
             const reg_size: u6 = if (width == .w64) 63 else 31;
@@ -632,7 +674,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// ASR reg, reg, imm (arithmetic shift right by immediate)
-        pub fn asrRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, shift: u6) !void {
+        pub fn asrRegRegImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, shift: u6) Allocator.Error!void {
             // SBFM <Xd>, <Xn>, #shift, #63 (or #31 for 32-bit)
             const sf = width.sf();
             const reg_size: u6 = if (width == .w64) 63 else 31;
@@ -649,7 +691,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LSLV dst, src, amount (shift left by register)
-        pub fn lslRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+        pub fn lslRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
             // LSLV <Xd>, <Xn>, <Xm>: sf=1 | 0b0011010110 | Rm | 0b001000 | Rn | Rd
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -662,7 +704,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LSRV dst, src, amount (logical shift right by register)
-        pub fn lsrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+        pub fn lsrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
             // LSRV <Xd>, <Xn>, <Xm>: sf=1 | 0b0011010110 | Rm | 0b001001 | Rn | Rd
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -675,7 +717,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// ASRV dst, src, amount (arithmetic shift right by register)
-        pub fn asrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+        pub fn asrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
             // ASRV <Xd>, <Xn>, <Xm>: sf=1 | 0b0011010110 | Rm | 0b001010 | Rn | Rd
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -690,7 +732,7 @@ pub fn Emit(comptime target: RocTarget) type {
         // Control flow instructions
 
         /// RET (return to address in LR)
-        pub fn ret(self: *Self) !void {
+        pub fn ret(self: *Self) Allocator.Error!void {
             // RET {<Xn>} defaults to X30 (LR)
             // 1101011 0010 11111 000000 Rn[4:0] 00000
             const inst: u32 = (0b1101011 << 25) |
@@ -703,7 +745,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// UDF (permanently undefined instruction - generates exception)
-        pub fn udf(self: *Self, imm16: u16) !void {
+        pub fn udf(self: *Self, imm16: u16) Allocator.Error!void {
             // UDF #imm16
             // 0000 0000 0000 0000 imm16
             const inst: u32 = @as(u32, imm16);
@@ -712,7 +754,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// ADR Xd, #imm — compute PC-relative address
         /// offset_bytes is a byte offset from the ADR instruction, range ±1 MB.
-        pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) !void {
+        pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) Allocator.Error!void {
             // ADR: 0 immlo[1:0] 10000 immhi[18:0] Rd[4:0]
             const imm: u21 = @bitCast(offset_bytes);
             const immlo: u2 = @truncate(imm);
@@ -725,8 +767,13 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        pub fn adrp(self: *Self, rd: GeneralReg) Allocator.Error!void {
+            const inst: u32 = 0x90000000 | @as(u32, rd.enc());
+            try self.emit32(inst);
+        }
+
         /// BLR Xn (branch with link to register - call to address in register)
-        pub fn blrReg(self: *Self, reg: GeneralReg) !void {
+        pub fn blrReg(self: *Self, reg: GeneralReg) Allocator.Error!void {
             // BLR <Xn>
             // 1101011 0001 11111 000000 Rn[4:0] 00000
             const inst: u32 = (0b1101011 << 25) |
@@ -739,7 +786,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// BL (branch with link - function call)
-        pub fn bl(self: *Self, offset_bytes: i32) !void {
+        pub fn bl(self: *Self, offset_bytes: i32) Allocator.Error!void {
             // BL <label>
             // 1 00101 imm26
             // Note: offset must be multiple of 4 for valid instruction alignment
@@ -752,7 +799,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// B (unconditional branch)
-        pub fn b(self: *Self, offset_bytes: i32) !void {
+        pub fn b(self: *Self, offset_bytes: i32) Allocator.Error!void {
             // B <label>
             // 0 00101 imm26
             const offset_words = @divExact(offset_bytes, 4);
@@ -786,7 +833,7 @@ pub fn Emit(comptime target: RocTarget) type {
         };
 
         /// B.cond (conditional branch)
-        pub fn bcond(self: *Self, cond: Condition, offset_bytes: i32) !void {
+        pub fn bcond(self: *Self, cond: Condition, offset_bytes: i32) Allocator.Error!void {
             // B.cond <label>
             // 0101010 0 imm19 0 cond
             const offset_words = @divExact(offset_bytes, 4);
@@ -799,7 +846,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CBZ (compare and branch if zero)
-        pub fn cbz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) !void {
+        pub fn cbz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) Allocator.Error!void {
             // CBZ <Xt>, <label>
             // sf 011010 0 imm19 Rt
             const sf = width.sf();
@@ -813,7 +860,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CBNZ (compare and branch if non-zero)
-        pub fn cbnz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) !void {
+        pub fn cbnz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) Allocator.Error!void {
             // CBNZ <Xt>, <label>
             // sf 011010 1 imm19 Rt
             const sf = width.sf();
@@ -827,7 +874,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CSEL (conditional select)
-        pub fn csel(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg, cond: Condition) !void {
+        pub fn csel(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg, cond: Condition) Allocator.Error!void {
             // CSEL <Xd>, <Xn>, <Xm>, <cond>
             // sf 0 0 11010100 Rm cond 0 0 Rn Rd
             const sf = width.sf();
@@ -842,7 +889,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CSINC (conditional select increment - used for CSET)
-        pub fn csinc(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg, cond: Condition) !void {
+        pub fn csinc(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg, cond: Condition) Allocator.Error!void {
             // CSINC <Xd>, <Xn>, <Xm>, <cond>
             // sf 0 0 11010100 Rm cond 0 1 Rn Rd
             const sf = width.sf();
@@ -857,13 +904,13 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// CSET (conditional set - alias for CSINC with XZR)
-        pub fn cset(self: *Self, width: RegisterWidth, dst: GeneralReg, cond: Condition) !void {
+        pub fn cset(self: *Self, width: RegisterWidth, dst: GeneralReg, cond: Condition) Allocator.Error!void {
             // CSET <Xd>, <cond> is CSINC <Xd>, XZR, XZR, invert(cond)
             try self.csinc(width, dst, .ZRSP, .ZRSP, cond.invert());
         }
 
         /// BRK #1 - Breakpoint instruction (generates SIGTRAP, used as trap)
-        pub fn brk(self: *Self) !void {
+        pub fn brk(self: *Self) Allocator.Error!void {
             // BRK #imm16: 1101_0100_001 imm16 00000
             // Using imm16=1 as a conventional trap value
             try self.emit32(0xD4200020);
@@ -871,8 +918,24 @@ pub fn Emit(comptime target: RocTarget) type {
 
         // Memory instructions
 
+        fn addressScratchReg(base: GeneralReg, preserved: ?GeneralReg) GeneralReg {
+            if (base != .IP0 and preserved != .IP0) return .IP0;
+            if (base != .IP1 and preserved != .IP1) return .IP1;
+
+            std.debug.panic(
+                "aarch64 memory emitter needs an address scratch register, but base {s} and preserved register {s} occupy both IP0 and IP1",
+                .{ base.name64(), preserved.?.name64() },
+            );
+        }
+
+        fn emitAddressOffset(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            std.debug.assert(dst != base);
+            try self.movRegImm64(dst, @bitCast(@as(i64, offset)));
+            try self.addRegRegReg(.w64, dst, base, dst);
+        }
+
         /// LDR (load register) with unsigned offset
-        pub fn ldrRegMemUoff(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn ldrRegMemUoff(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // LDR <Xt>, [<Xn|SP>, #<pimm>]
             // 1x 111 0 01 01 imm12 Rn Rt (64-bit)
             // 0x 111 0 01 01 imm12 Rn Rt (32-bit)
@@ -887,7 +950,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// STR (store register) with unsigned offset
-        pub fn strRegMemUoff(self: *Self, width: RegisterWidth, src: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn strRegMemUoff(self: *Self, width: RegisterWidth, src: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // STR <Xt>, [<Xn|SP>, #<pimm>]
             // 1x 111 0 01 00 imm12 Rn Rt
             const size: u2 = if (width == .w64) 0b11 else 0b10;
@@ -901,7 +964,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LDUR (load register unscaled) with signed offset
-        pub fn ldurRegMem(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, offset: i9) !void {
+        pub fn ldurRegMem(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
             // LDUR <Xt>, [<Xn|SP>, #<simm>]
             // 1x 111 0 00 01 0 imm9 00 Rn Rt
             const size: u2 = if (width == .w64) 0b11 else 0b10;
@@ -918,7 +981,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// STUR (store register unscaled) with signed offset
-        pub fn sturRegMem(self: *Self, width: RegisterWidth, src: GeneralReg, base: GeneralReg, offset: i9) !void {
+        pub fn sturRegMem(self: *Self, width: RegisterWidth, src: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
             // STUR <Xt>, [<Xn|SP>, #<simm>]
             // 1x 111 0 00 00 0 imm9 00 Rn Rt
             const size: u2 = if (width == .w64) 0b11 else 0b10;
@@ -935,7 +998,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// STURB (store register byte unscaled) with signed offset
-        pub fn sturbRegMem(self: *Self, src: GeneralReg, base: GeneralReg, offset: i9) !void {
+        pub fn sturbRegMem(self: *Self, src: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
             // STURB <Wt>, [<Xn|SP>, #<simm>]
             // 00 111 0 00 00 0 imm9 00 Rn Rt
             const imm9: u9 = @bitCast(offset);
@@ -951,7 +1014,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// STURH (store register halfword unscaled) with signed offset
-        pub fn sturhRegMem(self: *Self, src: GeneralReg, base: GeneralReg, offset: i9) !void {
+        pub fn sturhRegMem(self: *Self, src: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
             // STURH <Wt>, [<Xn|SP>, #<simm>]
             // 01 111 0 00 00 0 imm9 00 Rn Rt
             const imm9: u9 = @bitCast(offset);
@@ -967,7 +1030,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LDURB (load register byte unscaled, zero-extend) with signed offset
-        pub fn ldurbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) !void {
+        pub fn ldurbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
             // LDURB <Wt>, [<Xn|SP>, #<simm>]
             // 00 111 0 00 01 0 imm9 00 Rn Rt
             const imm9: u9 = @bitCast(offset);
@@ -983,7 +1046,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LDURH (load register halfword unscaled, zero-extend) with signed offset
-        pub fn ldurhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) !void {
+        pub fn ldurhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
             // LDURH <Wt>, [<Xn|SP>, #<simm>]
             // 01 111 0 00 01 0 imm9 00 Rn Rt
             const imm9: u9 = @bitCast(offset);
@@ -999,7 +1062,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LDRH (load register halfword, zero-extend) with unsigned offset
-        pub fn ldrhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn ldrhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // LDRH <Wt>, [<Xn|SP>, #<pimm>]
             // 01 111 0 01 01 imm12 Rn Rt
             const inst: u32 = (0b01 << 30) |
@@ -1015,8 +1078,8 @@ pub fn Emit(comptime target: RocTarget) type {
         /// Handles arbitrary signed offsets by choosing appropriate encoding:
         /// - Small offsets (-256 to 255): use LDUR (unscaled)
         /// - Positive aligned offsets (0 to 32760 for 64-bit): use LDR with unsigned offset
-        /// - Other offsets: compute address in IP0 then load with zero offset
-        pub fn ldrRegMemSoff(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, offset: i32) !void {
+        /// - Other offsets: compute address in an IP scratch register, then load with zero offset
+        pub fn ldrRegMemSoff(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
             // Try LDUR for small signed offsets
             if (offset >= -256 and offset <= 255) {
                 try self.ldurRegMem(width, dst, base, @intCast(offset));
@@ -1036,16 +1099,14 @@ pub fn Emit(comptime target: RocTarget) type {
                 }
             }
 
-            // Handle offsets outside LDUR range [-256,255] and not suitable for unsigned encoding
-            // Use movRegImm64 for correct sign extension of negative offsets
-            try self.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
-            try self.addRegRegReg(.w64, .IP0, base, .IP0);
-            try self.ldurRegMem(width, dst, .IP0, 0);
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldurRegMem(width, dst, scratch, 0);
         }
 
         /// STR with signed offset (i32)
         /// Handles arbitrary signed offsets by choosing appropriate encoding
-        pub fn strRegMemSoff(self: *Self, width: RegisterWidth, src: GeneralReg, base: GeneralReg, offset: i32) !void {
+        pub fn strRegMemSoff(self: *Self, width: RegisterWidth, src: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
             // Try STUR for small signed offsets
             if (offset >= -256 and offset <= 255) {
                 try self.sturRegMem(width, src, base, @intCast(offset));
@@ -1065,15 +1126,13 @@ pub fn Emit(comptime target: RocTarget) type {
                 }
             }
 
-            // Handle offsets outside STUR range [-256,255] and not suitable for unsigned encoding
-            // Use movRegImm64 for correct sign extension of negative offsets
-            try self.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
-            try self.addRegRegReg(.w64, .IP0, base, .IP0);
-            try self.sturRegMem(width, src, .IP0, 0);
+            const scratch = addressScratchReg(base, src);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.sturRegMem(width, src, scratch, 0);
         }
 
         /// LDRB (load register byte, zero-extend)
-        pub fn ldrbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn ldrbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // LDRB <Wt>, [<Xn|SP>, #<pimm>]
             // 00 111 0 01 01 imm12 Rn Rt
             const inst: u32 = (0b00 << 30) |
@@ -1086,7 +1145,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// STRB (store register byte)
-        pub fn strbRegMem(self: *Self, src: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn strbRegMem(self: *Self, src: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // STRB <Wt>, [<Xn|SP>, #<pimm>]
             // 00 111 0 01 00 imm12 Rn Rt
             const inst: u32 = (0b00 << 30) |
@@ -1099,7 +1158,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// STRH (store register halfword)
-        pub fn strhRegMem(self: *Self, src: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn strhRegMem(self: *Self, src: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // STRH <Wt>, [<Xn|SP>, #<pimm>]
             // 01 111 0 01 00 imm12 Rn Rt
             // Note: uoffset is scaled by 2 (halfword), caller must divide offset by 2
@@ -1112,10 +1171,94 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// LDRB with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn ldrbRegMemSoff(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.ldurbRegMem(dst, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0 and offset <= 4095) {
+                try self.ldrbRegMem(dst, base, @intCast(@as(u32, @intCast(offset))));
+                return;
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldurbRegMem(dst, scratch, 0);
+        }
+
+        /// STRB with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn strbRegMemSoff(self: *Self, src: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.sturbRegMem(src, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0 and offset <= 4095) {
+                try self.strbRegMem(src, base, @intCast(@as(u32, @intCast(offset))));
+                return;
+            }
+
+            const scratch = addressScratchReg(base, src);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.sturbRegMem(src, scratch, 0);
+        }
+
+        /// LDRH with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn ldrhRegMemSoff(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.ldurhRegMem(dst, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 1) == 0) {
+                    const scaled = uoff >> 1;
+                    if (scaled <= 4095) {
+                        try self.ldrhRegMem(dst, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldurhRegMem(dst, scratch, 0);
+        }
+
+        /// STRH with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn strhRegMemSoff(self: *Self, src: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.sturhRegMem(src, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 1) == 0) {
+                    const scaled = uoff >> 1;
+                    if (scaled <= 4095) {
+                        try self.strhRegMem(src, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, src);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.sturhRegMem(src, scratch, 0);
+        }
+
         // Stack instructions
 
         /// STP (store pair) - commonly used for pushing to stack
-        pub fn stpPreIndex(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+        pub fn stpPreIndex(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) Allocator.Error!void {
             // STP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]!
             // ARM encoding: opc 101 V 0110 imm7 Rt2 Rn Rt
             // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
@@ -1140,7 +1283,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LDP (load pair) - commonly used for popping from stack
-        pub fn ldpPostIndex(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+        pub fn ldpPostIndex(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) Allocator.Error!void {
             // LDP <Xt1>, <Xt2>, [<Xn|SP>], #<imm>
             // ARM encoding: opc 101 V opc2 L imm7 Rt2 Rn Rt
             // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
@@ -1168,7 +1311,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// STP (store pair) with signed offset - no writeback
         /// Used for saving registers to pre-allocated frame slots
-        pub fn stpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+        pub fn stpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) Allocator.Error!void {
             // STP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]
             // ARM encoding: opc 101 V 010 L imm7 Rt2 Rn Rt
             // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
@@ -1196,7 +1339,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// LDP (load pair) with signed offset - no writeback
         /// Used for restoring registers from pre-allocated frame slots
-        pub fn ldpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+        pub fn ldpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) Allocator.Error!void {
             // LDP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]
             // ARM encoding: opc 101 V 010 L imm7 Rt2 Rn Rt
             // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
@@ -1231,7 +1374,7 @@ pub fn Emit(comptime target: RocTarget) type {
         };
 
         /// FMOV (floating-point move register)
-        pub fn fmovRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) !void {
+        pub fn fmovRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FMOV <Sd>, <Sn> or FMOV <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 00 10000 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1247,7 +1390,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FMOV from general register to float register
-        pub fn fmovFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg) !void {
+        pub fn fmovFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg) Allocator.Error!void {
             // FMOV <Sd>, <Wn> (single) or FMOV <Dd>, <Xn> (double)
             const sf: u1 = @intFromEnum(ftype);
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -1264,7 +1407,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FMOV from float register to general register
-        pub fn fmovGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg) !void {
+        pub fn fmovGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg) Allocator.Error!void {
             // FMOV <Wd>, <Sn> (single) or FMOV <Xd>, <Dn> (double)
             const sf: u1 = @intFromEnum(ftype);
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -1281,7 +1424,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FADD (floating-point add)
-        pub fn faddRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) !void {
+        pub fn faddRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FADD <Sd>, <Sn>, <Sm> or FADD <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0010 10 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1297,7 +1440,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FSUB (floating-point subtract)
-        pub fn fsubRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) !void {
+        pub fn fsubRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FSUB <Sd>, <Sn>, <Sm> or FSUB <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0011 10 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1313,7 +1456,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FMUL (floating-point multiply)
-        pub fn fmulRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) !void {
+        pub fn fmulRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FMUL <Sd>, <Sn>, <Sm> or FMUL <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0000 10 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1329,7 +1472,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FDIV (floating-point divide)
-        pub fn fdivRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) !void {
+        pub fn fdivRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FDIV <Sd>, <Sn>, <Sm> or FDIV <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0001 10 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1345,7 +1488,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FSQRT (floating-point square root)
-        pub fn fsqrtRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) !void {
+        pub fn fsqrtRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FSQRT <Sd>, <Sn> or FSQRT <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 11 10000 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1361,7 +1504,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FNEG (floating-point negate)
-        pub fn fnegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) !void {
+        pub fn fnegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FNEG <Sd>, <Sn> or FNEG <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 10 10000 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1377,7 +1520,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FABS (floating-point absolute value)
-        pub fn fabsRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) !void {
+        pub fn fabsRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FABS <Sd>, <Sn> or FABS <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 01 10000 Rn Rd
             const inst: u32 = (0b000 << 29) |
@@ -1393,7 +1536,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FCMP (floating-point compare)
-        pub fn fcmpRegReg(self: *Self, ftype: FloatType, lhs: FloatReg, rhs: FloatReg) !void {
+        pub fn fcmpRegReg(self: *Self, ftype: FloatType, lhs: FloatReg, rhs: FloatReg) Allocator.Error!void {
             // FCMP <Sn>, <Sm> or FCMP <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 00 1000 Rn 0 0 000
             const inst: u32 = (0b000 << 29) |
@@ -1409,7 +1552,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FCMP with zero
-        pub fn fcmpRegZero(self: *Self, ftype: FloatType, reg: FloatReg) !void {
+        pub fn fcmpRegZero(self: *Self, ftype: FloatType, reg: FloatReg) Allocator.Error!void {
             // FCMP <Sn>, #0.0 or FCMP <Dn>, #0.0
             // 0 0 0 11110 ftype 1 00000 00 1000 Rn 0 1 000
             const inst: u32 = (0b000 << 29) |
@@ -1425,7 +1568,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// SCVTF (signed integer to float)
-        pub fn scvtfFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg, src_width: RegisterWidth) !void {
+        pub fn scvtfFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg, src_width: RegisterWidth) Allocator.Error!void {
             // SCVTF <Sd>, <Wn> or SCVTF <Dd>, <Xn> etc.
             const sf = src_width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -1442,7 +1585,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// UCVTF (unsigned integer to float)
-        pub fn ucvtfFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg, src_width: RegisterWidth) !void {
+        pub fn ucvtfFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg, src_width: RegisterWidth) Allocator.Error!void {
             // UCVTF <Sd>, <Wn> or UCVTF <Dd>, <Xn> etc.
             // Same as SCVTF but opcode = 011 instead of 010
             const sf = src_width.sf();
@@ -1460,7 +1603,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FCVTZS (float to signed integer with truncation toward zero)
-        pub fn fcvtzsGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) !void {
+        pub fn fcvtzsGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) Allocator.Error!void {
             // FCVTZS <Wd>, <Sn> or FCVTZS <Xd>, <Dn> etc.
             const sf = dst_width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
@@ -1477,7 +1620,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FCVTZU (float to unsigned integer with truncation toward zero)
-        pub fn fcvtzuGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) !void {
+        pub fn fcvtzuGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) Allocator.Error!void {
             // FCVTZU <Wd>, <Sn> or FCVTZU <Xd>, <Dn> etc.
             // Same as FCVTZS but opcode = 001 instead of 000
             const sf = dst_width.sf();
@@ -1495,7 +1638,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// FCVT (float to float conversion)
-        pub fn fcvtFloatFloat(self: *Self, dst_type: FloatType, dst: FloatReg, src_type: FloatType, src: FloatReg) !void {
+        pub fn fcvtFloatFloat(self: *Self, dst_type: FloatType, dst: FloatReg, src_type: FloatType, src: FloatReg) Allocator.Error!void {
             // FCVT <Sd>, <Dn> or FCVT <Dd>, <Sn>
             // 0 0 0 11110 src_type 1 0001 dst_type 10000 Rn Rd
             const opc: u2 = @intFromEnum(dst_type);
@@ -1512,7 +1655,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LDR (load float register) with unsigned offset
-        pub fn fldrRegMemUoff(self: *Self, ftype: FloatType, dst: FloatReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn fldrRegMemUoff(self: *Self, ftype: FloatType, dst: FloatReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // LDR <St>, [<Xn|SP>, #<pimm>] (single) or LDR <Dt>, [<Xn|SP>, #<pimm>] (double)
             // size 111 1 01 01 imm12 Rn Rt
             const size: u2 = if (ftype == .double) 0b11 else 0b10;
@@ -1526,7 +1669,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// STR (store float register) with unsigned offset
-        pub fn fstrRegMemUoff(self: *Self, ftype: FloatType, src: FloatReg, base: GeneralReg, uoffset: u12) !void {
+        pub fn fstrRegMemUoff(self: *Self, ftype: FloatType, src: FloatReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // STR <St>, [<Xn|SP>, #<pimm>] (single) or STR <Dt>, [<Xn|SP>, #<pimm>] (double)
             // size 111 1 01 00 imm12 Rn Rt
             const size: u2 = if (ftype == .double) 0b11 else 0b10;
@@ -1538,6 +1681,46 @@ pub fn Emit(comptime target: RocTarget) type {
                 src.enc();
             try self.emit32(inst);
         }
+
+        /// LDR floating-point register with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn fldrRegMemSoff(self: *Self, ftype: FloatType, dst: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const scale: u5 = if (ftype == .double) 3 else 2;
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) {
+                    const scaled = uoff >> scale;
+                    if (scaled <= 4095) {
+                        try self.fldrRegMemUoff(ftype, dst, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.fldrRegMemUoff(ftype, dst, scratch, 0);
+        }
+
+        /// STR floating-point register with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn fstrRegMemSoff(self: *Self, ftype: FloatType, src: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const scale: u5 = if (ftype == .double) 3 else 2;
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) {
+                    const scaled = uoff >> scale;
+                    if (scaled <= 4095) {
+                        try self.fstrRegMemUoff(ftype, src, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.fstrRegMemUoff(ftype, src, scratch, 0);
+        }
     }; // end of struct returned by Emit
 }
 
@@ -1545,6 +1728,18 @@ pub fn Emit(comptime target: RocTarget) type {
 const LinuxEmit = Emit(.arm64linux);
 const WinEmit = Emit(.arm64win);
 const MacEmit = Emit(.arm64mac);
+
+fn testReadInst(buf: []const u8, inst_index: usize) u32 {
+    const byte_index = inst_index * 4;
+    return @as(u32, buf[byte_index]) |
+        (@as(u32, buf[byte_index + 1]) << 8) |
+        (@as(u32, buf[byte_index + 2]) << 16) |
+        (@as(u32, buf[byte_index + 3]) << 24);
+}
+
+fn testInstBaseReg(inst: u32) u32 {
+    return (inst >> 5) & 0x1F;
+}
 
 // Tests
 
@@ -1614,6 +1809,30 @@ test "fadd" {
     // fadd d0, d1, d2 (0x1E622820)
     try asm_buf.faddRegRegReg(.double, .V0, .V1, .V2);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x20, 0x28, 0x62, 0x1E }, asm_buf.buf.items);
+}
+
+test "signed-offset memory helpers use exact byte offsets" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+
+    try asm_buf.ldrRegMemSoff(.w64, .X0, .FP, 260);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+
+    asm_buf.buf.clearRetainingCapacity();
+    try asm_buf.fldrRegMemSoff(.double, .V0, .FP, 260);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+
+    asm_buf.buf.clearRetainingCapacity();
+    try asm_buf.strhRegMemSoff(.IP0, .FP, 257);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+
+    asm_buf.buf.clearRetainingCapacity();
+    try asm_buf.ldrbRegMemSoff(.X0, .IP0, 5000);
+    try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
 }
 
 test "condition invert" {

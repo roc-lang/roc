@@ -5,6 +5,7 @@
 //! different phases of compilation.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
 
@@ -115,7 +116,7 @@ pub const Serialized = extern struct {
         env: *const CommonEnv,
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
-    ) !void {
+    ) Allocator.Error!void {
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);
@@ -192,22 +193,37 @@ pub fn getStringStore(self: *CommonEnv) *StringLiteral.Store {
 }
 
 /// Adds an identifier to the exposed items list by its index.
-pub fn addExposedById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx) !void {
+pub fn addExposedById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx) Allocator.Error!void {
     return try self.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 }
 
-/// Retrieves the node index associated with an exposed identifier.
-pub fn getNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u16 {
-    return self.exposed_items.getNodeIndexById(allocator, @bitCast(ident_idx));
+/// Retrieves the explicit target associated with an exposed identifier.
+pub fn getExposedTargetById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?collections.ExposedItemTarget {
+    return self.exposed_items.getTargetById(allocator, @bitCast(ident_idx));
 }
 
-/// Associates a node index with an exposed identifier.
-pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u16) !void {
-    return try self.exposed_items.setNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
+/// Retrieves the value definition node associated with an exposed identifier.
+pub fn getValueNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u32 {
+    return self.exposed_items.getValueNodeIndexById(allocator, @bitCast(ident_idx));
+}
+
+/// Retrieves the type declaration node associated with an exposed identifier.
+pub fn getTypeNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u32 {
+    return self.exposed_items.getTypeNodeIndexById(allocator, @bitCast(ident_idx));
+}
+
+/// Associates a value definition node index with an exposed identifier.
+pub fn setValueNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.exposed_items.setValueNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
+}
+
+/// Associates a type declaration node index with an exposed identifier.
+pub fn setTypeNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.exposed_items.setTypeNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
 }
 
 /// Get region info for a given region
-pub fn getRegionInfo(self: *const CommonEnv, region: Region) !RegionInfo {
+pub fn getRegionInfo(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }!RegionInfo {
     return RegionInfo.position(
         self.source,
         self.line_starts.items.items,
@@ -250,7 +266,7 @@ pub fn getSourceAll(self: *const CommonEnv) []const u8 {
 }
 
 /// Calculate and store line starts from the source text
-pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) !void {
+pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!void {
     // Reset line_starts by creating a new SafeList
     self.line_starts.deinit(gpa);
     self.line_starts = try collections.SafeList(u32).initCapacity(gpa, 256);
@@ -299,7 +315,7 @@ pub fn getSource(self: *const CommonEnv, region: Region) []const u8 {
 }
 
 /// Get the source line for a given region
-pub fn getSourceLine(self: *const CommonEnv, region: Region) ![]const u8 {
+pub fn getSourceLine(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }![]const u8 {
     const region_info = try self.getRegionInfo(region);
     const line_start = self.line_starts.items.items[region_info.start_line_idx];
     const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.items.len)
@@ -360,24 +376,23 @@ test "CommonEnv.Serialized roundtrip" {
     defer writer.deinit(gpa);
 
     // Create temp file
+    const io = std.testing.io;
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
-    defer tmp_file.close();
+    const tmp_file = try tmp_dir.dir.createFile(io, "test.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    const read_len = try tmp_file.pread(buffer, 0);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -414,22 +429,21 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test_empty.compact", .{ .read = true });
-    defer tmp_file.close();
+    const io = std.testing.io;
+    const tmp_file = try tmp_dir.dir.createFile(io, "test_empty.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    const read_len = try tmp_file.pread(buffer, 0);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -451,7 +465,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
     defer source_builder.deinit();
 
     for (0..100) |i| {
-        try source_builder.writer().print("Line {}: This is a test line with some content\n", .{i});
+        const line = try std.fmt.allocPrint(gpa, "Line {}: This is a test line with some content\n", .{i});
+        defer gpa.free(line);
+        try source_builder.appendSlice(line);
     }
     const source = source_builder.items;
 
@@ -466,7 +482,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
     for (0..50) |i| {
         var ident_name = std.array_list.Managed(u8).init(gpa);
         defer ident_name.deinit();
-        try ident_name.writer().print("ident_{}", .{i});
+        const name = try std.fmt.allocPrint(gpa, "ident_{}", .{i});
+        defer gpa.free(name);
+        try ident_name.appendSlice(name);
         const idx = try original.insertIdent(gpa, Ident.for_text(ident_name.items));
         try ident_indices.append(idx);
     }
@@ -478,7 +496,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
     for (0..25) |i| {
         var string_content = std.array_list.Managed(u8).init(gpa);
         defer string_content.deinit();
-        try string_content.writer().print("string_literal_{}", .{i});
+        const str = try std.fmt.allocPrint(gpa, "string_literal_{}", .{i});
+        defer gpa.free(str);
+        try string_content.appendSlice(str);
         const idx = try original.insertString(gpa, string_content.items);
         try string_indices.append(idx);
     }
@@ -498,22 +518,21 @@ test "CommonEnv.Serialized roundtrip with large data" {
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test_large.compact", .{ .read = true });
-    defer tmp_file.close();
+    const io = std.testing.io;
+    const tmp_file = try tmp_dir.dir.createFile(io, "test_large.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    const read_len = try tmp_file.pread(buffer, 0);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -576,22 +595,21 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test_special.compact", .{ .read = true });
-    defer tmp_file.close();
+    const io = std.testing.io;
+    const tmp_file = try tmp_dir.dir.createFile(io, "test_special.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    const read_len = try tmp_file.pread(buffer, 0);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));

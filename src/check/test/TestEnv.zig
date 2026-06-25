@@ -1,6 +1,7 @@
 //! Test environment for canonicalization testing, providing utilities to parse, canonicalize, and inspect Roc expressions.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
@@ -8,15 +9,19 @@ const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
 const collections = @import("collections");
-const Allocators = base.Allocators;
+const CoreCtx = @import("can").CoreCtx;
 
 const Check = @import("../Check.zig");
 const TypedCIR = @import("../typed_cir.zig");
 const report_mod = @import("../report.zig");
 
 const testing = std.testing;
+// Allocators was removed in Zig 0.16 migration
 
 const compiled_builtins = @import("compiled_builtins");
+
+/// Errors that can occur while constructing or using a check test environment.
+pub const TestEnvError = Allocator.Error || error{ WriteFailed, TestExpectedEqual, TestUnexpectedResult };
 
 /// Wrapper for a loaded compiled module that tracks the buffer
 const LoadedModule = struct {
@@ -39,7 +44,7 @@ const LoadedModule = struct {
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
     // Copy to properly aligned memory
     const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
@@ -50,7 +55,7 @@ fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.
 }
 
 /// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
     // Copy the embedded data to properly aligned memory
     // CompactWriter requires specific alignment for serialization
     const CompactWriter = collections.CompactWriter;
@@ -77,12 +82,17 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .common = common,
         .types = serialized_ptr.types.deserializeInto(base_ptr, gpa), // Pass gpa to types deserialize
         .module_kind = serialized_ptr.module_kind.decode(),
+        .module_role = serialized_ptr.module_role,
         .all_defs = serialized_ptr.all_defs,
+        .global_value_defs = serialized_ptr.global_value_defs,
         .all_statements = serialized_ptr.all_statements,
+        .type_decls = serialized_ptr.type_decls,
+        .forward_type_decls = serialized_ptr.forward_type_decls,
         .exports = serialized_ptr.exports,
         .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
         .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
         .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
+        .hosted_entries = serialized_ptr.hosted_entries.deserializeInto(base_ptr),
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
         .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
@@ -95,6 +105,14 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .idents = ModuleEnv.CommonIdents.find(&common),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+        .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
+        .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
+        .file_dependencies = serialized_ptr.file_dependencies.deserializeInto(base_ptr),
+        .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
+        .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
+        .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
+        .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
+        .numeric_suffix_targets = serialized_ptr.numeric_suffix_targets.deserializeInto(base_ptr),
     };
 
     return LoadedModule{
@@ -130,12 +148,10 @@ const TestEnv = @This();
 /// add that module as an import to this module.
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
 /// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
-pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
+pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
@@ -175,7 +191,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
             // Type modules expose their main type under the module name
             const type_ident = other_test_env.module_env.common.findIdent(other_module_name);
             if (type_ident) |ident| {
-                if (other_test_env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                if (other_test_env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                     // The node index IS the statement index for type declarations
                     break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
                 }
@@ -195,14 +211,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     });
 
     // Parse the AST
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    can.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_env,
             .builtin_indices = builtin_indices,
@@ -249,7 +265,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     // Type Check - Pass all imported modules
     var checker = try Check.init(
@@ -261,9 +277,11 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         &module_env.store.regions,
         module_builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
 
     try checker.checkFile();
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -282,12 +300,10 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 }
 
 /// Initialize where the provided source is an entire file
-pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
+pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
@@ -316,14 +332,14 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     try module_env.common.calcLineStarts(gpa);
 
     // Parse the AST
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    can.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -360,7 +376,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
@@ -372,9 +388,11 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         &module_env.store.regions,
         module_builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
 
     try checker.checkFile();
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -393,12 +411,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 }
 
 /// Canonicalize a source module without type checking and count module-not-found diagnostics.
-pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) !usize {
+pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) Allocator.Error!usize {
     const gpa = std.testing.allocator;
-
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
 
     var module_env = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
@@ -409,7 +423,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -422,7 +436,8 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 
     try module_env.initCIRFields(module_name);
 
-    var czer = try Can.initModule(&allocators, &module_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
+    var czer = try Can.initModule(roc_ctx, &module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -447,7 +462,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 }
 
 /// Initialize where the provided source a single expression
-pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) !TestEnv {
+pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const source_wrapper =
@@ -508,7 +523,7 @@ pub fn takePublishedSourceModule(self: *TestEnv) TypedCIR.Modules.SourceModule {
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
+pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) TestEnvError!void {
     return self.assertDefTypeOptions(target_def_name, expected, .{ .allow_type_errors = false });
 }
 
@@ -516,7 +531,7 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) !void {
+pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) TestEnvError!void {
     try self.assertNoParseProblems();
     try self.assertNoCanProblems();
     if (!options.allow_type_errors) {
@@ -552,7 +567,7 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
+pub fn assertLastDefType(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
@@ -564,8 +579,58 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
+/// Like `assertLastDefType`, but the module must also produce warning-severity
+/// type problems — and ONLY warnings — whose report titles match
+/// `expected_warning_titles` exactly, in order. (Plain pass-mode fails on ANY
+/// problem, warnings included, so warning-producing tests must declare their
+/// warnings here rather than silently tolerate them.)
+pub fn assertLastDefTypeWithWarnings(
+    self: *TestEnv,
+    expected: []const u8,
+    expected_warning_titles: []const []const u8,
+) TestEnvError!void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertOnlyTypeWarnings(expected_warning_titles);
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
+
+    try self.type_writer.write(last_def_var, .wrap);
+    try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
+/// Assert that every type problem is warning-severity and that the rendered
+/// titles match `expected_titles` exactly, in order. Any error-severity
+/// problem (or a count/title mismatch) fails the assertion.
+fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) TestEnvError!void {
+    var report_builder = try report_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        &self.checker.problems,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+        &self.checker.regions,
+    );
+    defer report_builder.deinit();
+
+    try testing.expectEqual(expected_titles.len, self.checker.problems.problems.items.len);
+    for (self.checker.problems.problems.items, 0..) |problem, i| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        try testing.expectEqualStrings(expected_titles[i], report.title);
+        try testing.expectEqual(.warning, report.severity);
+    }
+}
+
 /// Assert that the last definition's type contains the given substring
-pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) !void {
+pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) TestEnvError!void {
     try self.assertNoErrors();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
@@ -575,7 +640,7 @@ pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8)
 
     try self.type_writer.write(last_def_var, .wrap);
     const type_str = self.type_writer.get();
-    if (std.mem.indexOf(u8, type_str, expected_substring) == null) {
+    if (std.mem.find(u8, type_str, expected_substring) == null) {
         std.debug.print("Expected type to contain '{s}', but got: {s}\n", .{ expected_substring, type_str });
         return error.TestExpectedEqual;
     }
@@ -584,7 +649,7 @@ pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8)
 /// Get the inferred type descriptor of the last declaration
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
+pub fn getLastExprType(self: *TestEnv) TestEnvError!types.Descriptor {
     try self.assertNoParseProblems();
     // try self.assertNoCanProblems();
     try self.assertNoTypeProblems();
@@ -597,7 +662,7 @@ pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
 }
 
 /// Assert that there were no parse, canonicalization, or type checking errors.
-pub fn assertNoErrors(self: *TestEnv) !void {
+pub fn assertNoErrors(self: *TestEnv) TestEnvError!void {
     try self.assertNoParseProblems();
     try self.assertNoCanProblems();
     try self.assertNoTypeProblems();
@@ -605,7 +670,7 @@ pub fn assertNoErrors(self: *TestEnv) !void {
 
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
-pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
+pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
     // try self.assertNoCanProblems();
 
@@ -635,7 +700,7 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
-pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) !void {
+pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
     // try self.assertNoCanProblems();
 
@@ -668,8 +733,41 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report_buf.items);
 }
 
+/// Assert that checking produced exactly the expected problems (errors AND
+/// warnings), in order, each matching its expected rendered message exactly.
+pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    try testing.expectEqual(expected.len, self.checker.problems.problems.items.len);
+
+    for (expected, self.checker.problems.problems.items) |expected_msg, problem| {
+        var report_builder = try report_mod.ReportBuilder.init(
+            self.gpa,
+            self.module_env,
+            self.module_env,
+            &self.checker.snapshots,
+            &self.checker.problems,
+            "test",
+            &.{},
+            &self.checker.import_mapping,
+            &self.checker.regions,
+        );
+        defer report_builder.deinit();
+
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+        defer report_buf.deinit();
+
+        try renderReportToMarkdownBuffer(&report_buf, &report);
+
+        try testing.expectEqualStrings(expected_msg, report_buf.items);
+    }
+}
+
 /// Assert that canonicalization produced exactly one diagnostic with the expected title.
-pub fn assertOneCanError(self: *TestEnv, expected: []const u8) !void {
+pub fn assertOneCanError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
 
     const diagnostics = try self.module_env.getDiagnostics();
@@ -683,7 +781,7 @@ pub fn assertOneCanError(self: *TestEnv, expected: []const u8) !void {
 }
 
 /// Assert that canonicalization produced exactly one diagnostic with the expected rendered message.
-pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) !void {
+pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
 
     const diagnostics = try self.module_env.getDiagnostics();
@@ -701,7 +799,7 @@ pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) !void {
 }
 
 /// Assert that the first type error matches the expected title (allows multiple errors).
-pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
+pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
 
     // Assert at least 1 problem
@@ -728,7 +826,7 @@ pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report.title);
 }
 
-fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
+fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) (Allocator.Error || error{WriteFailed})!void {
     buf.clearRetainingCapacity();
     var unmanaged = buf.moveToUnmanaged();
     defer buf.* = unmanaged.toManaged(buf.allocator);
@@ -742,7 +840,7 @@ fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytyp
     };
 }
 
-fn assertNoParseProblems(self: *TestEnv) !void {
+fn assertNoParseProblems(self: *TestEnv) TestEnvError!void {
     if (self.parse_ast.hasErrors()) {
         var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
         defer report_buf.deinit();
@@ -765,7 +863,7 @@ fn assertNoParseProblems(self: *TestEnv) !void {
     }
 }
 
-fn assertNoCanProblems(self: *TestEnv) !void {
+fn assertNoCanProblems(self: *TestEnv) TestEnvError!void {
     var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
     defer report_buf.deinit();
 
@@ -779,7 +877,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
         try renderReportToMarkdownBuffer(&report_buf, &report);
 
         // Ignore "MISSING MAIN! FUNCTION" error - it's expected in test modules
-        if (std.mem.indexOf(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
+        if (std.mem.find(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
             continue;
         }
 
@@ -787,7 +885,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
     }
 }
 
-fn assertNoTypeProblems(self: *TestEnv) !void {
+fn assertNoTypeProblems(self: *TestEnv) TestEnvError!void {
     var report_builder = try report_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test", &.{}, &self.checker.import_mapping, &self.checker.regions);
     defer report_builder.deinit();
 

@@ -1,5 +1,6 @@
 //! Basic types that are useful throughout the compiler.
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const SExprTree = @import("SExprTree.zig");
 pub const Ident = @import("Ident.zig");
@@ -7,12 +8,20 @@ pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const LowLevel = @import("LowLevel.zig").LowLevel;
 pub const RegionInfo = @import("RegionInfo.zig");
+pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
+pub const SerialStringInterner = @import("SerialStringInterner.zig");
+
+/// Single-threaded arena allocator, re-exported from `collections` for callers
+/// that already depend on `base`.
+pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
 pub const safe_memory = @import("safe_memory.zig");
+pub const signal_handler = @import("signal_handler.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
+pub const elf_self_relocate = @import("elf_self_relocate.zig");
 
 pub const target = @import("target.zig");
 pub const DataSpan = @import("DataSpan.zig").DataSpan;
@@ -24,6 +33,17 @@ pub const CommonEnv = @import("CommonEnv.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+
+/// The default general-purpose allocator for the current target (fast, not leak-checking).
+/// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
+/// it's the allocator LLVM already uses) — except on musl, whose malloc is slow,
+/// where smp_allocator wins. Falls back to smp_allocator without libc, and to
+/// wasm_allocator on freestanding.
+pub fn defaultGpa() std.mem.Allocator {
+    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+    if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;
+    return std.heap.smp_allocator;
+}
 
 test {
     const ident = @import("Ident.zig");
@@ -64,6 +84,9 @@ pub const CalledVia = enum {
     /// Try.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
     /// ```
     record_builder,
+    /// This call is the result of desugaring range syntax,
+    /// e.g. `1..<5` becomes `Iter.exclusive_range(1, 5)`.
+    range,
 };
 
 /// Represents a value written as-is in a Roc source file.
@@ -105,55 +128,6 @@ pub const Numeral = union(enum) {
     Frac: FracLiteral,
 };
 
-/// The core allocators for the lifetime of a roc program.
-///
-/// This structure should be used to pass allocators to most functions in Roc.
-/// Data structures should anchor to a generic allocator instead (alloc: Allocator).
-/// It is up to the instanciator of the data structure to pick what it will use.
-/// Generally speaking though, data structures can realloc and will use the gpa.
-///
-/// IMPORTANT: After initialization, Allocators must always be passed by pointer (*Allocators),
-/// never by value. Passing by value will invalidate the arena allocator pointer!
-pub const Allocators = struct {
-    /// The gpa is the general purpose allocator. Anything allocated with the gpa must be freed.
-    /// the gpa should generally be used for large allocations and things that might get reallocated.
-    /// It is best to avoid allocating small or short lived things with the gpa.
-    gpa: std.mem.Allocator,
-
-    /// The arena is an arena allocator that is around for the entire roc compilation.
-    /// The arena should be used for small and miscellaneous allocations.
-    /// Things allocated in arena are expected to never be freed individually.
-    ///
-    /// IMPORTANT: This field contains a pointer to arena_impl. The struct must not be
-    /// moved after initialization, or this pointer will be invalidated.
-    arena: std.mem.Allocator,
-
-    /// The underlying arena allocator implementation (stored to enable deinit)
-    arena_impl: std.heap.ArenaAllocator,
-
-    // TODO: consider if we want to add scratch. It would be an arena reset between each compilation phase.
-    // scratch: ?std.mem.Allocator,
-
-    /// Initialize the Allocators in-place with a general purpose allocator.
-    ///
-    /// IMPORTANT: This struct must be initialized in its final memory location.
-    /// After calling initInPlace(), the struct must only be passed by pointer (*Allocators),
-    /// never by value, or the arena allocator pointer will be invalidated.
-    pub fn initInPlace(self: *Allocators, gpa: std.mem.Allocator) void {
-        self.* = .{
-            .gpa = gpa,
-            .arena = undefined,
-            .arena_impl = std.heap.ArenaAllocator.init(gpa),
-        };
-        self.arena = self.arena_impl.allocator();
-    }
-
-    /// Deinitialize the arena allocator.
-    pub fn deinit(self: *Allocators) void {
-        self.arena_impl.deinit();
-    }
-};
-
 test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
@@ -163,6 +137,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
     std.testing.refAllDecls(@import("safe_memory.zig"));
+    std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));

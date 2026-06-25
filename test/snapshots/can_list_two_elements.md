@@ -8,26 +8,19 @@ type=expr
 [1, "hello"]
 ~~~
 # EXPECTED
-TYPE MISMATCH - can_list_two_elements.md:1:2:1:3
+TYPE MISMATCH - can_list_two_elements.md:1:5:1:12
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_two_elements.md:1:2:1:3:**
-```roc
-[1, "hello"]
-```
- ^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **can_list_two_elements.md:1:5:1:12:**
 ```roc
 [1, "hello"]
 ```
     ^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -55,5 +48,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Dec)"))
 ~~~

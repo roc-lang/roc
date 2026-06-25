@@ -18,7 +18,7 @@ const std = @import("std");
 /// For cases where you need an owned copy, use `getModuleNameAlloc`.
 pub fn getModuleName(path: []const u8) []const u8 {
     const base_name = std.fs.path.basename(path);
-    if (std.mem.lastIndexOfScalar(u8, base_name, '.')) |dot| {
+    if (std.mem.findScalarLast(u8, base_name, '.')) |dot| {
         return base_name[0..dot];
     }
     return base_name;
@@ -82,7 +82,7 @@ pub const QualifiedImport = struct {
 /// Returns null if the import name has no qualifier (no dot).
 /// This function returns slices of the input, so no allocation is needed.
 pub fn parseQualifiedImport(import_name: []const u8) ?QualifiedImport {
-    const dot_idx = std.mem.indexOfScalar(u8, import_name, '.') orelse return null;
+    const dot_idx = std.mem.findScalar(u8, import_name, '.') orelse return null;
     return .{
         .qualifier = import_name[0..dot_idx],
         .module = import_name[dot_idx + 1 ..],

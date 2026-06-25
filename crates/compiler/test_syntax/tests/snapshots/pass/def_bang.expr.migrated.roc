@@ -1,4 +1,0 @@
-launchTheNukes! = |{}|
-boom
-
-launchTheNukes!({})

@@ -1,41 +1,20 @@
 //! Tests for the LSP server lifecycle and request handling.
 
 const std = @import("std");
-const server_module = @import("../server.zig");
-const protocol = @import("../protocol.zig");
-const transport_module = @import("../transport.zig");
+const server_module = @import("lsp").server;
+const protocol = @import("lsp").protocol;
+const helpers = @import("helpers.zig");
+const TestSyntaxDriver = @import("test_syntax_driver.zig").TestSyntaxDriver;
 
-fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
+const frame = helpers.frame;
+const collectResponses = helpers.collectResponses;
+const uriFromPath = helpers.uriFromPath;
+
+fn TestServer(comptime ReaderType: type, comptime WriterType: type) type {
+    return server_module.ServerWithSyntaxDriver(ReaderType, WriterType, TestSyntaxDriver);
 }
 
-fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
-    var reader = std.io.fixedBufferStream(bytes);
-    var sink_storage: [1]u8 = undefined;
-    var sink = std.io.fixedBufferStream(&sink_storage);
-
-    const ReaderType = @TypeOf(reader.reader());
-    const WriterType = @TypeOf(sink.writer());
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader.reader(), sink.writer(), null);
-
-    var responses = std.ArrayList([]u8){};
-    errdefer {
-        for (responses.items) |body| allocator.free(body);
-        responses.deinit(allocator);
-    }
-
-    while (true) {
-        const message = transport.readMessage() catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-        try responses.append(allocator, message);
-    }
-
-    return responses.toOwnedSlice(allocator);
-}
-
-fn lifecycleInput(allocator: std.mem.Allocator) ![]u8 {
+fn lifecycleInput(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
     const messages = [_][]const u8{
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{}}}
         ,
@@ -47,7 +26,7 @@ fn lifecycleInput(allocator: std.mem.Allocator) ![]u8 {
         ,
     };
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     errdefer builder.deinit(allocator);
 
     inline for (messages) |body| {
@@ -66,18 +45,18 @@ test "server handles initialize/shutdown/exit handshake" {
     const input_bytes = try lifecycleInput(allocator);
     defer allocator.free(input_bytes);
 
-    var reader_stream = std.io.fixedBufferStream(input_bytes);
+    const reader_stream: std.Io.Reader = .fixed(input_bytes);
     var writer_buffer: [4096]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
 
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -117,7 +96,7 @@ test "server rejects re-initialization requests" {
         \\{"jsonrpc":"2.0","method":"exit"}
     ;
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
 
     for (&[_][]const u8{ init, reinit, shutdown, exit }) |body| {
@@ -129,17 +108,17 @@ test "server rejects re-initialization requests" {
     const input_bytes = try builder.toOwnedSlice(allocator);
     defer allocator.free(input_bytes);
 
-    var reader_stream = std.io.fixedBufferStream(input_bytes);
+    const reader_stream: std.Io.Reader = .fixed(input_bytes);
     var writer_buffer: [4096]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -157,7 +136,7 @@ test "server tracks documents on didOpen/didChange" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
     defer allocator.free(file_path);
@@ -177,7 +156,7 @@ test "server tracks documents on didOpen/didChange" {
     const change_msg = try frame(allocator, change_body);
     defer allocator.free(change_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg.len);
     try builder.appendSlice(allocator, open_msg);
@@ -185,15 +164,16 @@ test "server tracks documents on didOpen/didChange" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -206,7 +186,7 @@ test "server applies sequential incremental changes in a single didChange" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
     defer allocator.free(file_path);
@@ -230,7 +210,7 @@ test "server applies sequential incremental changes in a single didChange" {
     const change_msg = try frame(allocator, change_body);
     defer allocator.free(change_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg.len);
     try builder.appendSlice(allocator, open_msg);
@@ -238,15 +218,16 @@ test "server applies sequential incremental changes in a single didChange" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -259,7 +240,7 @@ test "server handles burst of incremental didChange messages" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
     defer allocator.free(file_path);
@@ -304,7 +285,7 @@ test "server handles burst of incremental didChange messages" {
     const change_msg_3 = try frame(allocator, change_body_3);
     defer allocator.free(change_msg_3);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg_1.len + change_msg_2.len + change_msg_3.len);
     try builder.appendSlice(allocator, open_msg);
@@ -314,15 +295,16 @@ test "server handles burst of incremental didChange messages" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 4), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -331,15 +313,11 @@ test "server handles burst of incremental didChange messages" {
     try std.testing.expectEqual(@as(i64, 4), doc.version);
 }
 
-fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return @import("../uri.zig").pathToUri(allocator, path);
-}
-
 test "server responds to semantic tokens request" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
     defer allocator.free(file_path);
@@ -385,7 +363,7 @@ test "server responds to semantic tokens request" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -396,17 +374,18 @@ test "server responds to semantic tokens request" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -469,7 +448,7 @@ test "server returns error for semantic tokens on unknown document" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -479,17 +458,18 @@ test "server returns error for semantic tokens on unknown document" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [8192]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 0), server.syntax_checker.check_calls);
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -516,7 +496,7 @@ test "server returns empty tokens for empty document" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "empty.roc" });
     defer allocator.free(file_path);
@@ -561,7 +541,7 @@ test "server returns empty tokens for empty document" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -572,17 +552,18 @@ test "server returns empty tokens for empty document" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);

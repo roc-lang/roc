@@ -5,12 +5,13 @@
 //! 2. Cross-module type resolution for static dispatch is accurate
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
 const can = @import("can");
 
-const Allocators = base.Allocators;
+const CoreCtx = @import("can").CoreCtx;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -19,6 +20,27 @@ const Check = @import("../Check.zig");
 const testing = std.testing;
 const compiled_builtins = @import("compiled_builtins");
 const collections = @import("collections");
+
+fn findTypeDeclByName(env: *const ModuleEnv, name: base.Ident.Idx) ?CIR.Statement.Idx {
+    if (findTypeDeclByNameInSpan(env, env.type_decls, name)) |stmt_idx| return stmt_idx;
+    if (findTypeDeclByNameInSpan(env, env.forward_type_decls, name)) |stmt_idx| return stmt_idx;
+    if (findTypeDeclByNameInSpan(env, env.all_statements, name)) |stmt_idx| return stmt_idx;
+    if (findTypeDeclByNameInSpan(env, env.builtin_statements, name)) |stmt_idx| return stmt_idx;
+    return null;
+}
+
+fn findTypeDeclByNameInSpan(env: *const ModuleEnv, span: CIR.Statement.Span, name: base.Ident.Idx) ?CIR.Statement.Idx {
+    for (0..span.span.len) |offset| {
+        const stmt_idx = env.store.statementAt(span, offset);
+        const header_idx = switch (env.store.getStatement(stmt_idx)) {
+            .s_nominal_decl => |nominal| nominal.header,
+            .s_alias_decl => |alias| alias.header,
+            else => continue,
+        };
+        if (env.store.getTypeHeader(header_idx).name.eql(name)) return stmt_idx;
+    }
+    return null;
+}
 
 /// Wrapper for a loaded compiled module that tracks the buffer
 const LoadedModule = struct {
@@ -34,7 +56,7 @@ const LoadedModule = struct {
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
     const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
@@ -43,7 +65,7 @@ fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.
 }
 
 /// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
     const CompactWriter = collections.CompactWriter;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
     @memcpy(buffer, bin_data);
@@ -60,12 +82,17 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .common = common,
         .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
         .module_kind = serialized_ptr.module_kind.decode(),
+        .module_role = serialized_ptr.module_role,
         .all_defs = serialized_ptr.all_defs,
+        .global_value_defs = serialized_ptr.global_value_defs,
         .all_statements = serialized_ptr.all_statements,
+        .type_decls = serialized_ptr.type_decls,
+        .forward_type_decls = serialized_ptr.forward_type_decls,
         .exports = serialized_ptr.exports,
         .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
         .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
         .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
+        .hosted_entries = serialized_ptr.hosted_entries.deserializeInto(base_ptr),
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
         .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
@@ -78,6 +105,14 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .idents = ModuleEnv.CommonIdents.find(&common),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+        .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
+        .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
+        .file_dependencies = serialized_ptr.file_dependencies.deserializeInto(base_ptr),
+        .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
+        .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
+        .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
+        .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
+        .numeric_suffix_targets = serialized_ptr.numeric_suffix_targets.deserializeInto(base_ptr),
     };
 
     return LoadedModule{
@@ -102,12 +137,9 @@ const MonoTestEnv = struct {
     const Self = @This();
 
     /// Initialize a single module test environment
-    pub fn init(module_name: []const u8, source: []const u8) !Self {
+    pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!Self {
         const gpa = testing.allocator;
-
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
@@ -130,13 +162,13 @@ const MonoTestEnv = struct {
         module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
-        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        can_instance.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
             .builtin_types = .{
                 .builtin_module_env = builtin_module.env,
                 .builtin_indices = builtin_indices,
@@ -161,7 +193,7 @@ const MonoTestEnv = struct {
         try imported_envs_list.append(gpa, builtin_module.env);
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -172,6 +204,7 @@ const MonoTestEnv = struct {
             &module_env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -190,12 +223,9 @@ const MonoTestEnv = struct {
     }
 
     /// Initialize with an imported module
-    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) !Self {
+    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) Allocator.Error!Self {
         const gpa = testing.allocator;
-
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
@@ -223,7 +253,7 @@ const MonoTestEnv = struct {
             if (other_env.module_env.module_kind == .type_module) {
                 const type_ident = other_env.module_env.common.findIdent(other_module_name);
                 if (type_ident) |ident| {
-                    if (other_env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                    if (other_env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                         break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
                     }
                 }
@@ -238,13 +268,13 @@ const MonoTestEnv = struct {
             .qualified_type_ident = other_qualified_ident,
         });
 
-        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        can_instance.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
             .builtin_types = .{
                 .builtin_module_env = builtin_env,
                 .builtin_indices = builtin_indices,
@@ -277,7 +307,7 @@ const MonoTestEnv = struct {
         }
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -288,6 +318,7 @@ const MonoTestEnv = struct {
             &module_env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -308,12 +339,9 @@ const MonoTestEnv = struct {
     const ImportedModule = struct { name: []const u8, env: *const MonoTestEnv };
 
     /// Initialize with multiple imported modules
-    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) !Self {
+    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) Allocator.Error!Self {
         const gpa = testing.allocator;
-
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
@@ -342,7 +370,7 @@ const MonoTestEnv = struct {
                 if (imp.env.module_env.module_kind == .type_module) {
                     const type_ident = imp.env.module_env.common.findIdent(imp.name);
                     if (type_ident) |ident| {
-                        if (imp.env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                        if (imp.env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                             break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
                         }
                     }
@@ -358,13 +386,13 @@ const MonoTestEnv = struct {
             });
         }
 
-        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        can_instance.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
             .builtin_types = .{
                 .builtin_module_env = builtin_env,
                 .builtin_indices = builtin_indices,
@@ -399,7 +427,7 @@ const MonoTestEnv = struct {
         }
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -410,6 +438,7 @@ const MonoTestEnv = struct {
             &module_env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -460,8 +489,9 @@ test "cross-module mono: static dispatch lookup finds method in imported module"
     const get_value_ident = env_a.module_env.common.findIdent("get_value");
     try testing.expect(get_value_ident != null);
 
-    // Check that the method is registered in method_idents
-    const method_lookup = env_a.module_env.lookupMethodIdent(a_type_ident.?, get_value_ident.?);
+    // Check that the method is registered under the source declaration owner.
+    const a_owner = findTypeDeclByName(env_a.module_env, a_type_ident.?) orelse return error.MissingATypeOwner;
+    const method_lookup = env_a.module_env.lookupMethodIdentForOwner(a_owner, get_value_ident.?);
     try testing.expect(method_lookup != null);
 }
 
@@ -525,10 +555,11 @@ test "cross-module mono: static dispatch method registration in type module" {
     try testing.expect(increment_ident != null);
     try testing.expect(get_ident != null);
 
-    // Check method lookups work
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, new_ident.?) != null);
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, increment_ident.?) != null);
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, get_ident.?) != null);
+    // Check method lookups work under the source declaration owner.
+    const counter_owner = findTypeDeclByName(env_a.module_env, counter_ident.?) orelse return error.MissingCounterTypeOwner;
+    try testing.expect(env_a.module_env.lookupMethodIdentForOwner(counter_owner, new_ident.?) != null);
+    try testing.expect(env_a.module_env.lookupMethodIdentForOwner(counter_owner, increment_ident.?) != null);
+    try testing.expect(env_a.module_env.lookupMethodIdentForOwner(counter_owner, get_ident.?) != null);
 }
 
 test "cross-module mono: static dispatch with chained method calls" {
@@ -659,9 +690,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     // Initialize test environment
     const gpa = testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     const module_env = try gpa.create(ModuleEnv);
     defer gpa.destroy(module_env);
@@ -685,13 +714,13 @@ test "type checker catches polymorphic recursion (infinite type)" {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     try module_env.initCIRFields("Test");
 
-    can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    can_instance.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -717,7 +746,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     try imported_envs_list.append(gpa, builtin_module.env);
 
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
     var checker = try Check.init(
         gpa,
@@ -728,6 +757,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
         &module_env.store.regions,
         module_builtin_ctx,
     );
+    checker.fixupTypeWriter();
     defer checker.deinit();
 
     try checker.checkFile();

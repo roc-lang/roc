@@ -57,9 +57,9 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
 UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
 MODULE NOT FOUND - can_import_type_annotations.md:20:14:20:21
 UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
-MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
+MODULE NOT FOUND - can_import_type_annotations.md:24:29:24:36
 MODULE NOT FOUND - can_import_type_annotations.md:24:53:24:59
-MODULE NOT IMPORTED - can_import_type_annotations.md:24:61:24:78
+MODULE NOT FOUND - can_import_type_annotations.md:24:72:24:78
 UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -206,15 +206,15 @@ config = Json.defaultConfig
          ^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Json.Parser` imported into this Roc file.
+**MODULE NOT FOUND**
+The type `Parser.Config` is qualified by the module `json.Json`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**can_import_type_annotations.md:24:18:24:36:**
+You're attempting to use this type here:
+**can_import_type_annotations.md:24:29:24:36:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 ```
-                 ^^^^^^^^^^^^^^^^^^
+                            ^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -228,15 +228,15 @@ advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
                                                     ^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Json.Parser` imported into this Roc file.
+**MODULE NOT FOUND**
+The type `Parser.Error` is qualified by the module `json.Json`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**can_import_type_annotations.md:24:61:24:78:**
+You're attempting to use this type here:
+**can_import_type_annotations.md:24:72:24:78:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 ```
-                                                            ^^^^^^^^^^^^^^^^^
+                                                                       ^^^^^^
 
 
 **UNDEFINED VARIABLE**

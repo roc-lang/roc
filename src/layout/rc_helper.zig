@@ -109,8 +109,9 @@ pub const Resolver = struct {
         if (!self.store.layoutContainsRefcounted(l)) return .noop;
 
         return switch (l.tag) {
-            .zst => .noop,
-            .scalar => if (l.data.scalar.tag == .str)
+            // ptr is never refcounted, so the early return above already handled it.
+            .zst, .ptr => .noop,
+            .scalar => if (l.getScalar().tag == .str)
                 switch (helper_key.op) {
                     .incref => .str_incref,
                     .decref => .str_decref,
@@ -134,16 +135,16 @@ pub const Resolver = struct {
                 .free => .erased_callable_free,
             },
             .struct_ => .{ .struct_ = .{
-                .struct_idx = l.data.struct_.idx,
+                .struct_idx = l.getStruct().idx,
                 .child_op = nestedDropOp(helper_key.op),
             } },
             .tag_union => .{ .tag_union = .{
-                .tag_union_idx = l.data.tag_union.idx,
+                .tag_union_idx = l.getTagUnion().idx,
                 .child_op = nestedDropOp(helper_key.op),
             } },
             .closure => .{ .closure = .{
                 .op = nestedDropOp(helper_key.op),
-                .layout_idx = l.data.closure.captures_layout_idx,
+                .layout_idx = l.getClosure().captures_layout_idx,
             } },
         };
     }
@@ -155,6 +156,8 @@ pub const Resolver = struct {
 
     /// Return the child step for one refcounted struct field, if any.
     pub fn structFieldPlan(self: *const Resolver, struct_plan: StructPlan, field_index: u32) ?FieldPlan {
+        // Padding spacers hold uninitialized bytes, never a refcounted value.
+        if (self.store.getStructFieldIsPadding(struct_plan.struct_idx, @intCast(field_index))) return null;
         const field_layout_idx = self.store.getStructFieldLayout(struct_plan.struct_idx, @intCast(field_index));
         const field_layout = self.store.getLayout(field_layout_idx);
         if (!self.store.layoutContainsRefcounted(field_layout)) return null;

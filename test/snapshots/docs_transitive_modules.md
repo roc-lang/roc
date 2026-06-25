@@ -46,12 +46,10 @@ platform ""
     requires {} { main : Str }
     exposes []
     packages {}
-    provides { main_for_host: "main" }
+    provides { "roc_main": main_for_host }
     targets: {
-        files: "targets/",
-        exe: {
-            x64glibc: [app],
-        }
+        inputs_dir: "targets/",
+        x64glibc: { inputs: [app] },
     }
 
 main_for_host : Str
@@ -61,16 +59,6 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
-    (name "app")
-    (package "app")
-    (kind app)
-    (entry
-      (name "main")
-      (kind value)
-      (type (type-ref (name "Str")))
-    )
-  )
   (module
     (name "Geometry")
     (package "app")
@@ -116,6 +104,16 @@ main_for_host = main
         (type (fn (type-ref (name "U64")) (type-ref (name "Str"))))
         (doc "Show a number as a string.")
       )
+    )
+  )
+  (module
+    (name "app")
+    (package "app")
+    (kind app)
+    (entry
+      (name "main")
+      (kind value)
+      (type (type-ref (name "Str")))
     )
   )
   (module

@@ -66,17 +66,28 @@ match person {
 									(sub-pattern
 										(p-assign (ident "userAge"))))))))
 				(value
-					(e-string
-						(e-literal (string "User "))
-						(e-lookup-local
-							(p-assign (ident "userName")))
-						(e-literal (string " is "))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 32)
-							(receiver
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "userName"))))
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-dispatch-call (method "to_str") (constraint-fn-var 32)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "userAge"))))
+								(args)))
+						(e-interpolation (constraint-fn-var 91)
+							(first
+								(e-literal (string "User ")))
+							(parts
 								(e-lookup-local
-									(p-assign (ident "userAge"))))
-							(args))
-						(e-literal (string " years old"))))))))
+									(p-assign (ident "#interp_0")))
+								(e-literal (string " is "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string " years old"))))))))))
 ~~~
 # TYPES
 ~~~clojure

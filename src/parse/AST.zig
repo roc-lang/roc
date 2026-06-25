@@ -16,6 +16,8 @@ const base = @import("base");
 const reporting = @import("reporting");
 
 const NodeStore = @import("NodeStore.zig");
+pub const DeclIndex = @import("DeclIndex.zig");
+const NumericLiteral = @import("NumericLiteral.zig");
 pub const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const SExprTree = base.SExprTree;
@@ -34,6 +36,7 @@ gpa: Allocator,
 env: *CommonEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
+decl_index: DeclIndex,
 root_node_idx: u32 = 0,
 tokenize_diagnostics: std.ArrayList(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayList(AST.Diagnostic),
@@ -130,6 +133,7 @@ pub fn deinit(self: *AST) void {
 
     self.tokens.deinit(gpa);
     self.store.deinit();
+    self.decl_index.deinit();
     self.tokenize_diagnostics.deinit(gpa);
     self.parse_diagnostics.deinit(gpa);
 
@@ -137,7 +141,7 @@ pub fn deinit(self: *AST) void {
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
-pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) !reporting.Report {
+pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
     const title = switch (diagnostic.tag) {
         .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
         .AsciiControl => "ASCII CONTROL CHARACTER",
@@ -239,7 +243,7 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
 }
 
 /// Convert a parse diagnostic to a Report for rendering
-pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
+pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!reporting.Report {
     const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
 
     // Ensure region bounds are valid for source slicing
@@ -264,6 +268,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .crash_statement_in_expr_position => "CRASH IN EXPRESSION",
         .return_outside_function => "RETURN OUTSIDE FUNCTION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
@@ -275,6 +280,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
+        .deprecated_number_suffix => "DEPRECATED NUMBER SUFFIX",
+        .expr_double_dot_is_not_range => "NOT A RANGE OPERATOR",
         else => "PARSE ERROR",
     };
 
@@ -405,6 +412,18 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addText("Tip: ");
                 try report.document.addReflowingTextWithBackticks(tip);
             }
+        },
+        .crash_statement_in_expr_position => {
+            try report.document.addReflowingText("The `crash` keyword starts a statement, but this position needs an expression.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Wrap it in a block expression:");
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(
+                \\{
+                \\    crash "unreachable"
+                \\}
+            );
         },
         .return_outside_function => {
             try report.document.addText("The ");
@@ -565,6 +584,49 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
         },
+        .deprecated_number_suffix => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const split = NumericLiteral.deprecatedSuffixFromSource(token_text);
+            const type_name = split.deprecated_suffix.newTypeName() orelse "";
+            const suggested = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ split.number_text, type_name });
+            defer allocator.free(suggested);
+
+            const owned_suffix = try report.addOwnedString(split.deprecated_suffix_text);
+            const owned_suggested = try report.addOwnedString(suggested);
+
+            try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                base.RegionInfo.position(self.env.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
+                    return report;
+                },
+                .error_highlight,
+                try report.addOwnedString(filename),
+                self.env.source,
+                env.line_starts.items.items,
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The ");
+            try report.document.addInlineCode(owned_suffix);
+            try report.document.addReflowingText(" suffix is deprecated. Use ");
+            try report.document.addInlineCode(owned_suggested);
+            try report.document.addReflowingText(" instead.");
+            return report;
+        },
+        .expr_double_dot_is_not_range => {
+            try report.document.addInlineCode("..");
+            try report.document.addText(" is not an operator. For an exclusive range use ");
+            try report.document.addInlineCode("..<");
+            try report.document.addText("; for an inclusive range use ");
+            try report.document.addInlineCode("..=");
+            try report.document.addText(".");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -622,6 +684,11 @@ pub const Diagnostic = struct {
         expected_provides_open_square,
         expected_provides_close_curly,
         expected_provides_open_curly,
+        expected_symbol_string,
+        expected_symbol_map_colon,
+        expected_symbol_map_function,
+        expected_hosted_open_curly,
+        expected_hosted_close_curly,
         expected_requires,
         expected_requires_rigids_open_curly,
         expected_requires_signatures_close_curly,
@@ -666,6 +733,7 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
+        crash_statement_in_expr_position,
         return_outside_function,
         expected_expr_record_field_name,
         expected_ty_apply_close_round,
@@ -679,6 +747,8 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
+        /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
+        expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,
         var_must_have_ident,
         var_expected_equals,
@@ -699,6 +769,7 @@ pub const Diagnostic = struct {
         file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
+        deprecated_number_suffix,
 
         // Targets section parse errors
         expected_targets_colon,
@@ -880,11 +951,11 @@ comptime {
 }
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    _ = std.testing.refAllDecls(@This());
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
-pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: anytype) !void {
+pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
     const file = ast.store.getFile();
 
     var tree = SExprTree.init(gpa);
@@ -910,7 +981,7 @@ pub const Statement = union(enum) {
     decl: Decl,
     @"var": struct {
         name: Token.Idx,
-        body: Expr.Idx,
+        body: ?Expr.Idx,
         region: TokenizedRegion,
     },
     expr: struct {
@@ -1025,7 +1096,9 @@ pub const Statement = union(enum) {
                 try tree.pushStringPair("name", name_str);
                 const attrs = tree.beginNode();
 
-                try ast.store.getExpr(v.body).pushToSExprTree(gpa, env, ast, tree);
+                if (v.body) |body| {
+                    try ast.store.getExpr(body).pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -1270,6 +1343,7 @@ pub const Statement = union(enum) {
 pub const Block = struct {
     /// The statements that constitute the block
     statements: Statement.Span,
+    scope: DeclIndex.ScopeIdx,
     region: TokenizedRegion,
 
     /// Push this Block to the SExprTree stack
@@ -1299,6 +1373,7 @@ pub const Block = struct {
 pub const Associated = struct {
     /// The statements in the associated items block
     statements: Statement.Span,
+    scope: DeclIndex.ScopeIdx,
     region: TokenizedRegion,
 };
 
@@ -1321,16 +1396,30 @@ pub const Pattern = union(enum) {
     },
     int: struct {
         number_tok: Token.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     frac: struct {
         number_tok: Token.Idx,
+        literal: NumericLiteral.Idx,
+        region: TokenizedRegion,
+    },
+    typed_int: struct {
+        number_tok: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
+        region: TokenizedRegion,
+    },
+    typed_frac: struct {
+        number_tok: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     string: struct {
         string_tok: Token.Idx,
         region: TokenizedRegion,
-        expr: Expr.Idx,
+        parts: PatternStringPart.Span,
     },
     single_quote: struct {
         token: Token.Idx,
@@ -1380,6 +1469,8 @@ pub const Pattern = union(enum) {
             .tag => |p| p.region,
             .int => |p| p.region,
             .frac => |p| p.region,
+            .typed_int => |p| p.region,
+            .typed_frac => |p| p.region,
             .string => |p| p.region,
             .single_quote => |p| p.region,
             .record => |p| p.region,
@@ -1456,12 +1547,33 @@ pub const Pattern = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
+            .typed_int => |num| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-typed-int");
+                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
+                try tree.pushStringPair("type", env.getIdent(num.type_ident));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_frac => |num| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-typed-frac");
+                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
+                try tree.pushStringPair("type", env.getIdent(num.type_ident));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .string => |str| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-string");
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
                 try tree.pushStringPair("raw", ast.resolve(str.string_tok));
                 const attrs = tree.beginNode();
+                for (ast.store.patternStringPartSlice(str.parts)) |part_idx| {
+                    try ast.store.getPatternStringPart(part_idx).pushToSExprTree(env, ast, tree);
+                }
                 try tree.endNode(begin, attrs);
             },
             .single_quote => |sq| {
@@ -1483,7 +1595,9 @@ pub const Pattern = union(enum) {
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try ast.appendRegionInfoToSexprTree(env, tree, field.region);
-                    try tree.pushStringPair("name", ast.resolve(field.name));
+                    if (field.name) |name_tok| {
+                        try tree.pushStringPair("name", ast.resolve(name_tok));
+                    }
                     try tree.pushBoolPair("rest", field.rest);
                     const attrs2 = tree.beginNode();
 
@@ -1572,6 +1686,47 @@ pub const Pattern = union(enum) {
     }
 };
 
+/// A part of a string pattern. Unlike expression strings, interpolation holes
+/// in patterns are pattern binders or discards, never expressions.
+pub const PatternStringPart = union(enum) {
+    text: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    capture: struct {
+        name: ?Token.Idx,
+        region: TokenizedRegion,
+    },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+
+    pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) Allocator.Error!void {
+        switch (self) {
+            .text => |text| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-text");
+                try ast.appendRegionInfoToSexprTree(env, tree, text.region);
+                try tree.pushStringPair("raw", ast.resolve(text.token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .capture => |capture| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-capture");
+                try ast.appendRegionInfoToSexprTree(env, tree, capture.region);
+                if (capture.name) |name| {
+                    try tree.pushStringPair("name", ast.resolve(name));
+                } else {
+                    try tree.pushBoolPair("discard", true);
+                }
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+        }
+    }
+};
+
 /// TODO
 pub const BinOp = struct {
     left: Expr.Idx,
@@ -1636,6 +1791,7 @@ pub const Collection = struct {
 pub const File = struct {
     header: Header.Idx,
     statements: Statement.Span,
+    scope: DeclIndex.ScopeIdx,
     region: TokenizedRegion,
 
     /// Push this File to the SExprTree stack
@@ -1684,7 +1840,8 @@ pub const Header = union(enum) {
         requires_entries: RequiresEntry.Span, // [Model : model] for main : () -> { ... }
         exposes: Collection.Idx,
         packages: Collection.Idx,
-        provides: Collection.Idx,
+        provides: SymbolMapEntry.Span, // provides { "roc_main": main_for_host! }
+        hosted: SymbolMapEntry.Span, // hosted { "roc_stdout_line": Stdout.line! }
         targets: ?TargetsSection.Idx, // Required for new platforms, optional during migration
         region: TokenizedRegion,
     },
@@ -1873,17 +2030,52 @@ pub const Header = union(enum) {
                 try tree.endNode(packages_begin, attrs5);
 
                 // Provides
-                const provides = ast.store.getCollection(a.provides);
-                const provides_items = ast.store.recordFieldSlice(.{ .span = provides.span });
                 const provides_begin = tree.beginNode();
                 try tree.pushStaticAtom("provides");
-                try ast.appendRegionInfoToSexprTree(env, tree, provides.region);
                 const attrs6 = tree.beginNode();
-                for (provides_items) |item_idx| {
-                    const item = ast.store.getRecordField(item_idx);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                for (ast.store.symbolMapEntrySlice(a.provides)) |entry_idx| {
+                    const entry = ast.store.getSymbolMapEntry(entry_idx);
+                    const entry_begin = tree.beginNode();
+                    try tree.pushStaticAtom("symbol-map-entry");
+                    try tree.pushStringPair("symbol", ast.resolve(entry.symbol));
+                    if (entry.module) |module_tok| {
+                        try tree.pushStringPair("module", ast.resolve(module_tok));
+                    }
+                    try tree.pushStringPair("func", ast.resolve(entry.func));
+                    const entry_attrs = tree.beginNode();
+                    try tree.endNode(entry_begin, entry_attrs);
                 }
                 try tree.endNode(provides_begin, attrs6);
+
+                // Hosted
+                if (a.hosted.span.len > 0) {
+                    const hosted_begin = tree.beginNode();
+                    try tree.pushStaticAtom("hosted");
+                    const attrs7 = tree.beginNode();
+                    for (ast.store.symbolMapEntrySlice(a.hosted)) |entry_idx| {
+                        const entry = ast.store.getSymbolMapEntry(entry_idx);
+                        const entry_begin = tree.beginNode();
+                        try tree.pushStaticAtom("symbol-map-entry");
+                        try tree.pushStringPair("symbol", ast.resolve(entry.symbol));
+                        if (entry.module) |module_tok| {
+                            try tree.pushStringPair("module", ast.resolve(module_tok));
+                        }
+                        // Functions on nested type modules span several
+                        // tokens (Foo.Idx.get!); cover everything after the
+                        // module, stripping the leading dot.
+                        const func_text = blk: {
+                            const module_tok = entry.module orelse break :blk ast.resolve(entry.func);
+                            if (entry.func == module_tok + 1) break :blk ast.resolve(entry.func);
+                            const first = ast.tokens.resolve(module_tok + 1);
+                            const last = ast.tokens.resolve(entry.func);
+                            break :blk ast.env.source[first.start.offset + 1 .. last.end.offset];
+                        };
+                        try tree.pushStringPair("func", func_text);
+                        const entry_attrs = tree.beginNode();
+                        try tree.endNode(entry_begin, entry_attrs);
+                    }
+                    try tree.endNode(hosted_begin, attrs7);
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -1918,9 +2110,7 @@ pub const Header = union(enum) {
                 try tree.pushStaticAtom("default-app");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
-                var buf: [32]u8 = undefined;
-                const idx_str = std.fmt.bufPrint(&buf, "{d}", .{a.main_fn_idx}) catch "(error)";
-                try tree.pushStringPair("main-fn-idx", idx_str);
+                try tree.pushStringPairFmt("main-fn-idx", "{d}", .{a.main_fn_idx});
                 try tree.endNode(begin, attrs);
             },
             .malformed => |a| {
@@ -2077,27 +2267,29 @@ pub const ExposedItem = union(enum) {
 
 /// A targets section in a platform header
 pub const TargetsSection = struct {
-    files_path: ?Token.Idx, // "files:" directive string literal
-    exe: ?TargetLinkType.Idx, // exe: { ... }
-    static_lib: ?TargetLinkType.Idx, // static_lib: { ... }
-    // shared_lib to be added later
+    inputs_dir: ?Token.Idx, // "inputs_dir:" directive string literal
+    entries: TargetEntry.Span, // per-target entries
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
 };
 
-/// A link type section (exe, static_lib, shared_lib)
-pub const TargetLinkType = struct {
-    entries: TargetEntry.Span,
+/// An entry mapping a linker symbol string to a platform function:
+/// `"roc_main": main_for_host!` (provides) or `"roc_stdout_line": Stdout.line!` (hosted)
+pub const SymbolMapEntry = struct {
+    symbol: Token.Idx, // StringPart token holding the linker symbol text
+    module: ?Token.Idx, // UpperIdent for qualified functions (e.g. Stdout); null for bare ones
+    func: Token.Idx, // LowerIdent (or NoSpaceDotLowerIdent when qualified) naming the function
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
 };
 
-/// Single target entry: x64musl: ["crt1.o", "host.o", app]
+/// Single target entry: x64musl: { inputs: ["crt1.o", "host.o", app], output: Exe }
 pub const TargetEntry = struct {
     target: Token.Idx, // LowerIdent token (e.g., x64musl, arm64mac)
-    files: TargetFile.Span,
+    config: TargetConfig.Idx,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -2108,6 +2300,38 @@ pub const TargetEntry = struct {
 pub const TargetFile = union(enum) {
     string_literal: Token.Idx, // "crt1.o"
     special_ident: Token.Idx, // app, win_gui
+    malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// Per-target configuration inside a target entry record.
+pub const TargetConfig = struct {
+    entries: TargetConfigEntry.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// A single field in a target configuration record.
+pub const TargetConfigEntry = struct {
+    name: Token.Idx,
+    value: TargetConfigValue.Idx,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// Literal or top-level identifier syntax accepted in target configuration.
+pub const TargetConfigValue = union(enum) {
+    int_literal: Token.Idx,
+    string_literal: Token.Idx,
+    tag_literal: Token.Idx,
+    ident: Token.Idx,
+    list: TargetConfigValue.Span,
+    files: TargetFile.Span,
     malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
 
     pub const Idx = enum(u32) { _ };
@@ -2558,24 +2782,28 @@ pub const WhereClause = union(enum) {
 pub const Expr = union(enum) {
     int: struct {
         token: Token.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     frac: struct {
         token: Token.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     /// An integer with an explicit type annotation: `123.U64`
-    /// The type_token contains the `.U64` part (NoSpaceDotUpperIdent)
+    /// Deprecated suffix syntax such as `123u64` is desugared to this form during parsing.
     typed_int: struct {
         token: Token.Idx,
-        type_token: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     /// A fractional number with an explicit type annotation: `3.14.Dec`
-    /// The type_token contains the `.Dec` part (NoSpaceDotUpperIdent)
+    /// Deprecated suffix syntax such as `3.14dec` is desugared to this form during parsing.
     typed_frac: struct {
         token: Token.Idx,
-        type_token: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     single_quote: struct {
@@ -2588,6 +2816,8 @@ pub const Expr = union(enum) {
     },
     string: StringLike,
     multiline_string: StringLike,
+    typed_string: TypedStringLike,
+    typed_multiline_string: TypedStringLike,
     list: struct {
         items: Expr.Span,
         region: TokenizedRegion,
@@ -2666,7 +2896,19 @@ pub const Expr = union(enum) {
         fields: RecordField.Span,
         region: TokenizedRegion,
     },
+    nominal_record: struct {
+        mapper: Expr.Idx,
+        backing: Expr.Idx,
+        region: TokenizedRegion,
+    },
     ellipsis: struct {
+        region: TokenizedRegion,
+    },
+    @"break": struct {
+        region: TokenizedRegion,
+    },
+    @"return": struct {
+        expr: Expr.Idx,
         region: TokenizedRegion,
     },
     block: Block,
@@ -2687,10 +2929,18 @@ pub const Expr = union(enum) {
         parts: Expr.Span,
     };
 
+    /// A string literal with an explicit type suffix, e.g. `"foo".MyType`.
+    pub const TypedStringLike = struct {
+        token: Token.Idx,
+        type_ident: base.Ident.Idx,
+        region: TokenizedRegion,
+        parts: Expr.Span,
+    };
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn as_string_part_region(self: @This()) !TokenizedRegion {
+    pub fn as_string_part_region(self: @This()) Allocator.Error!TokenizedRegion {
         switch (self) {
             .string_part => |part| return part.region,
             else => return error.ExpectedStringPartRegion,
@@ -2707,6 +2957,8 @@ pub const Expr = union(enum) {
             .typed_frac => |e| e.region,
             .string => |e| e.region,
             .multiline_string => |e| e.region,
+            .typed_string => |e| e.region,
+            .typed_multiline_string => |e| e.region,
             .tag => |e| e.region,
             .list => |e| e.region,
             .record => |e| e.region,
@@ -2727,7 +2979,10 @@ pub const Expr = union(enum) {
             .dbg => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
+            .nominal_record => |e| e.region,
             .ellipsis => |e| e.region,
+            .@"break" => |e| e.region,
+            .@"return" => |e| e.region,
             .for_expr => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
@@ -2765,7 +3020,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-typed-int");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                try tree.pushStringPair("type", ast.resolve(a.type_token));
+                try tree.pushStringPair("type", env.getIdent(a.type_ident));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2774,7 +3029,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-typed-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                try tree.pushStringPair("type", ast.resolve(a.type_token));
+                try tree.pushStringPair("type", env.getIdent(a.type_ident));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2815,6 +3070,34 @@ pub const Expr = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-multiline-string");
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const attrs = tree.beginNode();
+
+                for (ast.store.exprSlice(str.parts)) |part_id| {
+                    const part_expr = ast.store.getExpr(part_id);
+                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .typed_string => |str| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-string");
+                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                try tree.pushStringPair("type", env.getIdent(str.type_ident));
+                const attrs = tree.beginNode();
+
+                for (ast.store.exprSlice(str.parts)) |part_id| {
+                    const part_expr = ast.store.getExpr(part_id);
+                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .typed_multiline_string => |str| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-multiline-string");
+                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                try tree.pushStringPair("type", env.getIdent(str.type_ident));
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {
@@ -3030,10 +3313,45 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .nominal_record => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-nominal-record");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                const mapper_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("mapper");
+                try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
+                const mapper_attrs = tree.beginNode();
+                try tree.endNode(mapper_wrapper, mapper_attrs);
+
+                const backing_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("backing");
+                try ast.store.getExpr(a.backing).pushToSExprTree(gpa, env, ast, tree);
+                const backing_attrs = tree.beginNode();
+                try tree.endNode(backing_wrapper, backing_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
             .ellipsis => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-ellipsis");
                 const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"break" => |b| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-break");
+                try ast.appendRegionInfoToSexprTree(env, tree, b.region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"return" => |ret| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-return");
+                try ast.appendRegionInfoToSexprTree(env, tree, ret.region);
+                const attrs = tree.beginNode();
+                try ast.store.getExpr(ret.expr).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
             },
             .block => |block| {
@@ -3153,7 +3471,8 @@ pub const Expr = union(enum) {
 
 /// TODO
 pub const PatternRecordField = struct {
-    name: Token.Idx,
+    /// The field name, or `null` for a bare rest pattern (`..`), which has no name.
+    name: ?Token.Idx,
     value: ?Pattern.Idx,
     rest: bool,
     region: TokenizedRegion,

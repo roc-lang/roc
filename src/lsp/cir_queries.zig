@@ -162,6 +162,7 @@ const FindTypeContext = struct {
         const anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
             .s_decl => |d| d.anno,
             .s_var => |v| v.anno,
+            .s_var_uninitialized => |v| v.anno,
             else => null,
         };
 
@@ -173,6 +174,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
+                    .s_var_uninitialized => |v| v.pattern_idx,
                     else => null,
                 };
                 if (pattern_idx) |pat| {
@@ -189,6 +191,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
+                    .s_var_uninitialized => |v| v.pattern_idx,
                     else => null,
                 };
                 if (pattern_idx) |pat| {
@@ -229,7 +232,7 @@ const FindLookupContext = struct {
                     ctx.result = expr_idx;
                 }
             },
-            .e_method_call, .e_dispatch_call, .e_type_method_call, .e_type_dispatch_call, .e_structural_eq, .e_method_eq => {
+            .e_method_call, .e_dispatch_call, .e_type_method_call, .e_type_dispatch_call, .e_structural_eq, .e_structural_hash, .e_method_eq => {
                 const size = regionSize(region);
                 if (size < ctx.best_size) {
                     ctx.best_size = size;
@@ -261,6 +264,11 @@ const CollectReferencesContext = struct {
     allocator: std.mem.Allocator,
     results: *std.ArrayList(LspRange),
 
+    /// Records an OOM that occurred inside a visit callback. The CirVisitor
+    /// callback signature returns `VisitAction` (no error channel), so OOM is
+    /// stashed here and re-raised by the lsp-level entry point after the walk.
+    oom: ?std.mem.Allocator.Error = null,
+
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *CollectReferencesContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
         switch (expr) {
@@ -268,7 +276,10 @@ const CollectReferencesContext = struct {
                 if (@intFromEnum(lookup.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
                     const region = ctx.store.getExprRegion(expr_idx);
                     if (regionToRange(ctx.module_env, region)) |range| {
-                        ctx.results.append(ctx.allocator, range) catch {};
+                        ctx.results.append(ctx.allocator, range) catch |err| {
+                            ctx.oom = err;
+                            return .stop;
+                        };
                     }
                 }
             },
@@ -473,8 +484,9 @@ pub fn collectLookupReferences(
     module_env: *ModuleEnv,
     target_pattern: CIR.Pattern.Idx,
     allocator: std.mem.Allocator,
-) std.ArrayList(LspRange) {
-    var results = std.ArrayList(LspRange){};
+) std.mem.Allocator.Error!std.ArrayList(LspRange) {
+    var results: std.ArrayList(LspRange) = .empty;
+    errdefer results.deinit(allocator);
 
     var ctx = CollectReferencesContext{
         .store = &module_env.store,
@@ -500,6 +512,9 @@ pub fn collectLookupReferences(
     if (!visitor.stopped) {
         visitor.walkModule(&module_env.store, module_env.all_statements);
     }
+
+    // Re-raise any OOM that was stashed by a visit callback.
+    if (ctx.oom) |err| return err;
 
     return results;
 }

@@ -21,7 +21,11 @@ This expression is doing an equality check on a type that doesn't support equali
 
 The type is:
 
-    { age: Str, name: Str, process: a -> a }
+    { age: a, name: b, process: c -> c }
+      where [
+        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
+      ]
 
 This record does not support equality because these fields have types that don't support **is_eq**:
 
@@ -69,35 +73,37 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "eq")
-	(e-record
-		(fields
-			(field (name "name")
-				(e-string
-					(e-literal (string "Alice"))))
-			(field (name "age")
-				(e-string
-					(e-literal (string "30"))))
-			(field (name "process")
-				(e-lambda
-					(args
-						(p-assign (ident "x")))
-					(e-lookup-local
-						(p-assign (ident "x")))))))
-	(e-record
-		(fields
-			(field (name "name")
-				(e-string
-					(e-literal (string "Bob"))))
-			(field (name "age")
-				(e-string
-					(e-literal (string "25"))))
-			(field (name "process")
-				(e-lambda
-					(args
-						(p-assign (ident "y")))
-					(e-lookup-local
-						(p-assign (ident "y"))))))))
+(e-method-eq (negated "false")
+	(lhs
+		(e-record
+			(fields
+				(field (name "name")
+					(e-string
+						(e-literal (string "Alice"))))
+				(field (name "age")
+					(e-string
+						(e-literal (string "30"))))
+				(field (name "process")
+					(e-lambda
+						(args
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "x"))))))))
+	(rhs
+		(e-record
+			(fields
+				(field (name "name")
+					(e-string
+						(e-literal (string "Bob"))))
+				(field (name "age")
+					(e-string
+						(e-literal (string "25"))))
+				(field (name "process")
+					(e-lambda
+						(args
+							(p-assign (ident "y")))
+						(e-lookup-local
+							(p-assign (ident "y")))))))))
 ~~~
 # TYPES
 ~~~clojure

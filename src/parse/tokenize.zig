@@ -6,6 +6,7 @@
 //! them as offsets into the source code with additional metadata.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const tracy = @import("tracy");
 
@@ -114,6 +115,8 @@ pub const Token = struct {
         OpLessThanOrEq,
         OpBackArrow,
         OpLessThan,
+        OpDoubleDotLessThan, // ..<  (exclusive range)
+        OpDoubleDotEquals, // ..=  (inclusive range)
         OpEquals,
         OpColonEqual,
         OpDoubleColon,
@@ -220,6 +223,8 @@ pub const Token = struct {
                 .OpLessThanOrEq,
                 .OpBackArrow,
                 .OpLessThan,
+                .OpDoubleDotLessThan,
+                .OpDoubleDotEquals,
                 .OpEquals,
                 .OpColonEqual,
                 .OpDoubleColon,
@@ -448,6 +453,11 @@ pub const TokenizedBuffer = struct {
 
     /// Loads the current token if it is an identifier.
     /// Otherwise returns null.
+    /// Returns the tag of the token at the given index.
+    pub fn tokenTag(self: *const TokenizedBuffer, token: Token.Idx) Token.Tag {
+        return self.tokens.items(.tag)[@intCast(token)];
+    }
+
     pub fn resolveIdentifier(self: *const TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
         const tag = self.tokens.items(.tag)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];
@@ -675,7 +685,7 @@ pub const Cursor = struct {
     /// Chomps an exponent including sign and digits, if one if found.
     /// Returns true if an exponent was chomped.
     /// Will error if the exponent has no digits.
-    pub fn chompExponent(self: *Cursor) !bool {
+    pub fn chompExponent(self: *Cursor) error{EmptyExponent}!bool {
         if (self.peek() orelse 0 == 'e' or self.peek() orelse 0 == 'E') {
             self.pos += 1;
             // Optional sign
@@ -736,7 +746,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 10.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase10(self: *Cursor) !void {
+    pub fn chompIntegerBase10(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if (c >= '0' and c <= '9') {
@@ -755,7 +765,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 16.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase16(self: *Cursor) !void {
+    pub fn chompIntegerBase16(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')) {
@@ -774,7 +784,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 8.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase8(self: *Cursor) !void {
+    pub fn chompIntegerBase8(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if (c >= '0' and c <= '7') {
@@ -793,7 +803,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 2.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase2(self: *Cursor) !void {
+    pub fn chompIntegerBase2(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if (c == '0' or c == '1') {
@@ -863,11 +873,11 @@ pub const Cursor = struct {
         }
     }
 
-    pub fn chompEscapeSequence(self: *Cursor) !void {
+    pub fn chompEscapeSequence(self: *Cursor) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
         return self.chompEscapeSequenceWithQuote(null);
     }
 
-    pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) !void {
+    pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
         // Store the start position of the escape sequence (before the backslash)
         const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
 
@@ -1144,7 +1154,7 @@ pub const Tokenizer = struct {
         tag: Token.Tag,
         tok_offset: Token.Idx,
         text_offset: Token.Idx,
-    ) !void {
+    ) Allocator.Error!void {
         const text = self.cursor.buf[text_offset..self.cursor.pos];
         const id = try self.env.insertIdent(gpa, base.Ident.for_text(text));
 
@@ -1199,6 +1209,12 @@ pub const Tokenizer = struct {
                             if (self.cursor.peekAt(2) == '.') {
                                 self.cursor.pos += 3;
                                 try self.pushTokenNormalHere(gpa, .TripleDot, start);
+                            } else if (self.cursor.peekAt(2) == '<') {
+                                self.cursor.pos += 3;
+                                try self.pushTokenNormalHere(gpa, .OpDoubleDotLessThan, start);
+                            } else if (self.cursor.peekAt(2) == '=') {
+                                self.cursor.pos += 3;
+                                try self.pushTokenNormalHere(gpa, .OpDoubleDotEquals, start);
                             } else {
                                 self.cursor.pos += 2;
                                 try self.pushTokenNormalHere(gpa, .DoubleDot, start);
@@ -1683,7 +1699,7 @@ pub const Tokenizer = struct {
     }
 };
 
-fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
+fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
     var messages: [10]Diagnostic = undefined;
 
     var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
@@ -1704,7 +1720,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
 
 /// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) std.mem.Allocator.Error!void {
-    var env = try CommonEnv.init(gpa, gpa.dupe(u8, "") catch unreachable);
+    var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
     defer env.deinit(gpa);
 
     // Initial tokenization.
@@ -1818,7 +1834,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     }
 }
 
-fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.array_list.Managed(u8) {
+fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) (Allocator.Error || error{Unsupported})!std.array_list.Managed(u8) {
     // Create an arraylist to store the new buffer.
     var buf2 = try std.array_list.Managed(u8).initCapacity(alloc, buf.len);
     errdefer buf2.deinit();
@@ -2183,6 +2199,18 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 std.debug.assert(length == 1);
                 try buf2.append('<');
             },
+            .OpDoubleDotLessThan => {
+                std.debug.assert(length == 3);
+                try buf2.append('.');
+                try buf2.append('.');
+                try buf2.append('<');
+            },
+            .OpDoubleDotEquals => {
+                std.debug.assert(length == 3);
+                try buf2.append('.');
+                try buf2.append('.');
+                try buf2.append('=');
+            },
             .OpEquals => {
                 std.debug.assert(length == 2);
                 try buf2.append('=');
@@ -2378,6 +2406,15 @@ test "tokenizer" {
     try testTokenization(gpa, "_ident", &[_]Token.Tag{.NamedUnderscore});
     try testTokenization(gpa, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
     try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, "..<", &[_]Token.Tag{.OpDoubleDotLessThan});
+    try testTokenization(gpa, "..=", &[_]Token.Tag{.OpDoubleDotEquals});
+    try testTokenization(gpa, "1..<5", &[_]Token.Tag{ .Int, .OpDoubleDotLessThan, .Int });
+    try testTokenization(gpa, "1..=5", &[_]Token.Tag{ .Int, .OpDoubleDotEquals, .Int });
+    try testTokenization(gpa, "1 ..< 5", &[_]Token.Tag{ .Int, .OpDoubleDotLessThan, .Int });
+    try testTokenization(gpa, "a..=b", &[_]Token.Tag{ .LowerIdent, .OpDoubleDotEquals, .LowerIdent });
+    // existing behavior must not change:
+    try testTokenization(gpa, "1...5", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, "1..5", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
     try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
     try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});

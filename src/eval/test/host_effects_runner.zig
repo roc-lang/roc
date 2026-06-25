@@ -12,8 +12,10 @@
 //! order, and whether execution returned or terminated via crash.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const eval = @import("eval");
+const base = @import("base");
 const harness = @import("test_harness");
 
 const helpers = eval.test_helpers;
@@ -58,6 +60,10 @@ const has_fork = harness.has_fork;
 const NUM_BACKENDS = 2;
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev" };
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
+
+const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{DevBackendUnavailable};
+const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
+const RunnerMainError = StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
 
 const BackendStatus = enum(u8) {
     pass,
@@ -130,7 +136,7 @@ const WireHeader = extern struct {
     backend_run_lens: [NUM_BACKENDS]u32,
 };
 
-const BackendEvalFn = *const fn (std.mem.Allocator, *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun;
+const BackendEvalFn = *const fn (std.mem.Allocator, *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun;
 
 const ForkResult = union(enum) {
     success: RuntimeHostEnv.RecordedRun,
@@ -153,7 +159,7 @@ fn appendEncodedRun(
     allocator: std.mem.Allocator,
     out: *std.ArrayListUnmanaged(u8),
     run: RuntimeHostEnv.RecordedRun,
-) !void {
+) Allocator.Error!void {
     const header: BackendRunHeader = .{
         .termination = @intFromEnum(run.termination),
         .event_count = @intCast(run.events.len),
@@ -223,95 +229,95 @@ fn decodeRun(buf: []const u8, gpa: std.mem.Allocator) ?RuntimeHostEnv.RecordedRu
 
 fn serializeRun(fd: posix.fd_t, run: RuntimeHostEnv.RecordedRun) void {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(std.heap.page_allocator);
-    appendEncodedRun(std.heap.page_allocator, &buf, run) catch return;
+    defer buf.deinit(base.defaultGpa());
+    appendEncodedRun(base.defaultGpa(), &buf, run) catch return;
     harness.writeAll(fd, buf.items);
 }
 
 fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResult {
     if (comptime !has_fork) {
-        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
         return .{ .success = result };
     }
 
-    const pipe_fds = posix.pipe() catch return .{ .fork_failed = {} };
+    const pipe_fds = harness.pipe() catch return .{ .fork_failed = {} };
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = harness.fork() catch {
+        harness.closeFd(pipe_read);
+        harness.closeFd(pipe_write);
         return .{ .fork_failed = {} };
     };
 
     if (fork_result == 0) {
-        posix.close(pipe_read);
-        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        harness.closeFd(pipe_read);
+        var child_arena = collections.SingleThreadArena.init(base.defaultGpa());
         const child_alloc = child_arena.allocator();
 
         const run = eval_fn(child_alloc, lowered) catch |err| {
             const name = @errorName(err);
             harness.writeAll(pipe_write, name);
-            posix.close(pipe_write);
+            harness.closeFd(pipe_write);
             std.c._exit(2);
         };
         serializeRun(pipe_write, run);
-        posix.close(pipe_write);
+        harness.closeFd(pipe_write);
         std.c._exit(0);
     }
 
-    posix.close(pipe_write);
+    harness.closeFd(pipe_write);
 
     var result_buf: std.ArrayListUnmanaged(u8) = .empty;
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
     while (true) {
-        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+        const bytes_read = harness.posixRead(pipe_read, &read_buf) catch {
             read_error = true;
             break;
         };
         if (bytes_read == 0) break;
-        result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+        result_buf.appendSlice(base.defaultGpa(), read_buf[0..bytes_read]) catch {
             read_error = true;
             break;
         };
     }
-    posix.close(pipe_read);
+    harness.closeFd(pipe_read);
 
-    const wait_result = posix.waitpid(fork_result, 0);
+    const wait_result = harness.waitpid(fork_result, 0);
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
     if (termination_signal != 0) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .signal_death = termination_signal };
     }
 
     const exit_code: u8 = @truncate((status >> 8) & 0xff);
     if (exit_code == 2) {
-        const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
-            result_buf.deinit(std.heap.page_allocator);
+        const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
+            result_buf.deinit(base.defaultGpa());
             return .{ .child_error = "ChildExecFailed" };
         };
         return .{ .child_error = owned };
     }
     if (exit_code != 0 or read_error) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     }
 
-    const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
-        result_buf.deinit(std.heap.page_allocator);
+    const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     };
-    defer std.heap.page_allocator.free(owned);
+    defer base.defaultGpa().free(owned);
 
-    const decoded = decodeRun(owned, std.heap.page_allocator) orelse return .{ .child_error = "DecodeFailed" };
+    const decoded = decodeRun(owned, base.defaultGpa()) orelse return .{ .child_error = "DecodeFailed" };
     return .{ .success = decoded };
 }
 
-fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
+fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -334,13 +340,13 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         else => return err,
     };
     switch (eval_result) {
-        .value => |_| {},
+        .value => {},
     }
 
     return runtime_env.snapshot(allocator);
 }
 
-fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
+fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun {
     if (comptime !DEV_BACKEND_IMPLEMENTED) {
         return error.DevBackendUnavailable;
     } else {
@@ -348,7 +354,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !Runtime
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
-            null,
+            &.{},
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
@@ -409,7 +415,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
                 else => return false,
             },
             .dbg_contains => |fragment| switch (actual) {
-                .dbg => |actual_msg| if (std.mem.indexOf(u8, actual_msg, fragment) == null) return false,
+                .dbg => |actual_msg| if (std.mem.find(u8, actual_msg, fragment) == null) return false,
                 else => return false,
             },
             .dbg_any => switch (actual) {
@@ -429,8 +435,8 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
     return true;
 }
 
-fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    var compiled = helpers.compileProgram(allocator, tc.source_kind, tc.source, tc.imports) catch |err| {
+fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
+    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch |err| {
         return .{
             .status = .fail,
             .message = allocator.dupe(u8, @errorName(err)) catch null,
@@ -531,7 +537,7 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
     var run_bufs: [NUM_BACKENDS]?[]u8 = .{ null, null };
     defer {
         for (run_bufs) |maybe_buf| {
-            if (maybe_buf) |buf| std.heap.page_allocator.free(buf);
+            if (maybe_buf) |buf| base.defaultGpa().free(buf);
         }
     }
 
@@ -551,12 +557,12 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
         header.backend_message_lens[i] = if (backend_detail.message) |msg| @intCast(msg.len) else 0;
         if (backend_detail.run) |run| {
             var buf: std.ArrayListUnmanaged(u8) = .empty;
-            appendEncodedRun(std.heap.page_allocator, &buf, run) catch {
+            appendEncodedRun(base.defaultGpa(), &buf, run) catch {
                 header.backend_run_lens[i] = 0;
                 continue;
             };
-            const owned = buf.toOwnedSlice(std.heap.page_allocator) catch {
-                buf.deinit(std.heap.page_allocator);
+            const owned = buf.toOwnedSlice(base.defaultGpa()) catch {
+                buf.deinit(base.defaultGpa());
                 header.backend_run_lens[i] = 0;
                 continue;
             };
@@ -612,9 +618,9 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     };
 }
 
-fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
+fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, _: u64) TestResult {
     var timer = Timer.start() catch unreachable;
-    const outcome = runSingleTest(allocator, tc);
+    const outcome = runSingleTest(io, allocator, tc);
     const duration_ns = timer.read();
     return .{
         .status = outcome.status,
@@ -701,8 +707,8 @@ fn printHelp() void {
         \\  - crashed
         \\
         \\USAGE:
-        \\  zig build test-eval-host-effects
-        \\  zig build test-eval-host-effects -- <OPTIONS>
+        \\  zig build run-test-eval-host-effects
+        \\  zig build run-test-eval-host-effects -- <OPTIONS>
         \\  ./zig-out/bin/eval-host-effects-runner [<OPTIONS>]
         \\
         \\OPTIONS:
@@ -838,15 +844,179 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
     }
 }
 
+fn statsStatus(status: TestOutcome.Status) []const u8 {
+    return switch (status) {
+        .pass => "pass",
+        .fail => "fail",
+        .crash => "crash",
+        .skip => "skip",
+        .timeout => "timeout",
+    };
+}
+
+fn backendStatsStatus(status: BackendStatus) []const u8 {
+    return switch (status) {
+        .pass => "pass",
+        .wrong, .fail => "fail",
+        .crash => "crash",
+        .skip, .not_implemented => "skip",
+    };
+}
+
+fn statsSummary(results: []const TestResult) harness.StatsSummary {
+    var summary: harness.StatsSummary = .{ .total = results.len };
+    for (results) |result| {
+        switch (result.status) {
+            .pass => summary.passed += 1,
+            .fail => summary.failed += 1,
+            .crash => summary.crashed += 1,
+            .skip => summary.skipped += 1,
+            .timeout => summary.timed_out += 1,
+        }
+    }
+    return summary;
+}
+
+fn recordedRunSummary(allocator: std.mem.Allocator, run: RuntimeHostEnv.RecordedRun) []const u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{s} live_allocations={d} events={d}",
+        .{ @tagName(run.termination), run.allocation_count, run.events.len },
+    ) catch "recorded run unavailable";
+}
+
+fn maybeStatsData(
+    allocator: std.mem.Allocator,
+    result: TestResult,
+) []const harness.StatsData {
+    if (result.status == .pass) return &.{};
+
+    var count: usize = 0;
+    if (result.message != null) count += 1;
+    for (result.backends) |backend_detail| {
+        if (backend_detail.message != null) count += 1;
+        if (backend_detail.run != null and backend_detail.status != .pass) count += 1;
+    }
+    if (count == 0) return &.{};
+
+    const data = allocator.alloc(harness.StatsData, count) catch return &.{};
+    var next: usize = 0;
+    if (result.message) |message| {
+        data[next] = .{ .key = "message", .value = message };
+        next += 1;
+    }
+    for (result.backends, 0..) |backend_detail, i| {
+        if (backend_detail.message) |message| {
+            data[next] = .{ .key = BACKEND_NAMES[i], .value = message };
+            next += 1;
+        }
+        if (backend_detail.run) |run| {
+            if (backend_detail.status != .pass) {
+                data[next] = .{ .key = BACKEND_NAMES[i], .value = recordedRunSummary(allocator, run) };
+                next += 1;
+            }
+        }
+    }
+    return data;
+}
+
+fn appendStatsEvent(
+    allocator: std.mem.Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    parent_id: ?[]const u8,
+    kind: []const u8,
+    name: []const u8,
+    status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
+    data: []const harness.StatsData,
+) void {
+    events.append(allocator, .{
+        .id = id,
+        .parent_id = parent_id,
+        .kind = kind,
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .data = data,
+    }) catch {};
+}
+
+fn appendCaseStatsEvent(
+    allocator: std.mem.Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    name: []const u8,
+    status: []const u8,
+    duration_ns: u64,
+    maybe_span: ?harness.PoolSpan,
+    data: []const harness.StatsData,
+) void {
+    const start_ns = if (maybe_span) |span| span.start_ns else 0;
+    const end_ns = if (maybe_span) |span| span.end_ns else duration_ns;
+    const worker_index = if (maybe_span) |span| span.worker_index else null;
+    events.append(allocator, .{
+        .id = id,
+        .parent_id = null,
+        .kind = "case",
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .worker_index = worker_index,
+        .data = data,
+    }) catch {};
+}
+
+fn writeStatsJson(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    tests: []const TestCase,
+    results: []const TestResult,
+    spans: []const ?harness.PoolSpan,
+) StatsJsonError!void {
+    var stats_arena = std.heap.ArenaAllocator.init(allocator);
+    defer stats_arena.deinit();
+    const stats_allocator = stats_arena.allocator();
+
+    var events: std.ArrayListUnmanaged(harness.StatsEvent) = .empty;
+
+    for (tests, results, 0..) |tc, result, i| {
+        const case_id = try std.fmt.allocPrint(stats_allocator, "case-{d}", .{i});
+        const maybe_span = if (i < spans.len) spans[i] else null;
+        appendCaseStatsEvent(stats_allocator, &events, case_id, tc.name, statsStatus(result.status), result.duration_ns, maybe_span, maybeStatsData(stats_allocator, result));
+
+        var cursor: u64 = 0;
+        for (result.backends, 0..) |backend_detail, backend_i| {
+            if (backend_detail.duration_ns == 0 and backend_detail.status == .skip) continue;
+            const id = try std.fmt.allocPrint(stats_allocator, "case-{d}-backend-{s}", .{ i, BACKEND_NAMES[backend_i] });
+            const status = backendStatsStatus(backend_detail.status);
+            appendStatsEvent(stats_allocator, &events, id, case_id, "backend", BACKEND_NAMES[backend_i], status, cursor, cursor + backend_detail.duration_ns, &.{});
+            cursor += backend_detail.duration_ns;
+        }
+    }
+
+    try harness.writeRunnerStatsJson(stats_allocator, io, path, .{
+        .runner = "eval-host-effects",
+        .summary = statsSummary(results),
+        .events = events.items,
+    });
+}
+
 /// Public function `main`.
-pub fn main() !void {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) RunnerMainError!void {
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
-    var args_arena = std.heap.ArenaAllocator.init(gpa);
+    const io = init.io;
+
+    var args_arena = collections.SingleThreadArena.init(gpa);
     defer args_arena.deinit();
-    const cli = try harness.parseStandardArgs(args_arena.allocator());
+    const cli = try harness.parseStandardArgs(args_arena.allocator(), init.minimal.args);
 
     if (cli.help_requested) {
         printHelp();
@@ -860,8 +1030,8 @@ pub fn main() !void {
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
             for (cli.filters) |pattern| {
-                if (std.mem.indexOf(u8, tc.name, pattern) != null or
-                    std.mem.indexOf(u8, tc.source, pattern) != null)
+                if (std.mem.find(u8, tc.name, pattern) != null or
+                    std.mem.find(u8, tc.source, pattern) != null)
                 {
                     try filtered_buf.append(gpa, tc);
                     break;
@@ -884,6 +1054,9 @@ pub fn main() !void {
         gpa.free(results);
     }
     @memset(results, default_result);
+    const spans = try gpa.alloc(?harness.PoolSpan, tests.len);
+    defer gpa.free(spans);
+    @memset(spans, null);
 
     var wall_timer = Timer.start() catch unreachable;
     const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
@@ -896,7 +1069,7 @@ pub fn main() !void {
     // worker_argv_template is null — this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, null);
+    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;
@@ -943,6 +1116,10 @@ pub fn main() !void {
         "\n{d} passed, {d} failed, {d} crashed, {d} hung, {d} skipped ({d} total) in {d:.0}ms using {d} process(es)\n",
         .{ passed, failed, crashed, timed_out, skipped, tests.len, wall_ms, max_children },
     );
+
+    if (cli.stats_json_path) |path| {
+        try writeStatsJson(gpa, io, path, tests, results, spans);
+    }
 
     if (failed > 0 or crashed > 0 or timed_out > 0) std.process.exit(1);
 }

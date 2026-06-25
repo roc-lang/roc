@@ -5,18 +5,16 @@
 //! Falls back to token-based matching when CIR is unavailable.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
-const base = @import("base");
-
-const Allocators = base.Allocators;
 const Token = parse.tokenize.Token;
 
 /// Handler for `textDocument/documentHighlight` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "documentHighlight requires params");
                 return;
@@ -90,11 +88,15 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Try CIR-based highlighting first (scope-aware)
-            if (self.syntax_checker.getHighlightsAtPosition(uri, text, line, character) catch null) |result| {
+            const cir_highlights = self.syntax_checker.getHighlightsAtPosition(uri, text, line, character) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => null,
+            };
+            if (cir_highlights) |result| {
                 defer result.deinit(self.allocator);
 
                 // Convert to DocumentHighlight array
-                var highlights = std.ArrayList(DocumentHighlight){};
+                var highlights: std.ArrayList(DocumentHighlight) = .empty;
                 defer highlights.deinit(self.allocator);
 
                 for (result.regions) |range| {
@@ -112,11 +114,7 @@ pub fn handler(comptime ServerType: type) type {
             }
 
             // Fall back to token-based highlighting
-            const highlights = findHighlightsByToken(self.allocator, text, line, character) catch |err| {
-                std.log.err("document highlight failed: {s}", .{@errorName(err)});
-                try self.sendResponse(id, &[_]DocumentHighlight{});
-                return;
-            };
+            const highlights = try findHighlightsByToken(self.allocator, text, line, character);
             defer self.allocator.free(highlights);
 
             try self.sendResponse(id, highlights);
@@ -148,7 +146,7 @@ const DocumentHighlight = struct {
 
 /// Fallback: find all highlights by matching token text.
 /// Used when CIR is not available (e.g., parse errors).
-fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) ![]DocumentHighlight {
+fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) Allocator.Error![]DocumentHighlight {
     // Build line offset table
     const line_offsets = buildLineOffsets(source);
 
@@ -158,18 +156,10 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
     };
 
     // Parse to get tokens
-    var module_env = can.ModuleEnv.init(allocator, source) catch {
-        return &[_]DocumentHighlight{};
-    };
+    var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parse(&allocators, &module_env.common) catch {
-        return &[_]DocumentHighlight{};
-    };
+    const ast = try parse.file(allocator, &module_env.common);
     defer ast.deinit();
 
     const tags = ast.tokens.tokens.items(.tag);
@@ -199,7 +189,7 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
     }
 
     // Find all occurrences of the same identifier text
-    var highlights = std.ArrayList(DocumentHighlight){};
+    var highlights: std.ArrayList(DocumentHighlight) = .empty;
     errdefer highlights.deinit(allocator);
 
     for (tags, regions) |tag, region| {

@@ -63,23 +63,38 @@ NO CHANGE
 						(record-destruct (label "email") (ident "email")
 							(required
 								(p-assign (ident "email")))))))
-			(e-string
-				(e-literal (string "User: "))
-				(e-lookup-local
-					(p-assign (ident "name")))
-				(e-literal (string " ("))
-				(e-method-call (method "toStr")
-					(receiver
+			(e-block
+				(s-let
+					(p-assign (ident "#interp_0"))
+					(e-lookup-local
+						(p-assign (ident "name"))))
+				(s-let
+					(p-assign (ident "#interp_1"))
+					(e-method-call (method "toStr")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "age"))))
+						(args)))
+				(s-let
+					(p-assign (ident "#interp_2"))
+					(e-method-call (method "display")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "email"))))
+						(args)))
+				(e-interpolation
+					(first
+						(e-literal (string "User: ")))
+					(parts
 						(e-lookup-local
-							(p-assign (ident "age"))))
-					(args))
-				(e-literal (string " years old) - Contact: "))
-				(e-method-call (method "display")
-					(receiver
+							(p-assign (ident "#interp_0")))
+						(e-literal (string " ("))
 						(e-lookup-local
-							(p-assign (ident "email"))))
-					(args))
-				(e-literal (string ""))))))
+							(p-assign (ident "#interp_1")))
+						(e-literal (string " years old) - Contact: "))
+						(e-lookup-local
+							(p-assign (ident "#interp_2")))
+						(e-literal (string ""))))))))
 ~~~
 # TYPES
 ~~~clojure

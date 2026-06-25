@@ -5,6 +5,313 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "low_level - F32.from_bits to_bits roundtrip finite",
+        .source =
+        \\{
+        \\bits = 1069547520
+        \\F32.to_bits(F32.from_bits(bits))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1069547520" },
+    },
+    .{
+        .name = "low_level - F32.from_bits to_bits preserves quiet NaN payload",
+        .source =
+        \\{
+        \\bits = 2143289345
+        \\F32.to_bits(F32.from_bits(bits)) == bits
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64.from_bits to_bits roundtrip finite",
+        .source =
+        \\{
+        \\bits = 4609434218613702656
+        \\F64.to_bits(F64.from_bits(bits))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4609434218613702656" },
+    },
+    .{
+        .name = "low_level - F64.from_bits to_bits preserves quiet NaN payload",
+        .source =
+        \\{
+        \\bits = 9221120237041090561
+        \\F64.to_bits(F64.from_bits(bits)) == bits
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 constants expose expected bits",
+        .source =
+        \\{
+        \\F32.to_bits(F32.e) == 1076754516
+        \\    and F32.to_bits(F32.pi) == 1078530011
+        \\    and F32.to_bits(F32.tau) == 1086918619
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 classification handles NaN infinity and finite values",
+        .source =
+        \\{
+        \\F32.is_nan(F32.nan)
+        \\    and !F32.is_float_eq(F32.nan, F32.nan)
+        \\    and !F32.is_float_eq(1.0, F32.nan)
+        \\    and F32.is_float_eq(-0.0, 0.0)
+        \\    and F32.is_float_eq(F32.infinity, F32.infinity)
+        \\    and F32.is_float_eq(F32.negate(F32.infinity), F32.negate(F32.infinity))
+        \\    and !F32.is_float_eq(F32.infinity, F32.negate(F32.infinity))
+        \\    and F32.is_infinite(F32.infinity)
+        \\    and F32.is_infinite(F32.negate(F32.infinity))
+        \\    and F32.is_finite(1.0)
+        \\    and !F32.is_finite(F32.nan)
+        \\    and !F32.is_finite(F32.infinity)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 constants expose expected bits",
+        .source =
+        \\{
+        \\F64.to_bits(F64.e) == 4613303445314885481
+        \\    and F64.to_bits(F64.pi) == 4614256656552045848
+        \\    and F64.to_bits(F64.tau) == 4618760256179416344
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 classification handles NaN infinity and finite values",
+        .source =
+        \\{
+        \\F64.is_nan(F64.nan)
+        \\    and !F64.is_float_eq(F64.nan, F64.nan)
+        \\    and !F64.is_float_eq(1.0, F64.nan)
+        \\    and F64.is_float_eq(-0.0, 0.0)
+        \\    and F64.is_float_eq(F64.infinity, F64.infinity)
+        \\    and F64.is_float_eq(F64.negate(F64.infinity), F64.negate(F64.infinity))
+        \\    and !F64.is_float_eq(F64.infinity, F64.negate(F64.infinity))
+        \\    and F64.is_infinite(F64.infinity)
+        \\    and F64.is_infinite(F64.negate(F64.infinity))
+        \\    and F64.is_finite(1.0)
+        \\    and !F64.is_finite(F64.nan)
+        \\    and !F64.is_finite(F64.infinity)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 sqrt and sqrt_try",
+        .source =
+        \\{
+        \\match F32.sqrt_try(9.0) {
+        \\    Ok(value) => F32.is_float_eq(value, 3.0)
+        \\    Err(_) => False
+        \\}
+        \\    and match F32.sqrt_try(-1.0) {
+        \\        Ok(_) => False
+        \\        Err(SqrtOfNegative) => True
+        \\    }
+        \\    and F32.to_str(F32.sqrt(2.25)) == "1.5"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 sqrt and sqrt_try",
+        .source =
+        \\{
+        \\match F64.sqrt_try(9.0) {
+        \\    Ok(value) => F64.is_float_eq(value, 3.0)
+        \\    Err(_) => False
+        \\}
+        \\    and match F64.sqrt_try(-1.0) {
+        \\        Ok(_) => False
+        \\        Err(SqrtOfNegative) => True
+        \\    }
+        \\    and F64.to_str(F64.sqrt(2.25)) == "1.5"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 pow",
+        .source =
+        \\{
+        \\F32.pow(2.0, 3.0).to_str() == "8"
+        \\    and F32.pow(9.0, 0.5).to_str() == "3"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 pow",
+        .source =
+        \\{
+        \\F64.pow(2.0, 3.0).to_str() == "8"
+        \\    and F64.pow(9.0, 0.5).to_str() == "3"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 trig",
+        .source =
+        \\{
+        \\F32.sin(0.0).to_str() == "0"
+        \\    and F32.cos(0.0).to_str() == "1"
+        \\    and F32.tan(0.0).to_str() == "0"
+        \\    and F32.asin(0.0).to_str() == "0"
+        \\    and F32.acos(1.0).to_str() == "0"
+        \\    and F32.atan(0.0).to_str() == "0"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 tan matrix",
+        .source =
+        \\{
+        \\within = |actual, expected, tolerance| F32.abs_diff(actual, expected) <= tolerance
+        \\within(F32.tan(0.2), 0.20271003, 0.000001)
+        \\    and within(F32.tan(F32.negate(0.2)), F32.negate(0.20271003), 0.000001)
+        \\    and within(F32.tan(0.8923), 1.2404218, 0.000001)
+        \\    and within(F32.tan(1.5), 14.10142, 0.00001)
+        \\    and within(F32.tan(37.45), F32.negate(0.25439608), 0.000001)
+        \\    and within(F32.tan(89.123), 2.2858377, 0.00001)
+        \\    and F32.is_nan(F32.tan(F32.infinity))
+        \\    and F32.is_nan(F32.tan(F32.negate(F32.infinity)))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 trig",
+        .source =
+        \\{
+        \\F64.sin(0.0).to_str() == "0"
+        \\    and F64.cos(0.0).to_str() == "1"
+        \\    and F64.tan(0.0).to_str() == "0"
+        \\    and F64.asin(0.0).to_str() == "0"
+        \\    and F64.acos(1.0).to_str() == "0"
+        \\    and F64.atan(0.0).to_str() == "0"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 tan matrix",
+        .source =
+        \\{
+        \\within = |actual, expected, tolerance| F64.abs_diff(actual, expected) <= tolerance
+        \\within(F64.tan(0.2), 0.2027100355086725, 0.000000000000001)
+        \\    and within(F64.tan(F64.negate(0.2)), F64.negate(0.2027100355086725), 0.000000000000001)
+        \\    and within(F64.tan(0.8923), 1.2404217445497098, 0.000000000000001)
+        \\    and within(F64.tan(1.5), 14.101419947171719, 0.00000000000001)
+        \\    and within(F64.tan(37.45), F64.negate(0.25439607116885656), 0.000000000001)
+        \\    and within(F64.tan(89.123), 2.285837625135532, 0.000000000001)
+        \\    and F64.is_nan(F64.tan(F64.infinity))
+        \\    and F64.is_nan(F64.tan(F64.negate(F64.infinity)))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 rounding to integers",
+        .source =
+        \\{
+        \\F32.round_to_i32(3.4) == 3
+        \\    and F32.round_to_i32(-3.6) == -4
+        \\    and F32.round_to_i32(2.5) == 3
+        \\    and F32.round_to_i32(-2.5) == -3
+        \\    and F32.floor_to_i32(-3.2) == -4
+        \\    and F32.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 rounding to integers",
+        .source =
+        \\{
+        \\F64.round_to_i32(3.4) == 3
+        \\    and F64.round_to_i32(-3.6) == -4
+        \\    and F64.round_to_i32(2.5) == 3
+        \\    and F64.round_to_i32(-2.5) == -3
+        \\    and F64.floor_to_i32(-3.2) == -4
+        \\    and F64.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    // Single float->int conversions, kept separate from the compound tests
+    // above so a regression in one conversion isn't masked by `and`
+    // short-circuiting. These pin the float-to-int wrapper ABI (the dev
+    // backend must pass the float `val` through its CallBuilder so the
+    // following integer args land in the right registers on Windows x64).
+    .{
+        .name = "low_level - F32 floor_to_i32 returns signed value",
+        .source =
+        \\F32.floor_to_i32(-3.2)
+        ,
+        .expected = .{ .inspect_str = "-4" },
+    },
+    .{
+        .name = "low_level - F32 ceiling_to_u32 returns unsigned value",
+        .source =
+        \\F32.ceiling_to_u32(3.2)
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "low_level - F32 round_to_i32 returns signed value",
+        .source =
+        \\F32.round_to_i32(2.5)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "low_level - F64 floor_to_i32 returns signed value",
+        .source =
+        \\F64.floor_to_i32(-3.2)
+        ,
+        .expected = .{ .inspect_str = "-4" },
+    },
+    .{
+        .name = "low_level - F64 ceiling_to_u32 returns unsigned value",
+        .source =
+        \\F64.ceiling_to_u32(3.2)
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "low_level - F64 round_to_i32 returns signed value",
+        .source =
+        \\F64.round_to_i32(2.5)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "low_level - Dec rounding to integers",
+        .source =
+        \\{
+        \\Dec.round_to_i32(3.4) == 3
+        \\    and Dec.round_to_i32(-3.6) == -4
+        \\    and Dec.round_to_i32(2.5) == 3
+        \\    and Dec.round_to_i32(-2.5) == -3
+        \\    and Dec.floor_to_i32(-3.2) == -4
+        \\    and Dec.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{
@@ -267,6 +574,32 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        .name = "low_level - Str.drop_prefix_caseless_ascii removes matching prefix",
+        .source =
+        \\{
+        \\x = match Str.drop_prefix_caseless_ascii("Cache-Control: 0", "cache-control") {
+        \\    Ok(rest) => rest
+        \\    Err(_) => "missing"
+        \\}
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\": 0\"" },
+    },
+    .{
+        .name = "low_level - Str.drop_prefix_caseless_ascii rejects punctuation case-bit pairs",
+        .source =
+        \\{
+        \\x = match Str.drop_prefix_caseless_ascii("X_Auth: 0", "x\u(007F)auth") {
+        \\    Ok(_) => False
+        \\    Err(NotFound) => True
+        \\}
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
     },
     .{
         .name = "low_level - Str.with_ascii_lowercased with mixed case",
@@ -1342,6 +1675,20 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"-42\"" },
     },
     .{
+        .name = "low_level - I8.abs_diff uses signed operand layout",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 120.I8
+        \\b : I8
+        \\b = -120.I8
+        \\x = I8.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "240" },
+    },
+    .{
         .name = "low_level - U16.to_str",
         .source =
         \\{
@@ -1766,6 +2113,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"hi\"" },
     },
     .{
+        .name = "low_level - Str.find_first returns seamless before and after slices",
+        .source =
+        \\{
+        \\x = match Str.find_first("alpha:beta", ":") {
+        \\    Ok(parts) => Str.count_utf8_bytes(parts.before) * 100 + Str.count_utf8_bytes(parts.after)
+        \\    Err(_) => 0
+        \\}
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "504" },
+    },
+    .{
         .name = "low_level - U8.to_i16 safe widening",
         .source =
         \\{
@@ -1945,6 +2305,116 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"123.0\"" },
+    },
+    .{
+        .name = "low_level - F32.to_i8_try truncates fractional part",
+        .source =
+        \\{
+        \\x = F32.to_i8_try(42.7)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u64_try truncates fractional part",
+        .source =
+        \\{
+        \\x = F64.to_u64_try(42.5)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u32_try accepts values above I32 max",
+        .source =
+        \\{
+        \\x = F64.to_u32_try(3000000000.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(3000000000)" },
+    },
+    .{
+        .name = "low_level - F64.to_i64_try rejects exclusive upper bound",
+        .source =
+        \\{
+        \\x = F64.to_i64_try(9223372036854775808.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - F64.to_i64_try accepts inclusive lower bound",
+        .source =
+        \\{
+        \\x = F64.to_i64_try(-9223372036854775808.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(-9223372036854775808)" },
+    },
+    .{
+        .name = "low_level - F64.to_i128_try truncates negative fractional part",
+        .source =
+        \\{
+        \\x = F64.to_i128_try(-42.5)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(-42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u64_try rejects out-of-range without trapping",
+        .source =
+        \\{
+        \\x = F64.to_u64_try(F64.highest)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - F64.to_u128_try rejects out-of-range without trapping",
+        .source =
+        \\{
+        \\x = F64.to_u128_try(F64.highest)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - Dec.to_i8_try truncates fractional part",
+        .source =
+        \\{
+        \\x = Dec.to_i8_try(42.7)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - Dec.to_u64_try accepts full U64 range after truncation",
+        .source =
+        \\{
+        \\x = Dec.to_u64_try(18446744073709551615.9)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(18446744073709551615)" },
+    },
+    .{
+        .name = "low_level - Dec.to_u64_try rejects exclusive upper bound",
+        .source =
+        \\{
+        \\x = Dec.to_u64_try(18446744073709551616.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
     },
     .{
         .name = "low_level - I8.to_i16 safe widening positive",
@@ -3073,6 +3543,296 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "4294967295" },
     },
     .{
+        .name = "low_level - U8.bitwise_and basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b1100
+        \\x = a.bitwise_and(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "8" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_or basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b1100
+        \\x = a.bitwise_or(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "14" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_xor basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b1100
+        \\x = a.bitwise_xor(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "255" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_not high bits",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b0000_1111
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "240" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_and basic",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 0b0110
+        \\x = a.bitwise_and(0b0011)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_xor with negative one inverts",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 5
+        \\x = a.bitwise_xor(-1)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_not equals negate minus one",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 5
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_not of negative one is zero",
+        .source =
+        \\{
+        \\a : I8
+        \\a = -1
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "low_level - U16.bitwise_or sets high byte",
+        .source =
+        \\{
+        \\a : U16
+        \\a = 0x00FF
+        \\x = a.bitwise_or(0xFF00)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "65535" },
+    },
+    .{
+        .name = "low_level - U16.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U16
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "65535" },
+    },
+    .{
+        .name = "low_level - I16.bitwise_xor self is zero",
+        .source =
+        \\{
+        \\a : I16
+        \\a = 12345
+        \\x = a.bitwise_xor(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "low_level - U32.bitwise_xor swaps nibbles",
+        .source =
+        \\{
+        \\a : U32
+        \\a = 0xFFFF
+        \\x = a.bitwise_xor(0x0F0F)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "61680" },
+    },
+    .{
+        .name = "low_level - U32.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U32
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4294967295" },
+    },
+    .{
+        .name = "low_level - I32.bitwise_and masks low bits",
+        .source =
+        \\{
+        \\a : I32
+        \\a = -1
+        \\x = a.bitwise_and(0xFF)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "255" },
+    },
+    .{
+        .name = "low_level - U64.bitwise_and overlap",
+        .source =
+        \\{
+        \\a : U64
+        \\a = 0xFF00
+        \\x = a.bitwise_and(0x0FF0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3840" },
+    },
+    .{
+        .name = "low_level - U64.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U64
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "18446744073709551615" },
+    },
+    .{
+        .name = "low_level - I64.bitwise_not basic",
+        .source =
+        \\{
+        \\a : I64
+        \\a = 5
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - U128.bitwise_and high word",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 0xFFFF_FFFF_FFFF_FFFF_0000_0000_0000_0000
+        \\x = a.bitwise_and(0xFFFF_0000_0000_0000_0000_0000_0000_0000)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "340277174624079928635746076935438991360" },
+    },
+    .{
+        .name = "low_level - U128.bitwise_xor basic",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 0b1100
+        \\x = a.bitwise_xor(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "low_level - U128.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "340282366920938463463374607431768211455" },
+    },
+    .{
+        .name = "low_level - I128.bitwise_not basic",
+        .source =
+        \\{
+        \\a : I128
+        \\a = 5
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - I128.bitwise_and with negative one is identity",
+        .source =
+        \\{
+        \\a : I128
+        \\a = 1234567890123456789
+        \\x = a.bitwise_and(-1)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1234567890123456789" },
+    },
+    .{
+        .name = "low_level - U64.bitwise ops combine",
+        .source =
+        \\{
+        \\a : U64
+        \\a = 0b1010
+        \\b = a.bitwise_or(0b0101)
+        \\c = b.bitwise_and(0b1100)
+        \\x = c.bitwise_xor(0b0001)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
         .name = "low_level - List.sort_with basic ascending sort",
         .source =
         \\{
@@ -3731,6 +4491,22 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "9" },
     },
     .{
+        .name = "boxed lambda round trip: boxed callable captures boxed callable",
+        .source_kind = .module,
+        .source =
+        \\make_outer : {} -> Box((I64 -> I64))
+        \\make_outer = |_| {
+        \\    inner = Box.box(|x| x + 1)
+        \\
+        \\    Box.box(|x| Box.unbox(inner)(x) + 1)
+        \\}
+        \\
+        \\main : I64
+        \\main = Box.unbox(make_outer({}))(40)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
         .name = "boxed lambda round trip: nested box does not authorize unrelated erasure",
         .source_kind = .module,
         .source =
@@ -3851,5 +4627,117 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "6.0" },
+    },
+    .{
+        .name = "low_level - List.set replaces element at index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set([1, 2, 3], 1, 9), [])
+        \\Try.ok_or(List.get(list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9.0" },
+    },
+    .{
+        .name = "low_level - List.set preserves untouched elements",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set([1, 2, 3], 1, 9), [])
+        \\Try.ok_or(List.get(list, 2), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "low_level - List.set on refcounted List(Str)",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set(["cat", "chases", "rat"], 1, "loves"), [])
+        \\Try.ok_or(List.get(list, 1), "")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"loves\"" },
+    },
+    .{
+        .name = "low_level - List.set out of bounds returns Err",
+        .source =
+        \\{
+        \\match List.set([1, 2, 3], 9, 0) {
+        \\    Ok(_) => "ok"
+        \\    Err(_) => "err"
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"err\"" },
+    },
+    .{
+        .name = "low_level - List.replace returns updated list and prev",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace([10, 20, 30], 1, 99), { list: [], prev: 0 })
+        \\result.prev
+        \\}
+        ,
+        .expected = .{ .inspect_str = "20.0" },
+    },
+    .{
+        .name = "low_level - List.replace updated list element",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace([10, 20, 30], 1, 99), { list: [], prev: 0 })
+        \\Try.ok_or(List.get(result.list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "99.0" },
+    },
+    .{
+        .name = "low_level - List.replace on refcounted List(Str)",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace(["a", "b", "c"], 0, "z"), { list: [], prev: "" })
+        \\result.prev
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "low_level - List.update applies function at index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.update([10, 20, 30], 1, |x| x + 5), [])
+        \\Try.ok_or(List.get(list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "25.0" },
+    },
+    .{
+        .name = "low_level - List.swap exchanges two elements",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap([1, 2, 3, 4], 0, 3), [])
+        \\Try.ok_or(List.get(list, 0), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4.0" },
+    },
+    .{
+        .name = "low_level - List.swap preserves the other swapped index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap([1, 2, 3, 4], 0, 3), [])
+        \\Try.ok_or(List.get(list, 3), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "low_level - List.swap on refcounted List(Str)",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap(["cat", "chases", "rat"], 0, 2), [])
+        \\Try.ok_or(List.get(list, 0), "")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"rat\"" },
     },
 };

@@ -13,8 +13,7 @@ Command Line Interface. The entrypoint of the compiler that brings together all
 functionality in the Roc toolset and makes it accessible to the user through the
 terminal, e.g. `roc build main.roc`.
 
-- new compiler: [src/cli.main.zig](src/cli/main.zig)
-- old compiler: [crates/cli/src/main.rs](crates/cli/src/main.rs)
+Implementation: [src/cli.main.zig](src/cli/main.zig)
 
 ## Module
 
@@ -27,11 +26,7 @@ Types of modules:
 - platform [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/main.roc): Provides memory management and effects like writing to files, network communication,... to interface with the outside world. [Detailed explanation](https://www.roc-lang.org/platforms).
 - hosted [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/Host.roc): Lists all Roc types and functions provided by the platform.
 
-Implementation:
-- new compiler:
-  - [folder with lots of module related things](src/base)
-- old compiler:
-  - [module folder](crates/compiler/module)
+Implementation: [folder with lots of module related things](src/base)
 
 ## IR
 
@@ -67,8 +62,7 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites.
 
 Uses of interning:
-- new compiler: TODO
-- old compiler: [small_string_interner.rs](crates/compiler/collections/src/small_string_interner.rs), [mono_module.rs](crates/build/specialize_types/src/mono_module.rs), [format.rs](crates/cli/src/format.rs), ...
+- TODO
 - There are many more uses of interning, I recommend searching for "interner" (case-insensitive).
 
 ## Identifier
@@ -80,14 +74,9 @@ During [tokenization](#tokenization) all identifiers are put into a deduplicated
 That ID is used in [IRs](#ir) instead of the actual text to save memory.
 
 Identifier in the compiler:
-- new compiler:
-    - [Ident](src/base/Ident.zig)
-    - [Ident tokenization](src/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
-    - [Ident parsing](src/parse/Parser.zig): search `Ident`
-- old compiler:
-    - [IdentStr](crates/compiler/ident/src/lib.rs)
-    - [module/ident.rs](crates/compiler/module/src/ident.rs)
-    - [parsing](crates/compiler/parse/src/expr.rs): search "identifier" (case-insensitive)
+- [Ident](src/base/Ident.zig)
+- [Ident tokenization](src/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
+- [Ident parsing](src/parse/Parser.zig): search `Ident`
 
 ## Keyword
 
@@ -95,9 +84,7 @@ A specific word that has a predefined meaning in the language, like `crash`, `if
 Many keywords can not be used as a variable name.
 We have an [overview of all Roc keywords](https://www.roc-lang.org/tutorial#reserved-keywords).
 
-Keywords in the compiler:
-- [new compiler](src/parse/tokenize.zig)
-- [old compiler](crates/compiler/parse/src/keyword.rs)
+Keywords in the compiler: [tokenize.zig](src/parse/tokenize.zig)
 
 ## Operator
 
@@ -105,17 +92,13 @@ An operator is a [symbol](#symbol) or [keyword](#keyword) that performs a specif
 Some examples: `+`, `=`, `==`, `>`. [A table of all operators in Roc](https://www.roc-lang.org/tutorial#operator-desugaring-table).
 `+` is an example of binary operator because it works with two operands, e.g. `1 + 1`. Similarly `!` (e.g. `!Bool.false`) is a unary operator.
 
-Operators in the compiler:
-- New compiler: search `Op` in [tokenize.zig](src/parse/tokenize.zig)
-- Old compiler: search `operator_help` in [expr.rs](crates/compiler/parse/src/expr.rs)
+Operators in the compiler: search `Op` in [tokenize.zig](src/parse/tokenize.zig)
 
 ## Syntax
 
 The set of rules that define the correct structure and format of statements, expressions, and code blocks. It specifies how code should be written so that it can be interpreted and executed correctly. In other words, syntax determines how symbols, keywords, and punctuation must be arranged to form valid source code.
 
-Syntax in the compiler:
-- New compiler: determined by the [tokenizer and parser](src/parse).
-- Old compiler: determined by the [parser](crates/compiler/parse).
+Syntax in the compiler: determined by the [tokenizer and parser](src/parse).
 
 ## Syntactic Sugar
 
@@ -127,9 +110,7 @@ Desugaring converts syntax sugar (like `x + 1`) into more fundamental operations
 
 [A table of all operators in Roc and what they desugar to](https://www.roc-lang.org/tutorial#operator-desugaring-table)
 
-Desugaring in the compiler:
-- New compiler: there is no desugaring in the new compiler, these are implicitly handled by the compiler but not modified into a different form or IR representation.
-- Old compiler: [desugar.rs](crates/check/can_solo/src/desugar.rs)
+Desugaring in the compiler: there is no desugaring, these are implicitly handled by the compiler but not modified into a different form or IR representation.
 
 ## Type Signature
 
@@ -143,9 +124,7 @@ In the compiler, the type signature specified in the source code has priority ov
 
 Type annotations are basically the same thing as type signatures and both terms are used interchangeably throughout the compiler.
 
-Type signature in the code base:
-- New compiler: [Parser.zig](src/parse/Parser.zig) (search signature)
-- Old compiler: [ast.rs](crates/compiler/parse/src/ast.rs) (search TypeAnnotation)
+Type signature in the code base: [Parser.zig](src/parse/Parser.zig) (search signature)
 
 ## Type Alias
 
@@ -177,9 +156,7 @@ Graph a := Dict a (List a) where a implements Eq
 
 Type variables don't have to be a single letter, they just have to start with a lowercase letter.
 
-Parsing of type vars:
-- new compiler: search `ty_var` in [Parser.zig](src/parse/Parser.zig)
-- old compiler: search `parse_type_variable` in [type_annotation.rs](crates/compiler/parse/src/type_annotation.rs)
+Parsing of type vars: search `ty_var` in [Parser.zig](src/parse/Parser.zig)
 
 ## Builtin
 
@@ -188,19 +165,17 @@ You don't need to import any of these to use them.
 
 [Builtin Docs](https://www.roc-lang.org/builtins)
 
-Implementation of builtins:
-- new compiler: [src/builtins](src/builtins) (work in progress)
-- old compiler: [crates/compiler/builtins](crates/compiler/builtins). Note: some builtin functions are implemented in zig, like `Num.f64_to_bits`, see [num.zig](crates/compiler/builtins/bitcode/src/num.zig).
+Implementation of builtins: [src/builtins](src/builtins) (work in progress)
 
 Interesting fact: our builtins are integrated into the compiler, there is no typical separate standard library.
 
 ## Compiler Phase
 
-A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don’t just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](#tokenization), [parsing](#parsing), [code generation](#code-gen),... .
+A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don't just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](#tokenization), [parsing](#parsing), [code generation](#code-gen),... .
 
 ## Compiler Pass
 
-A single traversal through a program's [IR](#ir) that performs a specific transformation or analysis. [`insert_reset_reuse_operations`](https://github.com/roc-lang/roc/blob/1a9b4255407e7bec33c81d80057c5a8c2f70ead5/crates/compiler/mono/src/reset_reuse.rs#L29) is an example of a compiler pass, it analyzes and modifies the [IR](#IR) to detect when memory is no longer used and allows us to re-use that memory for other things.
+A single traversal through a program's [IR](#ir) that performs a specific transformation or analysis. `insert_reset_reuse_operations` is an example of a compiler pass, it analyzes and modifies the [IR](#IR) to detect when memory is no longer used and allows us to re-use that memory for other things.
 
 Note the difference with a compiler phase; a phase is a larger logical unit of compilation that may include multiple passes.
 
@@ -222,11 +197,7 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 ```
 
-New compiler:
-- [tokenize.zig](src/parse/tokenize.zig)
-
-Old compiler:
-- We did not do a separate tokenization step, everything happened in the [parser](crates/compiler/parse/src/parser.rs).
+Implementation: [tokenize.zig](src/parse/tokenize.zig)
 
 ## AST
 
@@ -254,30 +225,21 @@ Compared to raw source code, this structured format is much easier to analyze an
 
 The AST is created by the [parser](#parsing).
 
-New compiler:
+Implementation:
 - See the `Node` struct in [this file](src/parse/AST.zig).
 - You can see examples of ASTs in the .txt files in [this folder](test/snapshots).
 
-Old compiler:
-- See `FullAst` [here](crates/compiler/parse/src/ast.rs)
-- [Some tests](crates/compiler/parse/tests/test_parse.rs)
-- [Many snapshot tests](crates/compiler/test_syntax/tests/snapshots)
-
 ## Parsing
 
-The step where the compiler checks if the source code follows the correct structure or “grammar” of the programming language. It takes the tokens produced by [tokenization](#tokenization) and organizes them to see if they make sense together, like checking the structure of sentences in a language. If the code is correct, the parser builds a tree-like structure ([AST](#ast)) that shows how the code is organized. If not, it reports errors.
+The step where the compiler checks if the source code follows the correct structure or "grammar" of the programming language. It takes the tokens produced by [tokenization](#tokenization) and organizes them to see if they make sense together, like checking the structure of sentences in a language. If the code is correct, the parser builds a tree-like structure ([AST](#ast)) that shows how the code is organized. If not, it reports errors.
 
-Parser implementation:
-- new compiler: [src/parse](src/parse)
-- old compiler: [crates/compiler/parse](crates/compiler/parse) (tokenization is not a separate step here)
+Parser implementation: [src/parse](src/parse)
 
 ## Symbol
 
 A symbol points to a specific [identifier](#identifier) with an `ident_id` and a `module_id` ([see module](#module)).
 
-Symbol implementation:
-- new compiler: Not yet implemented.
-- old compiler: [symbol.rs](crates/compiler/module/src/symbol.rs)
+Symbol implementation: Not yet implemented.
 
 ## Closure
 
@@ -299,9 +261,7 @@ expect
     result == 15
 ```
 
-Closure implementation:
-- new compiler: Not yet implemented
-- old compiler: `ClosureData` in [expr.rs](crates/compiler/can/src/expr.rs). Closures are used all over the place, just search "Closure" (match case).
+Closure implementation: Not yet implemented.
 
 ## Type Inference
 
@@ -313,9 +273,7 @@ foo = |bar|
 ```
 `foo` has no type annotation so we don't immediately know the type of bar. Later in the function, `Num.to_str` is called on `bar` and we know the type of `to_str` is `Num * -> Str`, so that means `bar` must be a `Num *`! We have now inferred the type of `bar` :tada:
 
-Type inference implementation:
-- new compiler: Not yet implemented
-- old compiler: Type inference is spread over multiple crates: [solve](crates/compiler/solve), [late-solve](crates/compiler/solve),[unify](crates/compiler/unify), [constrain](crates/compiler/constrain), ...
+Type inference implementation: Not yet implemented.
 
 ## Type constraint
 
@@ -327,13 +285,8 @@ Type constraints can take several forms:
 - Try target constraint: requires the expression you use `?` on to be a `Result`:
     + `Str.from_utf8(byte_list)?`
 - Effect suffix constraint: Your function should have a `!` suffix if it calls an effectful function.
-- See `pub enum Constraint` in [crates/compiler/can/src/constraint.rs](crates/compiler/can/src/constraint.rs) for an overview of all constraints.
 
-Type constraint implementation:
-- new compiler: Not yet implemented
-- old compiler:
-    + Definition:  [can/src/constraint.rs](crates/compiler/can/src/constraint.rs)
-    + [Type solving](#type-solving) using constraints: [crates/compiler/solve/src/solve.rs](crates/compiler/solve/src/solve.rs)
+Type constraint implementation: Not yet implemented.
 
 ## Type Solving
 
@@ -380,7 +333,6 @@ double arg =
 This makes the scope of `two` very clear.
 
 In Roc, you can just define variables and use them without `let ... in`, we add `let` behind the scenes.
-See `Stmt::Let` in [crates/compiler/mono/src/ir.rs](crates/compiler/mono/src/ir.rs) (old compiler).
 
 ## Generalized
 
@@ -413,7 +365,7 @@ Imported variables get rank 2.
 
 Rank 0 is special, it is used for variables that are [generalized](#generalized).
 
-Keeping track of ranks makes type inference faster. You can see how ranks are used [here](crates/compiler/solve/src/solve.rs) (old compiler).
+Keeping track of ranks makes type inference faster.
 
 ## Rigid vs Flexible
 
@@ -442,18 +394,14 @@ But the type annotation on take_first says it should be:
 ```
 `elem` is a flexible [type variable](#type-variable), the compiler chose that name.
 
-Related definitions in the compiler:
-- old compiler: search "pub enum Content" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
-- new compiler: search "pub const Content" in [canonicalize/CIR.zig](src/canonicalize/CIR.zig)
+Related definitions in the compiler: search "pub const Content" in [canonicalize/CIR.zig](src/canonicalize/CIR.zig)
 
 ## Flat Type
 
 Represents types without indirection, it's the concrete form that types take after
 resolving [variables](#type-variable) and [aliases](#type-alias).
 
-definitions in the compiler:
-- old compiler: search "pub enum FlatType" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
-- new compiler: search "pub const FlatType" in [types/types.zig](src/types/types.zig)
+definitions in the compiler: search "pub const FlatType" in [types/types.zig](src/types/types.zig)
 
 ## Canonicalization
 
@@ -474,9 +422,7 @@ the types in a program. Among other things, canonicalization;
 Canonicalization occurs on a single module (file) in isolation, so the work can be easily parallelized and cached.
 If the source code for a [module](#module) has not changed, the CanIR can simply be loaded from disk and used immediately.
 
-Implementation of Canonicalization:
-- new compiler: [canonicalize/mod.zig](src/canonicalize/mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/canonicalize)
-- old compiler: [can folder](crates/compiler/can)
+Implementation of Canonicalization: [canonicalize/mod.zig](src/canonicalize/mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/canonicalize)
 
 ## Lambda Set
 
@@ -493,13 +439,6 @@ For example; a function with the type `Num a -> Num a` may only be called in the
 `I64 -> I64`.
 This trades off some compile time for a much better runtime performance, since we don't need to
 look up which implementation to call at runtime (AKA dynamic dispatch).
-
-Related Files:
-
-- old compiler:
-  - [mono folder](crates/compiler/mono)
-  - [mono tests](crates/compiler/test_mono)
-  - [mono macro tests](crates/compiler/test_mono_macros)
 
 ## Type Checking
 
@@ -520,9 +459,6 @@ Roc uses automatic reference counting because it avoids the significant pauses t
 These pauses can be annoying in games for example, because it can result in a noticeable drop in framerate.
 
 Another approach, manual memory management, would allow you to produce the fastest program but it is also more tedious to write code that way.
-
-Reference counting implementation:
-- Old compiler: [Mono folder](crates/compiler/mono/src) (search ref)
 
 ## Borrow
 
@@ -587,15 +523,7 @@ TODO
 The [phase](#compiler-phase) where the compiler translates intermediate representation (IR) of a program into target code, usually assembly code.
 This assembly code is not yet ready for execution, it needs to be [linked](#linking) first.
 
-For the old compiler we have three code gen backends, see [#backend](#backend) for more explanation.
-
-Code Gen implementation:
-- New compiler: Not done yet
-- Old compiler:
-  - [crates/compiler/gen_llvm](crates/compiler/gen_llvm) generates LLVM IR
-  - [crates/compiler/gen_dev](crates/compiler/gen_dev) generates assembly fast for quick build times
-  - [crates/compiler/gen_wasm](crates/compiler/gen_wasm) generates webassembly (binary) for typical [wasm](#wasm) usecases.
-  - [code gen tests](crates/compiler/test_gen)
+Code Gen implementation: Not done yet.
 
 ## Host
 
@@ -669,7 +597,7 @@ make_cat_or_dog_sound = |is_dog|
 ```
 
 The function from the example above checks the boolean parameter;
-If `is_dog` is true, the ”Woof” sound branch is taken, otherwise the ”Miauw” branch. Afterwards the branches **join**
+If `is_dog` is true, the "Woof" sound branch is taken, otherwise the "Miauw" branch. Afterwards the branches **join**
 back up and use string concatenation to add an exclamation mark. A naive way to [normalise](#normalization)
 this function would be to add an assignment and `Str.concat ...` to both branches. Like below:
 ```roc
@@ -708,13 +636,7 @@ Joinpoints provide the best of both worlds:
 
 This explanation was adapted from the thesis of J. Teeuwissen: reference counting with reuse in Roc.
 
-Joinpoints in the compiler:
-- Old compiler:
-  - Search for `Join` in `enum Stmt` in [crates/compiler/mono/src/ir.rs](crates/compiler/mono/src/ir.rs)
-  - `cd crates && rg JoinPoint`
-  - `cd crates && rg "joinpoint" --glob '!**/generated' --glob '*.rs'`
-  - `cd crates && rg "join_point" --glob '*.rs'`
-- New compiler: not yet!
+Joinpoints in the compiler: Not yet implemented.
 
 ## Mutate in Place
 

@@ -1,8 +1,8 @@
 //! Compile-time finalization coverage ported from the deleted comptime evaluator tests.
 //!
 //! These cases intentionally run through the current eval harness, which
-//! publishes checked artifacts, finalizes compile-time roots, lowers through the
-//! MIR family to LIR, and then evaluates the ARC-inserted runtime image. They
+//! publishes checked modules, finalizes compile-time roots, lowers through the
+//! post-check IRs to LIR, and then evaluates the ARC-inserted LIR image. They
 //! keep the old test names so coverage audits can map the replacement suite
 //! back to the deleted `comptime_eval_test.zig` tests without restoring the old
 //! evaluator API.
@@ -64,6 +64,23 @@ const expect_failure =
     \\main = 42
 ;
 
+const inline_expect_failure =
+    \\bad = {
+    \\    expect False
+    \\    42
+    \\}
+    \\main = bad
+;
+
+const multiple_inline_expect_failures =
+    \\bad = {
+    \\    expect False
+    \\    expect 1 == 2
+    \\    42
+    \\}
+    \\main = bad
+;
+
 const dbg_does_not_halt =
     \\x = {
     \\    dbg 40
@@ -102,6 +119,12 @@ const folded_helpers =
     \\square = |x| x * x
     \\sum_squares = |a, b| square(a) + square(b)
     \\main = sum_squares(5, 12)
+;
+
+const root_local_pointer_memoization =
+    \\left = Str.concat("alpha root payload ", "000")
+    \\right = Str.concat("omega root payload ", "111")
+    \\main = (left, right)
 ;
 
 const associated_dependency =
@@ -619,6 +642,62 @@ const tag_payload_single =
     \\main = lookup([MyTag.Foo({x: 42, y: 7})], 0)
 ;
 
+const comptime_exhaustive_match_ok =
+    \\x : Try(Str, Str)
+    \\x = Ok("blah")
+    \\
+    \\main = match x {
+    \\    Ok(foo) => foo
+    \\}
+;
+
+const comptime_exhaustive_destructure_email =
+    \\Email := [Email(Str)].{
+    \\    parse : Str -> Try(Email, Str)
+    \\    parse = |raw| if raw == "" { Err("empty") } else { Ok(Email(raw)) }
+    \\
+    \\    to_str : Email -> Str
+    \\    to_str = |Email(raw)| raw
+    \\}
+    \\
+    \\main = {
+    \\    Ok(email) = Email.parse("alice@example.com")
+    \\
+    \\    Email.to_str(email)
+    \\}
+;
+
+const comptime_non_exhaustive_match =
+    \\x : Try(Str, Str)
+    \\x = Err("bad")
+    \\
+    \\main = match x {
+    \\    Ok(foo) => foo
+    \\}
+;
+
+const comptime_non_exhaustive_destructure =
+    \\main = {
+    \\    x : Try(Str, Str)
+    \\    x = Err("bad")
+    \\
+    \\    Ok(foo) = x
+    \\
+    \\    foo
+    \\}
+;
+
+const comptime_unused_match_alternative =
+    \\main = match True {
+    \\    True => "yes"
+    \\    False => "no"
+    \\}
+;
+
+const comptime_unused_if_branch =
+    \\main = if True { 42 } else { 0 }
+;
+
 const opaque_function_field =
     \\W(a) := { f : {} -> [V(a)] }.{
     \\    run : W(a) -> [V(a)]
@@ -684,6 +763,8 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - expect success does not report", .source_kind = .module, .source = expect_success, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - expect failure is reported but does not halt within def", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - multiple expect failures are reported", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - inline expect failure in constant is reported", .source_kind = .module, .source = inline_expect_failure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - multiple inline expect failures in constant are reported", .source_kind = .module, .source = multiple_inline_expect_failures, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - crash does not halt other defs", .source_kind = .module, .source = crash_other_defs, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - expect failure does not halt evaluation", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - dbg does not halt evaluation", .source_kind = .module, .source = dbg_does_not_halt, .expected = .{ .inspect_str = "42.0" } },
@@ -695,6 +776,7 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - constant folding with function calls", .source_kind = .module, .source = folded_function_call, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - constant folding with recursive function", .source_kind = .module, .source = folded_recursive_function, .expected = .{ .inspect_str = "21.0" } },
     .{ .name = "comptime eval - constant folding with helper functions", .source_kind = .module, .source = folded_helpers, .expected = .{ .inspect_str = "169.0" } },
+    .{ .name = "comptime eval - root-local pointer memoization keeps equal-layout strings distinct", .source_kind = .module, .source = root_local_pointer_memoization, .expected = .{ .inspect_str = "(\"alpha root payload 000\", \"omega root payload 111\")" } },
     .{ .name = "comptime eval - associated item dependency order", .source_kind = .module, .source = associated_dependency, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - multiple associated items with dependencies", .source_kind = .module, .source = associated_multiple, .expected = .{ .inspect_str = "7.0" } },
     .{ .name = "comptime eval - deeply nested associated items (5+ levels)", .source_kind = .module, .source = associated_deep, .expected = .{ .inspect_str = "123.0" } },
@@ -815,6 +897,12 @@ pub const tests = [_]TestCase{
     .{ .name = "issue 8979: while (False) should not crash", .source_kind = .module, .source = while_false, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "issue 8979: nested while - inner break does not save outer loop", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "tag union matching with payload inside function - single module", .source_kind = .module, .source = tag_payload_single, .expected = .{ .inspect_str = "42" } },
+    .{ .name = "comptime exhaustiveness - match succeeds empirically", .source_kind = .module, .source = comptime_exhaustive_match_ok, .expected = .{ .inspect_str = "\"blah\"" } },
+    .{ .name = "comptime exhaustiveness - Email.parse destructure succeeds empirically", .source_kind = .module, .source = comptime_exhaustive_destructure_email, .expected = .{ .inspect_str = "\"alice@example.com\"" } },
+    .{ .name = "comptime exhaustiveness - match failure is reported empirically", .source_kind = .module, .source = comptime_non_exhaustive_match, .expected = .{ .problem = {} } },
+    .{ .name = "comptime exhaustiveness - destructure failure is reported empirically", .source_kind = .module, .source = comptime_non_exhaustive_destructure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime exhaustiveness - unused match alternative is reported", .source_kind = .module, .source = comptime_unused_match_alternative, .expected = .{ .problem = {} } },
+    .{ .name = "comptime exhaustiveness - unused if branch is reported", .source_kind = .module, .source = comptime_unused_if_branch, .expected = .{ .problem = {} } },
     .{
         .name = "tag union matching with payload inside function - cross module",
         .source_kind = .module,

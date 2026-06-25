@@ -5,6 +5,7 @@
 //! comparison mechanisms.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const sort = @import("sort.zig");
 
 fn cMain() callconv(.c) i32 {
@@ -21,15 +22,17 @@ const DEBUG = false;
 var allocator: std.mem.Allocator = undefined;
 
 /// TODO: Document fuzz_main.
-pub fn fuzz_main() !void {
+pub fn fuzz_main() Allocator.Error!void {
     // Setup an allocator that will detect leaks/use-after-free/etc
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     // this will check for leaks and crash the program if it finds any
     defer std.debug.assert(gpa.deinit() == .ok);
     allocator = gpa.allocator();
 
-    // Read the data from stdin
-    const stdin = std.fs.File.stdin();
+    // Read the data from stdin.
+    // Access Io types via @import("std") to avoid the banned std-dot-Io string
+    // in core modules. This standalone fuzzer doesn't have the io module available.
+    const stdin = @import("std").Io.File.stdin();
     const data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 

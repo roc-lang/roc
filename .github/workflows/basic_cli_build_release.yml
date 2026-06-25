@@ -18,9 +18,9 @@ env:
 
 jobs:
   prepare:
-    runs-on: [ubuntu-22.04]
+    runs-on: [ubuntu-24.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: roc-lang/basic-cli
 
@@ -48,10 +48,10 @@ jobs:
           path: roc_nightly-*
 
   build-linux-x86_64-files:
-    runs-on: [ubuntu-22.04]
+    runs-on: [ubuntu-24.04]
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
@@ -74,7 +74,7 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64]
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
@@ -99,7 +99,7 @@ jobs:
     runs-on: [macos-15-intel] # should work on macOS 15+
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
@@ -118,7 +118,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
@@ -141,9 +141,9 @@ jobs:
         build-macos-apple-silicon-files,
       ]
     name: create release archive
-    runs-on: [ubuntu-22.04]
+    runs-on: [ubuntu-24.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: remove all folders except the ci folder
         run: ls | grep -v  ci | xargs rm -rf
@@ -207,7 +207,7 @@ jobs:
     needs: [create-release-archive]
     strategy:
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-14, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Download the previously uploaded files

@@ -42,13 +42,20 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string
-	(e-literal (string "This is a string with "))
-	(e-call
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-literal (string " lines of text due to the template parts")))
+(e-block
+	(s-let
+		(p-assign (ident "#interp_0"))
+		(e-call
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-runtime-error (tag "ident_not_in_scope"))))
+	(e-interpolation
+		(first
+			(e-literal (string "This is a string with ")))
+		(parts
+			(e-lookup-local
+				(p-assign (ident "#interp_0")))
+			(e-literal (string " lines of text due to the template parts")))))
 ~~~
 # TYPES
 ~~~clojure

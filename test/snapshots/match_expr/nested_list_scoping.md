@@ -96,11 +96,13 @@ match nestedList {
 									(patterns
 										(p-assign (ident "y"))))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 43)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -111,11 +113,13 @@ match nestedList {
 										(p-assign (ident "x"))
 										(p-assign (ident "y"))))))))
 				(value
-					(e-binop (op "sub")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "minus") (constraint-fn-var 49)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

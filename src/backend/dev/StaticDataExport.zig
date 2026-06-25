@@ -9,6 +9,8 @@ pub const StaticDataExport = struct {
     symbol_name: []const u8,
     /// Fully materialized Roc ABI bytes for the constant.
     bytes: []const u8,
+    /// Offset inside `bytes` where `symbol_name` points.
+    symbol_offset: u32 = 0,
     /// Required alignment of the symbol inside the readonly section.
     alignment: u32,
     /// Whether the symbol should be visible to the host linker.
@@ -19,12 +21,19 @@ pub const StaticDataExport = struct {
 
 /// One pointer relocation inside a readonly static-data symbol.
 pub const StaticDataRelocation = struct {
+    pub const Kind = enum {
+        address,
+        function_pointer,
+    };
+
     /// Byte offset inside `StaticDataExport.bytes` where the pointer is stored.
     offset: u64,
     /// Symbol whose address should be written at `offset`.
     target_symbol_name: []const u8,
     /// Addend applied to the target symbol address.
     addend: i64 = 0,
+    /// Runtime meaning of the stored pointer.
+    kind: Kind = .address,
     /// Whether `target_symbol_name` is owned by this relocation and must be freed
     /// with the static data graph.
     owns_target_symbol_name: bool = false,

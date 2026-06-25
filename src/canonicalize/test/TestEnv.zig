@@ -1,13 +1,14 @@
 //! Test environment for canonicalization testing, providing utilities to parse, canonicalize, and inspect Roc expressions.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
-const Allocators = base.Allocators;
+const CoreCtx = @import("ctx").CoreCtx;
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
@@ -18,12 +19,10 @@ builtin_ctx: BuiltinTestContext,
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 pub const TestEnv = @This();
 
-pub fn init(source: []const u8) !TestEnv {
+pub fn init(source: []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
 
     // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
@@ -38,7 +37,7 @@ pub fn init(source: []const u8) !TestEnv {
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    const parse_ast = try parse.expr(gpa, &module_env.common);
     errdefer parse_ast.deinit();
 
     // Phase 4: AST Structure Validation
@@ -54,7 +53,7 @@ pub fn init(source: []const u8) !TestEnv {
     var builtin_ctx = try BuiltinTestContext.init(gpa);
     errdefer builtin_ctx.deinit();
 
-    can.* = try Can.initModule(&allocators, module_env, parse_ast, builtin_ctx.canInitContext());
+    can.* = try Can.initModule(roc_ctx, module_env, parse_ast, builtin_ctx.canInitContext());
 
     return TestEnv{
         .gpa = gpa,
@@ -78,7 +77,7 @@ pub fn deinit(self: *TestEnv) void {
 }
 
 /// Canonicalizes the root expression from the parsed AST, returning null if there are parse errors.
-pub fn canonicalizeExpr(self: *TestEnv) !?Can.CanonicalizedExpr {
+pub fn canonicalizeExpr(self: *TestEnv) Allocator.Error!?Can.CanonicalizedExpr {
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(self.parse_ast.root_node_idx);
 
     if (self.parse_ast.parse_diagnostics.items.len > 0 or
@@ -111,6 +110,6 @@ pub fn hasParseErrors(self: *TestEnv) bool {
 }
 
 /// Returns all diagnostics from the module environment.
-pub fn getDiagnostics(self: *TestEnv) ![]CIR.Diagnostic {
+pub fn getDiagnostics(self: *TestEnv) Allocator.Error![]CIR.Diagnostic {
     return self.module_env.getDiagnostics();
 }

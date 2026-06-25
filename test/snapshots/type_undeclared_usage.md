@@ -16,9 +16,9 @@ AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:1:10:1:21
-MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
+MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _UnknownType_ is not declared in this scope.
@@ -29,17 +29,6 @@ This type is referenced here:
 MyType : UnknownType
 ```
          ^^^^^^^^^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `SomeModule` imported into this Roc file.
-
-You're attempting to use this module here:
-**type_undeclared_usage.md:8:15:8:37:**
-```roc
-AnotherType : SomeModule.MissingType
-```
-              ^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -63,6 +52,17 @@ The unused variable is declared here:
 processValue = |value| {
 ```
                 ^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `SomeModule` imported into this Roc file.
+
+You're attempting to use this module here:
+**type_undeclared_usage.md:8:15:8:37:**
+```roc
+AnotherType : SomeModule.MissingType
+```
+              ^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS

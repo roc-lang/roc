@@ -1,3 +1,0 @@
-P:=p#
-  implements[]
-n

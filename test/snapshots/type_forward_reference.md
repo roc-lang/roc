@@ -85,31 +85,31 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl
-		(ty-header (name "B"))
-		(ty-lookup (name "Str") (builtin)))
-	(s-alias-decl
 		(ty-header (name "A"))
 		(ty-lookup (name "B") (local)))
 	(s-alias-decl
-		(ty-header (name "Third"))
-		(ty-lookup (name "U64") (builtin)))
-	(s-alias-decl
-		(ty-header (name "Second"))
-		(ty-lookup (name "Third") (local)))
+		(ty-header (name "B"))
+		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "First"))
 		(ty-lookup (name "Second") (local)))
 	(s-alias-decl
-		(ty-header (name "Inner")
-			(ty-args
-				(ty-rigid-var (name "a"))))
-		(ty-apply (name "List") (builtin)
-			(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
+		(ty-header (name "Second"))
+		(ty-lookup (name "Third") (local)))
+	(s-alias-decl
+		(ty-header (name "Third"))
+		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "Wrapper")
 			(ty-args
 				(ty-rigid-var (name "a"))))
 		(ty-apply (name "Inner") (local)
+			(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
+	(s-alias-decl
+		(ty-header (name "Inner")
+			(ty-args
+				(ty-rigid-var (name "a"))))
+		(ty-apply (name "List") (builtin)
 			(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 ~~~
 # TYPES
@@ -117,22 +117,22 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "B")
-			(ty-header (name "B")))
 		(alias (type "A")
 			(ty-header (name "A")))
-		(alias (type "Third")
-			(ty-header (name "Third")))
-		(alias (type "Second")
-			(ty-header (name "Second")))
+		(alias (type "B")
+			(ty-header (name "B")))
 		(alias (type "First")
 			(ty-header (name "First")))
-		(alias (type "Inner(a)")
-			(ty-header (name "Inner")
-				(ty-args
-					(ty-rigid-var (name "a")))))
+		(alias (type "Second")
+			(ty-header (name "Second")))
+		(alias (type "Third")
+			(ty-header (name "Third")))
 		(alias (type "Wrapper(a)")
 			(ty-header (name "Wrapper")
+				(ty-args
+					(ty-rigid-var (name "a")))))
+		(alias (type "Inner(a)")
+			(ty-header (name "Inner")
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions))

@@ -1,12 +1,13 @@
 //! Handler for the LSP `shutdown` request that gracefully terminates the server.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 
 /// Returns the `shutdown` method handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, _: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, _: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             switch (self.state) {
                 .waiting_for_initialize => {
                     try ServerType.sendError(self, id, .server_not_initialized, "initialize must be called before shutdown");

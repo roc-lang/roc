@@ -46,7 +46,6 @@ pub const Int = types.Int;
 pub const Frac = types.Frac;
 pub const IntRequirements = types.IntRequirements;
 pub const FracRequirements = types.FracRequirements;
-pub const parseNumeralWithSuffix = types.parseNumeralWithSuffix;
 
 pub const Slot = store.Slot;
 pub const ResolvedVarDesc = store.ResolvedVarDesc;

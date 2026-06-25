@@ -125,6 +125,20 @@ test "non-exhaustive - integer literals need wildcard" {
     try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
 }
 
+test "non-exhaustive - unannotated integer literal match needs wildcard" {
+    const source =
+        \\f = |n| match n {
+        \\    30 => "thirty"
+        \\}
+        \\
+        \\result = f(31)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
 test "exhaustive - integer literals with wildcard" {
     const source =
         \\x : I64
@@ -140,6 +154,18 @@ test "exhaustive - integer literals with wildcard" {
     defer test_env.deinit();
 
     try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive - guarded-only match needs unguarded fallback" {
+    const source =
+        \\result = match 1.I64 {
+        \\    x if x == 2.I64 => x
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
 }
 
 // Redundancy Checking
@@ -476,6 +502,148 @@ test "unmatchable - Err pattern first on empty error type is unreachable" {
     defer test_env.deinit();
 
     try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+}
+
+test "exhaustive - ignored error type means only Ok needed" {
+    const source =
+        \\x : Try(I64, _err)
+        \\x = Ok(42)
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - inferred wildcard error type means only Ok needed" {
+    const source =
+        \\x : Try(I64, _)
+        \\x = Ok(42)
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - direct Try.Ok match only needs Ok" {
+    const source =
+        \\result : Str
+        \\result = match Try.Ok("blah") {
+        \\    Ok(foo) => foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "unmatchable - Err pattern first on ignored error type is unreachable" {
+    const source =
+        \\x : Try(I64, _err)
+        \\x = Ok(42)
+        \\
+        \\result = match x {
+        \\    Err(_) => 0
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+}
+
+test "exhaustive - structural tag with ignored payload is not required" {
+    const source =
+        \\x : [Something, Other(_payload)]
+        \\x = Something
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Something => 1
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "non-exhaustive - structural tag with ordinary payload is required" {
+    const source =
+        \\x : [Something, Other(payload)]
+        \\x = Something
+        \\
+        \\result = match x {
+        \\    Something => 1
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "destructure - Ok on ignored error type is exhaustive" {
+    const source =
+        \\result : Str
+        \\result = {
+        \\    x : Try(Str, _err)
+        \\    x = Ok("blah")
+        \\
+        \\    Ok(foo) = x
+        \\
+        \\    foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "destructure - direct Try.Ok is exhaustive" {
+    const source =
+        \\result : Str
+        \\result = {
+        \\    Ok(foo) = Try.Ok("blah")
+        \\
+        \\    foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive destructure - Ok on concrete error type can miss Err" {
+    const source =
+        \\result = {
+        \\    x : Try(Str, Str)
+        \\    x = if True { Ok("blah") } else { Err("bad") }
+        \\
+        \\    Ok(foo) = x
+        \\
+        \\    foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("NON-EXHAUSTIVE DESTRUCTURE");
 }
 
 // Additional Inhabitedness Edge Cases
@@ -820,16 +988,16 @@ test "redundant - record second pattern unreachable with different field order" 
 }
 
 test "exhaustive - record patterns with different field subsets" {
-    // Patterns that destructure different subsets of fields should work correctly.
-    // The exhaustiveness checker should understand that unmentioned fields are wildcards.
+    // Patterns that destructure different subsets of fields with `..` should work correctly.
+    // The exhaustiveness checker should treat the `..`-covered fields as wildcards.
     const source =
         \\x : { name: Str, age: I64, score: I64 }
         \\x = { name: "Alice", age: 30, score: 100 }
         \\
         \\result = match x {
-        \\    { name: "Alice" } => "alice"
-        \\    { age: 30 } => "thirty"
-        \\    { score: 100 } => "perfect"
+        \\    { name: "Alice", .. } => "alice"
+        \\    { age: 30, .. } => "thirty"
+        \\    { score: 100, .. } => "perfect"
         \\    _ => "other"
         \\}
     ;

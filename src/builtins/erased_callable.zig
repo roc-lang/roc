@@ -33,12 +33,26 @@ pub const CallableFnPtr = ErasedCallableFn;
 /// decref/free any refcounted data contained inside the capture. It must not free
 /// the erased callable allocation; the erased callable runtime does that after
 /// this callback returns.
+///
+/// The ops argument is whatever the final release passed along. Compiled Roc
+/// code carries no RocOps under the symbol ABI and passes null here, so a
+/// host-installed callback must reach the host's RocOps through the host's
+/// own storage, never through this parameter.
 pub const OnDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
 
 /// Fixed header at the beginning of a boxed erased callable payload.
 pub const Payload = extern struct {
     callable_fn_ptr: CallableFnPtr,
     on_drop: ?OnDropFn,
+};
+
+/// Shim-only metadata stored at the beginning of a Roc-created erased
+/// callable's capture bytes while the dev machine-code shim is running in hot
+/// reload mode. The public erased-callable payload ABI remains unchanged:
+/// hosts still see `Payload` followed by bytes at `capturePtr`.
+pub const HotReloadCaptureHeader = extern struct {
+    code_ref: ?*anyopaque,
+    original_on_drop: ?OnDropFn,
 };
 
 /// Captures are aligned to this boundary so any legal Roc capture layout can be
@@ -52,9 +66,15 @@ pub const payload_alignment: u32 = capture_alignment;
 /// Fixed byte offset from the start of `Payload` to the first capture byte.
 pub const capture_offset: u32 = @intCast(std.mem.alignForward(usize, @sizeOf(Payload), capture_alignment));
 
+/// Bytes reserved before the ordinary Roc capture in shim-execution erased
+/// callables. This is aligned like captures so the adjusted capture pointer
+/// keeps the same alignment guarantees as `capturePtr`.
+pub const hot_reload_capture_prefix_size: u32 = @intCast(std.mem.alignForward(usize, @sizeOf(HotReloadCaptureHeader), capture_alignment));
+
 comptime {
     std.debug.assert(capture_offset % capture_alignment == 0);
     std.debug.assert(payload_alignment == 16);
+    std.debug.assert(hot_reload_capture_prefix_size % capture_alignment == 0);
 }
 
 /// The runtime allocation never relies on Roc's list-style element-count header.
@@ -109,6 +129,21 @@ pub fn capturePtr(data_ptr: [*]u8) [*]u8 {
 pub fn maybeCapturePtr(data_ptr: ?[*]u8) ?[*]u8 {
     const ptr = data_ptr orelse return null;
     return capturePtr(ptr);
+}
+
+/// Interpret a shim-execution erased-callable capture pointer as the hot-reload
+/// prefix header. Only call this for payloads whose on_drop was set to the
+/// shim hot-reload drop helper.
+pub fn hotReloadCaptureHeader(capture_ptr: ?[*]u8) ?*HotReloadCaptureHeader {
+    const ptr = capture_ptr orelse return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
+/// Return the ordinary Roc capture pointer after the shim-only hot-reload
+/// prefix.
+pub fn hotReloadAdjustedCapturePtr(capture_ptr: ?[*]u8) ?[*]u8 {
+    const ptr = capture_ptr orelse return null;
+    return ptr + hot_reload_capture_prefix_size;
 }
 
 /// Increment the outer boxed-erased-callable allocation refcount.

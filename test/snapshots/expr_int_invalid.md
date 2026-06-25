@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "invalid_num_literal"))
+(e-num-from-numeral)
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Dec"))
 ~~~

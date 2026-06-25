@@ -4,19 +4,17 @@
 //! Walks the AST to find all containing regions for proper expand/shrink selection.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
-const base = @import("base");
-
-const Allocators = base.Allocators;
 const AST = parse.AST;
 const TokenizedRegion = AST.TokenizedRegion;
 
 /// Handler for `textDocument/selectionRange` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "selectionRange requires params");
                 return;
@@ -75,7 +73,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Process each position
-            var results = std.ArrayList(?SelectionRange){};
+            var results: std.ArrayList(?SelectionRange) = .empty;
             defer {
                 // Free the linked list nodes
                 for (results.items) |maybe_range| {
@@ -110,7 +108,10 @@ pub fn handler(comptime ServerType: type) type {
                     };
                 };
 
-                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch null;
+                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => null,
+                };
                 try results.append(self.allocator, selection_range);
             }
 
@@ -145,7 +146,7 @@ fn freeSelectionRange(allocator: std.mem.Allocator, range: SelectionRange) void 
 
 /// Compute selection range hierarchy for a position.
 /// Walks the AST to find all containing nodes (token, expression, statement, file).
-fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) !SelectionRange {
+fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) (Allocator.Error || error{ InvalidPosition, ParseFailed, NoRangeFound })!SelectionRange {
     // Build line offset table
     const line_offsets = buildLineOffsets(source);
 
@@ -153,22 +154,14 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const target_offset = positionToOffset(line, character, &line_offsets) orelse return error.InvalidPosition;
 
     // Parse to get AST
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    var module_env = can.ModuleEnv.init(allocator, source) catch {
-        return error.ParseFailed;
-    };
+    var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(&allocators, &module_env.common) catch {
-        return error.ParseFailed;
-    };
+    const ast = try parse.file(allocator, &module_env.common);
     defer ast.deinit();
 
     // Collect all containing regions
-    var containing_regions = std.ArrayList(ByteRange){};
+    var containing_regions: std.ArrayList(ByteRange) = .empty;
     defer containing_regions.deinit(allocator);
 
     // 1. Find the token at the position (innermost)
@@ -209,7 +202,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     }.lessThan);
 
     // Remove duplicates (regions with same start and end)
-    var unique_regions = std.ArrayList(ByteRange){};
+    var unique_regions: std.ArrayList(ByteRange) = .empty;
     defer unique_regions.deinit(allocator);
 
     var prev: ?ByteRange = null;
@@ -293,7 +286,9 @@ fn collectContainingRegionsFromStatement(
             try collectContainingRegionsFromExpr(allocator, ast, d.body, target_offset, regions);
         },
         .@"var" => |v| {
-            try collectContainingRegionsFromExpr(allocator, ast, v.body, target_offset, regions);
+            if (v.body) |body| {
+                try collectContainingRegionsFromExpr(allocator, ast, body, target_offset, regions);
+            }
         },
         .expr => |e| {
             try collectContainingRegionsFromExpr(allocator, ast, e.expr, target_offset, regions);
@@ -463,12 +458,19 @@ fn collectContainingRegionsFromExpr(
                 }
             }
         },
+        .nominal_record => |nr| {
+            try collectContainingRegionsFromExpr(allocator, ast, nr.mapper, target_offset, regions);
+            try collectContainingRegionsFromExpr(allocator, ast, nr.backing, target_offset, regions);
+        },
         .for_expr => |f| {
             try collectContainingRegionsFromExpr(allocator, ast, f.expr, target_offset, regions);
             try collectContainingRegionsFromExpr(allocator, ast, f.body, target_offset, regions);
         },
+        .@"return" => |r| {
+            try collectContainingRegionsFromExpr(allocator, ast, r.expr, target_offset, regions);
+        },
         // Leaf expressions - no children to recurse into
-        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .tag, .ident, .record_updater, .ellipsis, .malformed => {},
+        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .typed_string, .typed_multiline_string, .tag, .ident, .record_updater, .ellipsis, .@"break", .malformed => {},
     }
 }
 

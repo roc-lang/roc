@@ -256,15 +256,9 @@ func = {
 	num_container = Container.Value(100)
 
 	chained = num_container
-		.map(
-			|x| x + 1,
-		)
-		.flat_map(
-			|x| Container.Value(x + 2),
-		)
-		.get_or(
-			0,
-		)
+		.map(|x| x + 1)
+		.flat_map(|x| Container.Value(x + 2))
+		.get_or(0)
 
 	chained
 }
@@ -292,7 +286,7 @@ func = {
 								(value
 									(e-tag (name "Value")
 										(args
-											(e-call (constraint-fn-var 145)
+											(e-call (constraint-fn-var 147)
 												(e-lookup-local
 													(p-assign (ident "f")))
 												(e-lookup-local
@@ -358,7 +352,7 @@ func = {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-call (constraint-fn-var 183)
+									(e-call (constraint-fn-var 187)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
@@ -391,11 +385,11 @@ func = {
 							(e-num (value "100"))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dispatch-call (method "get_or") (constraint-fn-var 264)
+				(e-dispatch-call (method "get_or") (constraint-fn-var 360)
 					(receiver
-						(e-dispatch-call (method "flat_map") (constraint-fn-var 244)
+						(e-dispatch-call (method "flat_map") (constraint-fn-var 317)
 							(receiver
-								(e-dispatch-call (method "map") (constraint-fn-var 216)
+								(e-dispatch-call (method "map") (constraint-fn-var 266)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))
@@ -403,10 +397,12 @@ func = {
 										(e-lambda
 											(args
 												(p-assign (ident "x")))
-											(e-binop (op "add")
-												(e-lookup-local
-													(p-assign (ident "x")))
-												(e-num (value "1")))))))
+											(e-dispatch-call (method "plus") (constraint-fn-var 264)
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "x"))))
+												(args
+													(e-num (value "1"))))))))
 							(args
 								(e-lambda
 									(args
@@ -414,10 +410,12 @@ func = {
 									(e-nominal (nominal "Container")
 										(e-tag (name "Value")
 											(args
-												(e-binop (op "add")
-													(e-lookup-local
-														(p-assign (ident "x")))
-													(e-num (value "2"))))))))))
+												(e-dispatch-call (method "plus") (constraint-fn-var 309)
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "x"))))
+													(args
+														(e-num (value "2")))))))))))
 					(args
 						(e-num (value "0")))))
 			(e-lookup-local

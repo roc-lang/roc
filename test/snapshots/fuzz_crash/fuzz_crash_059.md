@@ -150,8 +150,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 app [] { f: platform "" }
-import B as
-G
+import B as G
 ~~~
 # CANONICALIZE
 ~~~clojure

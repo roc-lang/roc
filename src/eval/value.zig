@@ -121,13 +121,13 @@ pub const LayoutHelper = struct {
     /// Offset of a struct field (by sorted field index).
     pub fn structFieldOffset(self: LayoutHelper, idx: layout_mod.Idx, sorted_field_idx: u32) u32 {
         const l = self.store.getLayout(idx);
-        return self.store.getStructFieldOffset(l.data.struct_.idx, sorted_field_idx);
+        return self.store.getStructFieldOffset(l.getStruct().idx, sorted_field_idx);
     }
 
     /// Offset of the discriminant in a tag union.
     pub fn tagDiscriminantOffset(self: LayoutHelper, idx: layout_mod.Idx) u16 {
         const l = self.store.getLayout(idx);
-        return self.store.getTagUnionDiscriminantOffset(l.data.tag_union.idx);
+        return self.store.getTagUnionDiscriminantOffset(l.getTagUnion().idx);
     }
 
     /// Read the discriminant value from a tag union value.
@@ -136,7 +136,7 @@ pub const LayoutHelper = struct {
         const disc_offset = self.tagDiscriminantOffset(union_layout);
         const at_disc = val.offset(disc_offset);
         const l = self.store.getLayout(union_layout);
-        const tu_data = self.store.getTagUnionData(l.data.tag_union.idx);
+        const tu_data = self.store.getTagUnionData(l.getTagUnion().idx);
         return switch (tu_data.discriminant_size) {
             0 => 0, // Single-variant unions have implicit discriminant 0
             1 => at_disc.read(u8),
@@ -150,7 +150,7 @@ pub const LayoutHelper = struct {
         const disc_offset = self.tagDiscriminantOffset(union_layout);
         const at_disc = val.offset(disc_offset);
         const l = self.store.getLayout(union_layout);
-        const tu_data = self.store.getTagUnionData(l.data.tag_union.idx);
+        const tu_data = self.store.getTagUnionData(l.getTagUnion().idx);
         switch (tu_data.discriminant_size) {
             0 => {}, // Single-variant — no discriminant to write
             1 => at_disc.write(u8, @intCast(disc)),

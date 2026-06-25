@@ -48,11 +48,18 @@ NO CHANGE
 			(e-literal (string "luc"))))
 	(d-let
 		(p-assign (ident "foo"))
-		(e-string
-			(e-literal (string "hello "))
-			(e-lookup-local
-				(p-assign (ident "name")))
-			(e-literal (string "")))))
+		(e-block
+			(s-let
+				(p-assign (ident "#interp_0"))
+				(e-lookup-local
+					(p-assign (ident "name"))))
+			(e-interpolation (constraint-fn-var 90)
+				(first
+					(e-literal (string "hello ")))
+				(parts
+					(e-lookup-local
+						(p-assign (ident "#interp_0")))
+					(e-literal (string "")))))))
 ~~~
 # TYPES
 ~~~clojure

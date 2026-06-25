@@ -12,35 +12,9 @@ match ... {
 }
 ~~~
 # EXPECTED
-REDUNDANT PATTERN - record_destructure.md:1:1:5:2
-REDUNDANT PATTERN - record_destructure.md:1:1:5:2
+NIL
 # PROBLEMS
-**REDUNDANT PATTERN**
-The second branch of this `match` is redundant:
-**record_destructure.md:1:1:5:2:**
-```roc
-match ... {
-    { name, age } => "${name} is ${age.to_str()} years old"
-    { name, address: { city } } => "${city} is the city of ${name}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The third branch of this `match` is redundant:
-**record_destructure.md:1:1:5:2:**
-```roc
-match ... {
-    { name, age } => "${name} is ${age.to_str()} years old"
-    { name, address: { city } } => "${city} is the city of ${name}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -112,17 +86,28 @@ match ... {
 									(required
 										(p-assign (ident "age"))))))))
 				(value
-					(e-string
-						(e-literal (string ""))
-						(e-lookup-local
-							(p-assign (ident "name")))
-						(e-literal (string " is "))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 51)
-							(receiver
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "name"))))
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-dispatch-call (method "to_str") (constraint-fn-var 58)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "age"))))
+								(args)))
+						(e-interpolation (constraint-fn-var 117)
+							(first
+								(e-literal (string "")))
+							(parts
 								(e-lookup-local
-									(p-assign (ident "age"))))
-							(args))
-						(e-literal (string " years old")))))
+									(p-assign (ident "#interp_0")))
+								(e-literal (string " is "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string " years old")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -139,14 +124,25 @@ match ... {
 													(required
 														(p-assign (ident "city"))))))))))))
 				(value
-					(e-string
-						(e-literal (string ""))
-						(e-lookup-local
-							(p-assign (ident "city")))
-						(e-literal (string " is the city of "))
-						(e-lookup-local
-							(p-assign (ident "name")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_2"))
+							(e-lookup-local
+								(p-assign (ident "city"))))
+						(s-let
+							(p-assign (ident "#interp_3"))
+							(e-lookup-local
+								(p-assign (ident "name"))))
+						(e-interpolation (constraint-fn-var 178)
+							(first
+								(e-literal (string "")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_2")))
+								(e-literal (string " is the city of "))
+								(e-lookup-local
+									(p-assign (ident "#interp_3")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

@@ -1,8 +1,0 @@
-app "test" provides [main] to "./platform"
-
-x : Result Str []
-x = Ok "abc"
-
-main = when x is
-#^^^^{-1} Str
-    Ok s -> s

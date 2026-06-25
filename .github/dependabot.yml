@@ -1,7 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: "cargo"
-    directory: "/"
+  - package-ecosystem: "nix"
+    # if the flake.nix file is moved from ./src/flake.nix, or if other nix files end up in the root, this path should be updated
+    directory: "/src"
     schedule:
       interval: "weekly"
       day: "monday"

@@ -5,6 +5,14 @@
 
 const std = @import("std");
 
+/// Machine encoding used for a data-address relocation in generated code.
+pub const DataRelocationKind = enum {
+    abs64,
+    rel32,
+    page21,
+    pageoff12,
+};
+
 /// A relocation that needs to be applied during linking.
 pub const Relocation = union(enum) {
     /// Inline data that should be placed in the data section.
@@ -32,6 +40,7 @@ pub const Relocation = union(enum) {
         offset: u64,
         /// Name of the data symbol to link to
         name: []const u8,
+        kind: DataRelocationKind = .abs64,
     },
 
     /// A jump to the function's return sequence.
@@ -72,6 +81,9 @@ pub const Relocation = union(enum) {
 /// Function that resolves a symbol name to its address.
 pub const SymbolResolver = *const fn (name: []const u8) ?usize;
 
+/// Function that resolves a symbol name using caller-provided context.
+pub const SymbolResolverContext = *const fn (ctx: *const anyopaque, name: []const u8) ?usize;
+
 /// Errors that can occur when applying relocations to generated machine code.
 pub const ApplyRelocationsError = error{
     UnresolvedSymbol,
@@ -94,24 +106,47 @@ pub fn applyRelocations(
     relocations: []const Relocation,
     resolver: SymbolResolver,
 ) ApplyRelocationsError!void {
+    const ResolverBox = struct {
+        resolver: SymbolResolver,
+
+        fn resolve(ctx: *const anyopaque, name: []const u8) ?usize {
+            const self: *const @This() = @ptrCast(@alignCast(ctx));
+            return self.resolver(name);
+        }
+    };
+
+    const box = ResolverBox{ .resolver = resolver };
+    return applyRelocationsWithContext(code, code_base_addr, relocations, &box, ResolverBox.resolve);
+}
+
+/// Apply relocations using a resolver that receives explicit caller context.
+pub fn applyRelocationsWithContext(
+    code: []u8,
+    code_base_addr: usize,
+    relocations: []const Relocation,
+    resolver_ctx: *const anyopaque,
+    resolver: SymbolResolverContext,
+) ApplyRelocationsError!void {
     for (relocations) |reloc| {
         switch (reloc) {
             .linked_function => |func_reloc| {
-                const target_addr = resolver(func_reloc.name) orelse {
+                const target_addr = resolver(resolver_ctx, func_reloc.name) orelse {
                     return error.UnresolvedSymbol;
                 };
                 try patchLinkedFunctionRelocation(code, code_base_addr, func_reloc.offset, target_addr);
             },
             .linked_data => |data_reloc| {
-                const target_addr = resolver(data_reloc.name) orelse {
+                const target_addr = resolver(resolver_ctx, data_reloc.name) orelse {
                     return error.UnresolvedSymbol;
                 };
-                try patchLinkedDataRelocation(code, code_base_addr, data_reloc.offset, target_addr);
+                try patchLinkedDataRelocation(code, code_base_addr, data_reloc.offset, target_addr, data_reloc.kind);
             },
             .local_data => |local_reloc| {
-                const owned_data = try std.heap.page_allocator.dupe(u8, local_reloc.data);
-                const target_addr = @intFromPtr(owned_data.ptr);
-                try patchLinkedDataRelocation(code, code_base_addr, local_reloc.offset, target_addr);
+                // The data's address is baked into the generated code, so the
+                // referenced bytes must outlive that code — the caller owns
+                // that lifetime.
+                const target_addr = @intFromPtr(local_reloc.data.ptr);
+                try patchLinkedDataRelocation(code, code_base_addr, local_reloc.offset, target_addr, .abs64);
             },
             .jmp_to_return => |jmp_reloc| {
                 try patchJumpToReturnRelocation(code, code_base_addr, jmp_reloc.inst_loc, jmp_reloc.inst_size, jmp_reloc.offset);
@@ -142,12 +177,24 @@ fn patchLinkedFunctionRelocation(code: []u8, code_base_addr: usize, reloc_offset
     return error.UnsupportedRelocationEncoding;
 }
 
-fn patchLinkedDataRelocation(code: []u8, code_base_addr: usize, reloc_offset_u64: u64, target_addr: usize) ApplyRelocationsError!void {
+fn patchLinkedDataRelocation(
+    code: []u8,
+    code_base_addr: usize,
+    reloc_offset_u64: u64,
+    target_addr: usize,
+    kind: DataRelocationKind,
+) ApplyRelocationsError!void {
     const reloc_offset = try asCodeOffset(reloc_offset_u64, code.len);
 
-    if (try tryPatchKnownRelativeOperand(code, code_base_addr, reloc_offset, target_addr)) return;
-
-    return patchAbsolutePointerOperand(code, reloc_offset, target_addr);
+    switch (kind) {
+        .abs64 => return patchAbsolutePointerOperand(code, reloc_offset, target_addr),
+        .rel32 => {
+            const next_instr = code_base_addr + reloc_offset + 4;
+            return patchX86Rel32Operand(code, reloc_offset, next_instr, target_addr);
+        },
+        .page21 => return patchAarch64AdrpRelocation(code, reloc_offset, code_base_addr + reloc_offset, target_addr),
+        .pageoff12 => return patchAarch64PageOffset12Relocation(code, reloc_offset, target_addr),
+    }
 }
 
 fn patchJumpToReturnRelocation(
@@ -196,51 +243,6 @@ fn patchJumpToReturnRelocation(
         },
         else => return error.UnsupportedRelocationEncoding,
     }
-}
-
-fn tryPatchKnownRelativeOperand(
-    code: []u8,
-    code_base_addr: usize,
-    reloc_offset: usize,
-    target_addr: usize,
-) ApplyRelocationsError!bool {
-    if (reloc_offset > 0 and reloc_offset + 4 <= code.len) {
-        const prev = code[reloc_offset - 1];
-        if (prev == 0xE8 or prev == 0xE9) {
-            const next_instr = code_base_addr + reloc_offset + 4;
-            try patchX86Rel32Operand(code, reloc_offset, next_instr, target_addr);
-            return true;
-        }
-    }
-
-    if (reloc_offset > 1 and reloc_offset + 4 <= code.len) {
-        const first = code[reloc_offset - 2];
-        const second = code[reloc_offset - 1];
-        if (first == 0x0F and second >= 0x80 and second <= 0x8F) {
-            const next_instr = code_base_addr + reloc_offset + 4;
-            try patchX86Rel32Operand(code, reloc_offset, next_instr, target_addr);
-            return true;
-        }
-    }
-
-    if (reloc_offset + 4 <= code.len) {
-        const inst = std.mem.readInt(u32, code[reloc_offset..][0..4], .little);
-        if (isAarch64BranchInstruction(inst)) {
-            try patchAarch64BranchInstruction(code, reloc_offset, code_base_addr + reloc_offset, target_addr);
-            return true;
-        }
-    }
-
-    return false;
-}
-
-fn isAarch64BranchInstruction(inst: u32) bool {
-    if ((inst >> 26) == 0b000101) return true; // B
-    if ((inst >> 26) == 0b100101) return true; // BL
-    if ((inst >> 24) == 0b01010100) return true; // B.cond
-    const top7 = (inst >> 24) & 0b01111111;
-    if (top7 == 0b0110100 or top7 == 0b0110101) return true; // CBZ/CBNZ
-    return false;
 }
 
 fn patchX86Rel32Operand(code: []u8, operand_offset: usize, next_instr_addr: usize, target_addr: usize) ApplyRelocationsError!void {
@@ -304,6 +306,44 @@ fn patchAbsolutePointerOperand(code: []u8, operand_offset: usize, target_addr: u
     }
 
     @compileError("Unsupported pointer size");
+}
+
+fn patchAarch64AdrpRelocation(code: []u8, inst_offset: usize, inst_addr: usize, target_addr: usize) ApplyRelocationsError!void {
+    if (inst_offset + 4 > code.len) return error.InvalidOffset;
+
+    var inst = std.mem.readInt(u32, code[inst_offset..][0..4], .little);
+    if ((inst & 0x9F00_0000) != 0x9000_0000) return error.UnsupportedRelocationEncoding;
+
+    const page_mask: usize = ~@as(usize, 0xFFF);
+    const inst_page = inst_addr & page_mask;
+    const target_page = target_addr & page_mask;
+    const delta_pages_i128 = @divExact(@as(i128, @intCast(target_page)) - @as(i128, @intCast(inst_page)), 4096);
+    if (!fitsSignedBits(delta_pages_i128, 21)) return error.BranchOutOfRange;
+
+    const delta_pages_i21: i21 = @intCast(delta_pages_i128);
+    const imm21: u21 = @bitCast(delta_pages_i21);
+    const immlo: u32 = @as(u32, imm21 & 0b11);
+    const immhi: u32 = @as(u32, imm21 >> 2);
+
+    inst &= ~(@as(u32, 0b11) << 29);
+    inst &= ~(@as(u32, 0x7FFFF) << 5);
+    inst |= immlo << 29;
+    inst |= immhi << 5;
+
+    std.mem.writeInt(u32, code[inst_offset..][0..4], inst, .little);
+}
+
+fn patchAarch64PageOffset12Relocation(code: []u8, inst_offset: usize, target_addr: usize) ApplyRelocationsError!void {
+    if (inst_offset + 4 > code.len) return error.InvalidOffset;
+
+    var inst = std.mem.readInt(u32, code[inst_offset..][0..4], .little);
+    if ((inst & 0x7F00_0000) != 0x1100_0000) return error.UnsupportedRelocationEncoding;
+
+    const lo12: u32 = @intCast(target_addr & 0xFFF);
+    inst &= ~(@as(u32, 0xFFF) << 10);
+    inst |= lo12 << 10;
+
+    std.mem.writeInt(u32, code[inst_offset..][0..4], inst, .little);
 }
 
 fn asCodeOffset(offset: u64, code_len: usize) ApplyRelocationsError!usize {

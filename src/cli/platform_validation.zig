@@ -16,22 +16,20 @@ const reporting = @import("reporting");
 const target_mod = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
 
-const Allocators = base.Allocators;
-
 const TargetsConfig = target_mod.TargetsConfig;
 const RocTarget = target_mod.RocTarget;
-const LinkType = target_mod.LinkType;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
+var stderr_file_writer: std.Io.File.Writer = .{
+    .io = std.Io.Threaded.global_single_threaded.io(),
+    .interface = std.Io.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
 };
 
 fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
     return &stderr_file_writer.interface;
 }
 
@@ -68,11 +66,12 @@ pub const PlatformValidation = struct {
 /// Returns the TargetsConfig if valid, or an error with details.
 pub fn validatePlatformHeader(
     allocator: std.mem.Allocator,
+    std_io: std.Io,
     platform_source_path: []const u8,
 ) ValidationError!PlatformValidation {
     // Read platform source
-    var source = std.fs.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
-        renderFileReadError(allocator, platform_source_path);
+    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_source_path, allocator, .unlimited) catch {
+        try renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };
     source = base.source_utils.normalizeLineEndingsRealloc(allocator, source) catch {
@@ -86,12 +85,8 @@ pub fn validatePlatformHeader(
         return error.ParseError;
     };
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parse(&allocators, &env) catch {
-        renderParseError(allocator, platform_source_path);
+    const ast = parse.file(allocator, &env) catch {
+        try renderParseError(allocator, platform_source_path);
         return error.ParseError;
     };
     defer ast.deinit();
@@ -100,7 +95,7 @@ pub fn validatePlatformHeader(
     const config = TargetsConfig.fromAST(allocator, ast) catch {
         return error.ParseError;
     } orelse {
-        renderMissingTargetsError(allocator, platform_source_path);
+        try renderMissingTargetsError(allocator, platform_source_path);
         return error.MissingTargetsSection;
     };
 
@@ -111,19 +106,19 @@ pub fn validatePlatformHeader(
 }
 
 /// Render a file read error report to stderr.
-fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) void {
+fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
     var report = reporting.Report.init(allocator, "FILE READ ERROR", .fatal);
     defer report.deinit();
 
-    report.document.addText("Failed to read platform source file:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    ") catch return;
-    report.document.addAnnotated(path, .path) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("Check that the file exists and you have read permissions.") catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("Failed to read platform source file:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(path, .path);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Check that the file exists and you have read permissions.");
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -134,19 +129,19 @@ fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) void {
 }
 
 /// Render a parse error report to stderr.
-fn renderParseError(allocator: std.mem.Allocator, path: []const u8) void {
+fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
     var report = reporting.Report.init(allocator, "PARSE ERROR", .fatal);
     defer report.deinit();
 
-    report.document.addText("Failed to parse platform header:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    ") catch return;
-    report.document.addAnnotated(path, .path) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("Check that the file contains valid Roc syntax.") catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("Failed to parse platform header:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(path, .path);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Check that the file contains valid Roc syntax.");
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -157,28 +152,26 @@ fn renderParseError(allocator: std.mem.Allocator, path: []const u8) void {
 }
 
 /// Render a missing targets section error report to stderr.
-fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) void {
+fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
     var report = reporting.Report.init(allocator, "MISSING TARGETS SECTION", .fatal);
     defer report.deinit();
 
-    report.document.addText("Platform at ") catch return;
-    report.document.addAnnotated(path, .path) catch return;
-    report.document.addText(" does not have a 'targets:' section.") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("Platform headers must declare supported targets. Example:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addCodeBlock(
+    try report.document.addText("Platform at ");
+    try report.document.addAnnotated(path, .path);
+    try report.document.addText(" does not have a 'targets:' section.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Platform headers must declare supported targets. Example:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64linux: ["host.o", app],
-        \\        }
+        \\        inputs_dir: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64linux: { inputs: ["host.o", app] },
         \\    }
-    ) catch return;
-    report.document.addLineBreak() catch return;
+    );
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -194,9 +187,8 @@ fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) voi
 pub fn validateTargetSupported(
     config: TargetsConfig,
     target: RocTarget,
-    link_type: LinkType,
 ) ValidationError!void {
-    if (!config.supportsTarget(target, link_type)) {
+    if (!config.supportsTarget(target)) {
         return error.UnsupportedTarget;
     }
 }
@@ -206,15 +198,13 @@ pub fn validateTargetSupported(
 pub fn createUnsupportedTargetResult(
     platform_path: []const u8,
     requested_target: RocTarget,
-    link_type: LinkType,
     config: TargetsConfig,
 ) ValidationResult {
     return .{
         .unsupported_target = .{
             .platform_path = platform_path,
             .requested_target = requested_target,
-            .link_type = link_type,
-            .supported_targets = config.getSupportedTargets(link_type),
+            .supported_targets = config.getSupportedTargets(),
         },
     };
 }
@@ -252,24 +242,25 @@ pub fn renderValidationError(
 /// Returns the ValidationResult for nice error reporting, or null if validation passed.
 pub fn validateAllTargetFilesExist(
     allocator: std.mem.Allocator,
+    std_io: std.Io,
     config: TargetsConfig,
     platform_dir_path: []const u8,
 ) ?ValidationResult {
-    var platform_dir = std.fs.cwd().openDir(platform_dir_path, .{}) catch {
+    var platform_dir = std.Io.Dir.cwd().openDir(std_io, platform_dir_path, .{}) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
-                .files_dir = config.files_dir orelse "targets",
+                .files_dir = config.inputs_dir orelse "targets",
             },
         };
     };
-    defer platform_dir.close();
+    defer platform_dir.close(std_io);
 
-    const result = targets_validator.validateTargetFilesExist(allocator, config, platform_dir) catch {
+    const result = targets_validator.validateTargetFilesExist(allocator, std_io, config, platform_dir) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
-                .files_dir = config.files_dir orelse "targets",
+                .files_dir = config.inputs_dir orelse "targets",
             },
         };
     };
@@ -285,31 +276,27 @@ const testing = std.testing;
 
 test "validateTargetSupported returns error for unsupported target" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64mac, .items = &.{.app} },
-            .{ .target = .arm64mac, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
+            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
     // x64musl is not in the config, should error
-    const result = validateTargetSupported(config, .x64musl, .exe);
+    const result = validateTargetSupported(config, .x64musl);
     try testing.expectError(error.UnsupportedTarget, result);
 }
 
 test "validateTargetSupported succeeds for supported target" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64mac, .items = &.{.app} },
-            .{ .target = .arm64mac, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
+            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
     // x64mac is in the config, should succeed
-    try validateTargetSupported(config, .x64mac, .exe);
+    try validateTargetSupported(config, .x64mac);
 }

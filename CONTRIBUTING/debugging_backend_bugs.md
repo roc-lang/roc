@@ -25,8 +25,8 @@ There are **two separate test systems** — don't mix them up:
 
 | System | Build command | How to filter | What it tests |
 |--------|--------------|---------------|---------------|
-| **Eval test runner** | `zig build test-eval` | `--filter "pattern"` | Cross-backend comparison (interp, dev, wasm) via `Str.inspect` |
-| **Unit tests** | `zig build test` | `--test-filter "pattern"` | Sequential Zig tests (`helpers.zig`, `fx_platform_test.zig`, etc.) |
+| **Eval test runner** | `zig build run-test-eval` | `--filter "pattern"` | Cross-backend comparison (interp, dev, wasm) via `Str.inspect` |
+| **Unit tests** | `zig build run-test-zig` | `--test-filter "pattern"` | Sequential Zig tests (`helpers.zig`, `fx_platform_test.zig`, etc.) |
 
 The eval test runner is a standalone binary. You build it once, then run it
 directly — there's no need to rebuild between runs unless you change source.
@@ -52,23 +52,23 @@ Key fields:
 Rebuild the test runner after adding your test:
 
 ```sh
-zig build test-eval
+zig build build-test-eval-runner
 ```
 
 ## 2. Run the failing test
 
 **Build once, then run the binary directly** — this is much faster than
-rebuilding via `zig build test-eval` each time:
+rebuilding via `zig build run-test-eval` each time:
 
 ```sh
 # Build (only needed once, or after source changes):
-zig build test-eval
+zig build build-test-eval-runner
 
 # Run a single test by name:
 ./zig-out/bin/eval-test-runner --filter "List.concat with strings" --verbose
 
 # Or combine build + run in one command (passes options after --):
-zig build test-eval -- --filter "List.concat with strings" --verbose
+zig build run-test-eval -- --filter "List.concat with strings" --verbose
 ```
 
 The output tells you the outcome and which backends were reached:
@@ -92,10 +92,10 @@ For tests in the Zig unit test system (not the eval runner), use `--test-filter`
 
 ```sh
 # Run a specific fx platform test:
-zig build test -- --test-filter "list_append_stdin_uaf"
+zig build run-test-zig -- --test-filter "list_append_stdin_uaf"
 
 # Run all fx interpreter tests:
-zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
+zig build run-test-zig -- --test-filter "fx platform IO spec tests (interpreter)"
 ```
 
 Note the different flag: `--test-filter` (not `--filter`).
@@ -118,7 +118,7 @@ Traces the full pipeline:
 
 ```sh
 # Build with tracing enabled:
-zig build test-eval -Dtrace-eval=true
+zig build build-test-eval-runner -Dtrace-eval=true
 
 # Then run your specific test:
 ./zig-out/bin/eval-test-runner --filter "my test" --verbose --threads 1
@@ -139,7 +139,7 @@ Example output:
 Traces every allocation, deallocation, reallocation, and refcount operation:
 
 ```sh
-zig build test-eval -Dtrace-refcount=true
+zig build build-test-eval-runner -Dtrace-refcount=true
 ./zig-out/bin/eval-test-runner --filter "my test" --verbose --threads 1
 ```
 
@@ -160,7 +160,7 @@ This is invaluable for catching:
 ### Combining both flags
 
 ```sh
-zig build test-eval -Dtrace-eval=true -Dtrace-refcount=true
+zig build build-test-eval-runner -Dtrace-eval=true -Dtrace-refcount=true
 ./zig-out/bin/eval-test-runner --filter "my test" --verbose --threads 1
 ```
 

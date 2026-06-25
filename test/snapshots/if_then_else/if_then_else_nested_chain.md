@@ -93,26 +93,32 @@ NO CHANGE
 				(e-if
 					(if-branches
 						(if-branch
-							(e-binop (op "lt")
-								(e-lookup-local
-									(p-assign (ident "num")))
-								(e-num (value "0")))
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 72)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "num"))))
+								(args
+									(e-num (value "0"))))
 							(e-block
 								(e-string
 									(e-literal (string "negative")))))
 						(if-branch
-							(e-binop (op "eq")
-								(e-lookup-local
-									(p-assign (ident "num")))
-								(e-num (value "0")))
+							(e-method-eq (negated "false")
+								(lhs
+									(e-lookup-local
+										(p-assign (ident "num"))))
+								(rhs
+									(e-num (value "0"))))
 							(e-block
 								(e-string
 									(e-literal (string "zero")))))
 						(if-branch
-							(e-binop (op "gt")
-								(e-lookup-local
-									(p-assign (ident "num")))
-								(e-num (value "100")))
+							(e-dispatch-call (method "is_gt") (constraint-fn-var 186)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "num"))))
+								(args
+									(e-num (value "100"))))
 							(e-block
 								(e-string
 									(e-literal (string "large"))))))
@@ -125,7 +131,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Str where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool]")))
+		(patt (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool, b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]")))
 	(expressions
-		(expr (type "a -> Str where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool]"))))
+		(expr (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool, b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]"))))
 ~~~

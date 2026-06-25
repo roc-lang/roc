@@ -1,4 +1,4 @@
-//! Deterministic checked-type keys for artifact and MIR boundaries.
+//! Deterministic checked-type digests for checked module and post-check boundaries.
 //!
 //! These keys are produced during checking finalization, while it is still valid
 //! to inspect the checked type store and module-local identifiers. Post-check
@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const TypeStore = types.Store;
 const Var = types.Var;
+const LiteralKind = types.StaticDispatchConstraint.LiteralKind;
 
 /// Public `TypeKeyInfo` declaration.
 pub const TypeKeyInfo = struct {
@@ -65,7 +66,7 @@ pub fn fromConcreteVar(
 /// Public `emptyTagUnion` function.
 pub fn emptyTagUnion() canonical.CanonicalTypeKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeByteSlice(&hasher, "empty_tag_union");
+    writeByteSlice(&hasher, "[]");
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -126,11 +127,11 @@ const Builder = struct {
 
         switch (resolved.desc.content) {
             .flex => |flex| {
-                if (self.require_concrete and self.flexDefaultsToDec(flex)) {
-                    self.writeDefaultDec();
-                    return;
-                }
                 if (self.require_concrete) {
+                    if (self.flexLiteralDefaultKind(flex)) |kind| {
+                        self.writeLiteralDefault(kind);
+                        return;
+                    }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
                 }
                 try self.writeIdentityVariable(root, "flex", flex.name, flex.constraints);
@@ -191,11 +192,11 @@ const Builder = struct {
         switch (content) {
             .err => invariantViolation("canonical type key requested for erroneous checked type"),
             .flex => |flex| {
-                if (self.require_concrete and self.flexDefaultsToDec(flex)) {
-                    self.writeDefaultDec();
-                    return;
-                }
                 if (self.require_concrete) {
+                    if (self.flexLiteralDefaultKind(flex)) |kind| {
+                        self.writeLiteralDefault(kind);
+                        return;
+                    }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
                 }
                 invariantViolation("canonical type key reached an unsolved flex without its root identity");
@@ -208,8 +209,7 @@ const Builder = struct {
             },
             .alias => |alias| {
                 self.writeTag("alias");
-                self.writeIdent(alias.ident.ident_idx);
-                self.writeIdent(alias.origin_module);
+                self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
                 try self.writeVar(self.store.getAliasBackingVar(alias));
                 const args = self.store.sliceAliasArgs(alias);
                 self.writeU32(@intCast(args.len));
@@ -221,18 +221,59 @@ const Builder = struct {
         }
     }
 
-    fn flexDefaultsToDec(self: *Builder, flex: types.Flex) bool {
+    /// INVARIANT: a still-open flex may be keyed as the canonical literal
+    /// default (Dec for numerals, Str for quotes) ONLY when every constraint
+    /// on it came directly from literal conversion — a pure,
+    /// otherwise-unconstrained literal is exactly what the checker's defaulting
+    /// commits to the kind's default.
+    /// Any OTHER constraint origin (binop/method/where-clause usage) feeds the
+    /// checker's candidate probing, which may commit a non-default candidate
+    /// (e.g. an integer-only method commits I64); such a var must already be
+    /// concrete when a concrete key is requested, so finding one still open
+    /// here means an upstream defaulting step was skipped — keying it as the
+    /// default would be a guess, so we raise an invariant violation instead.
+    ///
+    /// A mixed-kind set (both numeral and quote literal-origin constraints,
+    /// reachable only via a flex/flex merge the checker reports as a type
+    /// error, so it never survives to key generation) deterministically picks
+    /// `numeral`. This MUST agree with the mono layer's scan in
+    /// checked_artifact.zig `numericDefaultPhaseForConstraints`, where any
+    /// numeral constraint wins (-> Dec) before quote is considered (-> Str);
+    /// if the two sites disagreed, the key would silently name a different
+    /// nominal than mono specializes the variable to.
+    fn flexLiteralDefaultKind(self: *Builder, flex: types.Flex) ?LiteralKind {
         const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
+        var has_numeral = false;
+        var has_quote = false;
+        var has_interpolation = false;
+        var has_other = false;
         for (constraints) |constraint| {
-            if (constraint.origin == .from_numeral) return true;
+            switch (constraint.origin) {
+                .from_literal => |lit| switch (lit) {
+                    .numeral => has_numeral = true,
+                    .quote => has_quote = true,
+                    .interpolation => has_interpolation = true,
+                },
+                else => has_other = true,
+            }
         }
-        return false;
+        if ((has_numeral or has_quote or has_interpolation) and has_other) {
+            invariantViolation("concrete canonical type key requested for an open literal with non-literal constraints (defaulting was skipped)");
+        }
+        if (has_numeral) return .numeral;
+        if (has_quote) return .quote;
+        if (has_interpolation) return .interpolation;
+        return null;
     }
 
-    fn writeDefaultDec(self: *Builder) void {
+    fn writeLiteralDefault(self: *Builder, kind: LiteralKind) void {
         self.writeTag("nominal");
-        self.writeIdent(builtinDecTypeIdent(self.idents));
+        switch (kind) {
+            .numeral => self.writeIdent(builtinDecTypeIdent(self.idents)),
+            .quote, .interpolation => self.writeIdent(builtinStrTypeIdent(self.idents)),
+        }
         self.writeIdent(builtinModuleIdent(self.idents));
+        self.writeOptionalU32(null);
         self.writeBool(true);
         self.writeU32(0);
     }
@@ -240,24 +281,20 @@ const Builder = struct {
     fn writeFlat(self: *Builder, flat: types.FlatType) Allocator.Error!void {
         switch (flat) {
             .empty_record => self.writeTag("empty_record"),
-            .empty_tag_union => self.writeTag("empty_tag_union"),
+            .empty_tag_union => self.writeTag("[]"),
             .record_unbound => |fields| {
                 self.writeTag("record_unbound");
                 try self.writeNormalizedRecordFields(fields, null);
             },
-            .record => |record| {
-                self.writeTag("record");
-                try self.writeNormalizedRecordFields(record.fields, record.ext);
-            },
+            .record => |record| try self.writeNormalizedRecordPayload(record.fields, record.ext),
             .tuple => |tuple| {
                 self.writeTag("tuple");
                 try self.writeVarRange(tuple.elems);
             },
             .nominal_type => |nominal| {
                 self.writeTag("nominal");
-                self.writeIdent(nominal.ident.ident_idx);
-                self.writeIdent(nominal.origin_module);
-                self.writeBool(nominal.is_opaque);
+                self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
+                self.writeBool(nominal.isOpaque());
                 const args = self.store.sliceNominalArgs(nominal);
                 self.writeU32(@intCast(args.len));
                 for (args) |arg| {
@@ -272,10 +309,7 @@ const Builder = struct {
                 self.writeTag("fn_effectful");
                 try self.writeFunc(func);
             },
-            .tag_union => |tag_union| {
-                self.writeTag("tag_union");
-                try self.writeNormalizedTags(tag_union.tags, tag_union.ext);
-            },
+            .tag_union => |tag_union| try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
         }
     }
 
@@ -335,9 +369,7 @@ const Builder = struct {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
             if (varSlot(self.active.items, root) != null) break;
-            if (varSlot(seen.items, root) != null) {
-                invariantViolation("canonical type key row normalization reached a cyclic record row");
-            }
+            if (varSlot(seen.items, root) != null) break;
             try seen.append(self.allocator, root);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
@@ -375,6 +407,66 @@ const Builder = struct {
         }
     }
 
+    fn writeNormalizedRecordPayload(
+        self: *Builder,
+        head: types.RecordField.SafeMultiList.Range,
+        ext: Var,
+    ) Allocator.Error!void {
+        var fields = std.ArrayList(RecordFieldForKey).empty;
+        defer fields.deinit(self.allocator);
+        try self.appendRecordFieldsForKey(&fields, head);
+
+        var tail: ?Var = ext;
+        var seen = std.ArrayList(Var).empty;
+        defer seen.deinit(self.allocator);
+        while (tail) |tail_var| {
+            const resolved = self.store.resolveVar(tail_var);
+            const root = resolved.var_;
+            if (varSlot(self.active.items, root) != null) break;
+            if (varSlot(seen.items, root) != null) break;
+            try seen.append(self.allocator, root);
+            switch (resolved.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .empty_record => {
+                        tail = null;
+                        break;
+                    },
+                    .record => |record| {
+                        try self.appendRecordFieldsForKey(&fields, record.fields);
+                        tail = record.ext;
+                    },
+                    .record_unbound => |record_fields| {
+                        try self.appendRecordFieldsForKey(&fields, record_fields);
+                        tail = null;
+                    },
+                    else => break,
+                },
+                else => break,
+            }
+        }
+
+        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        if (tail == null and fields.items.len == 0) {
+            self.writeTag("empty_record");
+            return;
+        }
+
+        self.writeTag("record");
+        self.writeU32(@intCast(fields.items.len));
+        for (fields.items, 0..) |field, index| {
+            if (index > 0 and self.idents.idxTextEql(fields.items[index - 1].name, field.name)) {
+                invariantViolation("canonical type key row normalization found duplicate record fields");
+            }
+            self.writeIdent(field.name);
+            try self.writeVar(field.var_);
+        }
+        if (tail) |tail_var| {
+            try self.writeVar(tail_var);
+        } else {
+            self.writeTag("empty_record");
+        }
+    }
+
     fn appendTagsForKey(
         self: *Builder,
         tags: *std.ArrayList(TagForKey),
@@ -391,7 +483,7 @@ const Builder = struct {
         }
     }
 
-    fn writeNormalizedTags(
+    fn writeNormalizedTagUnionPayload(
         self: *Builder,
         head: types.Tag.SafeMultiList.Range,
         ext: Var,
@@ -407,9 +499,7 @@ const Builder = struct {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
             if (varSlot(self.active.items, root) != null) break;
-            if (varSlot(seen.items, root) != null) {
-                invariantViolation("canonical type key row normalization reached a cyclic tag row");
-            }
+            if (varSlot(seen.items, root) != null) break;
             try seen.append(self.allocator, root);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
@@ -428,6 +518,12 @@ const Builder = struct {
         }
 
         std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
+        if (tail == null and tags.items.len == 0) {
+            self.writeTag("[]");
+            return;
+        }
+
+        self.writeTag("tag_union");
         self.writeU32(@intCast(tags.items.len));
         for (tags.items, 0..) |tag, index| {
             if (index > 0 and self.idents.idxTextEql(tags.items[index - 1].name, tag.name)) {
@@ -439,7 +535,7 @@ const Builder = struct {
         if (tail) |tail_var| {
             try self.writeVar(tail_var);
         } else {
-            self.writeTag("empty_tag_union");
+            self.writeTag("[]");
         }
     }
 
@@ -458,9 +554,10 @@ const Builder = struct {
             self.writeIdent(constraint.fn_name);
             try self.writeVar(constraint.fn_var);
             self.writeTag(@tagName(constraint.origin));
-            self.writeBool(constraint.binop_negated);
-            self.writeBool(constraint.num_literal != null);
-            if (constraint.num_literal) |num_literal| {
+            self.writeBool(constraint.origin.binopNegated());
+            const maybe_num_literal = constraint.origin.numeralInfo();
+            self.writeBool(maybe_num_literal != null);
+            if (maybe_num_literal) |num_literal| {
                 self.hasher.update(&num_literal.bytes);
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
@@ -472,6 +569,21 @@ const Builder = struct {
     fn writeOptionalIdent(self: *Builder, maybe_ident: ?Ident.Idx) Allocator.Error!void {
         self.writeBool(maybe_ident != null);
         if (maybe_ident) |ident| {
+            self.writeIdent(ident);
+        }
+    }
+
+    fn writeOptionalU32(self: *Builder, maybe_value: ?u32) void {
+        self.writeBool(maybe_value != null);
+        if (maybe_value) |value| {
+            self.writeU32(value);
+        }
+    }
+
+    fn writeNamedSourceIdentity(self: *Builder, origin_module: Ident.Idx, ident: Ident.Idx, source_decl: ?u32) void {
+        self.writeIdent(origin_module);
+        self.writeOptionalU32(source_decl);
+        if (source_decl == null) {
             self.writeIdent(ident);
         }
     }
@@ -490,24 +602,26 @@ const Builder = struct {
     }
 
     fn writeBool(self: *Builder, value: bool) void {
-        const byte: [1]u8 = if (value) .{1} else .{0};
-        self.hasher.update(&byte);
+        const byte: u8 = if (value) 1 else 0;
+        self.hasher.update(std.mem.asBytes(&byte));
     }
 
     fn writeU32(self: *Builder, value: u32) void {
-        var bytes: [4]u8 = undefined;
-        bytes = .{
+        self.hasher.update(&.{
             @as(u8, @truncate(value)),
             @as(u8, @truncate(value >> 8)),
             @as(u8, @truncate(value >> 16)),
             @as(u8, @truncate(value >> 24)),
-        };
-        self.hasher.update(&bytes);
+        });
     }
 };
 
 fn builtinDecTypeIdent(idents: *const Ident.Store) Ident.Idx {
     return idents.builtinDecTypeIdent();
+}
+
+fn builtinStrTypeIdent(idents: *const Ident.Store) Ident.Idx {
+    return idents.builtinStrTypeIdent();
 }
 
 fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
@@ -524,19 +638,17 @@ fn writeByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void 
 }
 
 fn writeBoolValue(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
-    const byte: [1]u8 = if (value) .{1} else .{0};
-    hasher.update(&byte);
+    const byte: u8 = if (value) 1 else 0;
+    hasher.update(std.mem.asBytes(&byte));
 }
 
 fn writeU32Value(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-    var bytes: [4]u8 = undefined;
-    bytes = .{
+    hasher.update(&.{
         @as(u8, @truncate(value)),
         @as(u8, @truncate(value >> 8)),
         @as(u8, @truncate(value >> 16)),
         @as(u8, @truncate(value >> 24)),
-    };
-    hasher.update(&bytes);
+    });
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {
@@ -548,4 +660,94 @@ fn invariantViolation(comptime message: []const u8) noreturn {
 
 test "canonical type key declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "concrete keys default open literal flex vars per kind (numeral -> Dec, quote -> Str)" {
+    const allocator = std.testing.allocator;
+
+    var idents = try Ident.Store.initCapacity(allocator, 8);
+    defer idents.deinit(allocator);
+    _ = try idents.insert(allocator, Ident.for_text("Builtin"));
+    _ = try idents.insert(allocator, Ident.for_text("Builtin.Num.Dec"));
+    _ = try idents.insert(allocator, Ident.for_text("Builtin.Str"));
+    const from_numeral_ident = try idents.insert(allocator, Ident.for_text("from_numeral"));
+    const from_quote_ident = try idents.insert(allocator, Ident.for_text("from_quote"));
+
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const numeral_fn_var = try store.freshFromContent(.{ .flex = types.Flex.init() });
+    const numeral_constraints = try store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = from_numeral_ident,
+        .fn_var = numeral_fn_var,
+        .origin = .{ .from_literal = .{ .numeral = types.NumeralInfo.fromI128(1, false, false, base.Region.zero()) } },
+    }});
+    const numeral_var = try store.freshFromContent(.{
+        .flex = types.Flex.init().withConstraints(numeral_constraints),
+    });
+
+    const quote_fn_var = try store.freshFromContent(.{ .flex = types.Flex.init() });
+    const quote_constraints = try store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = from_quote_ident,
+        .fn_var = quote_fn_var,
+        .origin = .{ .from_literal = .quote },
+    }});
+    const quote_var = try store.freshFromContent(.{
+        .flex = types.Flex.init().withConstraints(quote_constraints),
+    });
+
+    const numeral_key = try fromConcreteVar(allocator, &store, &idents, numeral_var);
+    const quote_key = try fromConcreteVar(allocator, &store, &idents, quote_var);
+
+    // The two defaults must key as different nominals (Dec vs Str); before
+    // per-kind defaulting, a quote-only flex var keyed identically to Dec.
+    try std.testing.expect(!std.meta.eql(numeral_key, quote_key));
+
+    // Keying is deterministic per kind.
+    const quote_key_again = try fromConcreteVar(allocator, &store, &idents, quote_var);
+    try std.testing.expect(std.meta.eql(quote_key, quote_key_again));
+}
+
+test "source type keys normalize closed empty records to empty record" {
+    const allocator = std.testing.allocator;
+
+    var idents = try Ident.Store.initCapacity(allocator, 4);
+    defer idents.deinit(allocator);
+
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const empty = try store.freshFromContent(.{ .structure = .empty_record });
+    const fields = try store.appendRecordFields(&.{});
+    const closed_empty = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields,
+        .ext = empty,
+    } } });
+
+    const empty_key = try fromVar(allocator, &store, &idents, empty);
+    const closed_key = try fromVar(allocator, &store, &idents, closed_empty);
+
+    try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
+}
+
+test "source type keys normalize closed empty tag unions to empty tag union" {
+    const allocator = std.testing.allocator;
+
+    var idents = try Ident.Store.initCapacity(allocator, 4);
+    defer idents.deinit(allocator);
+
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const empty = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const tags = try store.appendTags(&.{});
+    const closed_empty = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = tags,
+        .ext = empty,
+    } } });
+
+    const empty_key = try fromVar(allocator, &store, &idents, empty);
+    const closed_key = try fromVar(allocator, &store, &idents, closed_empty);
+
+    try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
 }

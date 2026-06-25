@@ -49,6 +49,10 @@ pub const Context = union(enum) {
     /// From a type annotation
     type_annotation,
 
+    /// A record-destructure pattern binding (e.g. `{ x, y } = ...`). Tracked so
+    /// the report can suggest `field: _` or `..` when the pattern is too narrow.
+    record_destructure,
+
     // Operator contexts
     /// Left side of binary operator
     binop_lhs: BinopContext,

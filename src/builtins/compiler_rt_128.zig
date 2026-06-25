@@ -27,6 +27,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const ryu = @import("vendor_ryu");
 const math = std.math;
 const Log2Int = math.Log2Int;
 const native_endian = builtin.cpu.arch.endian();
@@ -332,6 +333,20 @@ pub fn divTrunc_u128(a: u128, b: u128) u128 {
     return udivmod(u128, a, b).quot;
 }
 
+/// Signed 128-bit multiply with overflow detection. Returns the wrapped
+/// product and sets `overflow.*` to 1 when the true product is not
+/// representable in i128. This is the implementation behind the compiler-rt
+/// `__muloti4` symbol that Zig codegen emits for `@mulWithOverflow` on i128.
+pub fn mulWithOverflow_i128(a: i128, b: i128, overflow: *c_int) i128 {
+    const result = mul_i128(a, b);
+    // The divide-back check `result / b != a` catches every overflow except
+    // minInt * -1, where the truncating division wraps back to minInt and so
+    // compares equal to `a`. Guard that one case explicitly.
+    const min = std.math.minInt(i128);
+    overflow.* = if (b != 0 and (divTrunc_i128(result, b) != a or (a == min and b == -1))) 1 else 0;
+    return result;
+}
+
 /// Signed 128-bit floor division.
 pub fn divFloor_i128(a: i128, b: i128) i128 {
     const q = divTrunc_i128(a, b);
@@ -554,7 +569,7 @@ pub fn f64_to_u128(x: f64) u128 {
     }
 }
 
-// Integer formatting (avoids std.fmt which calls @rem on u128)
+// Integer formatting (avoids Zig formatting helpers, which call @rem on u128)
 
 /// Format a u128 as a decimal string into the provided buffer.
 /// Returns the slice of `buf` that contains the formatted number.
@@ -603,13 +618,44 @@ pub fn i128_to_str(buf: []u8, val: i128) FormatResult {
     return u128_to_str_inner(buf, @as(u128, @intCast(val)));
 }
 
+/// Return the maximum decimal digit count needed to format an integer type.
+pub fn int_string_capacity(comptime T: type) comptime_int {
+    const info = @typeInfo(T).int;
+    return switch (info.signedness) {
+        .signed => switch (info.bits) {
+            8 => 4,
+            16 => 6,
+            32 => 11,
+            64 => 20,
+            128 => 40,
+            else => @compileError("unsupported signed integer width"),
+        },
+        .unsigned => switch (info.bits) {
+            8 => 3,
+            16 => 5,
+            32 => 10,
+            64 => 20,
+            128 => 39,
+            else => @compileError("unsupported unsigned integer width"),
+        },
+    };
+}
+
+/// Format an integer as decimal text into the provided buffer.
+pub fn int_to_str(comptime T: type, buf: []u8, val: T) []const u8 {
+    const info = @typeInfo(T).int;
+    return switch (info.signedness) {
+        .signed => i128_to_str(buf, @as(i128, @intCast(val))).str,
+        .unsigned => u128_to_str(buf, @as(u128, @intCast(val))).str,
+    };
+}
+
 // f64/f32 to string formatting.
-// Uses Ryu's binaryToDecimal (u64-only) followed by manual decimal formatting,
-// avoiding std.fmt.float which uses u128 arithmetic internally (isPowerOf10,
-// printIntAny) and would pull in __udivti3/__umodti3 from compiler-rt.
+// Uses Roc's vendored Ryu binary-to-decimal conversion followed by manual
+// decimal formatting, avoiding Zig formatting symbols in compiled programs.
 
 /// Format an f64 as a decimal string into the provided buffer.
-/// Uses Ryu algorithm via std.fmt.float.binaryToDecimal (u64-only).
+/// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
 /// Buffer must be at least 400 bytes.
 pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
@@ -617,7 +663,7 @@ pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
 }
 
 /// Format an f32 as a decimal string into the provided buffer.
-/// Uses Ryu algorithm via std.fmt.float.binaryToDecimal (u64-only).
+/// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
 /// Buffer must be at least 400 bytes.
 pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
@@ -629,13 +675,12 @@ pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
 /// notation (`M.MMMeEE`) for very large/small magnitudes (matches Python's
 /// `repr` thresholds: dp_offset > 16 or dp_offset <= -4); decimal otherwise.
 pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
-    const float = std.fmt.float;
-    const tables = &float.Backend64_TablesFull;
+    const tables = &ryu.Backend64_TablesFull;
 
     const d = if (is_f32)
-        float.binaryToDecimal(u64, @as(u64, @as(u32, @truncate(val_bits))), 23, 8, false, tables)
+        ryu.binaryToDecimal(u64, @as(u64, @as(u32, @truncate(val_bits))), 23, 8, false, tables)
     else
-        float.binaryToDecimal(u64, val_bits, 52, 11, false, tables);
+        ryu.binaryToDecimal(u64, val_bits, 52, 11, false, tables);
 
     // Handle special values (NaN, inf)
     if (d.exponent == 0x7fffffff) {
@@ -816,8 +861,5 @@ fn wasm_multi3(a: i128, b: i128) callconv(.c) i128 {
 /// __muloti4: i128 multiply with overflow detection (compiler-rt symbol).
 /// Called by Zig codegen for `@mulWithOverflow(a, b)` on i128.
 fn wasm_muloti4(a: i128, b: i128, overflow: *c_int) callconv(.c) i128 {
-    const result = mul_i128(a, b);
-    // Check overflow: if b != 0 and result / b != a, overflow occurred
-    overflow.* = if (b != 0 and divTrunc_i128(result, b) != a) 1 else 0;
-    return result;
+    return mulWithOverflow_i128(a, b, overflow);
 }

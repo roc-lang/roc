@@ -8,6 +8,7 @@
 //! - aarch64: Linux and macOS (AAPCS64)
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
@@ -23,18 +24,18 @@ pub const object_reader = @import("object_reader.zig");
 const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
+pub const applyRelocationsWithContext = relocation_mod.applyRelocationsWithContext;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
+pub const SymbolResolverContext = relocation_mod.SymbolResolverContext;
 pub const ValueStorage = @import("ValueStorage.zig");
 pub const ObjectWriter = @import("ObjectWriter.zig");
+pub const Dwarf = @import("Dwarf.zig");
 
 /// Executable memory for running generated code. Uses OS-specific APIs not available on freestanding.
 pub const ExecutableMemory = if (builtin.os.tag == .freestanding)
     void
 else
     @import("ExecutableMemory.zig").ExecutableMemory;
-
-// Static data interner for string literals and other static data
-pub const StaticDataInterner = @import("StaticDataInterner.zig");
 
 // LirCodeGen - LIR-based code generator parameterized by RocTarget
 pub const LirCodeGenMod = @import("LirCodeGen.zig");
@@ -52,8 +53,11 @@ pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @i
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
+pub const StaticStringData = @import("StaticStringData.zig");
+pub const RunImage = @import("RunImage.zig");
 pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
+pub const CompilationError = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationError;
 pub const writeFileWindowsAvSafe = @import("ObjectFileCompiler.zig").writeFileWindowsAvSafe;
 
 /// Generic development backend parameterized by architecture-specific types.
@@ -87,7 +91,7 @@ pub fn DevBackend(
             allocator: std.mem.Allocator,
             target: base.target.Target,
             layout_store: *layout.Store,
-        ) !Self {
+        ) Allocator.Error!Self {
             return Self{
                 .allocator = allocator,
                 .target = target,
@@ -188,7 +192,7 @@ pub fn Storage(
         /// Claim a general-purpose register for a symbol.
         /// Panics if no registers are free.
         /// TODO: Implement register spilling/reload.
-        pub fn claimGeneralReg(self: *Self, symbol: u32) !GeneralReg {
+        pub fn claimGeneralReg(self: *Self, symbol: u32) Allocator.Error!GeneralReg {
             const reg = self.general_free.popOrNull() orelse
                 @panic("TODO: no free general registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .general_reg = reg });
@@ -198,7 +202,7 @@ pub fn Storage(
         /// Claim a floating-point register for a symbol.
         /// Panics if no registers are free.
         /// TODO: Implement register spilling/reload.
-        pub fn claimFloatReg(self: *Self, symbol: u32) !FloatReg {
+        pub fn claimFloatReg(self: *Self, symbol: u32) Allocator.Error!FloatReg {
             const reg = self.float_free.popOrNull() orelse
                 @panic("TODO: no free float registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .float_reg = reg });
@@ -206,7 +210,7 @@ pub fn Storage(
         }
 
         /// Free the storage for a symbol (when it's no longer needed)
-        pub fn freeSymbol(self: *Self, symbol: u32) !void {
+        pub fn freeSymbol(self: *Self, symbol: u32) Allocator.Error!void {
             if (self.symbol_storage.fetchRemove(symbol)) |entry| {
                 switch (entry.value) {
                     .general_reg => |reg| try self.general_free.append(self.allocator, reg),

@@ -8,13 +8,13 @@ permissions: {}
 
 jobs:
   # Cross-compile all fx platform tests from all host platforms
-  cross-compile-fx-tests:
+  roc-cross-compile:
     runs-on: ${{ matrix.host }}
     strategy:
       fail-fast: false
       matrix:
         host: [
-            ubuntu-22.04, # Linux x64 host
+            ubuntu-24.04, # Linux x64 host
             macos-15-intel, # macOS x64 host
             macos-15, # macOS ARM64 host
             windows-2022, # Windows x64 host
@@ -25,12 +25,23 @@ jobs:
           ]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # 2.0.5
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
-          version: 0.15.2
-          use-cache: false
+          version: 0.16.0
+          use-cache: true
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          # See ci_zig.yml: cache Zig's fetched-package subdir under a stable
+          # build.zig.zon key so a cold runner doesn't re-download deps and hit
+          # transient HttpConnectionClosing fetch failures.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -41,8 +52,8 @@ jobs:
       - name: Build roc compiler and test_runner
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build'
-          error_string_contains: 'EndOfStream|503|Timeout|HttpConnectionClosing|WriteFailed|build.zig.zon'
+          command: zig build
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Run fx platform cross-compilation tests (Unix)
@@ -79,7 +90,7 @@ jobs:
 
   # Test cross-compiled int platform executables on actual target platforms
   test-int-on-target:
-    needs: [cross-compile-fx-tests]
+    needs: [roc-cross-compile]
     runs-on: ${{ matrix.target_os }}
     strategy:
       fail-fast: false
@@ -87,7 +98,7 @@ jobs:
         include:
           # Test x64musl executables on Linux x64
           - target: x64musl
-            target_os: ubuntu-22.04
+            target_os: ubuntu-24.04
             arch: x64
           # Test arm64musl executables on Linux ARM64
           - target: arm64musl

@@ -72,14 +72,14 @@ Elem := [].{
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "NodeKind") (local)))))
-	(s-nominal-decl
-		(ty-header (name "Elem"))
-		(ty-tag-union))
 	(s-alias-decl
 		(ty-header (name "NodeKind"))
 		(ty-tag-union
 			(ty-tag-name (name "Text"))
-			(ty-tag-name (name "Other")))))
+			(ty-tag-name (name "Other"))))
+	(s-nominal-decl
+		(ty-header (name "Elem"))
+		(ty-tag-union)))
 ~~~
 # TYPES
 ~~~clojure
@@ -87,10 +87,10 @@ Elem := [].{
 	(defs
 		(patt (type "({}) -> NodeKind")))
 	(type_decls
-		(nominal (type "Elem")
-			(ty-header (name "Elem")))
 		(alias (type "NodeKind")
-			(ty-header (name "NodeKind"))))
+			(ty-header (name "NodeKind")))
+		(nominal (type "Elem")
+			(ty-header (name "Elem"))))
 	(expressions
 		(expr (type "({}) -> NodeKind"))))
 ~~~

@@ -1,14 +1,18 @@
 platform ""
     requires {} { main! : () => Str }
-    exposes []
+    exposes [Stdout]
     packages {}
-    provides { main_for_host!: "main" }
-    targets: {
-        files: "targets/",
-        static_lib: {
-            wasm32: ["libhost.a", app],
-        }
+    provides { "roc_main": main_for_host! }
+    hosted {
+        "roc_stdout_line": Stdout.line!,
+        "roc_stdout_unused_niche_feature": Stdout.unused_niche_feature!,
     }
+    targets: {
+        inputs_dir: "targets/",
+        wasm32: { inputs: ["host.wasm", app] },
+    }
+
+import Stdout
 
 main_for_host! : () => Str
 main_for_host! = main!

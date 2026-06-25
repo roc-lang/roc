@@ -5,7 +5,41 @@
 //! caller's responsibility.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+
+// std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
+// Declare the thin extern bindings we need locally; only referenced on Windows.
+const win32 = struct {
+    const DWORD = u32;
+    const SIZE_T = usize;
+    const LPVOID = ?*anyopaque;
+    const PDWORD = *DWORD;
+
+    const MEM_COMMIT: DWORD = 0x1000;
+    const MEM_RESERVE: DWORD = 0x2000;
+    const MEM_RELEASE: DWORD = 0x8000;
+    const PAGE_READWRITE: DWORD = 0x04;
+    const PAGE_EXECUTE_READ: DWORD = 0x20;
+
+    extern "kernel32" fn VirtualAlloc(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flAllocationType: DWORD,
+        flProtect: DWORD,
+    ) callconv(.winapi) LPVOID;
+    extern "kernel32" fn VirtualFree(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        dwFreeType: DWORD,
+    ) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn VirtualProtect(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flNewProtect: DWORD,
+        lpflOldProtect: PDWORD,
+    ) callconv(.winapi) std.os.windows.BOOL;
+};
 
 /// A region of memory that can be executed as code.
 pub const ExecutableMemory = struct {
@@ -20,13 +54,13 @@ pub const ExecutableMemory = struct {
 
     /// Allocate executable memory and copy the given code into it.
     /// The code bytes should already have any relocations applied.
-    pub fn init(code: []const u8) !Self {
+    pub fn init(code: []const u8) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!Self {
         return initWithEntryOffset(code, 0);
     }
 
     /// Allocate executable memory with a specific entry offset.
     /// Use this when procedures are compiled before the main expression.
-    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) !Self {
+    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!Self {
         if (code.len == 0) {
             return error.EmptyCode;
         }
@@ -43,13 +77,36 @@ pub const ExecutableMemory = struct {
         @memcpy(memory[0..code.len], code);
 
         // Make the memory executable (and read-only)
-        try makeExecutable(memory);
+        try protectExecutable(memory);
 
         return Self{
             .memory = memory,
             .code_size = code.len,
             .entry_offset = entry_offset,
         };
+    }
+
+    /// Allocate writable memory that the caller will fill and relocate before
+    /// marking it executable.
+    pub fn initWritable(total_size: usize, code_size: usize, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, UnsupportedPlatform })!Self {
+        if (total_size == 0 or code_size == 0) {
+            return error.EmptyCode;
+        }
+
+        const page_size = std.heap.page_size_min;
+        const alloc_size = std.mem.alignForward(usize, total_size, page_size);
+        const memory = try allocateMemory(alloc_size);
+
+        return Self{
+            .memory = memory,
+            .code_size = code_size,
+            .entry_offset = entry_offset,
+        };
+    }
+
+    /// Mark a writable allocation returned by `initWritable` executable.
+    pub fn finishWrite(self: *Self) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+        try protectExecutable(self.memory);
     }
 
     /// Free the executable memory
@@ -89,17 +146,22 @@ pub const ExecutableMemory = struct {
 
     /// Call using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) callconv(.c) void
     pub fn callRocABI(self: *const Self, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
+        self.callRocABIAt(self.entry_offset, roc_ops, ret_ptr, args_ptr);
+    }
+
+    /// Call using the RocCall ABI at a specific code offset.
+    pub fn callRocABIAt(self: *const Self, entry_offset: usize, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
         const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
-            @ptrCast(@alignCast(self.entryPtr()));
+            @ptrCast(@alignCast(self.memory.ptr + entry_offset));
         func(roc_ops, ret_ptr, args_ptr);
     }
 };
 
 /// Allocate memory that can be made executable
-fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
+fn allocateMemory(size: usize) (Allocator.Error || error{ MmapFailed, VirtualAllocFailed, UnsupportedPlatform })![]align(std.heap.page_size_min) u8 {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
-            const prot = std.posix.PROT.READ | std.posix.PROT.WRITE;
+            const prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
             const flags = std.posix.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true };
             const result = std.posix.mmap(null, size, prot, flags, -1, 0) catch {
                 return error.MmapFailed;
@@ -107,12 +169,12 @@ fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
             return @alignCast(result[0..size]);
         },
         .windows => {
-            const mem = std.os.windows.VirtualAlloc(
+            const mem = win32.VirtualAlloc(
                 null,
                 size,
-                std.os.windows.MEM_COMMIT | std.os.windows.MEM_RESERVE,
-                std.os.windows.PAGE_READWRITE,
-            ) catch return error.VirtualAllocFailed;
+                win32.MEM_COMMIT | win32.MEM_RESERVE,
+                win32.PAGE_READWRITE,
+            ) orelse return error.VirtualAllocFailed;
             const ptr: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(mem));
             return ptr[0..size];
         },
@@ -121,20 +183,20 @@ fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
 }
 
 /// Make the memory executable
-fn makeExecutable(memory: []align(std.heap.page_size_min) u8) !void {
+fn protectExecutable(memory: []align(std.heap.page_size_min) u8) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
-            const prot = std.posix.PROT.READ | std.posix.PROT.EXEC;
-            std.posix.mprotect(memory, prot) catch return error.MprotectFailed;
+            const prot: std.posix.PROT = .{ .READ = true, .EXEC = true };
+            if (std.c.mprotect(@ptrCast(memory.ptr), memory.len, prot) != 0) return error.MprotectFailed;
         },
         .windows => {
-            var old_protect: std.os.windows.DWORD = undefined;
-            std.os.windows.VirtualProtect(
+            var old_protect: win32.DWORD = undefined;
+            if (win32.VirtualProtect(
                 memory.ptr,
                 memory.len,
-                std.os.windows.PAGE_EXECUTE_READ,
+                win32.PAGE_EXECUTE_READ,
                 &old_protect,
-            ) catch return error.VirtualProtectFailed;
+            ) == .FALSE) return error.VirtualProtectFailed;
         },
         else => return error.UnsupportedPlatform,
     }
@@ -147,10 +209,7 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
             std.posix.munmap(memory);
         },
         .windows => {
-            const result = std.os.windows.VirtualFree(memory.ptr, 0, std.os.windows.MEM_RELEASE);
-            if (@typeInfo(@TypeOf(result)) == .error_union) {
-                result catch {};
-            }
+            _ = win32.VirtualFree(memory.ptr, 0, win32.MEM_RELEASE);
         },
         // allocateMemory returns error.UnsupportedPlatform for other OSes,
         // so freeMemory should never be called on them

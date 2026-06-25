@@ -11,6 +11,7 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
+const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CheckedArtifact = check.CheckedArtifact;
@@ -63,6 +64,12 @@ pub const ParseTask = struct {
     module_name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
+    /// Source-relative import base directory. Distinct from `dirname(path)` when
+    /// the module is staged elsewhere (e.g. a default app written to a temp dir),
+    /// so sibling imports resolve against the user's original directory.
+    source_dir: []const u8,
+    /// Compiler role for this source module
+    module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
     depth: u32,
 };
@@ -107,6 +114,8 @@ pub const TypeCheckTask = struct {
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    /// Additional checked roots requested by package-level metadata.
+    explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation
@@ -153,6 +162,8 @@ pub const ParsedResult = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
+    /// Raw source file state consumed before line-ending normalization, when requested.
+    source_file_state: ?watch_inputs.State,
     /// The parsed module environment (ownership returned to coordinator)
     module_env: *ModuleEnv,
     /// Cached AST for reuse in canonicalization (ownership returned)
@@ -231,9 +242,27 @@ pub const ParseFailure = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
+    /// Raw source file state observed before parsing failed, when requested.
+    source_file_state: ?watch_inputs.State,
     /// Error reports explaining the failure
     reports: std.ArrayList(Report),
     /// Partial module env if available (for error recovery)
+    partial_env: ?*ModuleEnv,
+};
+
+/// Result when a non-parsing compilation stage cannot continue safely.
+pub const CompileFailure = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+    /// Path to the module file
+    path: []const u8,
+    /// Error reports explaining the failure
+    reports: std.ArrayList(Report),
+    /// Partial module env if available. The coordinator takes ownership.
     partial_env: ?*ModuleEnv,
 };
 
@@ -255,6 +284,19 @@ pub const CycleDetected = struct {
     module_env: *ModuleEnv,
 };
 
+/// Result when a worker stage ran out of memory. Carries just enough identity
+/// to report which module was being processed; the coordinator turns this into
+/// `error.OutOfMemory` and aborts the whole compilation rather than letting the
+/// failure masquerade as an ordinary stage failure.
+pub const WorkerOom = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+};
+
 /// Result sent from workers - contains ALL outputs from the operation
 pub const WorkerResult = union(enum) {
     /// Module was successfully parsed
@@ -265,8 +307,12 @@ pub const WorkerResult = union(enum) {
     type_checked: TypeCheckedResult,
     /// Parsing failed
     parse_failed: ParseFailure,
+    /// A later compilation stage failed before producing explicit facts
+    compile_failed: CompileFailure,
     /// Import cycle was detected
     cycle_detected: CycleDetected,
+    /// A worker stage ran out of memory
+    worker_oom: WorkerOom,
 
     pub fn getPackageName(self: WorkerResult) []const u8 {
         return switch (self) {
@@ -274,7 +320,9 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .parse_failed => |r| r.package_name,
+            .compile_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
+            .worker_oom => |r| r.package_name,
         };
     }
 
@@ -284,7 +332,9 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .parse_failed => |r| r.module_id,
+            .compile_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
+            .worker_oom => |r| r.module_id,
         };
     }
 
@@ -294,7 +344,9 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .parse_failed => |r| r.module_name,
+            .compile_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
+            .worker_oom => |r| r.module_name,
         };
     }
 
@@ -337,11 +389,16 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
+            .compile_failed => |*r| {
+                for (r.reports.items) |*rep| rep.deinit();
+                r.reports.deinit(gpa);
+            },
             .cycle_detected => |*r| {
                 if (r.cycle_info.cycle_path) |path| gpa.free(path);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
+            .worker_oom => {},
         }
     }
 };
@@ -367,7 +424,9 @@ test "WorkerTask accessors" {
             .module_id = 0,
             .module_name = "Main",
             .path = "/path/to/Main.roc",
+            .source_dir = "/path/to",
             .depth = 0,
+            .module_role = .user,
         },
     };
 
@@ -385,6 +444,7 @@ test "WorkerResult accessors" {
             .module_id = 1,
             .module_name = "Foo",
             .path = "/path/to/Foo.roc",
+            .source_file_state = .{ .hash = [_]u8{0} ** 32 },
             .module_env = undefined,
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,

@@ -1,8 +1,12 @@
 let wasm;
+const MAX_MODULES = 16;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const outputEl = document.getElementById("output");
 const errorsEl = document.getElementById("errors");
+const modulesListEl = document.getElementById("modules-list");
+const addModuleBtn = document.getElementById("add-module");
+const moduleTemplate = document.getElementById("module-template");
 
 const importObject = {
   env: {
@@ -17,6 +21,27 @@ const importObject = {
   },
 };
 
+function appendTrapNotice(err) {
+  const div = document.createElement("div");
+  div.className = "report error";
+  const h = document.createElement("h1");
+  h.textContent = "Compiler crashed";
+  const p = document.createElement("pre");
+  p.textContent =
+    "The Roc compiler hit an unrecoverable error while compiling your code. " +
+    "This is a bug in Roc — please report it.\n\n" +
+    String(err);
+  div.appendChild(h);
+  div.appendChild(p);
+  errorsEl.appendChild(div);
+}
+
+async function reinstantiate() {
+  const instance = await WebAssembly.instantiate(wasm.module, importObject);
+  wasm = { module: wasm.module, instance };
+  wasm.instance.exports.init();
+}
+
 function wasmWrite(str) {
   const encoded = encoder.encode(str);
   const ptr = wasm.instance.exports.allocateBuffer(encoded.length);
@@ -25,19 +50,67 @@ function wasmWrite(str) {
   return { ptr, len: encoded.length };
 }
 
-function run() {
+function updateAddButton() {
+  addModuleBtn.disabled = modulesListEl.children.length >= MAX_MODULES;
+}
+
+function addModuleCard(name, content) {
+  if (modulesListEl.children.length >= MAX_MODULES) return null;
+  const card = moduleTemplate.content.firstElementChild.cloneNode(true);
+  card.querySelector(".module-name").value = name;
+  card.querySelector(".module-content").value = content;
+  card.querySelector(".remove").addEventListener("click", () => {
+    card.remove();
+    updateAddButton();
+  });
+  modulesListEl.appendChild(card);
+  updateAddButton();
+  return card;
+}
+
+function appendSkipNotice(msg) {
+  const div = document.createElement("div");
+  div.className = "skip-notice";
+  div.textContent = msg;
+  errorsEl.appendChild(div);
+}
+
+async function run() {
   outputEl.textContent = "";
   errorsEl.innerHTML = "";
-  wasm.instance.exports.init();
 
-  for (const ta of document.querySelectorAll("textarea[data-module]")) {
-    const n = wasmWrite(ta.dataset.module);
-    const c = wasmWrite(ta.value);
-    wasm.instance.exports.addFile(n.ptr, n.len, c.ptr, c.len);
+  let trapped = false;
+  let code = 255;
+  try {
+    wasm.instance.exports.init();
+
+    for (const card of modulesListEl.querySelectorAll(".module-card")) {
+      const name = card.querySelector(".module-name").value.trim();
+      const content = card.querySelector(".module-content").value;
+      if (!name) {
+        appendSkipNotice("Skipped a module with an empty name.");
+        continue;
+      }
+      const n = wasmWrite(name);
+      const c = wasmWrite(content);
+      wasm.instance.exports.addFile(n.ptr, n.len, c.ptr, c.len);
+    }
+
+    const s = wasmWrite(document.getElementById("source").value);
+    code = wasm.instance.exports.compileAndRun(s.ptr, s.len);
+  } catch (err) {
+    trapped = true;
+    appendTrapNotice(err);
   }
 
-  const s = wasmWrite(document.getElementById("source").value);
-  const code = wasm.instance.exports.compileAndRun(s.ptr, s.len);
+  if (trapped) {
+    try {
+      await reinstantiate();
+    } catch (err) {
+      appendTrapNotice(err);
+    }
+    return;
+  }
 
   if (code === 255 && !errorsEl.innerHTML) {
     errorsEl.textContent = "Compilation or execution failed";
@@ -45,6 +118,18 @@ function run() {
     outputEl.textContent += `Exit code: ${code}\n`;
   }
 }
+
+addModuleBtn.addEventListener("click", () => {
+  addModuleCard("", "");
+});
+
+addModuleCard(
+  "Greeting",
+  `Greeting := [].{
+    msg : Str
+    msg = "Hello from the Greeting module!"
+}`,
+);
 
 fetch("echo.wasm")
   .then((r) => WebAssembly.instantiateStreaming(r, importObject))

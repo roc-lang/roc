@@ -14,6 +14,13 @@ pub const elf = @import("elf.zig");
 pub const macho = @import("macho.zig");
 pub const coff = @import("coff.zig");
 
+/// One 8-byte address field in a DWARF debug section that must be relocated
+/// to the text section's start address plus `addend`.
+pub const DebugReloc = struct {
+    section_offset: u32,
+    addend: u64,
+};
+
 pub const ElfWriter = elf.ElfWriter;
 pub const MachOWriter = macho.MachOWriter;
 pub const CoffWriter = coff.CoffWriter;

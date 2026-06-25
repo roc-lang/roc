@@ -85,6 +85,11 @@
                     const msg = decodeString(wasmModule.exports.memory, ptr, len);
                     log(`[EXPECT FAILED] ${msg}`);
                     document.getElementById('debug').textContent += `Expect failed: ${msg}\n`;
+                },
+                echo: (ptr, len) => {
+                    const msg = decodeString(wasmModule.exports.memory, ptr, len);
+                    console.log(msg);
+                    document.getElementById('debug').textContent += msg + '\n';
                 }
             }
         };
@@ -117,23 +122,13 @@
 
                 // Call the main function
                 const resultPtr = wasmModule.exports.wasm_main();
-                const heapUsed = wasmModule.exports.wasm_heap_used();
+                const resultLen = wasmModule.exports.wasm_result_len();
 
-                log(`Result pointer: ${resultPtr}`);
-                log(`Heap used: ${heapUsed} bytes`);
+                log(`Result pointer: ${resultPtr}, length: ${resultLen}`);
 
                 // Read the result string from memory
-                // For RocStr, we need to read the string data
-                // The pointer points to the string bytes
-                if (resultPtr) {
-                    // Try to read as a null-terminated string or fixed length
-                    const memory = new Uint8Array(wasmModule.exports.memory.buffer);
-                    let len = 0;
-                    const maxLen = 1024;
-                    while (len < maxLen && memory[resultPtr + len] !== 0) {
-                        len++;
-                    }
-                    const resultStr = decodeString(wasmModule.exports.memory, resultPtr, len);
+                if (resultPtr && resultLen > 0) {
+                    const resultStr = decodeString(wasmModule.exports.memory, resultPtr, resultLen);
                     resultDiv.textContent = resultStr || '(empty result)';
                     resultDiv.className = 'output success';
                     log(`Result: "${resultStr}"`);

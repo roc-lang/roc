@@ -572,10 +572,13 @@ core_types_section = {
 			"",
 			"A 24-byte structure representing a string. Small strings (up to 23 bytes",
 			"on 64-bit systems) are stored inline. Larger strings store a pointer to",
-			"heap-allocated data.",
+			"heap-allocated data. The bytes field is always an untagged pointer",
+			"for non-small strings. Big-string capacity is stored shifted left by",
+			"one bit, so max capacity is essentially the max signed pointer-sized",
+			"integer.",
 		],
 	)
-	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t len;\n    size_t capacity;\n} RocStr;\n\n_Static_assert(sizeof(RocStr) == 24, \"RocStr must be 24 bytes\");\n_Static_assert(_Alignof(RocStr) == 8, \"RocStr must be 8-byte aligned\");\n\n"
+	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t capacity_or_alloc_ptr;\n    size_t length;\n} RocStr;\n\n_Static_assert(sizeof(RocStr) == 24, \"RocStr must be 24 bytes\");\n_Static_assert(_Alignof(RocStr) == 8, \"RocStr must be 8-byte aligned\");\n\n"
 
 	roc_list_doc = doc_comment(
 		[
@@ -625,20 +628,22 @@ hosted_fn_infrastructure = {
 
 	hosted_fn_doc = doc_comment(
 		[
-			"HostedFn - Function pointer type for hosted functions",
+			"HostedFn - type-erased pointer to a hosted function.",
 			"",
-			"All hosted functions follow this signature:",
-			"  - ops: pointer to Roc runtime operations",
-			"  - ret: pointer to return value storage (or NULL if void return)",
-			"  - args: pointer to function-specific arguments struct (or NULL if no args)",
+			"Each hosted function has its own natural C signature, determined by its Roc",
+			"argument and return types: a leading `struct RocOps*` is present only when the",
+			"function allocates or frees Roc-managed memory, followed by each argument by",
+			"value and the natural return type. Store each implementation here cast to",
+			"HostedFn (e.g. `(HostedFn) &my_impl`); the Roc runtime calls it with its",
+			"concrete signature.",
 			"",
 			"Roc transfers ownership of refcounted arguments to hosted functions.",
 			"Hosted functions must decref owned refcounted arguments when done,",
 			"or retain/transfer ownership explicitly when storing or returning them.",
 		],
 	)
-	hosted_fn_typedef = 
-		"typedef void (*HostedFn)(struct RocOps* ops, void* ret, void* args);\n\n"
+	hosted_fn_typedef =
+		"typedef void (*HostedFn)(void);\n\n"
 
 	section(
 		"Hosted Function Infrastructure",

@@ -17,6 +17,8 @@ handleTry = |result| {
 ~~~
 # EXPECTED
 MODULE NOT FOUND - nominal_external_fully_qualified.md:3:24:3:34
+MODULE NOT FOUND - nominal_external_fully_qualified.md:6:20:6:30
+MODULE NOT FOUND - nominal_external_fully_qualified.md:7:20:7:30
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -28,6 +30,28 @@ You're attempting to use this type here:
 handleTry : MyTryModule.MyTryType(Str, I32) -> Str
 ```
                        ^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `MyTryType` is qualified by the module `MyTryModule`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**nominal_external_fully_qualified.md:6:20:6:30:**
+```roc
+        MyTryModule.MyTryType.Ok(value) => value
+```
+                   ^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `MyTryType` is qualified by the module `MyTryModule`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**nominal_external_fully_qualified.md:7:20:7:30:**
+```roc
+        MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
+```
+                   ^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -104,32 +128,33 @@ handleTry = |result| {
 (can-ir
 	(d-let
 		(p-assign (ident "handleTry"))
-		(e-lambda
-			(args
-				(p-assign (ident "result")))
-			(e-block
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal-external (external-module "MyTryModule")
-											(p-applied-tag))))
-								(value
-									(e-lookup-local
-										(p-assign (ident "value")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal-external (external-module "MyTryModule")
-											(p-applied-tag))))
-								(value
-									(e-string
-										(e-literal (string "Error: $(code.toStr())"))))))))))
+		(e-closure
+			(captures
+				(capture (ident "value")))
+			(e-lambda
+				(args
+					(p-assign (ident "result")))
+				(e-block
+					(e-match
+						(match
+							(cond
+								(e-lookup-local
+									(p-assign (ident "result"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-runtime-error (tag "type_from_missing_module"))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "value")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-runtime-error (tag "type_from_missing_module"))))
+									(value
+										(e-string
+											(e-literal (string "Error: $(code.toStr())")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

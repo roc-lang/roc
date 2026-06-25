@@ -14,8 +14,8 @@ pub const Error = error{ GetConsoleModeFailure, SetConsoleModeFailure };
 
 // method to enable raw mode on Windows terminals
 pub fn init() Error!Windows {
-    const h_out = std.fs.File.stdout().handle;
-    const h_in = std.fs.File.stdin().handle;
+    const h_out = std.Io.File.stdout().handle;
+    const h_in = std.Io.File.stdin().handle;
 
     var output_mode: windows.DWORD = 0;
     var input_mode: windows.DWORD = 0;
@@ -77,8 +77,8 @@ pub fn init() Error!Windows {
 
 // method to restore the previous terminal settings
 pub fn deinit(state: Windows) void {
-    const h_out = std.fs.File.stdout().handle;
-    const h_in = std.fs.File.stdin().handle;
+    const h_out = std.Io.File.stdout().handle;
+    const h_in = std.Io.File.stdin().handle;
 
     _ = windows.SetConsoleMode(h_out, state.output_mode);
     _ = windows.SetConsoleMode(h_in, state.input_mode);

@@ -197,6 +197,84 @@ fn wyhash_hash(seed: u64, input: []const u8) u64 {
     return Wyhash.hash(seed, input);
 }
 
+/// Domain byte mixed before each value written to a builtin Hasher.
+pub const HasherDomain = enum(u8) {
+    bool = 0x01,
+    u8 = 0x02,
+    u16 = 0x03,
+    u32 = 0x04,
+    u64 = 0x05,
+    u128 = 0x06,
+    i8 = 0x07,
+    i16 = 0x08,
+    i32 = 0x09,
+    i64 = 0x0a,
+    i128 = 0x0b,
+    f32 = 0x0c,
+    f64 = 0x0d,
+    dec = 0x0e,
+    bytes = 0x0f,
+    str = 0x10,
+    finish = 0xff,
+};
+
+fn writeLe(comptime T: type, out: []u8, value: T) void {
+    std.mem.writeInt(T, out[0..@sizeOf(T)], value, .little);
+}
+
+fn hasherFeed(seed: u64, domain: u8, bytes: []const u8) u64 {
+    var len_buf: [8]u8 = undefined;
+    writeLe(u64, &len_buf, @intCast(bytes.len));
+
+    var wy = Wyhash.init(seed);
+    wy.update(&.{domain});
+    wy.update(&len_buf);
+    wy.update(bytes);
+    return wy.final();
+}
+
+/// Mix an integer-width scalar into a builtin Hasher state.
+pub fn hasher_write_u64(seed: u64, domain: u8, value: u64, width: u8) callconv(.c) u64 {
+    std.debug.assert(width == 1 or width == 2 or width == 4 or width == 8);
+    var buf: [8]u8 = undefined;
+    writeLe(u64, &buf, value);
+    return hasherFeed(seed, domain, buf[0..width]);
+}
+
+/// Mix a 128-bit scalar into a builtin Hasher state.
+pub fn hasher_write_u128(seed: u64, domain: u8, low: u64, high: u64) callconv(.c) u64 {
+    var buf: [16]u8 = undefined;
+    writeLe(u64, buf[0..8], low);
+    writeLe(u64, buf[8..16], high);
+    return hasherFeed(seed, domain, &buf);
+}
+
+/// Mix raw F32 bits into a builtin Hasher state after zero normalization.
+pub fn hasher_write_f32_bits(seed: u64, bits: u32) callconv(.c) u64 {
+    const canonical = if ((bits & 0x7fff_ffff) == 0) 0 else bits;
+    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f32), canonical, 4);
+}
+
+/// Mix raw F64 bits into a builtin Hasher state after zero normalization.
+pub fn hasher_write_f64_bits(seed: u64, bits: u64) callconv(.c) u64 {
+    const canonical = if ((bits & 0x7fff_ffff_ffff_ffff) == 0) 0 else bits;
+    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f64), canonical, 8);
+}
+
+/// Mix a byte slice into a builtin Hasher state.
+pub fn hasher_write_bytes(seed: u64, domain: u8, bytes: ?[*]const u8, length: usize) callconv(.c) u64 {
+    const slice: []const u8 = if (bytes) |ptr| ptr[0..length] else blk: {
+        std.debug.assert(length == 0);
+        break :blk &.{};
+    };
+    return hasherFeed(seed, domain, slice);
+}
+
+/// Finalize a builtin Hasher state into a hash value.
+pub fn hasher_finish(seed: u64) callconv(.c) u64 {
+    return hasherFeed(seed, @intFromEnum(HasherDomain.finish), &.{});
+}
+
 test "test vectors" {
     const hash = Wyhash.hash;
 

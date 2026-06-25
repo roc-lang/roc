@@ -1,6 +1,7 @@
 //! Tests for Scopes
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const CIR = @import("../CIR.zig");
@@ -11,7 +12,7 @@ const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContex
 const Ident = base.Ident;
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
-const Allocators = base.Allocators;
+const CoreCtx = @import("ctx").CoreCtx;
 
 /// Context helper for Scope tests
 const ScopeTestContext = struct {
@@ -20,7 +21,7 @@ const ScopeTestContext = struct {
     gpa: std.mem.Allocator,
     builtin_ctx: BuiltinTestContext,
 
-    fn init(gpa: std.mem.Allocator) !ScopeTestContext {
+    fn init(gpa: std.mem.Allocator) Allocator.Error!ScopeTestContext {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, "");
@@ -29,12 +30,10 @@ const ScopeTestContext = struct {
         var builtin_ctx = try BuiltinTestContext.init(gpa);
         errdefer builtin_ctx.deinit();
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         return ScopeTestContext{
-            .self = try Can.initModule(&allocators, module_env, undefined, builtin_ctx.canInitContext()),
+            .self = try Can.initModule(roc_ctx, module_env, undefined, builtin_ctx.canInitContext()),
             .module_env = module_env,
             .gpa = gpa,
             .builtin_ctx = builtin_ctx,

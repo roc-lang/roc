@@ -1,6 +1,8 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
+import pf.Stdout
+
 main! = || {
-    _boxed = Box.box("test")
+    Stdout.line!("Hello from Roc WASM!")
     "Hello from Roc WASM!"
 }

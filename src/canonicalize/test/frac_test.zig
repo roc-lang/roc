@@ -12,6 +12,7 @@ const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const RocDec = builtins.dec.RocDec;
 const testing = std.testing;
+const ModuleEnv = @import("../ModuleEnv.zig");
 
 test "fractional literal - basic decimal" {
     const source = "3.14";
@@ -44,9 +45,8 @@ test "fractional literal - scientific notation small" {
 
     switch (expr) {
         .e_dec_small => |dec| {
-            // Very small numbers may round to zero when parsed as small decimal
-            // This is expected behavior when the value is too small for i16 representation
-            try testing.expectEqual(dec.value.numerator, 0);
+            try testing.expectEqual(@as(i16, 123), dec.value.numerator);
+            try testing.expectEqual(@as(u8, 12), dec.value.denominator_power_of_ten);
         },
         .e_dec => {
             // RocDec stores the value in a special format
@@ -70,11 +70,14 @@ test "fractional literal - scientific notation large (near f64 max)" {
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     switch (expr) {
-        .e_frac_f64 => |frac| {
-            try testing.expectEqual(frac.value, 1e308);
+        .e_num_from_numeral => {
+            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+            try testing.expect(literal.isFractional());
+            try testing.expect(!literal.isNegative());
+            try testing.expectEqual(@as(u32, 0), literal.after_decimal_digit_count);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be exact from_numeral
         },
     }
 }
@@ -88,13 +91,14 @@ test "fractional literal - scientific notation at f32 boundary" {
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     switch (expr) {
-        .e_frac_f64 => |frac| {
-            try testing.expect(true); // Infinity doesn't fit in Dec
-            try testing.expect(true); // Above f32 max
-            try testing.expectEqual(frac.value, 3.5e38);
+        .e_num_from_numeral => {
+            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+            try testing.expect(literal.isFractional());
+            try testing.expect(!literal.isNegative());
+            try testing.expectEqual(@as(u32, 0), literal.after_decimal_digit_count);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be exact from_numeral
         },
     }
 }
@@ -143,7 +147,7 @@ test "fractional literal - positive zero" {
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.value.numerator, 0);
-            try testing.expectEqual(small.value.denominator_power_of_ten, 1);
+            try testing.expectEqual(small.value.denominator_power_of_ten, 0);
             try testing.expect(true); // 0.5 fits in F32
             try testing.expect(true); // 0.5 fits in Dec
         },
@@ -162,14 +166,12 @@ test "fractional literal - very small scientific notation" {
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     switch (expr) {
-        .e_frac_f64 => |frac| {
-            try testing.expect(true); // This test is for minimum f64 value
-            // 1e-40 is within f32's subnormal range, so it should fit (ignoring precision)
-            try testing.expect(true); // 1e-40 fits in F32 subnormal range
-            try testing.expectApproxEqAbs(frac.value, 1e-40, 1e-50);
+        .e_dec_small => |dec| {
+            try testing.expectEqual(@as(i16, 1), dec.value.numerator);
+            try testing.expectEqual(@as(u8, 40), dec.value.denominator_power_of_ten);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be exact small decimal
         },
     }
 }
@@ -239,14 +241,12 @@ test "fractional literal - negative scientific notation" {
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     switch (expr) {
-        .e_dec => |frac| {
-            try testing.expect(true); // 1e-7 fits in Dec
-            // -1.5e-5 may not round-trip perfectly through f32
-            // Let's just check the value is correct
-            try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
+        .e_dec_small => |dec| {
+            try testing.expectEqual(@as(i16, -15), dec.value.numerator);
+            try testing.expectEqual(@as(u8, 6), dec.value.denominator_power_of_ten);
         },
         else => {
-            try testing.expect(false); // Should be frac_dec
+            try testing.expect(false); // Should be exact small decimal
         },
     }
 }
@@ -389,7 +389,7 @@ test "small dec - positive zero" {
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.value.numerator, 0);
-            try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
+            try testing.expectEqual(dec.value.denominator_power_of_ten, 0);
 
             // Verify positive zero
             try testing.expectEqual(dec.value.numerator, 0);
@@ -429,8 +429,8 @@ test "small dec - trailing zeros" {
 
     switch (expr) {
         .e_dec_small => |dec| {
-            try testing.expectEqual(dec.value.numerator, 1100);
-            try testing.expectEqual(dec.value.denominator_power_of_ten, 3);
+            try testing.expectEqual(dec.value.numerator, 11);
+            try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -486,8 +486,8 @@ test "small dec - min i8 value" {
 
     switch (expr) {
         .e_dec_small => |dec| {
-            try testing.expectEqual(dec.value.numerator, -1280);
-            try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
+            try testing.expectEqual(dec.value.numerator, -128);
+            try testing.expectEqual(dec.value.denominator_power_of_ten, 0);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -505,9 +505,8 @@ test "small dec - 128.0 now fits with new representation" {
 
     switch (expr) {
         .e_dec_small => |dec| {
-            // With numerator/power representation, 128.0 = 1280/10^1 fits in i16
-            try testing.expectEqual(dec.value.numerator, 1280);
-            try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
+            try testing.expectEqual(dec.value.numerator, 128);
+            try testing.expectEqual(dec.value.denominator_power_of_ten, 0);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -525,8 +524,8 @@ test "small dec - exceeds i16 range falls back to Dec" {
 
     switch (expr) {
         .e_dec => {
-            // Should fall back to Dec because 327680 > 32767 (max i16)
-            try testing.expect(true); // 3.141 fits in Dec
+            // Should fall back to Dec because 32768 > 32767 (max i16)
+            try testing.expect(true);
         },
         .e_dec_small => {
             try testing.expect(false); // Should NOT be dec_small
@@ -625,8 +624,8 @@ test "fractional literal - simple 1.0 uses small dec" {
 
     switch (expr) {
         .e_dec_small => |dec| {
-            try testing.expectEqual(dec.value.numerator, 10);
-            try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
+            try testing.expectEqual(dec.value.numerator, 1);
+            try testing.expectEqual(dec.value.denominator_power_of_ten, 0);
         },
         else => {
             try testing.expect(false); // Should be dec_small

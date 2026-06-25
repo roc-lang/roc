@@ -202,6 +202,19 @@ type_id_to_rust = |type_table, type_id| {
 	}
 }
 
+## Render one struct field declaration for a record field. Unnamed
+## nominal-record padding fields become fixed-size byte arrays (`[u8; size]`);
+## named fields use their resolved Rust type.
+rust_record_field_decl : List(TypeRepr), RecordField -> Str
+rust_record_field_decl = |type_table, field| {
+	rust_type = if field.is_padding {
+		"[u8; ${U64.to_str(field.size)}]"
+	} else {
+		type_id_to_rust(type_table, field.type_id)
+	}
+	"    pub ${field.name}: ${rust_type},\n"
+}
+
 ## Convert a TypeRepr to its Rust type string
 type_repr_to_rust : List(TypeRepr), TypeRepr -> Str
 type_repr_to_rust = |type_table, type_repr| {
@@ -278,9 +291,10 @@ is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| {
 	match type_repr {
 		RocStr => Bool.True
+		RocBox(_) => Bool.True
 		RocList(_) => Bool.True
 		RocFunction(_) => Bool.True
-		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
+		RocRecord(rec) => List.any(rec.fields, |field| !field.is_padding and is_type_refcounted(type_table, field.type_id))
 		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
 		_ => Bool.False
 	}
@@ -587,16 +601,18 @@ generate_rust_imports =
 ## Generate self-contained host ABI type definitions (matching roc_ops.rs)
 generate_host_abi_types_rust : Str
 generate_host_abi_types_rust =
-	\\/// Type-erased function pointer for hosted function dispatch.
+	\\/// Type-erased pointer to a hosted function. Each hosted function has its own natural
+	\\/// C signature (determined by its Roc argument and return types under the platform C
+	\\/// ABI), so they are stored type-erased here and cast to their concrete signature at
+	\\/// the Roc call site. A hosted function takes a leading `*const RocOps` only when it
+	\\/// allocates or frees Roc-managed memory (i.e. when an argument or its return is a heap
+	\\/// type).
 	\\///
-	\\/// The second pointer is return storage and the third pointer is the
-	\\/// function-specific arguments struct. Roc transfers ownership of
-	\\/// refcounted arguments to hosted functions. Hosted functions must
-	\\/// decref owned refcounted arguments when done, or transfer that
-	\\/// ownership into the return value or longer-lived storage. If the host
-	\\/// keeps both the call argument and a stored copy, it must incref the
-	\\/// stored copy so each live reference has one ownership.
-	\\pub type HostedFn = extern "C" fn(*const RocOps, *mut c_void, *mut c_void);
+	\\/// Roc transfers ownership of refcounted arguments to hosted functions. Hosted functions
+	\\/// must decref owned refcounted arguments when done, or transfer that ownership into the
+	\\/// return value or longer-lived storage. If the host keeps both the call argument and a
+	\\/// stored copy, it must incref the stored copy so each live reference has one ownership.
+	\\pub type HostedFn = extern "C" fn();
 	\\
 	\\/// Table of hosted function pointers passed to the Roc runtime.
 	\\#[repr(C)]
@@ -661,66 +677,20 @@ generate_host_abi_types_rust =
 	\\    data
 	\\}
 	\\
-	\\/// Arguments for a Roc allocation request.
-	\\#[repr(C)]
-	\\#[derive(Debug)]
-	\\pub struct RocAlloc {
-	\\    pub alignment: usize,
-	\\    pub length: usize,
-	\\    pub answer: *mut c_void,
-	\\}
-	\\
-	\\/// Arguments for a Roc deallocation request.
-	\\#[repr(C)]
-	\\#[derive(Debug)]
-	\\pub struct RocDealloc {
-	\\    pub alignment: usize,
-	\\    pub ptr: *mut c_void,
-	\\}
-	\\
-	\\/// Arguments for a Roc reallocation request.
-	\\#[repr(C)]
-	\\#[derive(Debug)]
-	\\pub struct RocRealloc {
-	\\    pub alignment: usize,
-	\\    pub new_length: usize,
-	\\    pub answer: *mut c_void,
-	\\}
-	\\
-	\\/// Arguments for a Roc `dbg` expression.
-	\\#[repr(C)]
-	\\#[derive(Debug)]
-	\\pub struct RocDbg {
-	\\    pub utf8_bytes: *mut u8,
-	\\    pub len: usize,
-	\\}
-	\\
-	\\/// Arguments for a failed Roc `expect`.
-	\\#[repr(C)]
-	\\#[derive(Debug)]
-	\\pub struct RocExpectFailed {
-	\\    pub utf8_bytes: *mut u8,
-	\\    pub len: usize,
-	\\}
-	\\
-	\\/// Arguments for a Roc `crash`.
-	\\#[repr(C)]
-	\\#[derive(Debug)]
-	\\pub struct RocCrashed {
-	\\    pub utf8_bytes: *mut u8,
-	\\    pub len: usize,
-	\\}
-	\\
-	\\/// The operations table passed from the host to the Roc runtime.
+	\\/// The operations table passed from the host to the Roc runtime. The memory and
+	\\/// diagnostic callbacks take a leading `*mut RocOps` and pass their remaining arguments
+	\\/// and return value in registers per the platform C ABI. `roc_alloc`/`roc_realloc`
+	\\/// return the allocation (or null on OOM — a platform host aborts instead of returning
+	\\/// null).
 	\\#[repr(C)]
 	\\pub struct RocOps {
 	\\    pub env: *mut c_void,
-	\\    pub roc_alloc: extern "C" fn(*mut RocAlloc, *mut c_void),
-	\\    pub roc_dealloc: extern "C" fn(*mut RocDealloc, *mut c_void),
-	\\    pub roc_realloc: extern "C" fn(*mut RocRealloc, *mut c_void),
-	\\    pub roc_dbg: extern "C" fn(*const RocDbg, *mut c_void),
-	\\    pub roc_expect_failed: extern "C" fn(*const RocExpectFailed, *mut c_void),
-	\\    pub roc_crashed: extern "C" fn(*const RocCrashed, *mut c_void),
+	\\    pub roc_alloc: extern "C" fn(*mut RocOps, usize, usize) -> *mut c_void,
+	\\    pub roc_dealloc: extern "C" fn(*mut RocOps, *mut c_void, usize),
+	\\    pub roc_realloc: extern "C" fn(*mut RocOps, *mut c_void, usize, usize) -> *mut c_void,
+	\\    pub roc_dbg: extern "C" fn(*mut RocOps, *const u8, usize),
+	\\    pub roc_expect_failed: extern "C" fn(*mut RocOps, *const u8, usize),
+	\\    pub roc_crashed: extern "C" fn(*mut RocOps, *const u8, usize),
 	\\    pub hosted_fns: HostedFunctions,
 	\\}
 	\\
@@ -728,20 +698,15 @@ generate_host_abi_types_rust =
 	\\    /// Allocate memory with the given alignment and length.
 	\\    #[inline]
 	\\    pub unsafe fn alloc(&self, alignment: usize, length: usize) -> *mut c_void {
-	\\        let mut args = RocAlloc {
-	\\            alignment,
-	\\            length,
-	\\            answer: core::ptr::null_mut(),
-	\\        };
-	\\        (self.roc_alloc)(&mut args, self.env);
-	\\        args.answer
+	\\        let ops = self as *const RocOps as *mut RocOps;
+	\\        (self.roc_alloc)(ops, length, alignment)
 	\\    }
 	\\
 	\\    /// Deallocate memory previously allocated with `alloc`.
 	\\    #[inline]
 	\\    pub unsafe fn dealloc(&self, ptr: *mut c_void, alignment: usize) {
-	\\        let mut args = RocDealloc { alignment, ptr };
-	\\        (self.roc_dealloc)(&mut args, self.env);
+	\\        let ops = self as *const RocOps as *mut RocOps;
+	\\        (self.roc_dealloc)(ops, ptr, alignment);
 	\\    }
 	\\
 	\\    /// Reallocate memory to a new size.
@@ -752,13 +717,8 @@ generate_host_abi_types_rust =
 	\\        alignment: usize,
 	\\        new_length: usize,
 	\\    ) -> *mut c_void {
-	\\        let mut args = RocRealloc {
-	\\            alignment,
-	\\            new_length,
-	\\            answer: old_ptr,
-	\\        };
-	\\        (self.roc_realloc)(&mut args, self.env);
-	\\        args.answer
+	\\        let ops = self as *const RocOps as *mut RocOps;
+	\\        (self.roc_realloc)(ops, old_ptr, new_length, alignment)
 	\\    }
 	\\}
 	\\
@@ -769,38 +729,46 @@ generate_rust_roc_str =
 	\\/// A Roc string value. Small strings (up to 23 bytes on 64-bit) are stored inline;
 	\\/// larger strings are heap-allocated with a reference count.
 	\\///
+	\\/// `bytes` is never tagged. Operations, host code, glue code, and object-file
+	\\/// relocations can use it directly as the UTF-8 byte pointer for non-small
+	\\/// strings. Seamless-slice tagging lives in `capacity_or_alloc_ptr` instead.
+	\\/// Big-string capacity is stored shifted left by one bit, so max capacity is
+	\\/// essentially `isize::MAX` bytes: about 2 GiB on 32-bit targets and 8 EiB on
+	\\/// 64-bit targets.
+	\\///
 	\\/// This type is ABI-compatible with the Zig RocStr (24 bytes, `#[repr(C)]`).
 	\\#[repr(C)]
 	\\pub struct RocStr {
 	\\    pub bytes: *mut u8,
-	\\    pub length: usize,
 	\\    pub capacity_or_alloc_ptr: usize,
+	\\    pub length: usize,
 	\\}
 	\\
 	\\const ROC_STR_SIZE: usize = core::mem::size_of::<RocStr>();
 	\\const ROC_SMALL_STR_MAX_LEN: usize = ROC_STR_SIZE - 1;
-	\\const ROC_SEAMLESS_SLICE_BIT: usize = isize::MIN as usize;
+	\\const ROC_SMALL_STR_BIT: usize = isize::MIN as usize;
+	\\const ROC_SEAMLESS_SLICE_TAG: usize = 1;
 	\\
 	\\impl RocStr {
 	\\    /// Return an empty RocStr (small string with zero length).
 	\\    pub fn empty() -> Self {
 	\\        Self {
 	\\            bytes: core::ptr::null_mut(),
-	\\            length: 0,
-	\\            capacity_or_alloc_ptr: ROC_SEAMLESS_SLICE_BIT,
+	\\            capacity_or_alloc_ptr: 0,
+	\\            length: ROC_SMALL_STR_BIT,
 	\\        }
 	\\    }
 	\\
 	\\    /// Return true if this string is stored inline (small string optimization).
 	\\    #[inline]
 	\\    pub fn is_small_str(&self) -> bool {
-	\\        (self.capacity_or_alloc_ptr as isize) < 0
+	\\        (self.length as isize) < 0
 	\\    }
 	\\
 	\\    /// Return true if this string is a seamless slice into another allocation.
 	\\    #[inline]
 	\\    pub fn is_seamless_slice(&self) -> bool {
-	\\        !self.is_small_str() && (self.length as isize) < 0
+	\\        !self.is_small_str() && (self.capacity_or_alloc_ptr & ROC_SEAMLESS_SLICE_TAG) != 0
 	\\    }
 	\\
 	\\    /// Return the length of the string in bytes.
@@ -811,7 +779,7 @@ generate_rust_roc_str =
 	\\            let last_byte = unsafe { *bytes_ptr.add(ROC_STR_SIZE - 1) };
 	\\            (last_byte ^ 0b1000_0000) as usize
 	\\        } else {
-	\\            self.length & !ROC_SEAMLESS_SLICE_BIT
+	\\            self.length
 	\\        }
 	\\    }
 	\\
@@ -866,8 +834,8 @@ generate_rust_roc_str =
 	\\            }
 	\\            Self {
 	\\                bytes: data_ptr,
+	\\                capacity_or_alloc_ptr: slice.len() << 1,
 	\\                length: slice.len(),
-	\\                capacity_or_alloc_ptr: slice.len(),
 	\\            }
 	\\        }
 	\\    }
@@ -889,6 +857,9 @@ generate_rust_roc_str =
 	\\        unsafe {
 	\\            let rc = (alloc_ptr as *mut isize).sub(1);
 	\\            let prev = *rc;
+	\\            if prev == 0 {
+	\\                return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
+	\\            }
 	\\            *rc = prev - 1;
 	\\            if prev == 1 {
 	\\                let ptr_width = core::mem::size_of::<usize>();
@@ -900,7 +871,7 @@ generate_rust_roc_str =
 	\\
 	\\    fn get_allocation_ptr(&self) -> *mut u8 {
 	\\        if self.is_seamless_slice() {
-	\\            (self.capacity_or_alloc_ptr << 1) as *mut u8
+	\\            (self.capacity_or_alloc_ptr & !ROC_SEAMLESS_SLICE_TAG) as *mut u8
 	\\        } else {
 	\\            self.bytes
 	\\        }
@@ -965,6 +936,25 @@ generate_rust_roc_list =
 	\\        self.length == 0
 	\\    }
 	\\
+	\\    /// Return true if this list is a seamless slice into another allocation.
+	\\    /// Slices share the rc slot with their backing allocation; the alloc ptr is
+	\\    /// encoded in `capacity_or_alloc_ptr` with the low bit set.
+	\\    #[inline]
+	\\    pub fn is_seamless_slice(&self) -> bool {
+	\\        (self.capacity_or_alloc_ptr & 1) != 0
+	\\    }
+	\\
+	\\    /// Resolve `self` to the start of its backing allocation (the element block
+	\\    /// just after the rc slot). Returns `null` for empty lists. Handles both
+	\\    /// whole-backing and seamless-slice forms.
+	\\    fn get_allocation_ptr(&self) -> *mut u8 {
+	\\        if self.is_seamless_slice() {
+	\\            (self.capacity_or_alloc_ptr & !1) as *mut u8
+	\\        } else {
+	\\            self.elements as *mut u8
+	\\        }
+	\\    }
+	\\
 	\\    /// Return the list elements as a slice.
 	\\    pub fn as_slice(&self) -> &[T] {
 	\\        if self.elements.is_null() {
@@ -993,7 +983,7 @@ generate_rust_roc_list =
 	\\        Self {
 	\\            elements: data_ptr as *mut T,
 	\\            length,
-	\\            capacity_or_alloc_ptr: length,
+	\\            capacity_or_alloc_ptr: length << 1,
 	\\        }
 	\\    }
 	\\
@@ -1018,14 +1008,21 @@ generate_rust_roc_list =
 	\\        if self.elements.is_null() {
 	\\            return;
 	\\        }
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
+	\\            return;
+	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
 	\\        let header_bytes = Self::header_bytes();
 	\\        unsafe {
-	\\            let rc = (self.elements as *mut isize).sub(1);
+	\\            let rc = (alloc_ptr as *mut isize).sub(1);
 	\\            let prev = *rc;
+	\\            if prev == 0 {
+	\\                return; // REFCOUNT_STATIC_DATA — elements are in read-only memory
+	\\            }
 	\\            *rc = prev - 1;
 	\\            if prev == 1 {
-	\\                let base = (self.elements as *mut u8).sub(header_bytes) as *mut c_void;
+	\\                let base = alloc_ptr.sub(header_bytes) as *mut c_void;
 	\\                roc_ops.dealloc(base, align);
 	\\            }
 	\\        }
@@ -1069,11 +1066,7 @@ generate_element_type_structs_rust = |type_table| {
 					struct_name = name_to_struct_name(rec.name)
 					var $field_strs = ""
 					for field in rec.fields {
-						rust_type = type_id_to_rust(type_table, field.type_id)
-						$field_strs = Str.concat(
-							$field_strs,
-							"    pub ${field.name}: ${rust_type},\n",
-						)
+						$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, field))
 					}
 
 					# Size/alignment assertions (guarded by pointer width)
@@ -1201,11 +1194,7 @@ generate_all_record_structs_rust = |hosted_functions, type_table| {
 
 			var $fields = ""
 			for field in type_table_result.fields {
-				rust_type = type_id_to_rust(type_table, field.type_id)
-				$fields = Str.concat(
-					$fields,
-					"    pub ${field.name}: ${rust_type},\n",
-				)
+				$fields = Str.concat($fields, rust_record_field_decl(type_table, field))
 			}
 
 			assertions = if type_table_result.size > 0 {
@@ -1256,11 +1245,7 @@ generate_args_struct_rust = |func, type_table| {
 	if type_table_result.found {
 		var $fields = ""
 		for field in type_table_result.fields {
-			rust_type = type_id_to_rust(type_table, field.type_id)
-			$fields = Str.concat(
-				$fields,
-				"    pub ${field.name}: ${rust_type},\n",
-			)
+			$fields = Str.concat($fields, rust_record_field_decl(type_table, field))
 		}
 
 		assertions = if type_table_result.size > 0 {
@@ -1307,31 +1292,50 @@ generate_platform_fns_struct_rust = |hosted_functions, type_table| {
 	"/// Implement this struct with your hosted function implementations.\n/// Refcounted hosted arguments are owned by the hosted function.\n/// Pass it to `hosted_functions()` to create the dispatch table.\npub struct PlatformHostedFns {\n${$fields}}\n"
 }
 
-## Get the Rust function pointer type for a hosted function
+## Get the Rust function-pointer type for a hosted function, in its natural C signature.
+##
+## A leading `*mut RocOps` is present only when the function allocates or frees Roc-managed
+## memory (i.e. when its return or any argument is a heap type). Each Roc argument becomes a
+## by-value parameter of its natural Rust type; the return is the natural Rust return type
+## (unit `()` is elided, so the function returns nothing). This matches exactly what the
+## compiler emits at the call site.
 hosted_fn_type_rust = |func, type_table| {
-	parsed = parse_type_str(func.type_str)
-	struct_name = name_to_struct_name(func.name)
+	needs_ops =
+		is_type_refcounted(type_table, func.ret_type_id)
+		or List.any(func.arg_type_ids, |id| is_type_refcounted(type_table, id))
 
-	# Use type table to detect record return types
-	ret_record = lookup_record_in_type_table(type_table, func.ret_type_id)
-	ret_param = if ret_record.found {
-		"*mut ${struct_name}RetRecord"
+	var $params = if needs_ops {
+		"*mut RocOps"
 	} else {
-		rust_ret = type_id_to_rust(type_table, func.ret_type_id)
-		if rust_ret == "()" or rust_ret == "*mut c_void" {
-			"*mut c_void"
-		} else {
-			"*mut ${rust_ret}"
+		""
+	}
+
+	for arg_type_id in func.arg_type_ids {
+		# Unit (zero-sized) arguments are not passed.
+		is_unit =
+			match List.get(type_table, arg_type_id) {
+				Ok(RocUnit) => Bool.True
+				_ => Bool.False
+			}
+		if !is_unit {
+			arg_rust = type_id_to_rust(type_table, arg_type_id)
+			sep = if $params == "" {
+				""
+			} else {
+				", "
+			}
+			$params = "${$params}${sep}${arg_rust}"
 		}
 	}
 
-	args_param = if List.is_empty(parsed.args) {
-		"*mut c_void"
+	rust_ret = type_id_to_rust(type_table, func.ret_type_id)
+	ret_suffix = if rust_ret == "()" {
+		""
 	} else {
-		"*const ${struct_name}Args"
+		" -> ${rust_ret}"
 	}
 
-	"extern \"C\" fn(*const RocOps, ${ret_param}, ${args_param})"
+	"extern \"C\" fn(${$params})${ret_suffix}"
 }
 
 ## Generate the hosted_functions() helper that builds the dispatch table
@@ -1361,12 +1365,11 @@ generate_default_allocators_rust =
 	\\
 	\\impl DefaultAllocators {
 	\\    /// Allocate memory for the Roc runtime using the global allocator.
-	\\    pub extern "C" fn roc_alloc(alloc_args: *mut RocAlloc, _env: *mut c_void) {
+	\\    pub extern "C" fn roc_alloc(_roc_ops: *mut RocOps, length: usize, alignment: usize) -> *mut c_void {
 	\\        unsafe {
-	\\            let args = &mut *alloc_args;
-	\\            let min_alignment = args.alignment.max(core::mem::align_of::<usize>());
+	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
-	\\            let total_size = args.length + size_storage_bytes;
+	\\            let total_size = length + size_storage_bytes;
 	\\
 	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let layout = Layout::from_size_align_unchecked(total_size, min_alignment);
@@ -1380,21 +1383,20 @@ generate_default_allocators_rust =
 	\\            let size_ptr = base_ptr.add(size_storage_bytes).sub(core::mem::size_of::<usize>()) as *mut usize;
 	\\            *size_ptr = total_size;
 	\\
-	\\            args.answer = base_ptr.add(size_storage_bytes) as *mut c_void;
+	\\            base_ptr.add(size_storage_bytes) as *mut c_void
 	\\        }
 	\\    }
 	\\
 	\\    /// Free memory previously allocated by `roc_alloc`.
-	\\    pub extern "C" fn roc_dealloc(dealloc_args: *mut RocDealloc, _env: *mut c_void) {
+	\\    pub extern "C" fn roc_dealloc(_roc_ops: *mut RocOps, ptr: *mut c_void, alignment: usize) {
 	\\        unsafe {
-	\\            let args = &*dealloc_args;
-	\\            let min_alignment = args.alignment.max(core::mem::align_of::<usize>());
+	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
 	\\
-	\\            let size_ptr = (args.ptr as *const u8).sub(core::mem::size_of::<usize>()) as *const usize;
+	\\            let size_ptr = (ptr as *const u8).sub(core::mem::size_of::<usize>()) as *const usize;
 	\\            let total_size = *size_ptr;
 	\\
-	\\            let base_ptr = (args.ptr as *mut u8).sub(size_storage_bytes);
+	\\            let base_ptr = (ptr as *mut u8).sub(size_storage_bytes);
 	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let layout = Layout::from_size_align_unchecked(total_size, min_alignment);
 	\\            std::alloc::dealloc(base_ptr, layout);
@@ -1402,19 +1404,18 @@ generate_default_allocators_rust =
 	\\    }
 	\\
 	\\    /// Reallocate memory, potentially extending the existing allocation in-place.
-	\\    pub extern "C" fn roc_realloc(realloc_args: *mut RocRealloc, _env: *mut c_void) {
+	\\    pub extern "C" fn roc_realloc(_roc_ops: *mut RocOps, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
 	\\        unsafe {
-	\\            let args = &mut *realloc_args;
-	\\            let min_alignment = args.alignment.max(core::mem::align_of::<usize>());
+	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
 	\\
 	\\            // Read old size from metadata
-	\\            let old_size_ptr = (args.answer as *const u8).sub(core::mem::size_of::<usize>()) as *const usize;
+	\\            let old_size_ptr = (ptr as *const u8).sub(core::mem::size_of::<usize>()) as *const usize;
 	\\            let old_total_size = *old_size_ptr;
-	\\            let old_base_ptr = (args.answer as *mut u8).sub(size_storage_bytes);
+	\\            let old_base_ptr = (ptr as *mut u8).sub(size_storage_bytes);
 	\\
 	\\            // Realloc (may extend in-place without copying)
-	\\            let new_total_size = args.new_length + size_storage_bytes;
+	\\            let new_total_size = new_length + size_storage_bytes;
 	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let old_layout = Layout::from_size_align_unchecked(old_total_size, min_alignment);
 	\\            let new_base_ptr = std::alloc::realloc(old_base_ptr, old_layout, new_total_size);
@@ -1427,7 +1428,7 @@ generate_default_allocators_rust =
 	\\            let new_user_ptr = new_base_ptr.add(size_storage_bytes);
 	\\            let new_size_ptr = new_user_ptr.sub(core::mem::size_of::<usize>()) as *mut usize;
 	\\            *new_size_ptr = new_total_size;
-	\\            args.answer = new_user_ptr as *mut c_void;
+	\\            new_user_ptr as *mut c_void
 	\\        }
 	\\    }
 	\\}
@@ -1443,10 +1444,9 @@ generate_default_handlers_rust =
 	\\
 	\\impl DefaultHandlers {
 	\\    /// Print a `dbg` expression to stderr.
-	\\    pub extern "C" fn roc_dbg(dbg_args: *const RocDbg, _env: *mut c_void) {
+	\\    pub extern "C" fn roc_dbg(_roc_ops: *mut RocOps, bytes: *const u8, len: usize) {
 	\\        unsafe {
-	\\            let args = &*dbg_args;
-	\\            let msg = core::slice::from_raw_parts(args.utf8_bytes, args.len);
+	\\            let msg = core::slice::from_raw_parts(bytes, len);
 	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
 	\\            eprintln!("\\x1b[36m[ROC DBG]\\x1b[0m {}", msg);
@@ -1454,10 +1454,9 @@ generate_default_handlers_rust =
 	\\    }
 	\\
 	\\    /// Print a failed `expect` to stderr.
-	\\    pub extern "C" fn roc_expect_failed(expect_args: *const RocExpectFailed, _env: *mut c_void) {
+	\\    pub extern "C" fn roc_expect_failed(_roc_ops: *mut RocOps, bytes: *const u8, len: usize) {
 	\\        unsafe {
-	\\            let args = &*expect_args;
-	\\            let msg = core::slice::from_raw_parts(args.utf8_bytes, args.len);
+	\\            let msg = core::slice::from_raw_parts(bytes, len);
 	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
 	\\            eprintln!("\\x1b[33m[ROC EXPECT]\\x1b[0m {}", msg);
@@ -1465,10 +1464,9 @@ generate_default_handlers_rust =
 	\\    }
 	\\
 	\\    /// Print a `crash` message to stderr and exit.
-	\\    pub extern "C" fn roc_crashed(crash_args: *const RocCrashed, _env: *mut c_void) {
+	\\    pub extern "C" fn roc_crashed(_roc_ops: *mut RocOps, bytes: *const u8, len: usize) {
 	\\        unsafe {
-	\\            let args = &*crash_args;
-	\\            let msg = core::slice::from_raw_parts(args.utf8_bytes, args.len);
+	\\            let msg = core::slice::from_raw_parts(bytes, len);
 	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
 	\\            eprintln!("\\x1b[31m[ROC CRASHED]\\x1b[0m {}", msg);

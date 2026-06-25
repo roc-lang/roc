@@ -12,26 +12,19 @@ match color {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - basic_tag_union.md:3:10:3:11
+TYPE MISMATCH - basic_tag_union.md:4:11:4:14
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**basic_tag_union.md:3:10:3:11:**
-```roc
-	Blue => 2
-```
-	        ^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **basic_tag_union.md:4:11:4:14:**
 ```roc
 	Green => "3"
 ```
 	         ^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -91,5 +84,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Dec"))
 ~~~

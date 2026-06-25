@@ -8,6 +8,9 @@
 pub const LowLevel = enum {
     // String operations
     str_is_eq,
+    str_is_eq_static_small,
+    str_static_small_word_eq,
+    str_static_small_word_caseless_eq,
     str_concat,
     str_contains,
     str_trim,
@@ -20,7 +23,9 @@ pub const LowLevel = enum {
     str_ends_with,
     str_repeat,
     str_drop_prefix,
+    str_drop_prefix_caseless_ascii,
     str_drop_suffix,
+    str_find_first,
     str_count_utf8_bytes,
     str_with_capacity,
     str_reserve,
@@ -56,6 +61,8 @@ pub const LowLevel = enum {
     list_drop_at,
     list_sublist,
     list_set,
+    list_replace_unsafe,
+    list_swap,
     list_prepend,
     list_first,
     list_last,
@@ -68,9 +75,33 @@ pub const LowLevel = enum {
     list_release_excess_capacity,
     list_split_first,
     list_split_last,
+    list_map_can_reuse,
+    list_map_cast_unsafe,
+    list_map_extract_unsafe,
+    list_map_write_unsafe,
 
     // Bool operations
     bool_not,
+
+    // Hasher operations
+    dict_pseudo_seed,
+    hasher_finish,
+    hasher_write_bool,
+    hasher_write_u8,
+    hasher_write_u16,
+    hasher_write_u32,
+    hasher_write_u64,
+    hasher_write_u128,
+    hasher_write_i8,
+    hasher_write_i16,
+    hasher_write_i32,
+    hasher_write_i64,
+    hasher_write_i128,
+    hasher_write_f32,
+    hasher_write_f64,
+    hasher_write_dec,
+    hasher_write_bytes,
+    hasher_write_str,
 
     // Numeric comparison operations
     num_is_eq,
@@ -92,16 +123,32 @@ pub const LowLevel = enum {
     num_mod_by,
     num_pow,
     num_sqrt,
+    num_sin,
+    num_cos,
+    num_tan,
+    num_asin,
+    num_acos,
+    num_atan,
     num_log,
     num_round,
     num_floor,
     num_ceiling,
     num_to_str,
+    f32_to_bits,
+    f32_from_bits,
+    f64_to_bits,
+    f64_from_bits,
 
     // Bitwise shift operations
     num_shift_left_by,
     num_shift_right_by,
     num_shift_right_zf_by,
+
+    // Bitwise logical operations
+    num_bitwise_and,
+    num_bitwise_or,
+    num_bitwise_xor,
+    num_bitwise_not,
 
     // Numeric parsing operations
     num_from_numeral,
@@ -396,6 +443,24 @@ pub const LowLevel = enum {
     box_unbox,
     erased_capture_load,
 
+    // Compiler-internal pointer operations, introduced by the TRMC pass
+    // (src/lir/trmc.zig). Never produced by user code or canonicalization.
+    // Sizes always come from local layouts: the target local for ptr_alloca /
+    // box_alloc_zeroed (inner of ptr/box) and ptr_load, the value arg for
+    // ptr_store.
+    /// () -> Ptr(T): reserve a zeroed stack/frame slot for T, yield its address.
+    /// Emitted once per proc entry (pre-loop); backends may hoist to the prologue.
+    ptr_alloca,
+    /// () -> Box(T): heap cell via allocateWithRefcount (rc=1), payload zero-filled.
+    /// Bit-identical to a box_box whose payload is all zeroes.
+    box_alloc_zeroed,
+    /// (Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into *ptr.
+    ptr_store,
+    /// (Ptr(T)) -> T: copy sizeOf(T) bytes out of *ptr.
+    ptr_load,
+    /// (Box(T) | Ptr(T)) -> Ptr(T): identity bits.
+    ptr_cast,
+
     // Comparison
     compare,
 
@@ -412,13 +477,35 @@ pub const LowLevel = enum {
         result_aliases_consumed_args: u64 = 0,
         retain_args: u64 = 0,
         retain_result: bool = false,
+        /// Argument positions whose payload data the result may point into
+        /// without owning it. When ARC insertion solves the result's binding
+        /// as borrowed, it emits no retain for the result and instead keeps
+        /// the lender argument live across every use of the result.
+        result_borrows_args: u64 = 0,
+        /// Argument positions whose allocations the result may hold handles
+        /// into even though unit accounting says nothing: the op returns a
+        /// fresh owned outer value whose interior shares the argument's
+        /// allocation (seamless slices, byte/string reinterpretations).
+        /// Host-visibility analysis links the result to these arguments in
+        /// both directions.
+        result_shares_args: u64 = 0,
+        /// The result's outermost allocation has count 1 on return. Runtime
+        /// uniqueness-checking ops qualify on both of their paths (in place
+        /// keeps an allocation whose count was already 1, the copy path
+        /// returns a fresh one), as do ops that always allocate their
+        /// outermost result — interior sharing described by
+        /// `result_shares_args` is irrelevant to the outermost count.
+        result_unique: bool = false,
 
         pub fn none() RcEffect {
             return .{};
         }
 
         pub fn allocates() RcEffect {
-            return .{ .may_allocate = true };
+            return .{
+                .may_allocate = true,
+                .result_unique = true,
+            };
         }
 
         pub fn allocatesRetainingArgs(mask: u64) RcEffect {
@@ -426,6 +513,7 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = mask != 0,
                 .retain_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -434,6 +522,7 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = mask != 0,
                 .consume_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -445,6 +534,14 @@ pub const LowLevel = enum {
             return .{
                 .may_retain_or_release = true,
                 .retain_result = true,
+            };
+        }
+
+        pub fn retainsResultBorrowingArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = true,
+                .retain_result = true,
+                .result_borrows_args = mask,
             };
         }
 
@@ -462,6 +559,7 @@ pub const LowLevel = enum {
                 .may_runtime_uniqueness_check_args = mask,
                 .consume_args = mask,
                 .result_aliases_consumed_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -473,6 +571,41 @@ pub const LowLevel = enum {
                 .consume_args = runtime_mask,
                 .result_aliases_consumed_args = runtime_mask,
                 .retain_args = retain_mask,
+                .result_unique = true,
+            };
+        }
+
+        pub fn retainsOrReleasesSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = true,
+                .result_shares_args = mask,
+                .result_unique = true,
+            };
+        }
+
+        pub fn retainsSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = mask != 0,
+                .retain_args = mask,
+                .result_shares_args = mask,
+                .result_unique = true,
+            };
+        }
+
+        pub fn allocatesSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .result_shares_args = mask,
+                .result_unique = true,
+            };
+        }
+
+        pub fn allocatesAndRetainsOrReleasesSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .result_shares_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -490,6 +623,7 @@ pub const LowLevel = enum {
                 .consume_args = consume_mask,
                 .result_aliases_consumed_args = consume_mask,
                 .retain_args = retain_mask,
+                .result_unique = true,
             };
         }
     };
@@ -504,17 +638,22 @@ pub const LowLevel = enum {
             .str_trim_end,
             .str_with_ascii_lowercased,
             .str_with_ascii_uppercased,
-            .str_drop_prefix,
-            .str_drop_suffix,
             .str_reserve,
             .str_release_excess_capacity,
-            .str_to_utf8,
-            .str_from_utf8,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            .str_drop_prefix,
+            .str_drop_prefix_caseless_ascii,
+            .str_drop_suffix,
+            .str_find_first,
+            => RcEffect.retainsSharingArgs(argMask(&.{0})),
+
+            .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
+
+            .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .list_drop_at,
             .list_sublist,
-            .list_prepend,
             .list_drop_first,
             .list_drop_last,
             .list_take_first,
@@ -526,20 +665,44 @@ pub const LowLevel = enum {
             .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
+            .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
-            .list_set => RcEffect.runtimeUniqueness(argMask(&.{0})),
+            // Reads the list's refcount (and slice bit) without changing it.
+            .list_map_can_reuse => RcEffect.none(),
+
+            // Retypes a unique non-slice list to the output element type,
+            // keeping the same allocation. Only reachable behind a true
+            // `list_map_can_reuse`, so the result's count is 1 on return.
+            .list_map_cast_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
+
+            // Moves one element's ownership out of a unique list's buffer.
+            // The buffer slot keeps stale bytes until `list_map_write_unsafe`
+            // stores the replacement; the op itself performs no RC work.
+            .list_map_extract_unsafe => RcEffect.none(),
+
+            // Stores an owned element into the slot vacated by
+            // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
+            .list_map_write_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
+
+            .list_swap => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            .list_set,
+            .list_replace_unsafe,
+            => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
 
             .list_first,
             .list_last,
             .list_get_unsafe,
-            => RcEffect.retainsResult(),
+            => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
+
+            .str_split_on => RcEffect.allocatesSharingArgs(argMask(&.{0})),
 
             .str_repeat,
             .str_from_utf8_lossy,
-            .str_split_on,
             .str_with_capacity,
             .str_inspect,
             .u8_to_str,
@@ -563,11 +726,28 @@ pub const LowLevel = enum {
 
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 
-            .box_unbox,
-            .erased_capture_load,
-            => RcEffect.retainsResult(),
+            .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
+
+            // The capture environment is read through the executing frame's
+            // closure, not through an explicit refcounted argument, so the
+            // result cannot name a lender to borrow from.
+            .erased_capture_load => RcEffect.retainsResult(),
+
+            .box_alloc_zeroed => RcEffect.allocates(),
+
+            // The stored value's ownership transfers into the pointed-at structure.
+            // The pointer args/results are ptr layouts, which are never refcounted.
+            .ptr_store => RcEffect.consumesArgsRetainingArgs(argMask(&.{1}), 0),
+
+            .ptr_alloca,
+            .ptr_load,
+            .ptr_cast,
+            => RcEffect.none(),
 
             .str_is_eq,
+            .str_is_eq_static_small,
+            .str_static_small_word_eq,
+            .str_static_small_word_caseless_eq,
             .str_contains,
             .str_caseless_ascii_equals,
             .str_starts_with,
@@ -575,6 +755,24 @@ pub const LowLevel = enum {
             .str_count_utf8_bytes,
             .list_len,
             .bool_not,
+            .dict_pseudo_seed,
+            .hasher_finish,
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_u128,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            .hasher_write_i128,
+            .hasher_write_f32,
+            .hasher_write_f64,
+            .hasher_write_dec,
+            .hasher_write_bytes,
+            .hasher_write_str,
             .num_is_eq,
             .num_is_gt,
             .num_is_gte,
@@ -592,13 +790,27 @@ pub const LowLevel = enum {
             .num_mod_by,
             .num_pow,
             .num_sqrt,
+            .num_sin,
+            .num_cos,
+            .num_tan,
+            .num_asin,
+            .num_acos,
+            .num_atan,
             .num_log,
             .num_round,
             .num_floor,
             .num_ceiling,
+            .f32_to_bits,
+            .f32_from_bits,
+            .f64_to_bits,
+            .f64_from_bits,
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,
+            .num_bitwise_and,
+            .num_bitwise_or,
+            .num_bitwise_xor,
+            .num_bitwise_not,
             .num_from_numeral,
             .u8_from_str,
             .i8_from_str,
@@ -862,6 +1074,23 @@ pub const LowLevel = enum {
             .compare,
             .crash,
             => RcEffect.none(),
+        };
+    }
+
+    /// Whether this primitive can consume borrowed string views directly,
+    /// without first materializing them into RocStr values.
+    pub fn acceptsStrViewArgs(self: LowLevel) bool {
+        return switch (self) {
+            .str_count_utf8_bytes,
+            .str_is_eq,
+            .str_contains,
+            .str_starts_with,
+            .str_ends_with,
+            .str_caseless_ascii_equals,
+            .str_drop_prefix,
+            .str_drop_suffix,
+            => true,
+            else => false,
         };
     }
 

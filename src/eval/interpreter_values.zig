@@ -56,7 +56,7 @@ inline fn readAligned(comptime T: type, raw_ptr: [*]const u8) T {
 /// Read the value as a signed 128-bit integer, widening smaller int types.
 pub fn readI128(self: RocValue) i128 {
     const raw_ptr = self.ptr orelse return 0;
-    return switch (self.lay.data.scalar.data.int) {
+    return switch (self.lay.getScalar().getInt()) {
         .u8 => readAligned(u8, raw_ptr),
         .i8 => readAligned(i8, raw_ptr),
         .u16 => readAligned(u16, raw_ptr),
@@ -73,7 +73,7 @@ pub fn readI128(self: RocValue) i128 {
 /// Read the value as an unsigned 128-bit integer, widening smaller int types.
 pub fn readU128(self: RocValue) u128 {
     const raw_ptr = self.ptr orelse return 0;
-    return switch (self.lay.data.scalar.data.int) {
+    return switch (self.lay.getScalar().getInt()) {
         .u8 => readAligned(u8, raw_ptr),
         .u16 => readAligned(u16, raw_ptr),
         .u32 => readAligned(u32, raw_ptr),
@@ -134,7 +134,7 @@ pub const FormatError = error{OutOfMemory};
 pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) FormatError![]u8 {
     // --- Scalars ---
     if (self.lay.tag == .scalar) {
-        const scalar = self.lay.data.scalar;
+        const scalar = self.lay.getScalar();
         switch (scalar.tag) {
             .str => {
                 const rs = self.readStr();
@@ -153,14 +153,20 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 return buf.toOwnedSlice();
             },
             .int => {
-                const precision = scalar.data.int;
+                // Check for bool sentinel
+                if (self.layout_idx) |idx| {
+                    if (idx == Idx.bool) {
+                        return try allocator.dupe(u8, if (self.readBool()) "True" else "False");
+                    }
+                }
+                const precision = scalar.getInt();
                 return switch (precision) {
                     .u64, .u128 => try std.fmt.allocPrint(allocator, "{d}", .{self.readU128()}),
                     else => try std.fmt.allocPrint(allocator, "{d}", .{self.readI128()}),
                 };
             },
             .frac => {
-                return switch (scalar.data.frac) {
+                return switch (scalar.getFrac()) {
                     .f32 => blk: {
                         var buf: [400]u8 = undefined;
                         const slice = i128h.f32_to_str(&buf, self.readF32());
@@ -184,7 +190,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
 
     // --- Structs (unified records and tuples) ---
     if (self.lay.tag == .struct_) {
-        const struct_data = ctx.layout_store.getStructData(self.lay.data.struct_.idx);
+        const struct_data = ctx.layout_store.getStructData(self.lay.getStruct().idx);
         const fields = ctx.layout_store.struct_fields.sliceRange(struct_data.getFields());
         if (struct_data.fields.count == 0) {
             return try allocator.dupe(u8, "{}");
@@ -205,7 +211,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
             };
             const fld = fields.get(sorted_idx);
             const elem_layout = ctx.layout_store.getLayout(fld.layout);
-            const elem_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(sorted_idx));
+            const elem_offset = ctx.layout_store.getStructFieldOffset(self.lay.getStruct().idx, @intCast(sorted_idx));
             const base_ptr = self.ptr.?;
             const elem_ptr = base_ptr + elem_offset;
             const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
@@ -226,7 +232,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         errdefer out.deinit();
         try out.append('[');
         if (len > 0) {
-            const elem_layout_idx = self.lay.data.list;
+            const elem_layout_idx = self.lay.getIdx();
             const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
             const elem_size = ctx.layout_store.layoutSize(elem_layout);
             if (roc_list.bytes) |bytes| {
@@ -270,7 +276,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         var out = std.array_list.AlignedManaged(u8, null).init(allocator);
         errdefer out.deinit();
         try out.appendSlice("Box(");
-        const elem_layout_idx = self.lay.data.box;
+        const elem_layout_idx = self.lay.getIdx();
         const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
         const elem_size = ctx.layout_store.layoutSize(elem_layout);
         if (elem_size > 0) {
@@ -324,8 +330,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
 
     switch (self.lay.tag) {
         .scalar => {
-            const s_scalar = self.lay.data.scalar;
-            const o_scalar = other.lay.data.scalar;
+            const s_scalar = self.lay.getScalar();
+            const o_scalar = other.lay.getScalar();
             if (s_scalar.tag != o_scalar.tag) return false;
             return switch (s_scalar.tag) {
                 .str => self.readStr().eql(other.readStr().*),
@@ -334,8 +340,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                     return self.readI128() == other.readI128();
                 },
                 .frac => {
-                    if (s_scalar.data.frac != o_scalar.data.frac) return false;
-                    return switch (s_scalar.data.frac) {
+                    if (s_scalar.getFrac() != o_scalar.getFrac()) return false;
+                    return switch (s_scalar.getFrac()) {
                         .f32 => @as(u32, @bitCast(self.readF32())) == @as(u32, @bitCast(other.readF32())),
                         .f64 => @as(u64, @bitCast(self.readF64())) == @as(u64, @bitCast(other.readF64())),
                         .dec => self.readDec().num == other.readDec().num,
@@ -346,10 +352,10 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
         .zst => return true,
         .struct_ => {
             const s_fields = ctx.layout_store.struct_fields.sliceRange(
-                ctx.layout_store.getStructData(self.lay.data.struct_.idx).getFields(),
+                ctx.layout_store.getStructData(self.lay.getStruct().idx).getFields(),
             );
             const o_fields = ctx.layout_store.struct_fields.sliceRange(
-                ctx.layout_store.getStructData(other.lay.data.struct_.idx).getFields(),
+                ctx.layout_store.getStructData(other.lay.getStruct().idx).getFields(),
             );
             if (s_fields.len != o_fields.len) return false;
             for (0..s_fields.len) |i| {
@@ -357,8 +363,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                 const o_fld = o_fields.get(i);
                 const s_field_layout = ctx.layout_store.getLayout(s_fld.layout);
                 const o_field_layout = ctx.layout_store.getLayout(o_fld.layout);
-                const s_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(i));
-                const o_offset = ctx.layout_store.getStructFieldOffset(other.lay.data.struct_.idx, @intCast(i));
+                const s_offset = ctx.layout_store.getStructFieldOffset(self.lay.getStruct().idx, @intCast(i));
+                const o_offset = ctx.layout_store.getStructFieldOffset(other.lay.getStruct().idx, @intCast(i));
                 const s_field = RocValue{ .ptr = self.ptr.? + s_offset, .lay = s_field_layout };
                 const o_field = RocValue{ .ptr = other.ptr.? + o_offset, .lay = o_field_layout };
                 if (!s_field.equals(o_field, ctx)) return false;
@@ -369,15 +375,17 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
             const s_list = self.readList();
             const o_list = other.readList();
             if (s_list.len() != o_list.len()) return false;
-            const elem_layout = ctx.layout_store.getLayout(self.lay.data.list);
-            const elem_size = ctx.layout_store.layoutSize(elem_layout);
-            if (s_list.bytes == null or o_list.bytes == null) return s_list.len() == 0;
-            const s_bytes = s_list.bytes.?;
-            const o_bytes = o_list.bytes.?;
-            var i: usize = 0;
-            while (i < s_list.len()) : (i += 1) {
-                const s_elem = RocValue{ .ptr = s_bytes + i * elem_size, .lay = elem_layout };
-                const o_elem = RocValue{ .ptr = o_bytes + i * elem_size, .lay = elem_layout };
+            const len = s_list.len();
+            if (len == 0) return true;
+            const s_elem_layout = ctx.layout_store.getLayout(self.lay.getIdx());
+            const o_elem_layout = ctx.layout_store.getLayout(other.lay.getIdx());
+            const s_elem_size = ctx.layout_store.layoutSize(s_elem_layout);
+            const o_elem_size = ctx.layout_store.layoutSize(o_elem_layout);
+            const s_bytes = s_list.bytes orelse return false;
+            const o_bytes = o_list.bytes orelse return false;
+            for (0..len) |i| {
+                const s_elem = RocValue{ .ptr = s_bytes + i * s_elem_size, .lay = s_elem_layout };
+                const o_elem = RocValue{ .ptr = o_bytes + i * o_elem_size, .lay = o_elem_layout };
                 if (!s_elem.equals(o_elem, ctx)) return false;
             }
             return true;
@@ -388,18 +396,20 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
             return s_list.len() == o_list.len();
         },
         .box => {
-            const s_data = self.getBoxedData();
-            const o_data = other.getBoxedData();
-            if (s_data == null or o_data == null) return s_data == o_data;
-            const elem_layout = ctx.layout_store.getLayout(self.lay.data.box);
-            const s_inner = RocValue{ .ptr = s_data.?, .lay = elem_layout };
-            const o_inner = RocValue{ .ptr = o_data.?, .lay = elem_layout };
+            const s_inner_layout = ctx.layout_store.getLayout(self.lay.getIdx());
+            const o_inner_layout = ctx.layout_store.getLayout(other.lay.getIdx());
+            const s_inner_size = ctx.layout_store.layoutSize(s_inner_layout);
+            if (s_inner_size == 0) return true; // Both are boxes of ZST
+            const s_data = self.getBoxedData() orelse return other.getBoxedData() == null;
+            const o_data = other.getBoxedData() orelse return false;
+            const s_inner = RocValue{ .ptr = s_data, .lay = s_inner_layout };
+            const o_inner = RocValue{ .ptr = o_data, .lay = o_inner_layout };
             return s_inner.equals(o_inner, ctx);
         },
         .box_of_zst => return true,
         .tag_union => {
-            const s_tu_idx = self.lay.data.tag_union.idx;
-            const o_tu_idx = other.lay.data.tag_union.idx;
+            const s_tu_idx = self.lay.getTagUnion().idx;
+            const o_tu_idx = other.lay.getTagUnion().idx;
             const s_tu_data = ctx.layout_store.getTagUnionData(s_tu_idx);
             const o_tu_data = ctx.layout_store.getTagUnionData(o_tu_idx);
             const s_disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(s_tu_idx);
@@ -525,4 +535,99 @@ test "format box_of_zst" {
     const result = try val.format(allocator, ctx);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Box({})", result);
+}
+
+test "equals bool" {
+    const bool_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .int = .u8 }, .tag = .int } },
+    };
+    var t: [1]u8 = .{1};
+    var f: [1]u8 = .{0};
+    const vt = RocValue{ .ptr = &t, .lay = bool_layout, .layout_idx = Idx.bool };
+    const vf = RocValue{ .ptr = &f, .lay = bool_layout, .layout_idx = Idx.bool };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(vt.equals(vt, ctx));
+    try std.testing.expect(vf.equals(vf, ctx));
+    try std.testing.expect(!vt.equals(vf, ctx));
+}
+
+test "equals i64" {
+    const i64_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .int = .i64 }, .tag = .int } },
+    };
+    var a: [@sizeOf(i64)]u8 = undefined;
+    var b: [@sizeOf(i64)]u8 = undefined;
+    var c: [@sizeOf(i64)]u8 = undefined;
+    @memcpy(&a, std.mem.asBytes(&@as(i64, 42)));
+    @memcpy(&b, std.mem.asBytes(&@as(i64, 42)));
+    @memcpy(&c, std.mem.asBytes(&@as(i64, -1)));
+    const va = RocValue{ .ptr = &a, .lay = i64_layout };
+    const vb = RocValue{ .ptr = &b, .lay = i64_layout };
+    const vc = RocValue{ .ptr = &c, .lay = i64_layout };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+    try std.testing.expect(!va.equals(vc, ctx));
+}
+
+test "equals f64" {
+    const f64_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .frac = .f64 }, .tag = .frac } },
+    };
+    var a: [@sizeOf(f64)]u8 = undefined;
+    var b: [@sizeOf(f64)]u8 = undefined;
+    var c: [@sizeOf(f64)]u8 = undefined;
+    @memcpy(&a, std.mem.asBytes(&@as(f64, 3.14)));
+    @memcpy(&b, std.mem.asBytes(&@as(f64, 3.14)));
+    @memcpy(&c, std.mem.asBytes(&@as(f64, 2.71)));
+    const va = RocValue{ .ptr = &a, .lay = f64_layout };
+    const vb = RocValue{ .ptr = &b, .lay = f64_layout };
+    const vc = RocValue{ .ptr = &c, .lay = f64_layout };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+    try std.testing.expect(!va.equals(vc, ctx));
+}
+
+test "equals dec" {
+    const dec_layout = Layout{
+        .tag = .scalar,
+        .data = .{ .scalar = .{ .data = .{ .frac = .dec }, .tag = .frac } },
+    };
+    const dec_a: i128 = 3 * RocDec.one_point_zero_i128;
+    const dec_b: i128 = 3 * RocDec.one_point_zero_i128;
+    const dec_c: i128 = 5 * RocDec.one_point_zero_i128;
+    var a: [@sizeOf(i128)]u8 = undefined;
+    var b: [@sizeOf(i128)]u8 = undefined;
+    var c: [@sizeOf(i128)]u8 = undefined;
+    @memcpy(&a, std.mem.asBytes(&dec_a));
+    @memcpy(&b, std.mem.asBytes(&dec_b));
+    @memcpy(&c, std.mem.asBytes(&dec_c));
+    const va = RocValue{ .ptr = &a, .lay = dec_layout };
+    const vb = RocValue{ .ptr = &b, .lay = dec_layout };
+    const vc = RocValue{ .ptr = &c, .lay = dec_layout };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+    try std.testing.expect(!va.equals(vc, ctx));
+}
+
+test "equals zst" {
+    const zst_layout = Layout{
+        .tag = .zst,
+        .data = .{ .zst = {} },
+    };
+    const va = RocValue.zst(zst_layout);
+    const vb = RocValue.zst(zst_layout);
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(va.equals(vb, ctx));
+}
+
+test "equals mismatched tags" {
+    const zst_layout = Layout.zst();
+    const box_zst_layout = Layout.boxOfZst();
+    const va = RocValue.zst(zst_layout);
+    const vb = RocValue.zst(box_zst_layout);
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(!va.equals(vb, ctx));
 }

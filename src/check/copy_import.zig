@@ -75,16 +75,16 @@ pub fn copyVar(
         allocator,
     );
 
-    const from_numeral_origin = switch (resolved.desc.content) {
-        .flex => resolved.desc.from_numeral_origin,
-        else => false,
-    };
     try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
-        .from_numeral_origin = from_numeral_origin,
     });
 
+    // NOTE: a copied var whose content is a flex carrying a literal-conversion
+    // constraint is an open literal in the destination module. Registering it on
+    // the checker's open-literal worklist is the CALLER's job (see `Check.copyVar`,
+    // which walks `var_mapping` after the copy) — this module only copies type
+    // data between stores.
     return placeholder_var;
 }
 
@@ -194,6 +194,7 @@ fn copyAlias(
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
         .vars = .{ .nonempty = dest_vars_span },
         .origin_module = translated_module_ident,
+        .source_decl = source_alias.source_decl,
     };
 }
 
@@ -394,7 +395,7 @@ fn copyNominalType(
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
         .vars = .{ .nonempty = dest_vars_span },
         .origin_module = translated_origin,
-        .is_opaque = source_nominal.is_opaque,
+        .source = source_nominal.source,
     };
 }
 

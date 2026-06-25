@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 /// Multiple consecutive doc comment lines are joined with newlines.
 ///
 /// The caller owns the returned memory and must free it with the provided allocator.
-pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset: u32) !?[]const u8 {
+pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset: u32) Allocator.Error!?[]const u8 {
     if (source.len == 0 or offset == 0) return null;
 
     // Clamp offset to source bounds
@@ -91,10 +91,10 @@ pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset:
 /// Type annotations in Roc look like: `add : I64, I64 -> I64`
 fn isTypeAnnotation(trimmed: []const u8) bool {
     // Look for ':' character
-    const colon_pos = std.mem.indexOfScalar(u8, trimmed, ':') orelse return false;
+    const colon_pos = std.mem.findScalar(u8, trimmed, ':') orelse return false;
 
     // Make sure there's no '=' after the colon (which would indicate a definition like `x : I64 = 42`)
-    const equals_pos = std.mem.indexOfScalarPos(u8, trimmed, colon_pos, '=');
+    const equals_pos = std.mem.findScalarPos(u8, trimmed, colon_pos, '=');
     return equals_pos == null;
 }
 
@@ -183,17 +183,21 @@ pub fn docOffsetForStatement(store: *const NodeStore, stmt: CIR.Statement, stmt_
             store.getAnnotationRegion(a).start.offset
         else
             store.getPatternRegion(v.pattern_idx).start.offset,
+        .s_var_uninitialized => |v| if (v.anno) |a|
+            store.getAnnotationRegion(a).start.offset
+        else
+            store.getPatternRegion(v.pattern_idx).start.offset,
         else => store.getStatementRegion(stmt_idx).start.offset,
     };
 }
 
 /// Extract doc comments for a Def (combines offset computation + source extraction).
-pub fn extractDocForDef(allocator: Allocator, source: []const u8, store: *const NodeStore, def: CIR.Def) !?[]const u8 {
+pub fn extractDocForDef(allocator: Allocator, source: []const u8, store: *const NodeStore, def: CIR.Def) Allocator.Error!?[]const u8 {
     return extractDocCommentBefore(allocator, source, docOffsetForDef(store, def));
 }
 
 /// Extract doc comments for a Statement (combines offset computation + source extraction).
-pub fn extractDocForStatement(allocator: Allocator, source: []const u8, store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) !?[]const u8 {
+pub fn extractDocForStatement(allocator: Allocator, source: []const u8, store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) Allocator.Error!?[]const u8 {
     return extractDocCommentBefore(allocator, source, docOffsetForStatement(store, stmt, stmt_idx));
 }
 
@@ -316,7 +320,7 @@ test "extractDocCommentBefore: handles type annotation between doc and definitio
         \\add = |a, b| a + b
     ;
     // Find offset of the definition line (not the type annotation)
-    const offset: u32 = @intCast(std.mem.indexOf(u8, source, "add = |a, b|") orelse unreachable);
+    const offset: u32 = @intCast(std.mem.find(u8, source, "add = |a, b|") orelse unreachable);
     const result = try extractDocCommentBefore(allocator, source, offset);
     defer if (result) |r| allocator.free(r);
 
@@ -336,7 +340,7 @@ test "extractDocCommentBefore: complex multi-line with formatting" {
         \\len : Str -> U64
     ;
     // Find offset of "len"
-    const offset: u32 = @intCast(std.mem.indexOf(u8, source, "len : Str") orelse unreachable);
+    const offset: u32 = @intCast(std.mem.find(u8, source, "len : Str") orelse unreachable);
     const result = try extractDocCommentBefore(allocator, source, offset);
     defer if (result) |r| allocator.free(r);
 

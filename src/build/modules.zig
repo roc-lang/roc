@@ -33,10 +33,13 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .check => &.{"check tests"},
         .parse => &.{"parser tests"},
         .layout => &.{"layout tests"},
+        .lir_core => &.{"lir core declarations are referenced"},
+        .postcheck => &.{"postcheck declarations are referenced"},
         .values => &.{"values tests"},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
         .fmt => &.{"fmt tests"},
+        .lsp_unit => &.{"lsp unit tests"},
         else => &.{},
     };
 }
@@ -76,6 +79,7 @@ fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
         pending.items.len -= 1;
         total += scanFileForWrappers(
             allocator,
+            b.graph.io,
             entry,
             &pending,
             &seen,
@@ -88,17 +92,18 @@ fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
 
 fn scanFileForWrappers(
     allocator: std.mem.Allocator,
+    io: std.Io,
     entry: FileToScan,
     pending: *std.ArrayList(FileToScan),
     seen: *std.StringHashMap(void),
     has_aggregators: bool,
 ) usize {
     const path = entry.path;
-    const source = std.fs.cwd().readFileAllocOptions(
-        allocator,
+    const source = std.Io.Dir.cwd().readFileAllocOptions(
+        io,
         path,
-        wrapper_scan_max_bytes,
-        null,
+        allocator,
+        .limited(wrapper_scan_max_bytes),
         .@"1",
         0,
     ) catch |err| {
@@ -146,7 +151,7 @@ fn collectAggregatorImports(
     var search_index: usize = 0;
     const current_dir = std.fs.path.dirname(current_path) orelse ".";
 
-    while (std.mem.indexOfPos(u8, source, search_index, pattern)) |match_pos| {
+    while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
         const literal_start = match_pos + pattern.len;
         var cursor = literal_start;
         while (cursor < source.len) : (cursor += 1) {
@@ -168,6 +173,10 @@ fn collectAggregatorImports(
             search_index = cursor + 1;
             continue;
         };
+        if (!std.mem.endsWith(u8, import_rel, ".zig")) {
+            search_index = cursor + 1;
+            continue;
+        }
 
         const resolved = resolveImportPath(allocator, current_dir, import_rel) catch |err| {
             std.log.warn(
@@ -269,7 +278,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [28]ModuleTest,
+    tests: []const ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -288,11 +297,12 @@ pub const ModuleType = enum {
     can,
     check,
     tracy,
-    io,
+    ctx,
     build_options,
     layout,
     interpreter_layout,
     values,
+    interpreter_values,
     eval,
     ipc,
     fmt,
@@ -301,11 +311,13 @@ pub const ModuleType = enum {
     unbundle,
     base58,
     lsp,
+    lsp_unit,
+    lsp_integration,
     backend,
+    lir_core,
+    postcheck,
     lir,
     symbol,
-    mir,
-    ir,
     roc_target,
     sljmp,
     echo_platform,
@@ -317,33 +329,36 @@ pub const ModuleType = enum {
         return switch (self) {
             .build_options => &.{},
             .builtins => &.{.tracy},
-            .io => &.{},
+            .ctx => &.{},
             .tracy => &.{.build_options},
             .collections => &.{},
-            .base => &.{ .collections, .builtins },
+            .base => &.{.collections},
             .roc_src => &.{},
             .types => &.{ .tracy, .base, .collections },
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
-            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
-            .check => &.{ .tracy, .build_options, .builtins, .collections, .base, .parse, .types, .can, .reporting, .symbol },
+            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options, .ctx },
+            .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting, .build_options },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp, .ipc },
-            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .mir, .ir, .sljmp },
+            .interpreter_values => &.{ .collections, .base, .builtins, .interpreter_layout },
+            .eval => &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .interpreter_values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+            .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
             .ipc => &.{},
-            .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
+
+            .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
-            .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
-            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
-            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .mir, .ir },
+            .lsp => &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+            .lsp_unit, .lsp_integration => &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target, .ctx },
+            .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
+            .postcheck => &.{ .base, .builtins, .can, .check, .layout, .lir_core },
+            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck },
             .symbol => &.{.base},
-            .mir => &.{ .base, .types, .can, .check, .symbol, .layout },
-            .ir => &.{ .base, .types, .symbol, .mir, .layout },
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
@@ -366,11 +381,12 @@ pub const RocModules = struct {
     can: *Module,
     check: *Module,
     tracy: *Module,
-    io: *Module,
+    ctx: *Module,
     build_options: *Module,
     layout: *Module,
     interpreter_layout: *Module,
     values: *Module,
+    interpreter_values: *Module,
     eval: *Module,
     ipc: *Module,
     fmt: *Module,
@@ -379,16 +395,30 @@ pub const RocModules = struct {
     unbundle: *Module,
     base58: *Module,
     lsp: *Module,
+    lsp_unit: *Module,
+    lsp_integration: *Module,
     backend: *Module,
+    lir_core: *Module,
+    postcheck: *Module,
     lir: *Module,
     symbol: *Module,
-    mir: *Module,
-    ir: *Module,
     roc_target: *Module,
     sljmp: *Module,
     echo_platform: *Module,
     docs: *Module,
     glue: *Module,
+    embedded_lld: *Module,
+
+    // Vendored-from-Zig modules. Kept out of the `ModuleType` dependency graph
+    // (like `embedded_lld`) and wired into their specific consumers via
+    // `applyVendorImports`, so it stays clear which code comes from elsewhere.
+    // The sources live under `vendor/`.
+    vendor_parse_float: *Module,
+    vendor_ryu: *Module,
+    vendor_eval_loader: *Module,
+    vendor_macho: *Module,
+    vendor_llvm_ir: *Module,
+    vendor_llvm_compile_bindings: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -406,7 +436,7 @@ pub const RocModules = struct {
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/build/tracy.zig") }),
-            .io = b.addModule("io", .{ .root_source_file = b.path("src/io/mod.zig") }),
+            .ctx = b.addModule("ctx", .{ .root_source_file = b.path("src/ctx/mod.zig") }),
             .build_options = b.addModule(
                 "build_options",
                 .{ .root_source_file = build_options_step.getOutput() },
@@ -414,6 +444,7 @@ pub const RocModules = struct {
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
             .interpreter_layout = b.addModule("interpreter_layout", .{ .root_source_file = b.path("src/interpreter_layout/mod.zig") }),
             .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
+            .interpreter_values = b.addModule("interpreter_values", .{ .root_source_file = b.path("src/eval/interpreter_values.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
@@ -422,16 +453,26 @@ pub const RocModules = struct {
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
+            .lsp_unit = b.addModule("lsp_unit", .{ .root_source_file = b.path("src/lsp/test/unit.zig") }),
+            .lsp_integration = b.addModule("lsp_integration", .{ .root_source_file = b.path("src/lsp/test/integration.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
+            .lir_core = b.addModule("lir_core", .{ .root_source_file = b.path("src/lir/core.zig") }),
+            .postcheck = b.addModule("postcheck", .{ .root_source_file = b.path("src/postcheck/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
             .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
-            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
-            .ir = b.addModule("ir", .{ .root_source_file = b.path("src/ir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
             .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
             .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
+            .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
+
+            .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
+            .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
+            .vendor_eval_loader = b.addModule("vendor_eval_loader", .{ .root_source_file = b.path("vendor/eval_loader.zig") }),
+            .vendor_macho = b.addModule("vendor_macho", .{ .root_source_file = b.path("vendor/macho/mod.zig") }),
+            .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
+            .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -440,8 +481,29 @@ pub const RocModules = struct {
             self.bundle.linkLibrary(z.artifact("zstd"));
         }
 
+        // The interpreter's hosted-call trampoline is hand-written assembly (see
+        // host_trampoline.S); attach it to the eval module so it is assembled and linked into
+        // every artifact that uses the interpreter. The file is arch-guarded, so it compiles
+        // to an empty object on targets without a trampoline (e.g. wasm).
+        self.eval.addAssemblyFile(b.path("src/eval/host_trampoline.S"));
+
         // Setup module dependencies using our generic helper
         self.setupModuleDependencies();
+
+        // `embedded_lld` is created outside the dependency table above; it only
+        // needs `collections` for the single-threaded arena.
+        self.embedded_lld.addImport("collections", self.collections);
+
+        // The vendored ELF loader reaches one roc helper (`elf_self_relocate`)
+        // through the `base` module.
+        self.vendor_eval_loader.addImport("base", self.base);
+
+        // The vendored Mach-O code-signing helpers use the build-time `tracy`
+        // tracing shim.
+        self.vendor_macho.addImport("tracy", self.tracy);
+
+        // The vendored LLVM IR library's BitcodeReader reaches roc's `base`.
+        self.vendor_llvm_ir.addImport("base", self.base);
 
         return self;
     }
@@ -458,11 +520,12 @@ pub const RocModules = struct {
             .can,
             .check,
             .tracy,
-            .io,
+            .ctx,
             .build_options,
             .layout,
             .interpreter_layout,
             .values,
+            .interpreter_values,
             .eval,
             .ipc,
             .fmt,
@@ -471,11 +534,13 @@ pub const RocModules = struct {
             .unbundle,
             .base58,
             .lsp,
+            .lsp_unit,
+            .lsp_integration,
             .backend,
+            .lir_core,
+            .postcheck,
             .lir,
             .symbol,
-            .mir,
-            .ir,
             .roc_target,
             .sljmp,
             .echo_platform,
@@ -492,6 +557,25 @@ pub const RocModules = struct {
                 const dep_module = self.getModule(dep_type);
                 module.addImport(@tagName(dep_type), dep_module);
             }
+
+            self.applyVendorImports(module, module_type);
+        }
+    }
+
+    /// Wire vendored-from-Zig modules into the specific roc modules that use
+    /// them. Called for both the persistent modules and the per-module test
+    /// builds, so a `@import("vendor_x")` resolves in both. Vendored modules
+    /// are deliberately not part of the `ModuleType` dependency graph.
+    fn applyVendorImports(self: RocModules, module: *Module, module_type: ModuleType) void {
+        switch (module_type) {
+            .builtins => {
+                module.addImport("vendor_parse_float", self.vendor_parse_float);
+                module.addImport("vendor_ryu", self.vendor_ryu);
+            },
+            .eval => {
+                module.addImport("vendor_eval_loader", self.vendor_eval_loader);
+            },
+            else => {},
         }
     }
 
@@ -507,7 +591,7 @@ pub const RocModules = struct {
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("io", self.io);
+        step.root_module.addImport("ctx", self.ctx);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
         step.root_module.addImport("interpreter_layout", self.interpreter_layout);
@@ -517,15 +601,20 @@ pub const RocModules = struct {
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
+        step.root_module.addImport("lir_core", self.lir_core);
+        step.root_module.addImport("postcheck", self.postcheck);
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("symbol", self.symbol);
-        step.root_module.addImport("mir", self.mir);
-        step.root_module.addImport("ir", self.ir);
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
         step.root_module.addImport("glue", self.glue);
         step.root_module.addImport("compile", self.compile);
+        step.root_module.addImport("embedded_lld", self.embedded_lld);
+
+        // Vendored, used by the CLI linker (Mach-O code signing). Harmless where
+        // unused (it is only @import-ed from CLI code, never from wasm).
+        step.root_module.addImport("vendor_macho", self.vendor_macho);
 
         // Don't add thread-dependent or native-only modules for WASM targets
         if (!is_wasm) {
@@ -555,11 +644,12 @@ pub const RocModules = struct {
             .can => self.can,
             .check => self.check,
             .tracy => self.tracy,
-            .io => self.io,
+            .ctx => self.ctx,
             .build_options => self.build_options,
             .layout => self.layout,
             .interpreter_layout => self.interpreter_layout,
             .values => self.values,
+            .interpreter_values => self.interpreter_values,
             .eval => self.eval,
             .ipc => self.ipc,
             .fmt => self.fmt,
@@ -568,11 +658,13 @@ pub const RocModules = struct {
             .unbundle => self.unbundle,
             .base58 => self.base58,
             .lsp => self.lsp,
+            .lsp_unit => self.lsp_unit,
+            .lsp_integration => self.lsp_integration,
             .backend => self.backend,
+            .lir_core => self.lir_core,
+            .postcheck => self.postcheck,
             .lir => self.lir,
             .symbol => self.symbol,
-            .mir => self.mir,
-            .ir => self.ir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
             .echo_platform => self.echo_platform,
@@ -588,6 +680,7 @@ pub const RocModules = struct {
             const dep_module = self.getModule(dep_type);
             step.root_module.addImport(@tagName(dep_type), dep_module);
         }
+        self.applyVendorImports(step.root_module, module_type);
     }
 
     pub fn createModuleTests(
@@ -608,7 +701,7 @@ pub const RocModules = struct {
             .parse,
             .can,
             .check,
-            .io,
+            .ctx,
             .layout,
             .interpreter_layout,
             .values,
@@ -618,18 +711,19 @@ pub const RocModules = struct {
             .bundle,
             .unbundle,
             .base58,
-            .lsp,
+            .lsp_unit,
             .backend,
+            .lir_core,
+            .postcheck,
             .lir,
             .symbol,
-            .mir,
-            .ir,
             .sljmp,
             .echo_platform,
             .docs,
         };
 
-        var tests: [test_configs.len]ModuleTest = undefined;
+        const tests = b.allocator.alloc(ModuleTest, test_configs.len) catch
+            @panic("OOM while creating module tests");
         var forced_passes: usize = 0;
 
         inline for (test_configs, 0..) |module_type, i| {
@@ -646,12 +740,13 @@ pub const RocModules = struct {
                     .root_source_file = module.root_source_file.?,
                     .target = target,
                     .optimize = optimize,
-                    // IPC module needs libc for mmap, munmap, close on POSIX systems
-                    // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
-                    // Eval module needs libc for setjmp/longjmp crash protection
-                    // sljmp module needs libc for setjmp/longjmp functions
-                    // compile/lsp modules transitively depend on eval->sljmp, so also need libc
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
+                    // Zig 0.16 requires explicit link_libc on any compile unit that references
+                    // std.c.* (directly or transitively). Our modules use std.c in multiple
+                    // places — stack_overflow, CoreCtx, ExecutableMemory, channel.nanosleep,
+                    // download.getaddrinfo, server.zig, etc. — and most of the remaining
+                    // modules import ctx/unbundle transitively. It's simpler (and has no
+                    // practical cost for native-only tests) to enable link_libc uniformly.
+                    .link_libc = true,
                 }),
                 .filters = filter_injection.filters,
             });
@@ -659,8 +754,8 @@ pub const RocModules = struct {
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
             // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
             if (module_type == .watch and target.result.os.tag == .macos and targetMatchesHost(target)) {
-                test_step.linkFramework("CoreFoundation");
-                test_step.linkFramework("CoreServices");
+                test_step.root_module.linkFramework("CoreFoundation", .{});
+                test_step.root_module.linkFramework("CoreServices", .{});
             }
 
             // Add only the necessary dependencies for each module test
@@ -669,7 +764,7 @@ pub const RocModules = struct {
             // Link zstd for bundle module (unbundle uses stdlib zstd)
             if (module_type == .bundle) {
                 if (zstd) |z| {
-                    test_step.linkLibrary(z.artifact("zstd"));
+                    test_step.root_module.linkLibrary(z.artifact("zstd"));
                 }
             }
 

@@ -49,19 +49,30 @@ NO CHANGE
 				(record-destruct (label "age") (ident "age")
 					(required
 						(p-assign (ident "age")))))))
-	(e-string
-		(e-literal (string "Hello "))
-		(e-lookup-local
-			(p-assign (ident "name")))
-		(e-literal (string ", you are "))
-		(e-dispatch-call (method "to_str") (constraint-fn-var 28)
-			(receiver
+	(e-block
+		(s-let
+			(p-assign (ident "#interp_0"))
+			(e-lookup-local
+				(p-assign (ident "name"))))
+		(s-let
+			(p-assign (ident "#interp_1"))
+			(e-dispatch-call (method "to_str") (constraint-fn-var 28)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "age"))))
+				(args)))
+		(e-interpolation (constraint-fn-var 87)
+			(first
+				(e-literal (string "Hello ")))
+			(parts
 				(e-lookup-local
-					(p-assign (ident "age"))))
-			(args))
-		(e-literal (string " years old"))))
+					(p-assign (ident "#interp_0")))
+				(e-literal (string ", you are "))
+				(e-lookup-local
+					(p-assign (ident "#interp_1")))
+				(e-literal (string " years old"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: a, name: Str, .. } -> Str where [a.to_str : a -> Str]"))
+(expr (type "{ age: a, name: _field } -> b where [a.to_str : a -> _ret, b.from_interpolation : Str, Iter((_field, Str)) -> b]"))
 ~~~

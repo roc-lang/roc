@@ -67,15 +67,26 @@ NO CHANGE
 			(ty-lookup (name "U8") (builtin))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(s-let
+				(p-assign (ident "#interp_0"))
+				(e-lookup-local
+					(p-assign (ident "x"))))
+			(e-interpolation (constraint-fn-var 184)
+				(first
+					(e-literal (string "value: ")))
+				(parts
+					(e-lookup-local
+						(p-assign (ident "#interp_0")))
+					(e-literal (string "")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "U8"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "U8"))
 		(expr (type "Error"))))
 ~~~

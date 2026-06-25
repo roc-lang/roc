@@ -1,9 +1,8 @@
 //! Shared test specifications for fx platform tests.
 //!
 //! This module defines IO specs for all fx platform tests that can be run
-//! using the --test mode. These specs are shared between:
-//! - Native Zig tests (fx_platform_test.zig)
-//! - Unified test platform runner (test_runner.zig)
+//! using the --test mode. The shared IO-spec matrix is owned by the parallel
+//! CLI platform runner.
 //!
 //! IO Spec Format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
 //! - 0<text: stdin input
@@ -20,6 +19,9 @@ pub const TestSpec = struct {
     description: []const u8 = "",
     /// Skip this test on Windows (usually due to dev backend limitations)
     skip_on_windows: bool = false,
+    /// Skip this test unconditionally. Use sparingly and link to the tracking
+    /// issue/comment that documents the underlying bug.
+    skip: bool = false,
 };
 
 /// Regression coverage for #9401: boxed erased callables must use the same
@@ -114,6 +116,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "List.for_each! with effectful callback",
     },
     .{
+        .roc_file = "test/fx/list_opaque_pattern_match_bug.roc",
+        .io_spec = "1>Test 1: Text elements in list|1>Div branch|1>  iterating child|1>Text branch: Hello|1>  iterating child|1>Text branch: World|1>Test 2: Label element with opaque payload in list|1>Div branch|1>  iterating child|1>Label branch|1>Done!",
+        .description = "Regression test: Pattern matching opaque payload variants retrieved from lists (issue #9113)",
+    },
+    .{
         .roc_file = "test/fx/string_pattern_matching.roc",
         .io_spec = "1>Hello Alice!|1>Hey Bob!",
         .description = "Pattern matching on string literals",
@@ -153,6 +160,16 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "String interpolation",
     },
 
+    // Host-interop layout: a nominal record with an unnamed padding field and a
+    // non-alphabetical declared order must reach the host with the matching C /
+    // extern-struct byte layout (z@0, padding@4, a@8). The host reads the fields
+    // at those offsets and returns "<z*100 + a>"; 11/22 -> "1122".
+    .{
+        .roc_file = "test/fx/host_interop_padding.roc",
+        .io_spec = "1>1122",
+        .description = "Nominal record declared-order + unnamed padding matches the host C struct layout",
+    },
+
     // Lookup tests
     .{
         .roc_file = "test/fx/numeric_lookup_test.roc",
@@ -163,6 +180,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/string_lookup_test.roc",
         .io_spec = "1>hello",
         .description = "String lookup",
+    },
+    .{
+        .roc_file = "test/fx/dict_pseudo_seed_repro.roc",
+        .io_spec = "1>b",
+        .description = "Regression test: compiled Dict operations call the hasher builtins",
     },
     .{
         .roc_file = "test/fx/test_direct_string.roc",
@@ -374,6 +396,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: Polymorphic function with for loop list literal panic (issue #8898)",
     },
     .{
+        .roc_file = "test/fx/issue_9113_opaque_payload_list_match.roc",
+        .io_spec = "1>Test 1: Text elements in list|1>Div branch|1>  iterating child|1>Text branch: Hello|1>  iterating child|1>Text branch: World|1>|1>Test 2: Label element with opaque payload in list|1>Div branch|1>  iterating child|1>Label branch|1>Done!",
+        .description = "Regression test: Opaque payload in list match works with platform modules (issue #9113)",
+    },
+    .{
         .roc_file = "test/fx/static_dispatch_platform_module.roc",
         .io_spec = "1>Result: start-middle-end",
         .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",
@@ -418,6 +445,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/record_builder_test5_repro.roc",
         .io_spec = "1>Builder: a=1, b=2|1>Direct: a=1, b=2",
         .description = "Repro: applicative record builder and direct map2 agree on the same parsed record",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_imported_map2_repro.roc",
+        .io_spec = "1>direct=localhost:8080|1>builder=localhost:8080",
+        .description = "Regression test: record builder suffix resolves map2 on imported type modules (issue #9581)",
     },
     .{
         .roc_file = "test/fx/issue9049.roc",
@@ -505,6 +537,31 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/keep_oks.roc",
         .io_spec = "1>done",
         .description = "Regression test: Monomorphize panic when callback always returns Ok but match expects Err tag",
+    },
+
+    // Leak regression tests for the address-taken element-decref callbacks in
+    // the list/str builtins. The lld COFF linker once misresolved strJoinWithC's
+    // &strDecref callback into .rdata, silently leaking every heap element string
+    // of a consumed List(Str) under `roc build` (LLVM backend) on x64 Windows.
+    // These apps build runtime heap strings (>= 24 bytes, derived from stdin) so
+    // the fx host's tracking allocator reports any missed decref as a leak, which
+    // the harness turns into a hard failure. Note: the listReverse/listPrepend
+    // wrappers are not reachable from the current Roc surface (List.rev is pure
+    // Roc; there is no List.prepend), so they have no coverage here.
+    .{
+        .roc_file = "test/fx/leak_join_with_heap_strs.roc",
+        .io_spec = "0<xy|1>joined bytes: 98",
+        .description = "Regression test: Str.join_with consuming a unique heap List(Str) frees its element strings (lld-COFF &strDecref misresolution)",
+    },
+    .{
+        .roc_file = "test/fx/leak_list_str_ops.roc",
+        .io_spec = "0<xy|1>ops done: 3 5",
+        .description = "Leak coverage for refcounted-element list ops (concat/drop_at/sublist/replace/swap/append/release_excess_capacity callback paths in dev_wrappers.zig)",
+    },
+    .{
+        .roc_file = "test/fx/leak_list_str_drop_nested.roc",
+        .io_spec = "0<xy|1>drop done",
+        .description = "Leak coverage for dropped heap List(Str) and List(List(Str)) (roc_builtins_list_decref_str / _flat_list callback paths)",
     },
 };
 

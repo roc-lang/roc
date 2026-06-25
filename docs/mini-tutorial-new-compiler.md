@@ -39,6 +39,52 @@ Hooray!
 
 > Tip: If you don't provide a path to a .roc file, `roc` will default to "main.roc" - so since your Roc program is named main.roc, you can run your program by just running `roc` in the future.
 
+## The REPL
+
+You can also try Roc expressions and definitions without creating a file by running `roc repl`.
+
+```bash
+$ roc repl
+```
+
+Inside the REPL, enter an expression to evaluate it:
+
+```roc
+1 + 1
+```
+
+You can define names and use them in later inputs:
+
+```roc
+x = 1 + 1
+x * 2
+```
+
+The REPL also works well with piped input. In piped mode it prints only evaluation output to stdout; prompts, the welcome banner, and the goodbye message are not printed.
+
+In PowerShell, send multiple input lines with an array:
+
+```powershell
+@("x = 1 + 1", "x * 2") | roc repl
+```
+
+You should see:
+
+```text
+assigned `x`
+4.0
+```
+
+In Unix shells, use `printf` for the same thing:
+
+```bash
+$ printf 'x = 1 + 1\nx * 2\n' | roc repl
+assigned `x`
+4.0
+```
+
+Diagnostics from piped input are written to stderr, so tools can read successful results from stdout separately from parse and type errors. If you want plain diagnostics without ANSI color codes, use `roc repl --no-color` or set `NO_COLOR` environment variable.
+
 ## The `main!` function
 
 Let's take a look at `main!` next:
@@ -309,7 +355,7 @@ main! = |_args| {
 
 Although printing is an I/O operation, the `dbg` statement can be used even in pure functions. It works in two different ways:
 
-- Roc evaluates all pure functions that are run on constants at compile time when possible. (This is known as [constant folding](https://en.wikipedia.org/wiki/Constant_folding), and Roc does it as much as possible.) When you put a `dbg` inside a pure function, and that pure function gets run at compile time, you'll see the `dbg` output at compile tie.
+- Roc evaluates all pure functions that are run on constants at compile time when possible. (This is known as [constant folding](https://en.wikipedia.org/wiki/Constant_folding), and Roc does it as much as possible.) When you put a `dbg` inside a pure function, and that pure function gets run at compile time, you'll see the `dbg` output at compile time.
 - At runtime, `dbg` may work differently depending on where you're running the program. For example, in this command-line application it will be printed to stderr. However, when running a Roc program that's compiled to WebAssembly and running in the browser, it would likely appear in the browser console instead.
 
 Note that Roc's compile-time evaluation means there is no guarantee that a given `dbg` will run at runtime or at compile time. 
@@ -652,7 +698,7 @@ The initial hello world example at the start is a special kind of app, a headerl
 Many Roc apps you encounter will have a header similar to this one:
 
 ```ruby
-app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/0.6/2BfGn4M9uWJNhDVeMghGeXNVDFijMfPsmmVeo6M4QjKX.tar.zst" }
+app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/0.9/8GdFEvQYS3TeAZxKvTzCLVdQiomweGtXcdZkXNDEeABq.tar.zst" }
 ```
 
 Let's break the header down:

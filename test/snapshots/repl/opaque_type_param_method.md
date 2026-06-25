@@ -3,7 +3,7 @@
 description=Opaque type with type params - method call should resolve params correctly
 type=repl
 skip=true
-# TODO: panics with unresolved flex row extension tail
+# TODO: REPL does not support standalone type annotations yet.
 ~~~
 # SOURCE
 ~~~roc

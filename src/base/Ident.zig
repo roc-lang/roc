@@ -6,7 +6,9 @@
 //! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+
 const collections = @import("collections");
 
 const SmallStringInterner = @import("SmallStringInterner.zig");
@@ -15,11 +17,9 @@ const CompactWriter = collections.CompactWriter;
 
 const Ident = @This();
 
-/// Whether to enable debug store tracking. This adds runtime checks to verify
-/// that Idx values are only looked up in the store that created them.
-/// Disabled on freestanding targets where threading primitives aren't available.
-const is_freestanding = builtin.os.tag == .freestanding;
-const enable_store_tracking = builtin.mode == .Debug and !is_freestanding;
+/// Whether to enable debug store tracking. This adds a Debug-only check that
+/// verifies Idx values are only looked up in the store that created them.
+const enable_store_tracking = builtin.mode == .Debug;
 
 /// Method name for addition - used by + operator desugaring
 pub const PLUS_METHOD_NAME = "plus";
@@ -79,7 +79,7 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
     }
 
     // Check for null bytes (causes crashes in string interner)
-    if (std.mem.indexOfScalar(u8, bytes, 0) != null) {
+    if (std.mem.findScalar(u8, bytes, 0) != null) {
         return Error.ContainsNullByte;
     }
 
@@ -125,7 +125,7 @@ pub const Idx = packed struct(u32) {
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
         writer: anytype,
-    ) !void {
+    ) Allocator.Error!void {
         // Extract from packed struct to avoid formatting issues
         const idx_val: u32 = @intCast(self.idx);
         try writer.print("Ident({?})", .{idx_val});
@@ -147,162 +147,24 @@ pub const Attributes = packed struct(u3) {
     }
 };
 
-/// Debug-only info for store provenance tracking.
-const StoreDebugInfo = struct {
-    store_id: []const u8,
-    known_idxs: std.AutoHashMapUnmanaged(u32, void),
-};
-
-/// Global counter for generating unique store IDs.
-/// This counter survives struct copies because the ID is stored in the Store struct itself.
-/// Using u32 for cross-platform compatibility (wasm32 doesn't support 64-bit atomics).
-var debug_store_id_counter: if (enable_store_tracking) std.atomic.Value(u32) else void =
-    if (enable_store_tracking) std.atomic.Value(u32).init(1) else {};
-
-/// Global map from Store's unique debug_id to debug info.
-/// Protected by a mutex for thread safety.
-var debug_store_map: if (enable_store_tracking) std.AutoHashMapUnmanaged(u32, StoreDebugInfo) else void = if (enable_store_tracking) .{} else {};
-
-/// Mutex protecting the debug_store_map.
-var debug_store_mutex: if (enable_store_tracking) std.Thread.Mutex else void = if (enable_store_tracking) .{} else {};
-
 /// An interner for identifier names.
 pub const Store = struct {
     interner: SmallStringInterner,
     attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
 
-    /// Debug-only: unique ID for this store instance.
-    /// This ID is assigned on first insert and survives struct copies.
-    /// 0 means unassigned.
-    debug_id: if (enable_store_tracking) u32 else void = if (enable_store_tracking) 0 else {},
-
-    /// Debug-only: get or assign a unique ID for this store.
-    fn getOrAssignDebugId(self: *Store, src: std.builtin.SourceLocation) u32 {
-        if (enable_store_tracking) {
-            if (self.debug_id == 0) {
-                // If this store already has idents (e.g., deserialized), we can't
-                // fully track it because existing idents weren't registered.
-                // Keep debug_id at 0 to skip verification for this store.
-                if (self.interner.entry_count > 0) {
-                    return 0;
-                }
-
-                // Assign a new unique ID
-                self.debug_id = debug_store_id_counter.fetchAdd(1, .monotonic);
-
-                // Register in the global map with source location info
-                const store_id = std.fmt.allocPrint(std.heap.page_allocator, "{s}:{d}:{d}", .{
-                    src.file,
-                    src.line,
-                    src.column,
-                }) catch "unknown";
-
-                debug_store_map.put(std.heap.page_allocator, self.debug_id, .{
-                    .store_id = store_id,
-                    .known_idxs = .{},
-                }) catch {};
-            }
-            return self.debug_id;
-        } else {
-            return 0;
-        }
-    }
-
-    /// Debug-only: unregister this store from the global debug map.
-    fn unregisterFromTracking(self: *Store) void {
-        if (enable_store_tracking) {
-            if (self.debug_id == 0) return; // Never registered
-
-            debug_store_mutex.lock();
-            defer debug_store_mutex.unlock();
-
-            if (debug_store_map.fetchRemove(self.debug_id)) |entry| {
-                // Free the heap-allocated store_id (if it's not the static "unknown" string)
-                if (entry.value.store_id.ptr != @as([*]const u8, "unknown".ptr)) {
-                    std.heap.page_allocator.free(entry.value.store_id);
-                }
-                // Copy the known_idxs to make it mutable for deinit
-                var known_idxs = entry.value.known_idxs;
-                known_idxs.deinit(std.heap.page_allocator);
-            }
-        }
-    }
-
-    /// Debug-only: track an Idx as belonging to this store.
-    fn trackIdx(self: *Store, idx: Idx, src: std.builtin.SourceLocation) void {
-        if (enable_store_tracking) {
-            debug_store_mutex.lock();
-            defer debug_store_mutex.unlock();
-
-            const debug_id = self.getOrAssignDebugId(src);
-            if (debug_store_map.getPtr(debug_id)) |info| {
-                // We don't fail on OOM in debug tracking - just skip tracking
-                info.known_idxs.put(std.heap.page_allocator, @bitCast(idx), {}) catch {};
-            }
-        }
-    }
-
-    /// Debug-only: verify an Idx belongs to this store.
+    /// Debug-only: verify `idx` was produced by this store. An Idx is a byte
+    /// offset into this store's interner, so an Idx from a different store points
+    /// outside this interner's data and is caught by the bounds check.
     fn verifyIdx(self: *const Store, idx: Idx) void {
         if (enable_store_tracking) {
-            if (self.debug_id == 0) {
-                // Store was never registered (e.g., deserialized store).
-                // Skip verification.
-                return;
-            }
-
-            debug_store_mutex.lock();
-            defer debug_store_mutex.unlock();
-
-            const info = debug_store_map.get(self.debug_id) orelse {
-                // Store not in map (shouldn't happen if debug_id != 0)
-                return;
-            };
-
-            const idx_bits: u32 = @bitCast(idx);
-            if (!info.known_idxs.contains(idx_bits)) {
+            if (!self.interner.isInBounds(@enumFromInt(@as(u32, idx.idx)))) {
                 std.debug.panic(
-                    "Ident.Idx lookup in wrong store: Idx {d} (0x{x}) not found in store '{s}' (debug_id={d}). " ++
-                        "This Idx was created by a different store.",
-                    .{ idx.idx, idx_bits, info.store_id, self.debug_id },
+                    "Ident.Idx lookup in wrong store: offset {d} is not a valid " ++
+                        "entry in this interner. It was created by a different store.",
+                    .{idx.idx},
                 );
             }
-        }
-    }
-
-    /// Check if an Idx was created by this store.
-    /// In debug builds with store tracking enabled, this checks the known_idxs set.
-    /// In release builds or when tracking is disabled, this returns true (assumes valid).
-    /// Use this to determine which store to use for lookups when idents may come from
-    /// multiple sources (e.g., during type unification with builtins).
-    pub fn containsIdx(self: *const Store, idx: Idx) bool {
-        if (enable_store_tracking) {
-            if (self.debug_id == 0) {
-                // A fresh empty store has never produced any Idx values.
-                // Treat it as containing nothing.
-                if (self.interner.entry_count == 0) {
-                    return false;
-                }
-
-                // Store was never registered but already has entries
-                // (e.g. a deserialized store). Can't verify provenance here.
-                return true;
-            }
-
-            debug_store_mutex.lock();
-            defer debug_store_mutex.unlock();
-
-            const info = debug_store_map.get(self.debug_id) orelse {
-                // Store not in map
-                return true;
-            };
-
-            const idx_bits: u32 = @bitCast(idx);
-            return info.known_idxs.contains(idx_bits);
-        } else {
-            // No tracking, can't determine - assume true
-            return true;
         }
     }
 
@@ -349,7 +211,6 @@ pub const Store = struct {
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.interner.deinit(gpa);
         self.attributes.deinit(gpa);
-        self.unregisterFromTracking();
     }
 
     /// Clone this store into fresh owned memory.
@@ -369,8 +230,6 @@ pub const Store = struct {
             .attributes = ident.attributes,
             .idx = @as(u29, @intCast(@intFromEnum(idx))),
         };
-
-        self.trackIdx(result, @src());
 
         return result;
     }
@@ -447,8 +306,6 @@ pub const Store = struct {
             .idx = @truncate(@intFromEnum(idx)),
         };
 
-        self.trackIdx(result, @src());
-
         return result;
     }
 
@@ -495,6 +352,11 @@ pub const Store = struct {
     /// Return the already-interned Builtin.Num.Dec type identifier.
     pub fn builtinDecTypeIdent(self: *const Store) Idx {
         return self.findByString("Builtin.Num.Dec") orelse unreachable;
+    }
+
+    /// Return the already-interned Builtin.Str type identifier.
+    pub fn builtinStrTypeIdent(self: *const Store) Idx {
+        return self.findByString("Builtin.Str") orelse unreachable;
     }
 
     /// Calculate the size needed to serialize this Ident.Store
@@ -611,11 +473,12 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_empty_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -626,19 +489,16 @@ test "Ident.Store empty CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -681,11 +541,12 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_basic_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -696,19 +557,16 @@ test "Ident.Store basic CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -766,11 +624,12 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_unique_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_unique_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -781,19 +640,16 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -829,11 +685,12 @@ test "Ident.Store CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_frozen_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_frozen_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -844,19 +701,16 @@ test "Ident.Store CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -911,11 +765,12 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_comprehensive_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_comprehensive_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -926,19 +781,16 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate

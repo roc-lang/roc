@@ -85,7 +85,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // we'll have to QA the old fashioned way.
 }
 
-fn buildSyntaxProblemReport(allocator: Allocator) !Document {
+fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {
     var doc = Document.init(allocator);
     try doc.addText("Using more than one ");
     try doc.addBinaryOperator("+");
@@ -102,7 +102,7 @@ fn buildSyntaxProblemReport(allocator: Allocator) !Document {
 // Test Helpers
 
 /// Should only print out the debug copy-paste ready string if the string comparison fails.
-fn expectMultilineEqual(expected: []const u8, actual: []const u8) !void {
+fn expectMultilineEqual(expected: []const u8, actual: []const u8) Allocator.Error!void {
     testing.expectEqualStrings(expected, actual) catch {
         std.debug.print("\n--- DEBUG STRING COMPARISON (copy-paste ready) ---\n", .{});
         std.debug.print("const expected = \n", .{});

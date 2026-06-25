@@ -14,12 +14,10 @@ const base = @import("base");
 const target_mod = @import("target.zig");
 const reporting = @import("reporting");
 
-const Allocators = base.Allocators;
-
 const RocTarget = target_mod.RocTarget;
 const TargetsConfig = target_mod.TargetsConfig;
 const TargetLinkSpec = target_mod.TargetLinkSpec;
-const LinkType = target_mod.LinkType;
+const OutputKind = target_mod.OutputKind;
 const LinkItem = target_mod.LinkItem;
 const Report = reporting.Report;
 const Severity = reporting.Severity;
@@ -54,7 +52,7 @@ pub const ValidationResult = union(enum) {
     /// A file declared in targets doesn't exist
     missing_target_file: struct {
         target: RocTarget,
-        link_type: LinkType,
+        output: OutputKind,
         file_path: []const u8,
         expected_full_path: []const u8,
     },
@@ -74,7 +72,6 @@ pub const ValidationResult = union(enum) {
     unsupported_target: struct {
         platform_path: []const u8,
         requested_target: RocTarget,
-        link_type: LinkType,
         supported_targets: []const TargetLinkSpec,
     },
 
@@ -152,37 +149,23 @@ pub fn validatePlatformHasTargets(
 /// Validate that files declared in targets section exist on disk
 pub fn validateTargetFilesExist(
     allocator: Allocator,
+    std_io: std.Io,
     targets_config: TargetsConfig,
-    platform_dir: std.fs.Dir,
-) !ValidationResult {
-    const files_dir_path = targets_config.files_dir orelse return .{ .valid = {} };
+    platform_dir: std.Io.Dir,
+) Allocator.Error!ValidationResult {
+    const files_dir_path = targets_config.inputs_dir orelse return .{ .valid = {} };
 
     // Check if files directory exists
-    var files_dir = platform_dir.openDir(files_dir_path, .{}) catch {
+    var files_dir = platform_dir.openDir(std_io, files_dir_path, .{}) catch {
         return .{ .missing_files_directory = .{
             .platform_path = "platform",
             .files_dir = files_dir_path,
         } };
     };
-    defer files_dir.close();
+    defer files_dir.close(std_io);
 
-    // Validate exe targets
-    for (targets_config.exe) |spec| {
-        if (try validateTargetSpec(allocator, spec, .exe, files_dir)) |result| {
-            return result;
-        }
-    }
-
-    // Validate static_lib targets
-    for (targets_config.static_lib) |spec| {
-        if (try validateTargetSpec(allocator, spec, .static_lib, files_dir)) |result| {
-            return result;
-        }
-    }
-
-    // Validate shared_lib targets
-    for (targets_config.shared_lib) |spec| {
-        if (try validateTargetSpec(allocator, spec, .shared_lib, files_dir)) |result| {
+    for (targets_config.targets) |spec| {
+        if (try validateTargetSpec(allocator, std_io, spec, files_dir)) |result| {
             return result;
         }
     }
@@ -192,15 +175,15 @@ pub fn validateTargetFilesExist(
 
 fn validateTargetSpec(
     allocator: Allocator,
+    std_io: std.Io,
     spec: TargetLinkSpec,
-    link_type: LinkType,
-    files_dir: std.fs.Dir,
-) !?ValidationResult {
+    files_dir: std.Io.Dir,
+) Allocator.Error!?ValidationResult {
     // Get target subdirectory name
     const target_subdir = @tagName(spec.target);
 
     // Open target subdirectory
-    var target_dir = files_dir.openDir(target_subdir, .{}) catch {
+    var target_dir = files_dir.openDir(std_io, target_subdir, .{}) catch {
         // Target directory doesn't exist - this might be okay if there are no file items
         var has_files = false;
         for (spec.items) |item| {
@@ -216,25 +199,25 @@ fn validateTargetSpec(
             const expected_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "targets", target_subdir });
             return .{ .missing_target_file = .{
                 .target = spec.target,
-                .link_type = link_type,
+                .output = spec.output,
                 .file_path = target_subdir,
                 .expected_full_path = expected_path,
             } };
         }
         return null;
     };
-    defer target_dir.close();
+    defer target_dir.close(std_io);
 
     // Check each file item exists
     for (spec.items) |item| {
         switch (item) {
             .file_path => |path| {
                 // Check if file exists
-                target_dir.access(path, .{}) catch {
+                target_dir.access(std_io, path, .{}) catch {
                     const expected_path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ "targets", target_subdir, path });
                     return .{ .missing_target_file = .{
                         .target = spec.target,
-                        .link_type = link_type,
+                        .output = spec.output,
                         .file_path = path,
                         .expected_full_path = expected_path,
                     } };
@@ -253,7 +236,7 @@ fn validateTargetSpec(
 pub fn createValidationReport(
     allocator: Allocator,
     result: ValidationResult,
-) !Report {
+) Allocator.Error!Report {
     switch (result) {
         .valid => unreachable, // Should not create report for valid result
 
@@ -274,13 +257,11 @@ pub fn createValidationReport(
 
             try report.document.addCodeBlock(
                 \\    targets: {
-                \\        files: "targets/",
-                \\        exe: {
-                \\            x64linux: ["host.o", app],
-                \\            arm64linux: ["host.o", app],
-                \\            x64mac: ["host.o", app],
-                \\            arm64mac: ["host.o", app],
-                \\        }
+                \\        inputs_dir: "targets/",
+                \\        x64linux: { inputs: ["host.o", app] },
+                \\        arm64linux: { inputs: ["host.o", app] },
+                \\        x64mac: { inputs: ["host.o", app] },
+                \\        arm64mac: { inputs: ["host.o", app] },
                 \\    }
             );
             try report.document.addLineBreak();
@@ -391,16 +372,12 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
             try report.document.addText("does not support the ");
             try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
-            try report.document.addText(" target for ");
-            try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
-            try report.document.addText(" builds.");
+            try report.document.addText(" target.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
             if (info.supported_targets.len > 0) {
-                try report.document.addText("Supported targets for ");
-                try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
-                try report.document.addText(":");
+                try report.document.addText("Supported targets:");
                 try report.document.addLineBreak();
                 for (info.supported_targets) |spec| {
                     try report.document.addText("  - ");
@@ -409,9 +386,7 @@ pub fn createValidationReport(
                 }
                 try report.document.addLineBreak();
             } else {
-                try report.document.addText("This platform has no targets configured for ");
-                try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
-                try report.document.addText(" builds.");
+                try report.document.addText("This platform has no targets configured.");
                 try report.document.addLineBreak();
                 try report.document.addLineBreak();
             }
@@ -444,7 +419,7 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
             try report.document.addText("  <platform>/");
             // Trim trailing slash from files_dir for cleaner display
-            const trimmed_files_dir = std.mem.trimRight(u8, info.files_dir, "/");
+            const trimmed_files_dir = std.mem.trimEnd(u8, info.files_dir, "/");
             try report.document.addAnnotated(trimmed_files_dir, .emphasized);
             try report.document.addText("/");
             try report.document.addAnnotated(@tagName(info.target), .emphasized);
@@ -671,7 +646,7 @@ test "createValidationReport generates correct report for missing_target_file" {
     var report = try createValidationReport(allocator, .{
         .missing_target_file = .{
             .target = .x64linux,
-            .link_type = .exe,
+            .output = .exe,
             .file_path = "host.o",
             .expected_full_path = "targets/x64linux/host.o",
         },
@@ -713,13 +688,11 @@ test "validateTargetFilesExist returns valid when no files_dir specified" {
     const allocator = std.testing.allocator;
 
     const config = TargetsConfig{
-        .files_dir = null,
-        .exe = &.{},
-        .static_lib = &.{},
-        .shared_lib = &.{},
+        .inputs_dir = null,
+        .targets = &.{},
     };
 
-    const result = try validateTargetFilesExist(allocator, config, std.fs.cwd());
+    const result = try validateTargetFilesExist(allocator, std.testing.io, config, std.Io.Dir.cwd());
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
 }
 
@@ -732,7 +705,7 @@ test "validatePlatformHasTargets detects missing targets section" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\
     ;
 
@@ -742,11 +715,7 @@ test "validatePlatformHasTargets detects missing targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -771,12 +740,10 @@ test "validatePlatformHasTargets accepts platform with targets section" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        exe: {
-        \\            x64linux: [app],
-        \\            arm64linux: [app],
-        \\        }
+        \\        x64linux: { inputs: [app] },
+        \\        arm64linux: { inputs: [app] },
         \\    }
         \\
     ;
@@ -787,11 +754,7 @@ test "validatePlatformHasTargets accepts platform with targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -816,11 +779,7 @@ test "validatePlatformHasTargets skips non-platform headers" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "app/main.roc");
@@ -832,22 +791,18 @@ test "validatePlatformHasTargets skips non-platform headers" {
 test "validatePlatformHasTargets accepts platform with multiple target types" {
     const allocator = std.testing.allocator;
 
-    // Platform with exe and static_lib targets
+    // Platform with mixed output kinds
     const source =
         \\platform ""
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64mac: [app],
-        \\        },
-        \\        static_lib: {
-        \\            x64mac: ["libhost.a"],
-        \\        }
+        \\        inputs_dir: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64mac: { inputs: [app] },
+        \\        x64mac: { inputs: ["libhost.a", app], output: Shared },
         \\    }
         \\
     ;
@@ -858,11 +813,7 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -879,11 +830,9 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        exe: {
-        \\            x64win: [win_gui],
-        \\        }
+        \\        x64win: { inputs: [win_gui] },
         \\    }
         \\
     ;
@@ -894,11 +843,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -915,13 +860,11 @@ test "TargetsConfig.fromAST extracts targets configuration" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64linux: [app],
-        \\        }
+        \\        inputs_dir: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64linux: { inputs: [app] },
         \\    }
         \\
     ;
@@ -932,11 +875,7 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     // Try to extract targets config from the AST
@@ -946,12 +885,12 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     const config = maybe_config.?;
     defer config.deinit(allocator);
 
-    // Check files_dir
-    try std.testing.expect(config.files_dir != null);
-    try std.testing.expectEqualStrings("targets/", config.files_dir.?);
+    // Check inputs_dir
+    try std.testing.expect(config.inputs_dir != null);
+    try std.testing.expectEqualStrings("targets/", config.inputs_dir.?);
 
-    // Check exe targets
-    try std.testing.expectEqual(@as(usize, 2), config.exe.len);
+    // Check targets
+    try std.testing.expectEqual(@as(usize, 2), config.targets.len);
 }
 
 test "validateTargetFilesExist reports missing target file with valid path" {
@@ -962,7 +901,7 @@ test "validateTargetFilesExist reports missing target file with valid path" {
     defer tmp_dir.cleanup();
 
     // Create a files directory but without the expected target subdirectory
-    tmp_dir.dir.makeDir("targets") catch {};
+    tmp_dir.dir.createDir(std.testing.io, "targets", .default_dir) catch {};
 
     // Create a config that references a file that doesn't exist
     const items: []const LinkItem = &.{
@@ -970,18 +909,16 @@ test "validateTargetFilesExist reports missing target file with valid path" {
         .app,
     };
     const exe_specs: []const TargetLinkSpec = &.{
-        .{ .target = .x64mac, .items = items },
+        .{ .target = .x64mac, .output = .exe, .items = items },
     };
 
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = exe_specs,
-        .static_lib = &.{},
-        .shared_lib = &.{},
+        .inputs_dir = "targets",
+        .targets = exe_specs,
     };
 
     // This should return a missing_target_file result with a valid expected_full_path
-    const result = try validateTargetFilesExist(allocator, config, tmp_dir.dir);
+    const result = try validateTargetFilesExist(allocator, std.testing.io, config, tmp_dir.dir);
 
     switch (result) {
         .missing_target_file => |info| {

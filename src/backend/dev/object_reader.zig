@@ -102,7 +102,7 @@ fn extractElfTextSection(bytes: []const u8) Error![]const u8 {
         // Get section name from string table
         if (sh_name < strtab.len) {
             const name_start = strtab[sh_name..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
 
             // Look for .text section or .text.* sections (when function_sections is enabled)
@@ -128,7 +128,7 @@ fn extractElfTextSection(bytes: []const u8) Error![]const u8 {
 
         if (sh_name < strtab.len) {
             const name_start = strtab[sh_name..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
 
             if (std.mem.eql(u8, name, ".text")) {
@@ -229,7 +229,7 @@ fn extractCoffTextSection(bytes: []const u8) Error![]const u8 {
 
         // Section name is first 8 bytes (null-padded)
         const name = sh[0..8];
-        const name_end = std.mem.indexOfScalar(u8, name, 0) orelse 8;
+        const name_end = std.mem.findScalar(u8, name, 0) orelse 8;
 
         if (std.mem.eql(u8, name[0..name_end], ".text")) {
             const sec_size = std.mem.readInt(u32, sh[16..20], .little);
@@ -315,7 +315,7 @@ fn findRocEvalOffsetElf(bytes: []const u8, code: []const u8) Error!usize {
         // Check if this is the .text section that corresponds to our code
         if (sh_name_idx < shstrtab.len) {
             const name_start = shstrtab[sh_name_idx..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
             const sec_offset = std.mem.readInt(u64, sh[24..32], .little);
             if (sec_offset == code_start) {
@@ -362,7 +362,7 @@ fn findRocEvalOffsetElf(bytes: []const u8, code: []const u8) Error!usize {
 
         if (st_name < strtab.len) {
             const name_start = strtab[st_name..];
-            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
             if (std.mem.eql(u8, name, "roc_eval") or std.mem.eql(u8, name, "_roc_eval")) {
                 // Compute offset within the extracted code
@@ -442,7 +442,7 @@ fn findRocEvalOffsetMachO(bytes: []const u8, _: []const u8) Error!usize {
 
                     if (n_strx < strtab.len) {
                         const name_start = strtab[n_strx..];
-                        const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+                        const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
                         const name = name_start[0..name_end];
                         if (std.mem.eql(u8, name, "_roc_eval") or std.mem.eql(u8, name, "roc_eval")) {
                             if (text_section_addr > 0 and n_value >= text_section_addr) {
@@ -491,14 +491,14 @@ fn findRocEvalOffsetCoff(bytes: []const u8) Error!usize {
             const abs_offset = strtab_offset + str_offset;
             if (abs_offset < bytes.len) {
                 const name_start = bytes[@intCast(abs_offset)..];
-                const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+                const name_end = std.mem.findScalar(u8, name_start, 0) orelse name_start.len;
                 name = name_start[0..name_end];
             } else {
                 continue;
             }
         } else {
             // Short name: inline in the 8-byte field
-            const name_end = std.mem.indexOfScalar(u8, sym[0..8], 0) orelse 8;
+            const name_end = std.mem.findScalar(u8, sym[0..8], 0) orelse 8;
             name = sym[0..name_end];
         }
 
@@ -538,7 +538,7 @@ pub const RelocatedCode = struct {
 /// Extract all loadable sections from an ELF object file, lay them out
 /// in a contiguous buffer, apply all aarch64 relocations, and return
 /// the result ready for execution.
-pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) !RelocatedCode {
+pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) Allocator.Error!RelocatedCode {
     if (object_bytes.len < 64) return error.InvalidObjectFile;
     if (object_bytes[0] != 0x7F or object_bytes[1] != 'E' or object_bytes[2] != 'L' or object_bytes[3] != 'F')
         return error.UnsupportedFormat;
@@ -695,6 +695,24 @@ pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) !Re
             const r_type: u32 = @truncate(r_info & 0xFFFFFFFF);
             const r_sym: u32 = @truncate(r_info >> 32);
 
+            // Base-relative relocations carry no symbol (sym index 0), so they
+            // would otherwise be dropped at the `resolveSymbol orelse continue`
+            // gate below. The relocatable objects this loader reads do not emit
+            // them today, but handle them explicitly rather than silently skip:
+            // value = load base + addend.
+            const is_relative = switch (builtin.cpu.arch) {
+                .aarch64 => r_type == 1027, // R_AARCH64_RELATIVE
+                .x86_64 => r_type == 8, // R_X86_64_RELATIVE
+                else => false,
+            };
+            if (is_relative) {
+                const rel_patch_off: u64 = target_buf_offset.? + r_offset;
+                if (rel_patch_off + 8 > buf.len) continue;
+                const value: u64 = @intFromPtr(buf.ptr) +% @as(u64, @bitCast(r_addend));
+                std.mem.writeInt(u64, buf[@intCast(rel_patch_off)..][0..8], value, .little);
+                continue;
+            }
+
             // Resolve symbol address
             const sym_addr = resolveSymbol(
                 object_bytes,
@@ -823,6 +841,8 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_str_ends_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_ends_with) },
         .{ .name = "roc_builtins_str_equal", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_equal) },
         .{ .name = "roc_builtins_str_count_utf8_bytes", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_count_utf8_bytes) },
+        .{ .name = "roc_builtins_str_find_first", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_find_first) },
+        .{ .name = "roc_builtins_str_drop_prefix_caseless_ascii", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_drop_prefix_caseless_ascii) },
         .{ .name = "roc_builtins_str_caseless_ascii_equals", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_caseless_ascii_equals) },
         .{ .name = "roc_builtins_str_repeat", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_repeat) },
         .{ .name = "roc_builtins_str_trim", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_trim) },
@@ -840,28 +860,36 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_str_from_utf8_lossy", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_lossy) },
         .{ .name = "roc_builtins_str_escape_and_quote", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_escape_and_quote) },
         .{ .name = "roc_builtins_dbg_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dbg_str) },
+        .{ .name = "roc_builtins_expect_err_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_expect_err_str) },
         .{ .name = "roc_builtins_list_with_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity) },
         .{ .name = "roc_builtins_list_append_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe) },
         .{ .name = "roc_builtins_list_concat", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_concat) },
         .{ .name = "roc_builtins_list_prepend", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_prepend) },
         .{ .name = "roc_builtins_list_sublist", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist) },
+        .{ .name = "roc_builtins_list_reverse", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_reverse) },
         .{ .name = "roc_builtins_list_drop_at", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_drop_at) },
         .{ .name = "roc_builtins_list_replace", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_replace) },
         .{ .name = "roc_builtins_list_reserve", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_reserve) },
         .{ .name = "roc_builtins_list_release_excess_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_release_excess_capacity) },
         .{ .name = "roc_builtins_list_decref_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_str) },
+        .{ .name = "roc_builtins_list_incref_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_incref_single_thread) },
         .{ .name = "roc_builtins_list_decref_flat_list", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_flat_list) },
         .{ .name = "roc_builtins_list_decref_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with) },
+        .{ .name = "roc_builtins_list_decref_with_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with_single_thread) },
         .{ .name = "roc_builtins_list_free_flat_list", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_free_flat_list) },
         .{ .name = "roc_builtins_list_free_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_free_with) },
         .{ .name = "roc_builtins_box_decref_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with) },
+        .{ .name = "roc_builtins_box_decref_with_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with_single_thread) },
         .{ .name = "roc_builtins_box_free_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_free_with) },
         .{ .name = "roc_builtins_erased_callable_incref", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_incref) },
         .{ .name = "roc_builtins_erased_callable_decref", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref) },
+        .{ .name = "roc_builtins_erased_callable_decref_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref_single_thread) },
         .{ .name = "roc_builtins_erased_callable_free", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_free) },
         .{ .name = "roc_builtins_allocate_with_refcount", .addr = @intFromPtr(&dev_wrappers.roc_builtins_allocate_with_refcount) },
         .{ .name = "roc_builtins_incref_data_ptr", .addr = @intFromPtr(&dev_wrappers.roc_builtins_incref_data_ptr) },
+        .{ .name = "roc_builtins_incref_data_ptr_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_incref_data_ptr_single_thread) },
         .{ .name = "roc_builtins_decref_data_ptr", .addr = @intFromPtr(&dev_wrappers.roc_builtins_decref_data_ptr) },
+        .{ .name = "roc_builtins_decref_data_ptr_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_decref_data_ptr_single_thread) },
         .{ .name = "roc_builtins_free_data_ptr", .addr = @intFromPtr(&dev_wrappers.roc_builtins_free_data_ptr) },
         .{ .name = "roc_builtins_dec_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_str) },
         .{ .name = "roc_builtins_dec_to_i64_trunc", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc) },
@@ -882,6 +910,7 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_f64_to_f32_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_f32_try_unsafe) },
         .{ .name = "roc_builtins_i128_to_dec_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_i128_to_dec_try_unsafe) },
         .{ .name = "roc_builtins_u128_to_dec_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_u128_to_dec_try_unsafe) },
+        .{ .name = "roc_builtins_dec_mul", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul) },
         .{ .name = "roc_builtins_dec_mul_saturated", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul_saturated) },
         .{ .name = "roc_builtins_dec_div", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div) },
         .{ .name = "roc_builtins_dec_div_trunc", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div_trunc) },
@@ -891,6 +920,15 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_num_rem_trunc_i128", .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_i128) },
         .{ .name = "roc_builtins_int_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str) },
         .{ .name = "roc_builtins_float_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str) },
+        .{ .name = "roc_builtins_float_floor", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_floor) },
+        .{ .name = "roc_builtins_float_ceiling", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_ceiling) },
+        .{ .name = "roc_builtins_float_pow", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_pow) },
+        .{ .name = "roc_builtins_float_sin", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_sin) },
+        .{ .name = "roc_builtins_float_cos", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_cos) },
+        .{ .name = "roc_builtins_float_tan", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_tan) },
+        .{ .name = "roc_builtins_float_asin", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_asin) },
+        .{ .name = "roc_builtins_float_acos", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_acos) },
+        .{ .name = "roc_builtins_float_atan", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_atan) },
         .{ .name = "roc_builtins_int_from_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str) },
     };
 
@@ -1009,13 +1047,31 @@ fn getSectionData(bytes: []const u8, e_shoff: u64, e_shentsize: u16, index: u16)
 fn getSectionName(strtab: []const u8, name_idx: u32) []const u8 {
     if (name_idx >= strtab.len) return "";
     const start = strtab[name_idx..];
-    const end = std.mem.indexOfScalar(u8, start, 0) orelse start.len;
+    const end = std.mem.findScalar(u8, start, 0) orelse start.len;
     return start[0..end];
 }
 
 //
 // Tests
 //
+
+test "resolve float rounding wrappers" {
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_floor), resolveBuiltinWrapper("roc_builtins_float_floor").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_ceiling), resolveBuiltinWrapper("roc_builtins_float_ceiling").?);
+}
+
+test "resolve float pow wrapper" {
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_pow), resolveBuiltinWrapper("roc_builtins_float_pow").?);
+}
+
+test "resolve float trig wrappers" {
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_sin), resolveBuiltinWrapper("roc_builtins_float_sin").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_cos), resolveBuiltinWrapper("roc_builtins_float_cos").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_tan), resolveBuiltinWrapper("roc_builtins_float_tan").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_asin), resolveBuiltinWrapper("roc_builtins_float_asin").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_acos), resolveBuiltinWrapper("roc_builtins_float_acos").?);
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_atan), resolveBuiltinWrapper("roc_builtins_float_atan").?);
+}
 
 test "detect ELF magic" {
     // Minimal ELF header (just magic)

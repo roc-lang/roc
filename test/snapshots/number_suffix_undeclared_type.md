@@ -18,7 +18,7 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-typed-int (raw "0") (type ".F"))
+(e-typed-int (raw "0") (type "F"))
 ~~~
 # FORMATTED
 ~~~roc

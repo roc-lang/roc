@@ -5,11 +5,8 @@
 //! proper deserialization of the written data.
 
 const std = @import("std");
-const builtin = @import("builtin");
-
-// POSIX I/O only available on non-freestanding targets
-const is_freestanding = builtin.os.tag == .freestanding;
-const posix = if (is_freestanding) undefined else std.posix;
+const Allocator = std.mem.Allocator;
+const native_endian = @import("builtin").cpu.arch.endian();
 
 const CompactWriter = @This();
 
@@ -28,104 +25,25 @@ allocated_memory: std.ArrayList(AllocatedMemory),
 
 pub fn init() CompactWriter {
     return CompactWriter{
-        .iovecs = .{},
+        .iovecs = .empty,
         .total_bytes = 0,
-        .allocated_memory = .{},
+        .allocated_memory = .empty,
     };
 }
 
-/// Does a pwritev() on UNIX systems.
-/// There is no usable equivalent of this on Windows
-/// (WriteFileGather has ludicrous alignment requirements that make it useless),
-/// so Windows must call
+/// Write all gathered buffers to a file sequentially using positional writes.
+/// Accepts any file/io pair where `file.writePositionalAll(io, bytes, offset)` is valid
+/// (e.g. the std_io File and Io types). Generic to avoid depending on the io module.
 pub fn writeGather(
     self: *@This(),
-    allocator: std.mem.Allocator,
-    file: std.fs.File,
-) !void {
-    // Handle partial writes (where pwritev returns that it only wrote some of the bytes)
-    var bytes_written: usize = 0;
-    var current_iovec: usize = 0;
-    var iovec_offset: usize = 0;
-    const total_size = self.total_bytes;
-
-    // Early return if nothing to write
-    if (total_size == 0 or self.iovecs.items.len == 0) return;
-
-    while (bytes_written < total_size) {
-        // Skip any iovecs that have been completely written
-        while (current_iovec < self.iovecs.items.len and
-            iovec_offset >= self.iovecs.items[current_iovec].iov_len)
-        {
-            current_iovec += 1;
-            iovec_offset = 0;
-        }
-
-        // Check if we've processed all iovecs
-        if (current_iovec >= self.iovecs.items.len) break;
-
-        // Count valid remaining iovecs (those with data to write)
-        var valid_iovec_count: usize = 0;
-        for (self.iovecs.items[current_iovec..], 0..) |iovec, j| {
-            const offset = if (j == 0) iovec_offset else 0;
-            if (iovec.iov_len > offset) {
-                valid_iovec_count += 1;
-            }
-        }
-
-        if (valid_iovec_count == 0) break;
-
-        // Create adjusted iovec array for partial writes
-        var adjusted_iovecs = try allocator.alloc(posix.iovec_const, valid_iovec_count);
-        defer allocator.free(adjusted_iovecs);
-
-        // Copy remaining iovecs, adjusting first one for partial write and filtering out empty ones
-        var adjusted_index: usize = 0;
-        for (self.iovecs.items[current_iovec..], 0..) |iovec, j| {
-            const offset = if (j == 0) iovec_offset else 0;
-
-            // Skip iovecs that have no remaining data
-            if (iovec.iov_len <= offset) continue;
-
-            // Handle potential null pointer when adding offset
-            const base_addr = @intFromPtr(iovec.iov_base);
-            const new_base = if (base_addr == 0 and offset == 0)
-                iovec.iov_base // Keep null if already null
-            else if (base_addr == 0)
-                @as([*]const u8, @ptrFromInt(offset)) // This shouldn't happen, but handle it
-            else
-                @as([*]const u8, @ptrFromInt(base_addr + offset));
-
-            adjusted_iovecs[adjusted_index] = .{
-                .base = new_base,
-                .len = iovec.iov_len - offset,
-            };
-            adjusted_index += 1;
-        }
-
-        // Sanity check - we should have filled all slots
-        std.debug.assert(adjusted_index == valid_iovec_count);
-
-        const n = try posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
-
-        if (n == 0) return error.UnexpectedEof;
-
-        // Update position tracking
-        bytes_written += n;
-        var remaining = n;
-
-        // Figure out where we are now
-        while (remaining > 0 and current_iovec < self.iovecs.items.len) {
-            const iovec_remaining = self.iovecs.items[current_iovec].iov_len - iovec_offset;
-            if (remaining >= iovec_remaining) {
-                remaining -= iovec_remaining;
-                current_iovec += 1;
-                iovec_offset = 0;
-            } else {
-                iovec_offset += remaining;
-                remaining = 0;
-            }
-        }
+    file: anytype,
+    io: anytype,
+) std.Io.File.WritePositionalError!void {
+    var offset: u64 = 0;
+    for (self.iovecs.items) |iovec| {
+        const bytes = @as([*]const u8, @ptrCast(iovec.iov_base))[0..iovec.iov_len];
+        try file.writePositionalAll(io, bytes, offset);
+        offset += iovec.iov_len;
     }
 }
 
@@ -214,6 +132,219 @@ pub fn appendSlice(
     return result;
 }
 
+/// Zero all padding bytes in a value of type `V` for deterministic serialization.
+/// Auto-layout structs/unions/optionals have undefined padding (inter-field gaps,
+/// union tail/overshoot, null optionals) that varies between runs (stack/heap
+/// contents); assignment copies ALL bytes including padding, so it must be zeroed
+/// before the bytes are written. Recurses into nested aggregates. Primitives, enums,
+/// and extern/packed structs have no padding to zero. Shared by `SafeList.Serialized`
+/// and `appendSlicePodZeroed` so there is a single deterministic-bytes implementation.
+pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
+    // The padding mask + per-byte `inline for` are O(@sizeOf(V)) comptime work; large
+    // POD element types (e.g. the artifact's stored expr/payload unions) exceed the
+    // default 1000-branch quota.
+    @setEvalBranchQuota(1_000_000);
+    const vinfo = @typeInfo(V);
+    const vsize = @sizeOf(V);
+    if (vsize == 0) return;
+
+    if (vinfo == .@"union") {
+        const uinfo = vinfo.@"union";
+        if (uinfo.tag_type) |TagType| {
+            const tag_size = @sizeOf(TagType);
+            if (tag_size == 0) {
+                // A zero-size tag (e.g. a single-variant union) carries no discriminant; the
+                // sole payload sits at offset 0.
+                if (uinfo.fields.len >= 1 and @sizeOf(uinfo.fields[0].type) > 0) {
+                    zeroValuePadding(uinfo.fields[0].type, ptr);
+                    @memset(ptr[@sizeOf(uinfo.fields[0].type)..vsize], 0);
+                } else {
+                    @memset(ptr[0..vsize], 0);
+                }
+            } else {
+                const max_payload = comptime blk: {
+                    var m: usize = 0;
+                    for (uinfo.fields) |f| m = @max(m, @sizeOf(f.type));
+                    break :blk m;
+                };
+                const max_payload_align = comptime blk: {
+                    var a: usize = 1;
+                    for (uinfo.fields) |f| a = @max(a, @alignOf(f.type));
+                    break :blk a;
+                };
+                // Zig lays out a tagged union like a 2-field struct {tag, payload}: the tag
+                // comes first iff its alignment is >= every payload's, otherwise the payload
+                // is first (at offset 0) and the tag follows the largest variant.
+                const tag_first = @alignOf(TagType) >= max_payload_align;
+                const payload_offset = comptime if (tag_first)
+                    std.mem.alignForward(usize, tag_size, max_payload_align)
+                else
+                    0;
+                const tag_offset = comptime if (tag_first)
+                    0
+                else
+                    std.mem.alignForward(usize, max_payload, @alignOf(TagType));
+
+                // Read the discriminant as a raw, bit-width-masked integer — NEVER through
+                // the enum/`switch`, which panics in safe builds on a poisoned tag (the
+                // round-trip tests fill every byte, tags included). Masking to the tag's bit
+                // width mirrors what the compiler's own tag read sees, so an in-range value
+                // still selects the right variant.
+                const TagInt = @typeInfo(TagType).@"enum".tag_type;
+                const StorageInt = std.meta.Int(.unsigned, tag_size * 8);
+                const stored = std.mem.readInt(StorageInt, ptr[tag_offset..][0..tag_size], native_endian);
+                const tag_val: TagInt = @truncate(stored);
+
+                // Save the tag + active payload, zero the WHOLE value (every inactive / unused
+                // / alignment byte becomes deterministic 0), then restore them.
+                const saved_tag: [tag_size]u8 = ptr[tag_offset..][0..tag_size].*;
+                var handled = false;
+                inline for (uinfo.fields) |f| {
+                    if (!handled and @intFromEnum(@field(TagType, f.name)) == tag_val) {
+                        handled = true;
+                        const active_size = @sizeOf(f.type);
+                        const saved_payload: [active_size]u8 = if (active_size > 0)
+                            ptr[payload_offset..][0..active_size].*
+                        else
+                            undefined;
+                        @memset(ptr[0..vsize], 0);
+                        ptr[tag_offset..][0..tag_size].* = saved_tag;
+                        if (active_size > 0) {
+                            ptr[payload_offset..][0..active_size].* = saved_payload;
+                            zeroValuePadding(f.type, ptr + payload_offset);
+                        }
+                    }
+                }
+                // An out-of-range discriminant has no active payload to preserve (only
+                // reachable from poisoned test bytes, never a real serialized value): zero
+                // everything for a deterministic result.
+                if (!handled) @memset(ptr[0..vsize], 0);
+            }
+        }
+    } else if (vinfo == .optional) {
+        // For optionals: when null, the payload area contains garbage — zero it all.
+        // When non-null, recurse into the payload to zero its internal padding,
+        // then zero any trailing padding after payload + tag.
+        const ChildType = vinfo.optional.child;
+        const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+        if (item.* == null) {
+            @memset(ptr[0..vsize], 0);
+        } else {
+            // Payload is at offset 0 (auto layout puts highest-alignment first)
+            const child_size = @sizeOf(ChildType);
+            if (child_size > 0) {
+                zeroValuePadding(ChildType, ptr);
+            }
+            // Zero padding after payload + 1-byte tag
+            const meaningful = child_size + 1;
+            if (meaningful < vsize) {
+                @memset(ptr[meaningful..vsize], 0);
+            }
+        }
+    } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .auto) {
+        // Zero inter-field gaps
+        const covered = comptime blk: {
+            var mask = [_]bool{false} ** vsize;
+            for (vinfo.@"struct".fields) |field| {
+                const start = @offsetOf(V, field.name);
+                const end = start + @sizeOf(field.type);
+                for (start..end) |j| mask[j] = true;
+            }
+            break :blk mask;
+        };
+        const has_padding = comptime blk: {
+            for (covered) |c| {
+                if (!c) break :blk true;
+            }
+            break :blk false;
+        };
+        if (has_padding) {
+            inline for (0..vsize) |j| {
+                if (!covered[j]) ptr[j] = 0;
+            }
+        }
+        // Recurse into struct fields that may have internal padding
+        inline for (vinfo.@"struct".fields) |field| {
+            const FType = field.type;
+            const ftype_info = @typeInfo(FType);
+            if (@sizeOf(FType) > 0) {
+                const needs_recursion = (ftype_info == .@"union" and ftype_info.@"union".tag_type != null) or
+                    (ftype_info == .@"struct" and ftype_info.@"struct".layout == .auto) or
+                    (ftype_info == .optional);
+                if (needs_recursion) {
+                    zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
+                }
+            }
+        }
+    }
+    // Primitives, enums, extern structs: no padding to zero.
+}
+
+/// Whether `zeroValuePadding(V, …)` would write any bytes — i.e. whether `V` has
+/// undefined padding (auto-struct inter-field gaps, tagged-union tail/overshoot, or an
+/// optional). When this is false, a verbatim byte copy of `V` is already deterministic,
+/// so serialization can iovec the source directly instead of allocating a scratch copy
+/// just to run a no-op padding pass. Kept next to `zeroValuePadding` so the two stay in
+/// lockstep: every shape `zeroValuePadding` acts on must return true here.
+pub fn needsPaddingZeroing(comptime V: type) bool {
+    return switch (@typeInfo(V)) {
+        .@"union" => |u| u.tag_type != null,
+        .optional => true,
+        .@"struct" => |s| s.layout == .auto,
+        else => false,
+    };
+}
+
+/// Append a slice of POD elements with DETERMINISTIC bytes: copy into fresh
+/// writer-owned memory, zero each element's padding (`zeroValuePadding`), and gather
+/// it. Unlike `appendSlice` (which iovecs the caller's slice verbatim, including
+/// undefined padding), this guarantees byte-identical output for byte-identical
+/// logical data — required for reproducible builds and content-stable cache bodies.
+/// Returns a slice whose `.ptr` is the data's offset within the serialized buffer.
+pub fn appendSlicePodZeroed(
+    self: *@This(),
+    allocator: std.mem.Allocator,
+    slice: anytype,
+) std.mem.Allocator.Error!@TypeOf(slice) {
+    const SliceType = @TypeOf(slice);
+    const T = std.meta.Child(SliceType);
+    const len = slice.len;
+
+    try self.padToAlignment(allocator, @alignOf(T));
+    const offset = self.total_bytes;
+
+    if (len > 0) {
+        if (comptime needsPaddingZeroing(T)) {
+            // `T` has undefined padding; copy into writer-owned memory and zero it so the
+            // bytes are deterministic.
+            const buf = try allocator.alloc(T, len);
+            for (slice, 0..) |item, i| buf[i] = item;
+            for (buf) |*item| zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
+
+            try self.allocated_memory.append(allocator, .{
+                .ptr = @ptrCast(buf.ptr),
+                .size = len * @sizeOf(T),
+                .alignment = @alignOf(T),
+            });
+            try self.iovecs.append(allocator, .{
+                .iov_base = @ptrCast(buf.ptr),
+                .iov_len = len * @sizeOf(T),
+            });
+        } else {
+            // `T` has no padding to zero, so the source bytes are already deterministic:
+            // iovec them verbatim (no scratch alloc, no copy). The source must outlive the
+            // writer's flush — true on the serialize path, where the store owns the data.
+            try self.iovecs.append(allocator, .{
+                .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
+                .iov_len = len * @sizeOf(T),
+            });
+        }
+        self.total_bytes += len * @sizeOf(T);
+    }
+
+    return @as([*]const T, @ptrFromInt(offset))[0..len];
+}
+
 /// Adds padding bytes to ensure the next write will be aligned to the specified boundary.
 /// This is critical for ensuring that serialized data structures maintain their required
 /// alignment when written to the output buffer.
@@ -234,7 +365,7 @@ pub fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: u
 pub fn writeToBuffer(
     self: *@This(),
     buffer: []u8,
-) ![]u8 {
+) error{BufferTooSmall}![]u8 {
     if (buffer.len < self.total_bytes) {
         return error.BufferTooSmall;
     }
@@ -271,3 +402,32 @@ const AllocatedMemory = struct {
     size: usize,
     alignment: usize,
 };
+
+test "zeroValuePadding: tagged-union determinism regardless of prior garbage / layout" {
+    // Tagged unions whose variants differ in size/alignment place the discriminant at a
+    // target-dependent offset that no comptime formula can reliably predict. The padding
+    // zeroer must locate the real tag (so it survives) AND deterministically zero every
+    // inactive/padding byte. The property: the same logical value canonicalizes to the
+    // SAME bytes no matter what garbage preceded it. (A mislocated tag breaks this and
+    // corrupted the discriminant on x86_64.)
+    const Case = struct {
+        fn check(comptime U: type, value: U) error{TestExpectedEqual}!void {
+            var a: [@sizeOf(U)]u8 align(@alignOf(U)) = undefined;
+            var b: [@sizeOf(U)]u8 align(@alignOf(U)) = undefined;
+            @memset(&a, 0xAA); // two different poisons in the inactive/padding bytes
+            @memset(&b, 0x55);
+            @as(*U, @ptrCast(&a)).* = value;
+            @as(*U, @ptrCast(&b)).* = value;
+            zeroValuePadding(U, @ptrCast(&a));
+            zeroValuePadding(U, @ptrCast(&b));
+            try std.testing.expectEqualSlices(u8, &a, &b); // deterministic, garbage-independent
+            try std.testing.expectEqual(std.meta.activeTag(value), std.meta.activeTag(@as(*U, @ptrCast(&a)).*));
+        }
+    };
+    // Payload-first union, largest variant (12) not a multiple of the max payload align (8).
+    try Case.check(union(enum) { a: u64, b: [12]u8 }, .{ .b = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 } });
+    try Case.check(union(enum) { a: u64, b: [12]u8 }, .{ .a = 0x0102030405060708 });
+    // A few more shapes (different sizes/alignments → different tag placements).
+    try Case.check(union(enum) { a: u32, b: [3]u8 }, .{ .b = [_]u8{ 9, 9, 9 } });
+    try Case.check(union(enum) { a: u128, b: [4]u8 }, .{ .b = [_]u8{ 1, 2, 3, 4 } });
+}

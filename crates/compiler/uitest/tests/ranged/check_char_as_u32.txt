@@ -1,5 +1,0 @@
-app "test" provides [x] to "./platform"
-
-x : U32
-x = '.'
-#^{-1} U32

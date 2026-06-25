@@ -379,13 +379,14 @@ used to:
 
 | File | Contents |
 |---|---|
-| `test/handler_tests.zig` | Full end-to-end integration tests. Simulates an LSP session (initialize → didOpen → completion request → shutdown → exit) and parses the JSON-RPC response. |
+| `test/handler_integration_tests.zig` | Full end-to-end integration tests. Simulates an LSP session (initialize → didOpen → completion request → shutdown → exit) and parses the JSON-RPC response. |
+| `test/handler_unit_tests.zig` | Handler response-shape tests that run through the test syntax driver instead of real compiler checking. |
 | `test/syntax_test.zig` | Mid-level tests. Creates a `SyntaxChecker`, builds real Roc source, and calls `getCompletionsAtPosition()` directly. |
 | `completion/context.zig` (inline) | Unit tests for `detectCompletionContext` and `computeOffset`. |
 | `completion/builder.zig` (inline) | Unit tests for helper functions (`stripModulePrefix`, `firstSegment`, `lastSegment`). |
 | `completion/builtins.zig` (inline) | Unit tests for `isBuiltinType` and `BUILTIN_TYPES.len`. |
 
-### Handler test structure (handler_tests.zig)
+### Handler test structure (handler_integration_tests.zig)
 
 Each test follows this pattern:
 
@@ -431,25 +432,29 @@ These tests call `getCompletionsAtPosition()` directly on a `SyntaxChecker`:
 ### Running tests
 
 ```bash
-# All completion-related tests
-zig build test -- --test-filter "completion"
+# All completion-related LSP tests
+zig build run-test-zig-module-lsp_integration -- --test-filter "completion"
 
 # Just context detection unit tests
-zig build test -- --test-filter "detectCompletionContext"
+zig build run-test-zig -- --test-filter "detectCompletionContext"
 
 # Just builder helper tests
-zig build test -- --test-filter "stripModulePrefix"
+zig build run-test-zig -- --test-filter "stripModulePrefix"
 
 # Just builtin type tests
-zig build test -- --test-filter "isBuiltinType"
+zig build run-test-zig -- --test-filter "isBuiltinType"
 
-# Full test suite
-zig build test
+# Fast LSP unit tests
+zig build run-test-zig-module-lsp_unit
+
+# Compiler-backed LSP integration tests
+zig build run-test-zig-module-lsp_integration
 ```
 
 ### Writing a new completion test
 
-For a handler-level integration test, follow the pattern in `handler_tests.zig`:
+For a handler-level integration test, follow the pattern in
+`handler_integration_tests.zig`:
 
 ```zig
 test "completion handler returns X in Y context" {

@@ -59,9 +59,6 @@ combineTrys = |jsonTry, httpStatus|
     }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
-UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
-UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
 UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
 UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
@@ -76,6 +73,9 @@ UNDECLARED TYPE - can_import_exposing_types.md:20:47:20:52
 UNDECLARED TYPE - can_import_exposing_types.md:20:55:20:60
 DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
+UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
+UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
+UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
 MODULE NOT FOUND - can_import_exposing_types.md:35:30:35:37
 UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
@@ -89,39 +89,6 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Config_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:29:18:29:24:**
-```roc
-    jsonConfig : Config,
-```
-                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Status_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:30:18:30:24:**
-```roc
-    httpStatus : Status,
-```
-                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:31:23:31:31:**
-```roc
-    defaultResponse : Response,
-```
-                      ^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 
@@ -276,6 +243,39 @@ Is there an `import` or `exposing` missing up-top?
         |v| Json.validateWith(config, v),
 ```
             ^^^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Config_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:29:18:29:24:**
+```roc
+    jsonConfig : Config,
+```
+                 ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Status_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:30:18:30:24:**
+```roc
+    httpStatus : Status,
+```
+                 ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Response_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:31:23:31:31:**
+```roc
+    defaultResponse : Response,
+```
+                      ^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -873,15 +873,6 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-apply (name "Try") (builtin)
 					(ty-malformed)
 					(ty-malformed)))))
-	(s-alias-decl
-		(ty-header (name "ServerConfig"))
-		(ty-record
-			(field (field "jsonConfig")
-				(ty-malformed))
-			(field (field "httpStatus")
-				(ty-malformed))
-			(field (field "defaultResponse")
-				(ty-malformed))))
 	(s-import (module "json.Json")
 		(exposes
 			(exposed (name "Value") (wildcard false))
@@ -894,7 +885,16 @@ combineTrys = |jsonTry, httpStatus|
 			(exposed (name "Status") (wildcard false))))
 	(s-import (module "utils.Try")
 		(exposes
-			(exposed (name "Try") (wildcard false)))))
+			(exposed (name "Try") (wildcard false))))
+	(s-alias-decl
+		(ty-header (name "ServerConfig"))
+		(ty-record
+			(field (field "jsonConfig")
+				(ty-malformed))
+			(field (field "httpStatus")
+				(ty-malformed))
+			(field (field "defaultResponse")
+				(ty-malformed)))))
 ~~~
 # TYPES
 ~~~clojure

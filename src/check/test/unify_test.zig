@@ -1,5 +1,6 @@
 //! TODO
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
 const types_mod = @import("types");
@@ -28,6 +29,8 @@ const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
 const Desc = types_mod.Descriptor;
 const Slot = types_mod.Slot;
+
+const UnifyTestError = Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult, VarNotRoot };
 
 /// A lightweight test harness used in unification and type inference tests.
 ///
@@ -81,19 +84,34 @@ const TestEnv = struct {
 
     /// Helper function to call unify with args from TestEnv
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
-        return try unify_mod.unify(
-            self.module_env.gpa,
-            self.module_env.getIdentStoreConst(),
-            self.module_env.qualified_module_ident,
-            &self.module_env.types,
-            &self.problems,
-            &self.snapshots,
-            &self.type_writer,
-            &self.scratch,
-            &self.occurs_scratch,
-            a,
-            b,
-        );
+        const env = unify_mod.Env{
+            .problems_gpa = self.module_env.gpa,
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .qualified_module_ident = self.module_env.qualified_module_ident,
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, .{});
+    }
+
+    /// Helper to call the write-no-report unify variant from TestEnv.
+    fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
+        const env = unify_mod.Env{
+            .problems_gpa = self.module_env.gpa,
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .qualified_module_ident = self.module_env.qualified_module_ident,
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, .{ .on_mismatch = .write_no_report });
     }
 
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
@@ -309,7 +327,7 @@ test "rigid_var - unifies with flex_var (other way)" {
     try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
 }
 
-test "rigid_var - cannot unify with alias (fail)" {
+test "rigid_var - cannot unify with structure (fail)" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -332,6 +350,25 @@ test "rigid_var - cannot unify with identical ident str (fail)" {
     const result = try env.unify(rigid1, rigid2);
     try std.testing.expectEqual(false, result.isOk());
 }
+test "unifyWriteNoReport - detects mismatch without recording or poisoning" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const b = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unifyWriteNoReport(a, b);
+
+    // A mismatch is detected...
+    try std.testing.expectEqual(false, result.isOk());
+    // ...but NOTHING is recorded to the problem store...
+    try std.testing.expectEqual(@as(usize, 0), env.problems.problems.items.len);
+    // ...and neither operand is poisoned to `.err`.
+    try std.testing.expect(env.module_env.types.resolveVar(a).desc.content != .err);
+    try std.testing.expect(env.module_env.types.resolveVar(b).desc.content != .err);
+}
+
 // unification - aliases //
 
 test "unify - aliases with different names but same backing" {
@@ -373,19 +410,21 @@ test "unify - alias with concrete" {
 
     try std.testing.expectEqual(.ok, result);
 
-    // Assert that the alias was preserved
-    const resolved = env.module_env.types.resolveVar(a);
-    try std.testing.expect(resolved.desc.content == .alias);
+    // The alias remains a transparent checked view; the concrete structure
+    // constrains its backing var instead of redirecting to the alias root.
+    const resolved_alias = env.module_env.types.resolveVar(a);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
 
-    // Assert that the alias backing var was preserved
     const resolved_backing = env.module_env.types.resolveVar(
-        env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
     );
+    const resolved_concrete = env.module_env.types.resolveVar(b);
     try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(resolved_concrete.var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
-    // Assert that a & b redirect to the alias
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(b));
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
 }
 
 test "unify - alias with concrete other way" {
@@ -403,19 +442,133 @@ test "unify - alias with concrete other way" {
 
     try std.testing.expectEqual(.ok, result);
 
-    // Assert that the alias was preserved
-    const resolved = env.module_env.types.resolveVar(a);
-    try std.testing.expect(resolved.desc.content == .alias);
+    // The concrete root and alias backing unify; the alias root remains the
+    // source-level checked view.
+    const resolved_alias = env.module_env.types.resolveVar(b);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
 
-    // Assert that the alias backing var was preserved
     const resolved_backing = env.module_env.types.resolveVar(
-        env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
+    );
+    const resolved_concrete = env.module_env.types.resolveVar(a);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(resolved_concrete.var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
+
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, b);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
+}
+
+test "unify - alias with own backing structure" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const alias_content = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const alias_var = try env.module_env.types.freshFromContent(alias_content);
+
+    const result = try env.unify(alias_var, backing_var);
+
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved_alias = env.module_env.types.resolveVar(alias_var);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
+
+    const resolved_backing = env.module_env.types.resolveVar(
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
     );
     try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(env.module_env.types.resolveVar(backing_var).var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
-    // Assert that a & b redirect to the alias
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(b));
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
+}
+
+test "unify - own backing structure with alias" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const alias_content = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const alias_var = try env.module_env.types.freshFromContent(alias_content);
+
+    const result = try env.unify(backing_var, alias_var);
+
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved_alias = env.module_env.types.resolveVar(alias_var);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
+
+    const resolved_backing = env.module_env.types.resolveVar(
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
+    );
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(env.module_env.types.resolveVar(backing_var).var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
+
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
+}
+
+test "unify - alias (flex backing) with rigid" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Alias whose backing is a flex var - aliases are transparent, so this
+    // should unify with a rigid by expanding to the backing.
+    const backing = try env.module_env.types.fresh();
+    const a = try env.module_env.types.freshFromContent(try env.mkAlias("Id", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(a, rigid);
+    try std.testing.expectEqual(true, result.isOk());
+}
+
+test "unify - alias (flex backing) with rigid (other way)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Same as above but with the rigid as `a` - the result must match the
+    // other order (unification is commutative).
+    const backing = try env.module_env.types.fresh();
+    const alias = try env.module_env.types.freshFromContent(try env.mkAlias("Id", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(rigid, alias);
+    try std.testing.expectEqual(true, result.isOk());
+}
+
+test "unify - alias (concrete backing) with rigid (fail)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Alias whose backing is a concrete structure - expanding to the backing
+    // gives structure-vs-rigid, which is a mismatch.
+    const backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const a = try env.module_env.types.freshFromContent(try env.mkAlias("Alias", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(a, rigid);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "unify - alias (concrete backing) with rigid (fail, other way)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const alias = try env.module_env.types.freshFromContent(try env.mkAlias("Alias", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(rigid, alias);
+    try std.testing.expectEqual(false, result.isOk());
 }
 
 // unification - structure/flex_vars //
@@ -736,6 +889,60 @@ test "unify - two empty nominal types" {
     const result = try env.unify(nominal_var1, nominal_var2);
 
     // Should fail because they're different nominal types
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "unify - distinct concrete builtin numeric nominals never unify" {
+    // GUARD for `structurallyIncompatiblePair` in src/check/unify.zig (the
+    // pair classifier behind `numeralCandidateStructurallyRefuted` in
+    // src/check/Check.zig): its dispatcher-position refutation (and the
+    // witness-probe assertion in `commitLiteralDefault`) assumes two
+    // CONCRETE builtin numeric nominals with different identities (origin +
+    // source decl) can never unify —
+    // there is no implicit numeric widening/coercion in the unifier. If such
+    // coercion is ever added, this test fails legibly BEFORE the structural
+    // pre-filter starts skipping probes that would now succeed.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Builtin numeric nominals are opaque, builtin-origin, zero-arg, with an
+    // empty tag union backing and a present source decl (see
+    // `mkNumberTypeContent` in src/check/Check.zig). Mirror that shape for
+    // U8 and I64 with distinct source decls.
+    const origin_module = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("Builtin"),
+    );
+
+    const u8_backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const u8_var = try env.module_env.types.freshFromContent(
+        try env.module_env.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+            try env.mkTypeIdent("U8"),
+            u8_backing,
+            &[_]Var{},
+            origin_module,
+            1, // source decl
+            true, // opaque
+            true, // builtin origin
+        ),
+    );
+
+    const i64_backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const i64_var = try env.module_env.types.freshFromContent(
+        try env.module_env.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+            try env.mkTypeIdent("I64"),
+            i64_backing,
+            &[_]Var{},
+            origin_module,
+            2, // source decl
+            true, // opaque
+            true, // builtin origin
+        ),
+    );
+
+    // Unify: U8 ~ I64 - must fail (no implicit numeric coercion)
+    const result = try env.unify(u8_var, i64_var);
     try std.testing.expectEqual(false, result.isOk());
 }
 
@@ -1505,7 +1712,7 @@ test "unify - flex with no constraints unifies with flex with constraints" {
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("sort")),
         .fn_var = sort_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
 
     const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -1536,7 +1743,7 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
 
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -1566,7 +1773,7 @@ test "unify - empty constraints unify with any" {
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
         .fn_var = foo_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
@@ -1599,7 +1806,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1634,7 +1841,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1684,7 +1891,7 @@ test "unify - flex vs nominal type captures constraint" {
     const ord_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("ord")),
         .fn_var = ord_fn,
-        .origin = .where_clause,
+        .origin = .{ .where_clause = .{} },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ord_constraint});
 
@@ -1720,8 +1927,7 @@ test "unify - from_numeral flex with rigid retains constraints on resolved rigid
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .from_numeral,
-        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+        .origin = .{ .from_literal = .{ .numeral = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()) } },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1729,7 +1935,6 @@ test "unify - from_numeral flex with rigid retains constraints on resolved rigid
         .name = null,
         .constraints = constraints,
     } });
-    env.module_env.types.from_numeral_flex_count += 1;
 
     const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
     const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
@@ -1738,7 +1943,6 @@ test "unify - from_numeral flex with rigid retains constraints on resolved rigid
     try std.testing.expectEqual(.ok, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
-    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
     try std.testing.expect(resolved.desc.content == .rigid);
     const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
@@ -1756,8 +1960,7 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .from_numeral,
-        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+        .origin = .{ .from_literal = .{ .numeral = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()) } },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1767,13 +1970,11 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
         .name = null,
         .constraints = constraints,
     } });
-    env.module_env.types.from_numeral_flex_count += 1;
 
     const result = try env.unify(rigid_var, flex_var);
     try std.testing.expectEqual(.ok, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
-    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
     try std.testing.expect(resolved.desc.content == .rigid);
     const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
@@ -1812,4 +2013,78 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
     try std.testing.expectEqual(@as(u32, 0), resolved.desc.content.rigid.constraints.count);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+}
+
+test "unify order - resulting type is order-independent for recursive types" {
+    // The *resulting type* of unification does not depend on operand order, even
+    // for recursive types. Unifying a self-referential type E = [Node(E)] with
+    // B = [Node(r)] binds the embedded flex `r` to the recursive structure
+    // regardless of order.
+    const gpa = std.testing.allocator;
+    const Helper = struct {
+        fn run(e_first: bool) UnifyTestError!bool {
+            var env = try TestEnv.init(gpa);
+            defer env.deinit();
+            const ts = &env.module_env.types;
+
+            // E = [Node(E)]  (self-referential tag union)
+            const e = try ts.fresh();
+            const e_tag = try env.mkTag("Node", &[_]Var{e});
+            const e_tu = try env.mkTagUnionClosed(&[_]Tag{e_tag});
+            try ts.setRootVarContent(e, e_tu.content);
+
+            // B = [Node(r)]  (r is a fresh flex "return var")
+            const r = try ts.fresh();
+            const b_tag = try env.mkTag("Node", &[_]Var{r});
+            const b_tu = try env.mkTagUnionClosed(&[_]Tag{b_tag});
+            const b = try ts.freshFromContent(b_tu.content);
+
+            const result = if (e_first) try env.unify(e, b) else try env.unify(b, e);
+            try std.testing.expectEqual(true, result.isOk());
+            return ts.resolveVar(r).desc.content == .structure;
+        }
+    };
+    try std.testing.expectEqual(true, try Helper.run(true));
+    try std.testing.expectEqual(true, try Helper.run(false));
+}
+
+test "unify order - deferred constraint origin var depends on operand order" {
+    // While the resulting *type* is order-independent, two artifacts are NOT:
+    //   1. union_ makes the SECOND operand the surviving root (store.zig).
+    //   2. a deferred static-dispatch constraint is attached to `b`, the second
+    //      operand (unify.zig recordDeferredConstraint / unresolved_b).
+    // So unifying a constrained flex with a concrete type in opposite orders
+    // attaches the deferred constraint to different surviving root vars. This
+    // operand-order sensitivity is why `store.union_`'s survivor choice is
+    // load-bearing — see the documented reliance on it in
+    // `Check.checkBranchBodyAgainstExpected`.
+    const gpa = std.testing.allocator;
+    const Helper = struct {
+        // Resolved root var-id that the deferred constraint is attached to.
+        fn run(flex_first: bool) UnifyTestError!u32 {
+            var env = try TestEnv.init(gpa);
+            defer env.deinit();
+            const ts = &env.module_env.types;
+
+            const str = try ts.freshFromContent(Content{ .structure = .empty_record });
+            const fn_var = try ts.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+            const constraint = types_mod.StaticDispatchConstraint{
+                .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("m")),
+                .fn_var = fn_var,
+                .origin = .method_call,
+            };
+            const constraints = try ts.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{constraint});
+            const flex = try ts.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } });
+            const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+            const rigid = try ts.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+
+            const result = if (flex_first) try env.unify(flex, rigid) else try env.unify(rigid, flex);
+            try std.testing.expectEqual(.ok, result);
+            try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
+            const origin = env.scratch.deferred_constraints.items.items[0].var_;
+            return @intFromEnum(ts.resolveVar(origin).var_);
+        }
+    };
+    // The constraint lands on a different surviving root depending on order.
+    try std.testing.expect((try Helper.run(true)) != (try Helper.run(false)));
 }

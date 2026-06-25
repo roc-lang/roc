@@ -9,7 +9,7 @@ import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_042.md:1:11:1:12
-MODULE NOT IMPORTED - fuzz_crash_042.md:1:17:1:22
+MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
 **PARSE ERROR**
@@ -23,15 +23,15 @@ import u.R}g:r->R.a.E
           ^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `R.a` imported into this Roc file.
+**MODULE NOT FOUND**
+The type `a.E` is qualified by the module `u.R`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**fuzz_crash_042.md:1:17:1:22:**
+You're attempting to use this type here:
+**fuzz_crash_042.md:1:20:1:22:**
 ```roc
 import u.R}g:r->R.a.E
 ```
-                ^^^^^
+                   ^^
 
 
 **DECLARATION HAS NO VALUE**

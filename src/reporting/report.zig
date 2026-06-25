@@ -48,26 +48,26 @@ pub const Report = struct {
 
     /// Add a string that the report will take ownership of.
     /// Returns the owned copy of the string that can be safely used in the document.
-    pub fn addOwnedString(self: *Report, string: []const u8) ![]const u8 {
+    pub fn addOwnedString(self: *Report, string: []const u8) Allocator.Error![]const u8 {
         const owned_copy = try self.allocator.dupe(u8, string);
         try self.owned_strings.append(owned_copy);
         return owned_copy;
     }
 
     /// Render the report to the specified writer and target format.
-    pub fn render(self: *const Report, writer: *std.Io.Writer, target: RenderTarget) !void {
+    pub fn render(self: *const Report, writer: *std.Io.Writer, target: RenderTarget) (Allocator.Error || error{WriteFailed})!void {
         try renderReport(self, writer, target);
     }
 
     /// Add a section header to the report.
-    pub fn addHeader(self: *Report, header: []const u8) !void {
+    pub fn addHeader(self: *Report, header: []const u8) Allocator.Error!void {
         try self.document.addLineBreak();
         try self.document.addAnnotated(header, .emphasized);
         try self.document.addLineBreak();
     }
 
     /// Add a code snippet with proper formatting and UTF-8 validation.
-    pub fn addCodeSnippet(self: *Report, code: []const u8, line_number: ?u32) !void {
+    pub fn addCodeSnippet(self: *Report, code: []const u8, line_number: ?u32) Allocator.Error!void {
         validateUtf8(code) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in code snippet]");
@@ -77,10 +77,7 @@ pub const Report = struct {
         };
 
         if (line_number) |line_num| {
-            // Manually format line number to avoid buffer corruption
-            var line_num_buf: [32]u8 = undefined;
-            const line_num_str = std.fmt.bufPrint(&line_num_buf, "{d}", .{line_num}) catch unreachable;
-            try self.document.addText(line_num_str);
+            try self.document.addFormattedText("{d}", .{line_num});
             try self.document.addText(" | ");
         } else {
             try self.document.addText("   | ");
@@ -90,7 +87,7 @@ pub const Report = struct {
     }
 
     /// Add source context using RegionInfo for better accuracy and simplicity.
-    pub fn addSourceContext(self: *Report, region: RegionInfo, filename: ?[]const u8, source: []const u8, line_starts: []const u32) !void {
+    pub fn addSourceContext(self: *Report, region: RegionInfo, filename: ?[]const u8, source: []const u8, line_starts: []const u32) Allocator.Error!void {
         validateUtf8(region.calculateLineText(source, line_starts)) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in source context]");
@@ -111,7 +108,7 @@ pub const Report = struct {
     }
 
     /// Add a suggestion with proper formatting and UTF-8 validation.
-    pub fn addSuggestion(self: *Report, suggestion: []const u8) !void {
+    pub fn addSuggestion(self: *Report, suggestion: []const u8) Allocator.Error!void {
         validateUtf8(suggestion) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in suggestion]");
@@ -121,7 +118,13 @@ pub const Report = struct {
         };
 
         const truncated_suggestion = if (suggestion.len > DEFAULT_MAX_MESSAGE_BYTES) blk: {
-            const truncated = truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
+            // `suggestion` is already validated as UTF-8 above, and the limit is
+            // large enough that a truncation point always exists, so the only
+            // failure `truncateUtf8` can produce here is running out of memory.
+            const truncated = truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidUtf8, error.CannotTruncate => unreachable,
+            };
             if (truncated.ptr != suggestion.ptr) {
                 try self.owned_strings.append(truncated);
             }
@@ -135,7 +138,7 @@ pub const Report = struct {
     }
 
     /// Add multiple suggestions as a list.
-    pub fn addSuggestions(self: *Report, suggestions: []const []const u8) !void {
+    pub fn addSuggestions(self: *Report, suggestions: []const []const u8) Allocator.Error!void {
         if (suggestions.len == 0) return;
 
         try self.document.addLineBreak();
@@ -156,7 +159,7 @@ pub const Report = struct {
     }
 
     /// Add a type comparison showing expected vs actual.
-    pub fn addTypeComparison(self: *Report, expected: []const u8, actual: []const u8) !void {
+    pub fn addTypeComparison(self: *Report, expected: []const u8, actual: []const u8) Allocator.Error!void {
         try self.document.addLineBreak();
         try self.document.addText("Expected type:");
         try self.document.addLineBreak();
@@ -172,7 +175,7 @@ pub const Report = struct {
     }
 
     /// Add a note with dimmed styling.
-    pub fn addNote(self: *Report, note: []const u8) !void {
+    pub fn addNote(self: *Report, note: []const u8) Allocator.Error!void {
         try self.document.addLineBreak();
         try self.document.addAnnotated("Note: ", .dimmed);
         try self.document.addText(note);
@@ -180,19 +183,19 @@ pub const Report = struct {
     }
 
     /// Add an error message with proper styling.
-    pub fn addErrorMessage(self: *Report, message: []const u8) !void {
+    pub fn addErrorMessage(self: *Report, message: []const u8) Allocator.Error!void {
         try self.document.addError(message);
         try self.document.addLineBreak();
     }
 
     /// Add a warning message with proper styling.
-    pub fn addWarningMessage(self: *Report, message: []const u8) !void {
+    pub fn addWarningMessage(self: *Report, message: []const u8) Allocator.Error!void {
         try self.document.addWarning(message);
         try self.document.addLineBreak();
     }
 
     /// Add a separator line.
-    pub fn addSeparator(self: *Report) !void {
+    pub fn addSeparator(self: *Report) Allocator.Error!void {
         try self.document.addLineBreak();
         try self.document.addHorizontalRule(40);
         try self.document.addLineBreak();
@@ -268,7 +271,7 @@ pub const ReportBuilder = struct {
         return self;
     }
 
-    pub fn code(self: *ReportBuilder, code_text: []const u8) !*ReportBuilder {
+    pub fn code(self: *ReportBuilder, code_text: []const u8) Allocator.Error!*ReportBuilder {
         try self.report.addCodeSnippet(code_text, null);
         return self;
     }

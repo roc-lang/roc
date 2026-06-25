@@ -1,7 +1,7 @@
 //! Topological sorting for module dependencies using Kahn's algorithm.
 //!
 //! This module provides a generalized topological sort that can be used by both
-//! the IPC path (roc run/build) and BuildEnv path (roc check) to ensure modules
+//! the IPC path (default `roc` command/`roc build`) and BuildEnv path (`roc check`) to ensure modules
 //! are compiled in dependency order (dependencies first, dependents last).
 
 const std = @import("std");
@@ -22,7 +22,9 @@ pub const ImportContext = struct {
 
 /// Callback type for extracting imports from a module.
 /// Returns a slice of imported module names (caller owns memory).
-pub const ImportExtractor = *const fn (context: ImportContext, module_name: []const u8) anyerror![][]const u8;
+pub fn ImportExtractor(comptime ExtractorError: type) type {
+    return *const fn (context: ImportContext, module_name: []const u8) ExtractorError![][]const u8;
+}
 
 /// Sort modules by their import dependencies using Kahn's algorithm.
 /// Returns modules in compilation order (dependencies first, dependents last).
@@ -36,11 +38,12 @@ pub const ImportExtractor = *const fn (context: ImportContext, module_name: []co
 /// Returns: Sorted list of module names (caller owns memory)
 /// Returns error.CyclicDependency if modules have circular imports.
 pub fn sortByDependency(
+    comptime ExtractorError: type,
     gpa: Allocator,
     module_names: []const []const u8,
-    extractor: ImportExtractor,
+    extractor: ImportExtractor(ExtractorError),
     extractor_ctx: *anyopaque,
-) ![][]const u8 {
+) (Allocator.Error || CyclicDependencyError || ExtractorError)![][]const u8 {
     const n = module_names.len;
 
     // Early return for trivial cases
@@ -140,7 +143,7 @@ pub fn sortByPrecomputedDependency(
     gpa: Allocator,
     module_names: []const []const u8,
     module_imports: []const []const []const u8,
-) ![][]const u8 {
+) (Allocator.Error || error{CyclicDependency})![][]const u8 {
     std.debug.assert(module_names.len == module_imports.len);
 
     const n = module_names.len;

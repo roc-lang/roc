@@ -1,19 +1,42 @@
 //! Statement-only LIR module.
 
 const std = @import("std");
+const core = @import("lir_core");
 
 /// Core statement-only LIR type definitions.
-pub const LIR = @import("LIR.zig");
+pub const LIR = core.LIR;
+/// Resolved source location recorded in LIR side tables.
+pub const SourceLoc = @import("base").SourceLoc;
 /// Flat storage for statement-only LIR nodes and spans.
-pub const LirStore = @import("LirStore.zig");
-/// Source-blind IR-to-LIR lowering boundary.
-pub const LowerIr = @import("lower_ir.zig");
-/// Public checked-artifact-to-LIR lowering entrypoint.
+pub const LirStore = core.LirStore;
+/// LIR-owned root metadata.
+pub const RootMetadata = core.RootMetadata;
+/// Hosted ABI metadata carried by LIR proc specs.
+pub const Hosted = core.Hosted;
+/// LIR program result shared by post-check lowering and consumers.
+pub const Program = core.Program;
+/// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
-/// Mechanical ARC insertion over explicit LIR values and control flow.
+/// Struct-typed join parameters split into per-field parameters before ARC.
+pub const ScalarizeJoins = @import("scalarize_joins.zig");
+/// Switch branch pruning from explicit possible-tag analysis.
+pub const TagReachability = @import("tag_reachability.zig");
+/// Demand-driven proc compaction before ARC and backend emission.
+pub const ReachableProcs = @import("reachable_procs.zig");
+/// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");
-/// Shared-memory ARC-inserted LIR runtime image for interpreter-shim execution.
-pub const RuntimeImage = @import("runtime_image.zig");
+/// Tail recursion modulo constructor + plain tail-call elimination.
+pub const Trmc = @import("trmc.zig");
+/// Compact textual LIR dumps for golden tests and debug flags.
+pub const DebugPrint = @import("debug_print.zig");
+/// ARC-stage per-proc ownership signatures.
+pub const ArcSig = @import("arc_sig.zig");
+/// ARC borrow-inference solver over ownership-neutral LIR.
+pub const ArcSolve = @import("arc_solve.zig");
+/// Debug borrow certifier for ARC-complete LIR.
+pub const ArcCertify = @import("arc_certify.zig");
+/// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
+pub const LirImage = @import("lir_image.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -45,13 +68,27 @@ pub const LirProcSpec = LIR.LirProcSpec;
 pub const LirProcSpecId = LIR.LirProcSpecId;
 /// Builtin low-level operation identifier reused from `base`.
 pub const LowLevel = LIR.LowLevel;
+/// Pattern type used in LIR.
+pub const LirPattern = LIR.LirPattern;
+/// Identifier of a stored LirPattern.
+pub const LirPatternId = LIR.LirPatternId;
+/// Span into flat pattern-id storage.
+pub const LirPatternSpan = LIR.LirPatternSpan;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
-    std.testing.refAllDecls(LowerIr);
+    std.testing.refAllDecls(RootMetadata);
+    std.testing.refAllDecls(Hosted);
+    std.testing.refAllDecls(Program);
+    std.testing.refAllDecls(ReachableProcs);
     std.testing.refAllDecls(CheckedPipeline);
+    std.testing.refAllDecls(ScalarizeJoins);
+    std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(Arc);
-    std.testing.refAllDecls(RuntimeImage);
+    std.testing.refAllDecls(ArcSig);
+    std.testing.refAllDecls(ArcSolve);
+    std.testing.refAllDecls(ArcCertify);
+    std.testing.refAllDecls(LirImage);
 }

@@ -1,4 +1,0 @@
-P := p
-    #
-    implements []
-n

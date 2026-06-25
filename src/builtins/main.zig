@@ -52,6 +52,7 @@ comptime {
     exportDecFn(dec.negateC, "negate");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.sinC, "sin");
+    exportDecFn(dec.sqrtC, "sqrt");
     exportDecFn(dec.subC, "sub_with_overflow");
     exportDecFn(dec.subOrPanicC, "sub_or_panic");
     exportDecFn(dec.subSaturatedC, "sub_saturated");
@@ -231,6 +232,7 @@ comptime {
     exportStrFn(str.strWithAsciiLowercased, "with_ascii_lowercased");
     exportStrFn(str.strWithAsciiUppercased, "with_ascii_uppercased");
     exportStrFn(str.strCaselessAsciiEquals, "caseless_ascii_equals");
+    exportStrFn(str.strDropPrefixCaselessAscii, "drop_prefix_caseless_ascii");
 
     for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
@@ -248,13 +250,18 @@ comptime {
     exportUtilsFn(utils.test_dbg, "test_dbg");
     exportUtilsFn(utils.test_panic, "test_panic");
     exportUtilsFn(utils.increfRcPtrC, "incref_rc_ptr");
+    exportUtilsFn(utils.increfRcPtrSingleThreadC, "incref_rc_ptr_single_thread");
     exportUtilsFn(utils.decrefRcPtrC, "decref_rc_ptr");
+    exportUtilsFn(utils.decrefRcPtrSingleThreadC, "decref_rc_ptr_single_thread");
     exportUtilsFn(utils.freeRcPtrC, "free_rc_ptr");
     exportUtilsFn(utils.increfDataPtrC, "incref_data_ptr");
+    exportUtilsFn(utils.increfDataPtrSingleThreadC, "incref_data_ptr_single_thread");
     exportUtilsFn(utils.decrefDataPtrC, "decref_data_ptr");
+    exportUtilsFn(utils.decrefDataPtrSingleThreadC, "decref_data_ptr_single_thread");
     exportUtilsFn(utils.freeDataPtrC, "free_data_ptr");
     exportUtilsFn(utils.isUnique, "is_unique");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
+    exportUtilsFn(utils.decrefCheckNullSingleThreadC, "decref_check_null_single_thread");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
     exportUtilsFn(@import("erased_callable.zig").incref, "erased_callable.incref");

@@ -15,24 +15,11 @@ Outer := [A].{
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - simple_scope_test.md:6:17:6:26
-UNUSED VARIABLE - simple_scope_test.md:6:17:6:26
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `inner_val` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**simple_scope_test.md:6:17:6:26:**
-```roc
-    outer_val = inner_val
-```
-                ^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `inner_val` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_inner_val` to suppress this warning.
-The unused variable is declared here:
 **simple_scope_test.md:6:17:6:26:**
 ```roc
     outer_val = inner_val
@@ -94,8 +81,7 @@ Outer := [A].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "simple_scope_test.Outer.outer_val"))
-		(e-lookup-local
-			(p-assign (ident "inner_val"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-nominal-decl
 		(ty-header (name "Outer"))
 		(ty-tag-union
@@ -110,7 +96,7 @@ Outer := [A].{
 (inferred-types
 	(defs
 		(patt (type "Dec"))
-		(patt (type "_a")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Outer")
 			(ty-header (name "Outer")))
@@ -118,5 +104,5 @@ Outer := [A].{
 			(ty-header (name "simple_scope_test.Outer.Inner"))))
 	(expressions
 		(expr (type "Dec"))
-		(expr (type "_a"))))
+		(expr (type "Error"))))
 ~~~

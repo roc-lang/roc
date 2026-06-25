@@ -172,21 +172,34 @@ PARSE ERROR - fuzz_crash_027.md:40:5:40:6
 PARSE ERROR - fuzz_crash_027.md:40:7:40:8
 PARSE ERROR - fuzz_crash_027.md:40:9:40:10
 PARSE ERROR - fuzz_crash_027.md:41:1:41:2
-PARSE ERROR - fuzz_crash_027.md:122:3:122:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:3:125:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:124:3:124:4
+LIST NOT CLOSED - fuzz_crash_027.md:125:3:125:4
+PARSE ERROR - fuzz_crash_027.md:126:2:126:3
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:131:9:131:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:132:8:132:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:133:10:133:11
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:141:8:141:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:142:8:142:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:2
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:150:7:150:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:151:7:151:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:153:7:153:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:155:1:155:7
+LIST NOT CLOSED - fuzz_crash_027.md:160:1:160:1
+PARSE ERROR - fuzz_crash_027.md:160:1:160:1
+MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
+UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
+UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:32:32:32:33
 UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
-MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
-MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
-UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
-UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
@@ -198,42 +211,25 @@ UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
 NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
 UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
-NOT IMPLEMENTED - fuzz_crash_027.md:88:4:88:6
 NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
-UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
-UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
-UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
-INVALID ASSIGNMENT TO ITSELF - fuzz_crash_027.md:132:50:132:55
-UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
-UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
-UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
-UNDEFINED VARIABLE - fuzz_crash_027.md:142:10:142:17
-UNDEFINED VARIABLE - fuzz_crash_027.md:142:18:142:22
-DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
+UNRECOGNIZED SYNTAX - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
+UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+MISSING METHOD - fuzz_crash_027.md:68:3:68:8
+MISSING METHOD - fuzz_crash_027.md:70:3:70:8
+TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
-TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
-MISSING METHOD - fuzz_crash_027.md:129:12:129:22
-+ - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
-TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
-DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -306,26 +302,205 @@ This is an unexpected parsing error. Please check your syntax.
 ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_apply_close_round`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_027.md:122:3:122:10:**
-```roc
-		add_one(
-```
-		^^^^^^^
-
-
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **)** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:124:3:124:4:**
+```roc
+e[, # afarg
+```
+  ^
+
+
+**LIST NOT CLOSED**
+This list is missing a closing bracket or has a syntax error.
+Lists must be closed with **]** and list items must be separated by commas.
+For example:     [1, 2, 3]
 
 **fuzz_crash_027.md:125:3:125:4:**
 ```roc
 		),	456, # ee
 ```
 		^
+
+
+**PARSE ERROR**
+A parsing error occurred: `expected_expr_apply_close_round`
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_027.md:126:2:126:3:**
+```roc
+	]
+```
+	^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:131:9:131:10:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	       ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:132:8:132:9:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:133:10:133:11:**
+```roc
+	m_tuple = (
+```
+	        ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:141:8:141:9:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:142:8:142:9:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:148:1:148:2:**
+```roc
+} # Commenl decl
+```
+^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:150:7:150:8:**
+```roc
+empty : {}
+```
+      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:151:7:151:8:**
+```roc
+empty = {}
+```
+      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:153:7:153:8:**
+```roc
+tuple : Value((a, b, c))
+```
+      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **expect** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:155:1:155:7:**
+```roc
+expect {
+```
+^^^^^^
+
+
+**LIST NOT CLOSED**
+This list is missing a closing bracket or has a syntax error.
+Lists must be closed with **]** and list items must be separated by commas.
+For example:     [1, 2, 3]
+
+**fuzz_crash_027.md:160:1:160:1:**
+```roc
+
+```
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `expected_expr_close_curly`
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_027.md:160:1:160:1:**
+```roc
+
+```
+^
+
+
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:6:1:8:4:**
+```roc
+import Stdot
+		exposing [ #tem
+		] # Cose
+```
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:12:1:12:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:13:1:14:4:**
+```roc
+import
+	Ba
+```
 
 
 **UNDECLARED TYPE**
@@ -348,6 +523,28 @@ This type is referenced here:
 Foo : (Bar, Baz)
 ```
             ^^^
+
+
+**UNDECLARED TYPE**
+The type _Bar_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:29:2:29:5:**
+```roc
+	Bar, #
+```
+	^^^
+
+
+**UNDECLARED TYPE**
+The type _Baz_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:30:2:30:5:**
+```roc
+	Baz, #m
+```
+	^^^
 
 
 **UNDECLARED TYPE**
@@ -416,62 +613,6 @@ This type is referenced here:
 Func(a) : Maybe(a), a -> Maybe(a)
 ```
                          ^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:6:1:8:4:**
-```roc
-import Stdot
-		exposing [ #tem
-		] # Cose
-```
-
-
-**MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:12:1:12:19:**
-```roc
-import Bae as Gooe
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:13:1:14:4:**
-```roc
-import
-	Ba
-```
-
-
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:29:2:29:5:**
-```roc
-	Bar, #
-```
-	^^^
-
-
-**UNDECLARED TYPE**
-The type _Baz_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:30:2:30:5:**
-```roc
-	Baz, #m
-```
-	^^^
 
 
 **EMPTY TUPLE NOT ALLOWED**
@@ -601,18 +742,6 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: report an error when unable to resolve field identifier
-
-**fuzz_crash_027.md:88:4:88:6:**
-```roc
-			..} => 12
-```
-			^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
 **fuzz_crash_027.md:89:18:89:23:**
@@ -680,115 +809,16 @@ Is there an `import` or `exposing` missing up-top?
 	^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
-**fuzz_crash_027.md:128:2:128:7:**
+**fuzz_crash_027.md:1:1:1:1:**
 ```roc
-	line!("Adding ${n} to ${number}")
+# Thnt!
 ```
-	^^^^^
+^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `punned` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:131:63:131:69:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-	                                                             ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:132:42:132:48:**
-```roc
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-```
-	                                        ^^^^^^
-
-
-**INVALID ASSIGNMENT TO ITSELF**
-The value `tuple` is assigned to itself, which would cause an infinite loop at runtime.
-
-Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
-
-**fuzz_crash_027.md:132:50:132:55:**
-```roc
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-```
-	                                                ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `tag1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:136:3:136:7:**
-```roc
-		tag1,
-```
-		^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:138:4:138:10:**
-```roc
-		(nested, tuple),
-```
-		 ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:141:14:141:17:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	            ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `some_fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:142:10:142:17:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
-	        ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `arg1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:142:18:142:22:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
-	                ^^^^
-
-
-**DOES NOT EXIST**
-`Num.toStr` does not exist.
-
-**fuzz_crash_027.md:145:4:145:13:**
-```roc
-			Num.toStr(number) # on expr
-```
-			^^^^^^^^^
-
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNUSED VARIABLE**
 Variable `tag_with` is not used anywhere in your code.
@@ -815,62 +845,15 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `record` is not used anywhere in your code.
+Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_027.md:131:2:131:8:**
+**fuzz_crash_027.md:121:2:121:6:**
 ```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	list = [
 ```
-	^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `m_tuple` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:133:2:133:9:**
-```roc
-	m_tuple = (
-```
-	^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `bsult` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:141:2:141:7:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `stale` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:142:2:142:7:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
-	^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:153:9:153:14:**
-```roc
-tuple : Value((a, b, c))
-```
-        ^^^^^
+	^^^^
 
 
 **TOO FEW ARGS**
@@ -910,7 +893,7 @@ It is:
 But I need this to be a `Bool` value.
 
 **TYPE MISMATCH**
-The third branch of this `match` does not match the previous ones:
+The `lue` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
 **fuzz_crash_027.md:64:2:**
 ```roc
 	match a {lue | Red => {
@@ -945,11 +928,87 @@ ist
 		Ok(123) => 121000
 	}
 ```
-  ^^^^^
+                ^^^
 
-This third branch is trying to match:
+In the second pattern, `lue` is:
 
-    Str
+    [Red, ..]
+
+But in the first pattern, `lue` is:
+
+    [Red, ..]
+
+A name shared across `|` patterns in the same `match` branch must have one compatible type.
+
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:68:3:68:8:**
+```roc
+		"foo" => # ent
+```
+		^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Red, ..]
+
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:70:3:70:8:**
+```roc
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+```
+		^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Red, ..]
+
+**TYPE MISMATCH**
+The fifth branch of this `match` does not match the previous ones:
+**fuzz_crash_027.md:64:2:**
+```roc
+	match a {lue | Red => {
+			x x
+		}
+		Blue		=> 1
+		"foo" => # ent
+00
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+			=> ment
+
+
+		[1, 2 | 5, 3, .. as rest] => 123
+		[
+ist
+		] => 123
+		3.14 => 314
+		3.14 | 6.28 => 314
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ # Afrd open
+			foo #
+				: #ue
+					1, # Aftd field
+			bar: 2,
+			..} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
+		{
+			foo: 1,
+			} => 12
+		Ok(123) => 121000
+	}
+```
+                     ^^^^^^^^^^^^^^^^^^^^^
+
+This fifth branch is trying to match:
+
+    List(d)
+      where [
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        d.is_eq : d, d -> Bool,
+      ]
 
 But the expression between the `match` parenthesis has the type:
 
@@ -973,58 +1032,6 @@ The `match_time` function has the type:
 Are there any missing commas?
 
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**fuzz_crash_027.md:125:6:125:9:**
-```roc
-		),	456, # ee
-```
-		  	^^^
-
-The type was determined to be non-numeric here:
-**fuzz_crash_027.md:128:18:128:19:**
-```roc
-	line!("Adding ${n} to ${number}")
-```
-	                ^
-
-Other code expects this to have the type:
-
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**fuzz_crash_027.md:102:15:102:18:**
-```roc
-	var number = 123
-```
-	             ^^^
-
-The type was determined to be non-numeric here:
-**fuzz_crash_027.md:128:26:128:32:**
-```roc
-	line!("Adding ${n} to ${number}")
-```
-	                        ^^^^^^
-
-Other code expects this to have the type:
-
-    Str
-
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**fuzz_crash_027.md:129:12:129:22:**
-```roc
-		number = number + n
-```
-		         ^^^^^^^^^^
-
-The value's type, which does not have a method named **plus**, is:
-
-    Str
-
-**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
-**TYPE MISMATCH**
 This `return` does not match the function's return type:
 **fuzz_crash_027.md:106:3:106:6:**
 ```roc
@@ -1041,82 +1048,6 @@ But the function's return type is:
     Try({}, _d)
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:100:9:148:2:**
-```roc
-main! = |_| { # Yeah Ie
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # Comd
-		tag
-
-	# Jusnt!
-
-	...
-	match_time(
-		..., #
-	)
-	some_func(
-		dbg # bug
-			42, # Aft expr
-	)
-	crash "Unreachtement
-	tag_with = Ok(number)
-	ited = "Hello, ${world}"
-	list = [
-		add_one(
-			dbg # Afin list
-e[, # afarg
-		),	456, # ee
-	]
-	for n in list {
-	line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-	m_tuple = (
-		123,
-		"World",
-		tag1,
-		Ok(world), # Thisnt
-		(nested, tuple),
-		[1, 2, 3],
-	)
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
-} # Commenl decl
-```
-
-It has the type:
-
-    List(Error) => Error
-
-But the annotation say it should be:
-
-    List(Error) -> Error
-
-**Hint:** This function is effectful, but a pure function is expected.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_027.md:153:1:153:25:**
-```roc
-tuple : Value((a, b, c))
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -1425,12 +1356,15 @@ EndOfFile,
 							(p-tag (raw "Blue"))
 							(e-int (raw "1")))
 						(branch
-							(p-string (raw """))
+							(p-string (raw """)
+								(p-string-text (raw "foo")))
 							(e-int (raw "00")))
 						(branch
 							(p-alternatives
-								(p-string (raw """))
-								(p-string (raw """)))
+								(p-string (raw """)
+									(p-string-text (raw "foo")))
+								(p-string (raw """)
+									(p-string-text (raw "bar"))))
 							(e-int (raw "20")))
 						(branch
 							(p-list
@@ -1492,7 +1426,7 @@ EndOfFile,
 									(p-int (raw "1")))
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
-								(field (name "app") (rest true)))
+								(field (rest true)))
 							(e-int (raw "12")))
 						(branch
 							(p-record
@@ -1571,155 +1505,7 @@ EndOfFile,
 								(e-string-part (raw ""))))
 						(s-decl
 							(p-ident (raw "list"))
-							(e-list
-								(e-malformed (reason "expected_expr_apply_close_round"))
-								(e-malformed (reason "expr_unexpected_token"))
-								(e-int (raw "456"))))
-						(s-for
-							(p-ident (raw "n"))
-							(e-ident (raw "list"))
-							(e-block
-								(statements
-									(e-apply
-										(e-ident (raw "line!"))
-										(e-string
-											(e-string-part (raw "Adding "))
-											(e-ident (raw "n"))
-											(e-string-part (raw " to "))
-											(e-ident (raw "number"))
-											(e-string-part (raw ""))))
-									(s-decl
-										(p-ident (raw "number"))
-										(e-binop (op "+")
-											(e-ident (raw "number"))
-											(e-ident (raw "n")))))))
-						(s-decl
-							(p-ident (raw "record"))
-							(e-record
-								(field (field "foo")
-									(e-int (raw "123")))
-								(field (field "bar")
-									(e-string
-										(e-string-part (raw "Hello"))))
-								(field (field "baz")
-									(e-ident (raw "tag")))
-								(field (field "qux")
-									(e-apply
-										(e-tag (raw "Ok"))
-										(e-ident (raw "world"))))
-								(field (field "punned"))))
-						(s-decl
-							(p-ident (raw "tuple"))
-							(e-tuple
-								(e-int (raw "123"))
-								(e-string
-									(e-string-part (raw "World")))
-								(e-ident (raw "tag"))
-								(e-apply
-									(e-tag (raw "Ok"))
-									(e-ident (raw "world")))
-								(e-tuple
-									(e-ident (raw "nested"))
-									(e-ident (raw "tuple")))
-								(e-list
-									(e-int (raw "1"))
-									(e-int (raw "2"))
-									(e-int (raw "3")))))
-						(s-decl
-							(p-ident (raw "m_tuple"))
-							(e-tuple
-								(e-int (raw "123"))
-								(e-string
-									(e-string-part (raw "World")))
-								(e-ident (raw "tag1"))
-								(e-apply
-									(e-tag (raw "Ok"))
-									(e-ident (raw "world")))
-								(e-tuple
-									(e-ident (raw "nested"))
-									(e-ident (raw "tuple")))
-								(e-list
-									(e-int (raw "1"))
-									(e-int (raw "2"))
-									(e-int (raw "3")))))
-						(s-decl
-							(p-ident (raw "bsult"))
-							(e-binop (op "or")
-								(e-binop (op ">")
-									(e-binop (op "??")
-										(e-apply
-											(e-tag (raw "Err"))
-											(e-ident (raw "foo")))
-										(e-int (raw "12")))
-									(e-binop (op "*")
-										(e-int (raw "5"))
-										(e-int (raw "5"))))
-								(e-binop (op "or")
-									(e-binop (op "and")
-										(e-binop (op "<")
-											(e-binop (op "+")
-												(e-int (raw "13"))
-												(e-int (raw "2")))
-											(e-int (raw "5")))
-										(e-binop (op ">=")
-											(e-binop (op "-")
-												(e-int (raw "10"))
-												(e-int (raw "1")))
-											(e-int (raw "16"))))
-									(e-binop (op "<=")
-										(e-int (raw "12"))
-										(e-binop (op "/")
-											(e-int (raw "3"))
-											(e-int (raw "5")))))))
-						(s-decl
-							(p-ident (raw "stale"))
-							(e-question-suffix
-								(e-field-access
-									(e-question-suffix
-										(e-method-call (method ".ned")
-											(receiver
-												(e-question-suffix
-													(e-method-call (method ".statod")
-														(receiver
-															(e-question-suffix
-																(e-apply
-																	(e-ident (raw "some_fn"))
-																	(e-ident (raw "arg1")))))
-														(args))))
-											(args)))
-									(e-ident (raw "recd")))))
-						(e-apply
-							(e-tag (raw "Stdoline!"))
-							(e-string
-								(e-string-part (raw "How about "))
-								(e-apply
-									(e-ident (raw "Num.toStr"))
-									(e-ident (raw "number")))
-								(e-string-part (raw " as a"))))))))
-		(s-type-anno (name "empty")
-			(ty-record))
-		(s-decl
-			(p-ident (raw "empty"))
-			(e-record))
-		(s-type-anno (name "tuple")
-			(ty-apply
-				(ty (name "Value"))
-				(ty-tuple
-					(ty-var (raw "a"))
-					(ty-var (raw "b"))
-					(ty-var (raw "c")))))
-		(s-expect
-			(e-block
-				(statements
-					(s-decl
-						(p-ident (raw "foo"))
-						(e-int (raw "1")))
-					(s-decl
-						(p-ident (raw "blah"))
-						(e-int (raw "1")))
-					(e-binop (op "==")
-						(e-ident (raw "blah"))
-						(e-ident (raw "foo"))))))))
+							(e-malformed (reason "expected_expr_close_square_or_comma")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1846,43 +1632,8 @@ main! = |_| { # Yeah Ie
 	crash "Unreachtement"
 	tag_with = Ok(number)
 	ited = "Hello, ${world}"
-	list = [
-		, # afarg
-		,
-		456, # ee
-	]
-	for n in list {
-		line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-	m_tuple = (
-		123,
-		"World",
-		tag1,
-		Ok(world), # Thisnt
-		(nested, tuple),
-		[1, 2, 3],
-	)
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
-} # Commenl decl
-
-empty : {}
-empty = {}
-
-tuple : Value((a, b, c))
-
-expect {
-	foo = 1 # Thio
-	blah = 1
-	blah == foo
+	list = 
+		
 }
 ~~~
 # CANONICALIZE
@@ -2067,7 +1818,17 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-runtime-error (tag "not_implemented"))))
+									(p-record-destructure
+										(destructs
+											(record-destruct (label "foo") (ident "foo")
+												(sub-pattern
+													(p-num (value "1"))))
+											(record-destruct (label "bar") (ident "bar")
+												(sub-pattern
+													(p-num (value "2"))))
+											(record-destruct (label "#others") (ident "#others")
+												(rest-pattern
+													(p-underscore)))))))
 							(value
 								(e-num (value "12"))))
 						(branch
@@ -2113,9 +1874,11 @@ expect {
 					(p-assign (ident "number"))
 					(e-num (value "123")))
 				(s-expect
-					(e-binop (op "eq")
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-num (value "1"))))
+					(e-method-eq (negated "false")
+						(lhs
+							(e-runtime-error (tag "ident_not_in_scope")))
+						(rhs
+							(e-num (value "1")))))
 				(s-let
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
@@ -2125,7 +1888,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1113)
+					(e-call (constraint-fn-var 3592)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2143,271 +1906,22 @@ expect {
 								(p-assign (ident "number"))))))
 				(s-let
 					(p-assign (ident "ited"))
-					(e-string
-						(e-literal (string "Hello, "))
-						(e-lookup-local
-							(p-assign (ident "world")))
-						(e-literal (string ""))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "world"))))
+						(e-interpolation (constraint-fn-var 3683)
+							(first
+								(e-literal (string "Hello, ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "list"))
-					(e-list
-						(elems
-							(e-num (value "456")))))
-				(s-for
-					(p-assign (ident "n"))
-					(e-lookup-local
-						(p-assign (ident "list")))
-					(e-block
-						(s-expr
-							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-string
-									(e-literal (string "Adding "))
-									(e-lookup-local
-										(p-assign (ident "n")))
-									(e-literal (string " to "))
-									(e-lookup-local
-										(p-assign (ident "number")))
-									(e-literal (string "")))))
-						(s-reassign
-							(p-assign (ident "number"))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "number")))
-								(e-lookup-local
-									(p-assign (ident "n")))))
-						(e-empty_record)))
-				(s-let
-					(p-assign (ident "record"))
-					(e-record
-						(fields
-							(field (name "foo")
-								(e-num (value "123")))
-							(field (name "bar")
-								(e-string
-									(e-literal (string "Hello"))))
-							(field (name "baz")
-								(e-lookup-local
-									(p-assign (ident "tag"))))
-							(field (name "qux")
-								(e-tag (name "Ok")
-									(args
-										(e-lookup-local
-											(p-assign (ident "world"))))))
-							(field (name "punned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
-				(s-let
-					(p-assign (ident "tuple"))
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-lookup-local
-								(p-assign (ident "tag")))
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "world")))))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "self_referential_definition"))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
-				(s-let
-					(p-assign (ident "m_tuple"))
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "world")))))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local
-										(p-assign (ident "tuple")))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
-				(s-let
-					(p-assign (ident "bsult"))
-					(e-binop (op "or")
-						(e-binop (op "gt")
-							(e-match
-								(match
-									(cond
-										(e-tag (name "Err")
-											(args
-												(e-runtime-error (tag "ident_not_in_scope")))))
-									(branches
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-lookup-local
-													(p-assign (ident "#ok")))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-num (value "12")))))))
-							(e-binop (op "mul")
-								(e-num (value "5"))
-								(e-num (value "5"))))
-						(e-binop (op "or")
-							(e-binop (op "and")
-								(e-binop (op "lt")
-									(e-binop (op "add")
-										(e-num (value "13"))
-										(e-num (value "2")))
-									(e-num (value "5")))
-								(e-binop (op "ge")
-									(e-binop (op "sub")
-										(e-num (value "10"))
-										(e-num (value "1")))
-									(e-num (value "16"))))
-							(e-binop (op "le")
-								(e-num (value "12"))
-								(e-binop (op "div")
-									(e-num (value "3"))
-									(e-num (value "5")))))))
-				(s-let
-					(p-assign (ident "stale"))
-					(e-match
-						(match
-							(cond
-								(e-field-access (field "recd")
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1532)
-														(receiver
-															(e-match
-																(match
-																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 1499)
-																			(receiver
-																				(e-match
-																					(match
-																						(cond
-																							(e-call
-																								(e-runtime-error (tag "ident_not_in_scope"))
-																								(e-runtime-error (tag "ident_not_in_scope"))))
-																						(branches
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-lookup-local
-																										(p-assign (ident "#ok")))))
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-return
-																										(e-nominal-external
-																											(builtin)
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err")))))))))))))
-																			(args)))
-																	(branches
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-lookup-local
-																					(p-assign (ident "#ok")))))
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-return
-																					(e-nominal-external
-																						(builtin)
-																						(e-tag (name "Err")
-																							(args
-																								(e-lookup-local
-																									(p-assign (ident "#err")))))))))))))
-														(args)))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-return
-																(e-nominal-external
-																	(builtin)
-																	(e-tag (name "Err")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "#err")))))))))))))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
-				(e-tag (name "Stdoline!")
-					(args
-						(e-string
-							(e-literal (string "How about "))
-							(e-call
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))
-								(e-lookup-local
-									(p-assign (ident "number"))))
-							(e-literal (string " as a")))))))
+					(e-runtime-error (tag "expr_not_canonicalized")))
+				(e-empty_record)))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -2415,16 +1929,20 @@ expect {
 				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
-	(d-let
-		(p-assign (ident "empty"))
-		(e-empty_record)
-		(annotation
-			(ty-record)))
-	(d-let
-		(p-assign (ident "tuple"))
-		(e-anno-only)
-		(annotation
-			(ty-malformed)))
+	(s-import (module "pf.Stdout")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "e!") (wildcard false))))
+	(s-import (module "Stdot")
+		(exposes))
+	(s-import (module "pkg.S")
+		(exposes
+			(exposed (name "func") (alias "fry") (wildcard false))
+			(exposed (name "Custom") (wildcard true))))
+	(s-import (module "Bae")
+		(exposes))
+	(s-import (module "Ba")
+		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2488,39 +2006,12 @@ expect {
 			(ty-malformed)
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-malformed)))
-	(s-import (module "pf.Stdout")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "e!") (wildcard false))))
-	(s-import (module "Stdot")
-		(exposes))
-	(s-import (module "pkg.S")
-		(exposes
-			(exposed (name "func") (alias "fry") (wildcard false))
-			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "Bae")
-		(exposes))
-	(s-import (module "Ba")
-		(exposes))
 	(s-expect
-		(e-binop (op "eq")
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num (value "1"))))
-	(s-expect
-		(e-block
-			(s-let
-				(p-assign (ident "foo"))
-				(e-num (value "1")))
-			(s-let
-				(p-assign (ident "blah"))
-				(e-num (value "1")))
-			(e-method-eq (negated "false")
-				(lhs
-					(e-lookup-local
-						(p-assign (ident "blah"))))
-				(rhs
-					(e-lookup-local
-						(p-assign (ident "foo"))))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(rhs
+				(e-num (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -2530,9 +2021,7 @@ expect {
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Blue, Red, ..], _arg -> Error"))
-		(patt (type "List(Error) -> Try({}, _d)"))
-		(patt (type "{}"))
-		(patt (type "Error")))
+		(patt (type "List(Error) -> Try({}, _d)")))
 	(type_decls
 		(alias (type "Map(a, b)")
 			(ty-header (name "Map")
@@ -2567,7 +2056,5 @@ expect {
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
 		(expr (type "[Blue, Red, ..], _arg -> Error"))
-		(expr (type "List(Error) -> Try({}, _d)"))
-		(expr (type "{}"))
-		(expr (type "Error"))))
+		(expr (type "List(Error) -> Try({}, _d)"))))
 ~~~

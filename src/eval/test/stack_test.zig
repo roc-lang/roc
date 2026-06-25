@@ -1,11 +1,11 @@
 //! Tests for the stack implementation.
 const std = @import("std");
 const collections = @import("collections");
+const base = @import("base");
 const Stack = @import("../stack.zig").Stack;
 const StackOverflow = @import("../stack.zig").StackOverflow;
 
-// Use page_allocator for interpreter tests (doesn't track leaks)
-const test_allocator = std.heap.page_allocator;
+const test_allocator = base.defaultGpa();
 
 test "Stack.initCapacity and deinit" {
     var stack = try Stack.initCapacity(test_allocator, 1024);

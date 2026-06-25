@@ -50,7 +50,7 @@ my @RULES = (
     { category => 'shared-memory-fallback', regex => qr/\bcreateSharedMemoryWithFallback\b/, allowed => {} },
     { category => 'shared-memory-fallback', regex => qr/\bSHARED_MEMORY_FALLBACK_SIZE\b/, allowed => {} },
     { category => 'lir-module-env-boundary', regex => qr/\bcollectModuleEnvViews\b/, allowed => {} },
-    { category => 'raw-provides-scan-after-publication', regex => qr/\bprovides_entries\.items\.items\b/, allowed => { 'src/check/checked_artifact.zig' => 1, 'src/canonicalize/test/exposed_shadowing_test.zig' => 1 } },
+    { category => 'raw-provides-scan-after-publication', regex => qr/\bprovides_entries\.items\.items\b/, allowed => { 'src/check/checked_artifact.zig' => 1, 'src/check/Check.zig' => 1, 'src/canonicalize/test/exposed_shadowing_test.zig' => 1 } },
     { category => 'raw-const-template-mir-value', regex => qr/\bconst_ref:\s*(?:check\.CheckedArtifact\.|checked_artifact\.)ConstRef\b/, allowed => {} },
     { category => 'text-method-lookup-outside-typed-cir', regex => qr/\bresolveAttachedMethodTargetByText\b/, allowed => { 'src/check/typed_cir.zig' => 1 } },
     { category => 'text-ident-lookup-outside-typed-cir', regex => qr/\bfindCommonIdent\b/, allowed => { 'src/check/typed_cir.zig' => 1 } },

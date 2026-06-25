@@ -6,6 +6,29 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Roc's minimum supported macOS deployment target.
+///
+/// Keep this in one place because LLVM triples, Mach-O linker metadata, Mach-O
+/// object metadata, and Zig-built platform host archives must all agree. If
+/// these drift, `ld64.lld` warns when a host archive member advertises a newer
+/// minimum OS than the final executable.
+pub const macos_deployment = struct {
+    pub const semantic_version: std.SemanticVersion = .{ .major = 11, .minor = 0, .patch = 0 };
+    pub const linker_version = "11.0";
+    pub const llvm_version = "11.0.0";
+    pub const macho_encoded_version: u32 = 0x000b0000;
+    pub const query_os_version: std.Target.Query.OsVersion = .{ .semver = semantic_version };
+
+    pub fn query(arch: std.Target.Cpu.Arch) std.Target.Query {
+        return .{
+            .cpu_arch = arch,
+            .os_tag = .macos,
+            .os_version_min = query_os_version,
+            .abi = .none,
+        };
+    }
+};
+
 /// Roc's simplified target representation.
 /// Maps to specific OS/arch/ABI combinations for cross-compilation.
 pub const RocTarget = enum {
@@ -222,20 +245,34 @@ pub const RocTarget = enum {
         };
     }
 
-    /// Check if this target can be built and run on the current host.
-    /// wasm32 is always compatible (cross-compilation to wasm works on any host).
+    /// Check if this target has the same OS and CPU architecture as the current host.
+    pub fn matchesHostOsAndArch(self: RocTarget) bool {
+        return self.toOsTag() == builtin.target.os.tag and
+            self.toCpuArch() == builtin.target.cpu.arch;
+    }
+
+    /// Check if this target can be built on the current host.
+    /// wasm32 is always compatible because wasm code generation is host-independent.
     /// Native targets are compatible if both OS and architecture match the host.
     pub fn isCompatibleWithHost(self: RocTarget) bool {
         // wasm32 can be built from any host
         if (self == .wasm32) return true;
 
         // Otherwise, check if both OS and architecture match
-        return self.toOsTag() == builtin.target.os.tag and
-            self.toCpuArch() == builtin.target.cpu.arch;
+        return self.matchesHostOsAndArch();
+    }
+
+    /// Check if this target produces a process executable that can run on this host.
+    /// This is intentionally stricter than build compatibility: wasm32 can be
+    /// built on any host, but the default `roc` command does not execute wasm artifacts directly.
+    pub fn isExecutableOnHost(self: RocTarget) bool {
+        if (self == .wasm32) return false;
+
+        return self.matchesHostOsAndArch();
     }
 
     /// Get the dynamic linker path for this target
-    pub fn getDynamicLinkerPath(self: RocTarget) ![]const u8 {
+    pub fn getDynamicLinkerPath(self: RocTarget) error{ StaticLinkingTarget, WindowsTarget, NoKnownLinkerPath, WebAssemblyTarget }![]const u8 {
         return switch (self) {
             // x64 glibc targets
             .x64glibc, .x64linux => "/lib64/ld-linux-x86-64.so.2",
@@ -268,3 +305,18 @@ pub const RocTarget = enum {
         };
     }
 };
+
+test "native target matches host OS and architecture" {
+    try std.testing.expect(RocTarget.detectNative().matchesHostOsAndArch());
+}
+
+test "wasm32 is not host executable" {
+    try std.testing.expect(!RocTarget.wasm32.isExecutableOnHost());
+}
+
+test "wasm32 host matching is distinct from build compatibility" {
+    if (RocTarget.detectNative() != .wasm32) {
+        try std.testing.expect(!RocTarget.wasm32.matchesHostOsAndArch());
+    }
+    try std.testing.expect(RocTarget.wasm32.isCompatibleWithHost());
+}

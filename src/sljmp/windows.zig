@@ -10,6 +10,39 @@
 
 const std = @import("std");
 
+// std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
+// Declare the thin extern bindings we need locally; only referenced inside Windows tests.
+const win32 = struct {
+    const DWORD = u32;
+    const SIZE_T = usize;
+    const LPVOID = ?*anyopaque;
+    const PDWORD = *DWORD;
+
+    const MEM_COMMIT: DWORD = 0x1000;
+    const MEM_RESERVE: DWORD = 0x2000;
+    const MEM_RELEASE: DWORD = 0x8000;
+    const PAGE_READWRITE: DWORD = 0x04;
+    const PAGE_EXECUTE_READ: DWORD = 0x20;
+
+    extern "kernel32" fn VirtualAlloc(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flAllocationType: DWORD,
+        flProtect: DWORD,
+    ) callconv(.winapi) LPVOID;
+    extern "kernel32" fn VirtualFree(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        dwFreeType: DWORD,
+    ) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn VirtualProtect(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flNewProtect: DWORD,
+        lpflOldProtect: PDWORD,
+    ) callconv(.winapi) std.os.windows.BOOL;
+};
+
 /// Windows x64 jmp_buf layout (240 bytes total):
 ///   0x00-0x48: GP registers (RBX, RBP, RSI, RDI, R12-R15, RSP, RIP) — 10 * 8 = 80 bytes
 ///   0x50-0xE0: XMM registers (XMM6-XMM15) — 10 * 16 = 160 bytes
@@ -145,33 +178,32 @@ test "longjmp with value 0 returns 1" {
 test "setjmp followed by function pointer call" {
     // Allocate executable memory and call code after setjmp
     // This tests the same pattern as dev_evaluator.callWithCrashProtection
-    const os = std.os;
 
     // Simple code: mov qword ptr [rcx], 42; ret
     // Windows: first arg in RCX
     const code = [_]u8{ 0x48, 0xC7, 0x01, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
 
     // Allocate executable memory
-    const mem = os.windows.VirtualAlloc(
+    const mem = win32.VirtualAlloc(
         null,
         4096,
-        os.windows.MEM_COMMIT | os.windows.MEM_RESERVE,
-        os.windows.PAGE_READWRITE,
-    ) catch return error.VirtualAllocFailed;
-    defer _ = os.windows.VirtualFree(mem, 0, os.windows.MEM_RELEASE);
+        win32.MEM_COMMIT | win32.MEM_RESERVE,
+        win32.PAGE_READWRITE,
+    ) orelse return error.VirtualAllocFailed;
+    defer _ = win32.VirtualFree(mem, 0, win32.MEM_RELEASE);
 
     // Copy code
     const ptr: [*]u8 = @ptrCast(mem);
     @memcpy(ptr[0..code.len], &code);
 
     // Make executable
-    var old_protect: os.windows.DWORD = undefined;
-    os.windows.VirtualProtect(
+    var old_protect: win32.DWORD = undefined;
+    if (win32.VirtualProtect(
         mem,
         4096,
-        os.windows.PAGE_EXECUTE_READ,
+        win32.PAGE_EXECUTE_READ,
         &old_protect,
-    ) catch return error.VirtualProtectFailed;
+    ) == .FALSE) return error.VirtualProtectFailed;
 
     // Call pattern: setjmp, then call the function
     var result: i64 = 0;
@@ -189,7 +221,6 @@ test "setjmp followed by function pointer call" {
 
 test "setjmp with full prologue/epilogue code" {
     // Test with code that has full Windows x64 prologue/epilogue like MonoExprCodeGen generates
-    const os = std.os;
 
     // This mimics MonoExprCodeGen's generated code structure:
     // - Prologue: push rbp; mov rbp,rsp; push rbx; push r12; sub rsp,1024
@@ -220,26 +251,26 @@ test "setjmp with full prologue/epilogue code" {
     };
 
     // Allocate executable memory
-    const mem = os.windows.VirtualAlloc(
+    const mem = win32.VirtualAlloc(
         null,
         4096,
-        os.windows.MEM_COMMIT | os.windows.MEM_RESERVE,
-        os.windows.PAGE_READWRITE,
-    ) catch return error.VirtualAllocFailed;
-    defer _ = os.windows.VirtualFree(mem, 0, os.windows.MEM_RELEASE);
+        win32.MEM_COMMIT | win32.MEM_RESERVE,
+        win32.PAGE_READWRITE,
+    ) orelse return error.VirtualAllocFailed;
+    defer _ = win32.VirtualFree(mem, 0, win32.MEM_RELEASE);
 
     // Copy code
     const ptr: [*]u8 = @ptrCast(mem);
     @memcpy(ptr[0..code.len], &code);
 
     // Make executable
-    var old_protect: os.windows.DWORD = undefined;
-    os.windows.VirtualProtect(
+    var old_protect: win32.DWORD = undefined;
+    if (win32.VirtualProtect(
         mem,
         4096,
-        os.windows.PAGE_EXECUTE_READ,
+        win32.PAGE_EXECUTE_READ,
         &old_protect,
-    ) catch return error.VirtualProtectFailed;
+    ) == .FALSE) return error.VirtualProtectFailed;
 
     // Call pattern: setjmp, then call the function with 2 args
     var result: i64 = 0;
@@ -258,7 +289,6 @@ test "setjmp with full prologue/epilogue code" {
 
 test "setjmp with i128 result (Dec pattern)" {
     // Test the exact pattern used for Dec (i128) results
-    const os = std.os;
 
     // Code that stores a 128-bit value (like Dec):
     // - mov rax, low_64_bits
@@ -290,26 +320,26 @@ test "setjmp with i128 result (Dec pattern)" {
     };
 
     // Allocate executable memory
-    const mem = os.windows.VirtualAlloc(
+    const mem = win32.VirtualAlloc(
         null,
         4096,
-        os.windows.MEM_COMMIT | os.windows.MEM_RESERVE,
-        os.windows.PAGE_READWRITE,
-    ) catch return error.VirtualAllocFailed;
-    defer _ = os.windows.VirtualFree(mem, 0, os.windows.MEM_RELEASE);
+        win32.MEM_COMMIT | win32.MEM_RESERVE,
+        win32.PAGE_READWRITE,
+    ) orelse return error.VirtualAllocFailed;
+    defer _ = win32.VirtualFree(mem, 0, win32.MEM_RELEASE);
 
     // Copy code
     const ptr: [*]u8 = @ptrCast(mem);
     @memcpy(ptr[0..code.len], &code);
 
     // Make executable
-    var old_protect: os.windows.DWORD = undefined;
-    os.windows.VirtualProtect(
+    var old_protect: win32.DWORD = undefined;
+    if (win32.VirtualProtect(
         mem,
         4096,
-        os.windows.PAGE_EXECUTE_READ,
+        win32.PAGE_EXECUTE_READ,
         &old_protect,
-    ) catch return error.VirtualProtectFailed;
+    ) == .FALSE) return error.VirtualProtectFailed;
 
     // Call pattern with i128 result (aligned like actual code)
     var result: i128 align(16) = 0;

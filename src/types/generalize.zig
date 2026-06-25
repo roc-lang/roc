@@ -47,6 +47,7 @@
 //! - `Generalizer.generalize()` - Generalize all variables at a given rank
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 const TypesStore = @import("store.zig").Store;
@@ -185,12 +186,15 @@ pub const Generalizer = struct {
             const resolved = self.store.resolveVar(rank_var);
             if (resolved.is_root) {
                 const resolved_rank_int = @intFromEnum(resolved.desc.rank);
+                // Adjustment only lowers ranks; a rank above the one being
+                // generalized means a reducer broke the invariant (see line ~122).
+                std.debug.assert(resolved_rank_int <= rank_to_generalize_int);
                 if (resolved_rank_int < rank_to_generalize_int) {
                     // Escaped var, so move it to the right pool.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Safe to generalize
-                    self.store.setDescRank(resolved.desc_idx, Rank.generalized);
+                    try self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
             }
         }
@@ -282,13 +286,30 @@ pub const Generalizer = struct {
             break :blk resolved.desc.rank.min(group_rank);
         };
 
-        self.store.setDescRank(resolved.desc_idx, new_rank);
+        try self.store.setDescRank(resolved.desc_idx, new_rank);
         return new_rank;
+    }
+
+    /// Rank reduction shared by applied containers (aliases, nominal types,
+    /// tuples): the container contributes nothing itself, so its rank is the
+    /// max over its args. Seed at `generalized` (the max-identity) and let the
+    /// args raise it — seeding at `outermost` would floor the result there even
+    /// when every arg is already generalized, wrongly blocking generalization of
+    /// the type that uses the container. No args means a ground type, which sits
+    /// at `outermost`.
+    fn adjustRankOverArgs(self: *Self, args_iter: Var.SafeList.Iterator, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
+        var iter = args_iter;
+        if (iter.count() == 0) return Rank.outermost;
+        var next_rank = Rank.generalized;
+        while (iter.next()) |arg_var| {
+            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
+        }
+        return next_rank;
     }
 
     fn adjustRankContent(self: *Self, content: Content, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
         return switch (content) {
-            .flex => |_| {
+            .flex => {
                 // Here, we start at group_rank (since flex should be generalized),
                 // then we recurse into the constraints.
                 const next_rank = group_rank;
@@ -297,7 +318,7 @@ pub const Generalizer = struct {
                 // }
                 return next_rank;
             },
-            .rigid => |_| {
+            .rigid => {
                 // Here, we start at group_rank (since rigid should be generalized),
                 // then we recurse into the constraints.
                 const next_rank = group_rank;
@@ -307,21 +328,13 @@ pub const Generalizer = struct {
                 return next_rank;
             },
             .alias => |alias| {
-                // THEORY: Here, we don't need to recurse into the backing type because:
-                // 1. We visit the type arguments (args)
-                // 2. Anything in the RHS of the alias is either:
-                //    - A reference to an arg (already visited via args)
-                //    - A concrete type (adjustRankContent would resolve to outermost)
-                // So traversing the backing var would be redundant.
-                //
-                // We use outermost as a default, as the type container itself
-                // does not contribute to the rank calculation.
-                var next_rank = Rank.outermost;
-                var args_iter = self.store.iterAliasArgs(alias);
-                while (args_iter.next()) |arg_var| {
-                    next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                }
-                return next_rank;
+                // THEORY: we don't need to recurse into the backing type. Everything
+                // in the alias RHS is either a reference to an arg (already visited
+                // via the args below) or a concrete type (which resolves to
+                // `outermost` on its own, so it can't raise the rank). Traversing the
+                // backing var would therefore be redundant — the rank is just the max
+                // over the args.
+                return self.adjustRankOverArgs(self.store.iterAliasArgs(alias), group_rank, vars_to_generalize);
             },
             .structure => |flat_type| {
                 switch (flat_type) {
@@ -330,34 +343,12 @@ pub const Generalizer = struct {
                         return .outermost;
                     },
                     .tuple => |tuple| {
-                        if (tuple.elems.len() > 0) {
-                            const elems = self.store.sliceVars(tuple.elems);
-                            var next_rank = try self.adjustRank(elems[0], group_rank, vars_to_generalize);
-                            for (elems[1..]) |arg_var| {
-                                next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                            }
-                            return next_rank;
-                        } else {
-                            // THEORY: Empty tuples never need to be generalized
-                            return .outermost;
-                        }
+                        return self.adjustRankOverArgs(self.store.iterVars(tuple.elems), group_rank, vars_to_generalize);
                     },
                     .nominal_type => |nominal| {
-                        // THEORY: Here, we don't need to recurse into the backing type because:
-                        // 1. We visit the type arguments (args)
-                        // 2. Anything in the RHS of the nominal type is either:
-                        //    - A reference to an arg (already visited via args)
-                        //    - A concrete type (adjustRankContent would resolve to outermost)
-                        // So traversing the backing var would be redundant.
-                        //
-                        // We use outermost as a default, as the type container itself
-                        // does not contribute to the rank calculation.
-                        var next_rank = Rank.outermost;
-                        var args_iter = self.store.iterNominalArgs(nominal);
-                        while (args_iter.next()) |arg_var| {
-                            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
+                        // Same as .alias: don't recurse into the backing type, take
+                        // the max over the args.
+                        return self.adjustRankOverArgs(self.store.iterNominalArgs(nominal), group_rank, vars_to_generalize);
                     },
                     .fn_pure => |func| {
                         var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
@@ -496,7 +487,7 @@ pub const VarPool = struct {
         }
     }
 
-    pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) !void {
+    pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) Allocator.Error!void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
                 std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
@@ -505,13 +496,22 @@ pub const VarPool = struct {
         try self.ranks.items[@intFromEnum(rank)].append(variable);
     }
 
-    pub fn addVarsToRank(self: *Self, variables: []Var, rank: Rank) !void {
+    pub fn addVarsToRank(self: *Self, variables: []Var, rank: Rank) Allocator.Error!void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
                 std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
             }
         }
         try self.ranks.items[@intFromEnum(rank)].appendSlice(variables);
+    }
+
+    /// Shrink the vars recorded for `rank` back to `new_len`, discarding
+    /// entries appended after a speculative probe captured the length —
+    /// the rollback counterpart to the `addVarToRank` calls the probe made.
+    pub fn shrinkRank(self: *Self, rank: Rank, new_len: usize) void {
+        std.debug.assert(@intFromEnum(rank) <= @intFromEnum(self.current_rank));
+        std.debug.assert(new_len <= self.ranks.items[@intFromEnum(rank)].items.len);
+        self.ranks.items[@intFromEnum(rank)].shrinkRetainingCapacity(new_len);
     }
 
     pub fn getVarsForRank(self: *Self, rank: Rank) []Var {
@@ -530,7 +530,7 @@ fn mkVar(n: u32) Var {
     return @enumFromInt(n);
 }
 
-fn expectVarsEqual(actual: []Var, expected: []const Var) !void {
+fn expectVarsEqual(actual: []Var, expected: []const Var) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |e, a| {
         try std.testing.expectEqual(e, a);

@@ -97,18 +97,14 @@ main = |x| "done"
 
 
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
+This string literal is being used where a non-string type is needed:
 **type_var_underscore_conventions.md:9:26:9:35:**
 ```roc
 starting_dollar = |list| "default"
 ```
                          ^^^^^^^^^
 
-It has the type:
-
-    Str
-
-But the annotation say it should be:
+The type was determined to be:
 
     $elem
 
@@ -302,12 +298,12 @@ NO CHANGE
 		(patt (type "List($bad) -> Str"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))
-		(patt (type "_arg -> Str")))
+		(patt (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]")))
 	(expressions
 		(expr (type "List(elem) -> Str"))
 		(expr (type "List($elem) -> $elem"))
 		(expr (type "List($bad) -> Str"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "elem -> List(elem)"))
-		(expr (type "_arg -> Str"))))
+		(expr (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))))
 ~~~

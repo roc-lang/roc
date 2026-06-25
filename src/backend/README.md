@@ -8,7 +8,7 @@ To run a specific eval test by name filter:
 
 ```bash
 # Run a single test
-zig build test --filter "list refcount function"
+zig build run-test-zig -- --test-filter "list refcount function"
 ```
 
 ## Debugging Generated Code

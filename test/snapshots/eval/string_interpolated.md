@@ -58,14 +58,25 @@ NO CHANGE
 		(p-assign (ident "world"))
 		(e-string
 			(e-literal (string "World"))))
-	(e-string
-		(e-literal (string ""))
-		(e-lookup-local
-			(p-assign (ident "hello")))
-		(e-literal (string " "))
-		(e-lookup-local
-			(p-assign (ident "world")))
-		(e-literal (string ""))))
+	(e-block
+		(s-let
+			(p-assign (ident "#interp_0"))
+			(e-lookup-local
+				(p-assign (ident "hello"))))
+		(s-let
+			(p-assign (ident "#interp_1"))
+			(e-lookup-local
+				(p-assign (ident "world"))))
+		(e-interpolation (constraint-fn-var 117)
+			(first
+				(e-literal (string "")))
+			(parts
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string " "))
+				(e-lookup-local
+					(p-assign (ident "#interp_1")))
+				(e-literal (string ""))))))
 ~~~
 # TYPES
 ~~~clojure

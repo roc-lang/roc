@@ -1,2 +1,0 @@
-{ This will stack overflow if the input is too large }
-[^$1_=~][,]#

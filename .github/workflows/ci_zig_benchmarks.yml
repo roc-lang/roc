@@ -13,11 +13,14 @@ jobs:
   zig-benchmarks:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
+    env:
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
+      ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
     steps:
       # === MAIN BRANCH BUILD ===
       # TEMPORARY: Using PR branch for both to test CI workflow - revert to ref: "main" after testing
       - name: Checkout main branch
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
         with:
           ref: "main"
           clean: "true"
@@ -29,11 +32,14 @@ jobs:
       - name: Verify prerequisites
         run: nix develop ./src/ -c bash -c "hyperfine --version && jq --version && zig version"
 
+      - name: Clear stale Zig build outputs
+        run: rm -rf zig-out "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
+
       - name: Build main branch release binary
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release'"
-          error_string_contains: "build.zig.zon"
+          command: "nix develop ./src/ -c bash -c 'zig build build-release'"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Prepare main artifacts
@@ -43,21 +49,28 @@ jobs:
 
       # === PR BRANCH BUILD ===
       - name: Checkout PR branch
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
         with:
           clean: "false"
+
+      - name: Clear main branch Zig build outputs
+        run: rm -rf zig-out "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
       - name: Build PR branch release binary
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release'"
-          error_string_contains: "build.zig.zon"
+          command: "nix develop ./src/ -c bash -c 'zig build build-release'"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Prepare PR artifacts
         run: |
           mkdir -p bench-pr
           cp zig-out/bin/roc bench-pr/roc
+
+      # === VERIFY PR BENCHMARK CORPUS ===
+      - name: Verify PR benchmark corpus
+        run: nix develop ./src/ -c ./ci/benchmarks_zig/run_benchmark_verify.sh bench-pr/roc
 
       # === RUN BENCHMARKS ===
       - name: Run benchmarks

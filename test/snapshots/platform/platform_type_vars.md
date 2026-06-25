@@ -15,7 +15,7 @@ platform ""
 		}
     exposes []
     packages {}
-    provides { main: "main" }
+    provides { "roc_main": main }
 
 main : { init : Model, update : Model, I64 -> Model, render : Model -> I64 }
 main = { crash "todo" }
@@ -36,7 +36,7 @@ CloseCurly,
 CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
-KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
+KwProvides,OpenCurly,StringStart,StringPart,StringEnd,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,CloseCurly,
 LowerIdent,OpAssign,OpenCurly,KwCrash,StringStart,StringPart,StringEnd,CloseCurly,
 EndOfFile,
@@ -65,9 +65,7 @@ EndOfFile,
 		(exposes)
 		(packages)
 		(provides
-			(record-field (name "main")
-				(e-string
-					(e-string-part (raw "main"))))))
+			(symbol-map-entry (symbol "roc_main") (func "main"))))
 	(statements
 		(s-type-anno (name "main")
 			(ty-record
@@ -102,7 +100,7 @@ platform ""
 	}
 	exposes []
 	packages {}
-	provides { main: "main" }
+	provides { "roc_main": main }
 
 main : { init : Model, update : Model, I64 -> Model, render : Model -> I64 }
 main = {

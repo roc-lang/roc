@@ -1,5 +1,0 @@
-hosted [
-    Stuff,
-    Things,
-    somethingElse,
-]

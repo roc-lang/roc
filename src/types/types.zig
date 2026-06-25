@@ -32,12 +32,41 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(16, @sizeOf(Alias));
+    try std.testing.expectEqual(20, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
-    try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
+    // Folding `binop_negated` and `num_literal` into the `origin` union is a
+    // semantic regrouping (kind-specific payloads now live inside their variant),
+    // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
+    // so the `Origin` union dominates the struct at 52 bytes total.
+    try std.testing.expectEqual(52, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
+}
+
+test "source declaration checked constructors enforce packed statement capacity" {
+    const max_alias_statement = SourceDecl.max_statement;
+    const max_alias_decl = try SourceDecl.fromStatementWithBuiltinOriginChecked(max_alias_statement, true);
+    try std.testing.expectEqual(@as(?u32, max_alias_statement), max_alias_decl.toOptional());
+    try std.testing.expect(max_alias_decl.originIsBuiltin());
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        SourceDecl.fromStatementWithBuiltinOriginChecked(max_alias_statement + 1, false),
+    );
+
+    const max_nominal_statement = NominalType.Source.max_statement;
+    const max_nominal_decl = try SourceDecl.fromStatementWithBuiltinOriginChecked(max_nominal_statement, true);
+    const max_nominal_source = try NominalType.Source.initChecked(max_nominal_decl, true, true);
+    try std.testing.expect(max_nominal_source.sourceDecl().eql(max_nominal_decl));
+    try std.testing.expect(max_nominal_source.isOpaque());
+    try std.testing.expect(max_nominal_source.originIsBuiltin());
+
+    const too_large_for_nominal = try SourceDecl.fromStatementChecked(max_nominal_statement + 1);
+    try std.testing.expectError(
+        error.OutOfMemory,
+        NominalType.Source.initChecked(too_large_for_nominal, false, false),
+    );
 }
 
 /// A type variable
@@ -90,7 +119,6 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
-    from_numeral_origin: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -143,7 +171,7 @@ pub const Rank = enum(u8) {
 // content //
 
 /// Represents what the a type *is*
-pub const Content = union(enum) {
+pub const Content = union(enum(u8)) {
     const Self = @This();
 
     flex: Flex,
@@ -290,6 +318,9 @@ pub const Alias = struct {
     /// The full module path where this alias type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,
+    /// CIR statement index of the source declaration in origin_module, when
+    /// this alias came from a concrete source declaration.
+    source_decl: SourceDecl = .none,
 };
 
 /// Represents an ident of a type
@@ -300,11 +331,126 @@ pub const TypeIdent = struct {
     ident_idx: Ident.Idx,
 };
 
+/// Source statement identity for a local nominal/alias declaration.
+///
+/// This is stored in hot type payloads, so it deliberately uses one u32 slot.
+/// Alias source identity stores a u30 statement plus presence and builtin-origin
+/// bits. Nominal source identity stores a u29 statement plus presence, opacity,
+/// and builtin-origin bits. Producer paths must use the checked constructors so
+/// oversized CIR statement ids return `error.OutOfMemory` before release builds
+/// can truncate packed fields.
+pub const SourceDecl = packed struct(u32) {
+    statement: u30,
+    present: bool,
+    builtin_origin: bool,
+
+    pub const max_statement: u32 = std.math.maxInt(u30);
+
+    pub const none: SourceDecl = .{ .statement = 0, .present = false, .builtin_origin = false };
+
+    pub fn fromOptional(source_decl: ?u32) SourceDecl {
+        return fromOptionalWithBuiltinOrigin(source_decl, false);
+    }
+
+    pub fn fromOptionalChecked(source_decl: ?u32) std.mem.Allocator.Error!SourceDecl {
+        return fromOptionalWithBuiltinOriginChecked(source_decl, false);
+    }
+
+    pub fn fromOptionalWithBuiltinOrigin(source_decl: ?u32, builtin_origin: bool) SourceDecl {
+        const statement = source_decl orelse return .none;
+        return fromStatementWithBuiltinOrigin(statement, builtin_origin);
+    }
+
+    pub fn fromOptionalWithBuiltinOriginChecked(source_decl: ?u32, builtin_origin: bool) std.mem.Allocator.Error!SourceDecl {
+        const statement = source_decl orelse return .none;
+        return fromStatementWithBuiltinOriginChecked(statement, builtin_origin);
+    }
+
+    pub fn fromStatement(statement: u32) SourceDecl {
+        return fromStatementWithBuiltinOrigin(statement, false);
+    }
+
+    pub fn fromStatementChecked(statement: u32) std.mem.Allocator.Error!SourceDecl {
+        return fromStatementWithBuiltinOriginChecked(statement, false);
+    }
+
+    pub fn fromStatementWithBuiltinOrigin(statement: u32, builtin_origin: bool) SourceDecl {
+        std.debug.assert(statement <= max_statement);
+        return .{ .statement = @intCast(statement), .present = true, .builtin_origin = builtin_origin };
+    }
+
+    pub fn fromStatementWithBuiltinOriginChecked(statement: u32, builtin_origin: bool) std.mem.Allocator.Error!SourceDecl {
+        if (statement > max_statement) return error.OutOfMemory;
+        return fromStatementWithBuiltinOrigin(statement, builtin_origin);
+    }
+
+    pub fn toOptional(self: SourceDecl) ?u32 {
+        return if (self.present) self.statement else null;
+    }
+
+    pub fn originIsBuiltin(self: SourceDecl) bool {
+        return self.present and self.builtin_origin;
+    }
+
+    pub fn eql(self: SourceDecl, other: SourceDecl) bool {
+        if (self.present != other.present) return false;
+        return !self.present or (self.statement == other.statement and self.builtin_origin == other.builtin_origin);
+    }
+};
+
+const NominalSource = packed struct(u32) {
+    statement: u29,
+    present: bool,
+    is_opaque: bool,
+    builtin_origin: bool,
+
+    pub const max_statement: u32 = std.math.maxInt(u29);
+
+    pub fn init(source_decl: SourceDecl, is_opaque: bool, builtin_origin: bool) NominalSource {
+        if (source_decl.toOptional()) |statement| {
+            std.debug.assert(statement <= max_statement);
+            return .{
+                .statement = @intCast(statement),
+                .present = true,
+                .is_opaque = is_opaque,
+                .builtin_origin = builtin_origin,
+            };
+        }
+
+        return .{
+            .statement = 0,
+            .present = false,
+            .is_opaque = is_opaque,
+            .builtin_origin = builtin_origin,
+        };
+    }
+
+    pub fn initChecked(source_decl: SourceDecl, is_opaque: bool, builtin_origin: bool) std.mem.Allocator.Error!NominalSource {
+        if (source_decl.toOptional()) |statement| {
+            if (statement > max_statement) return error.OutOfMemory;
+        }
+
+        return init(source_decl, is_opaque, builtin_origin);
+    }
+
+    pub fn sourceDecl(self: NominalSource) SourceDecl {
+        return if (self.present) SourceDecl.fromStatementWithBuiltinOrigin(self.statement, self.builtin_origin) else .none;
+    }
+
+    pub fn isOpaque(self: NominalSource) bool {
+        return self.is_opaque;
+    }
+
+    pub fn originIsBuiltin(self: NominalSource) bool {
+        return self.builtin_origin;
+    }
+};
+
 // flat types //
 
 /// Represents type without indirection, it's the concrete form that a type
 /// takes after resolving type variables and aliases.
-pub const FlatType = union(enum) {
+pub const FlatType = union(enum(u8)) {
     record: Record,
     record_unbound: RecordField.SafeMultiList.Range,
     tuple: Tuple,
@@ -525,68 +671,39 @@ pub const FracRequirements = struct {
     }
 };
 
-/// Parse a number literal with an optional type suffix (e.g., "123u8", "45.67f64")
-/// Used by Can.zig for canonicalization
-pub fn parseNumeralWithSuffix(text: []const u8) struct { num_text: []const u8, suffix: ?[]const u8 } {
-    var split_index: usize = text.len;
-    var is_hex_or_bin = false;
-    var start_index: usize = 0;
-
-    // Check for negative prefix
-    var prefix_offset: usize = 0;
-    if (text.len > 0 and text[0] == '-') {
-        prefix_offset = 1;
-    }
-
-    if (text.len > prefix_offset + 2 and text[prefix_offset] == '0') {
-        switch (text[prefix_offset + 1]) {
-            'x', 'X', 'b', 'B', 'o', 'O' => {
-                is_hex_or_bin = true;
-                start_index = prefix_offset + 2; // Skip the "0x", "0b", or "0o" prefix
-            },
-            else => {},
-        }
-    }
-
-    for (text[start_index..], start_index..) |char, i| {
-        if (char >= 'a' and char <= 'z') {
-            // If we find a letter, check if it's a valid hex digit in a hex literal.
-            if (is_hex_or_bin and (char >= 'a' and char <= 'f')) {
-                // This is part of the hex number, continue.
-                continue;
-            }
-
-            // This is the start of a suffix.
-            split_index = i;
-            break;
-        }
-    }
-
-    if (split_index == text.len) {
-        return .{ .num_text = text, .suffix = null };
-    } else {
-        return .{
-            .num_text = text[0..split_index],
-            .suffix = text[split_index..],
-        };
-    }
-}
-
 // nominal types //
 
 /// A nominal user-defined type
 pub const NominalType = struct {
+    pub const Source = NominalSource;
+
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
     /// The full module path where this nominal type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,
-    /// True if this type was declared with :: (opaque), false if declared with := (nominal)
-    is_opaque: bool,
+    /// Packed source-declaration and opacity bits.
+    source: NominalSource,
+
+    pub fn sourceDecl(self: NominalType) SourceDecl {
+        return self.source.sourceDecl();
+    }
+
+    pub fn sourceDeclOptional(self: NominalType) ?u32 {
+        return self.source.sourceDecl().toOptional();
+    }
+
+    pub fn isOpaque(self: NominalType) bool {
+        return self.source.isOpaque();
+    }
+
+    pub fn originIsBuiltin(self: NominalType) bool {
+        return self.source.originIsBuiltin();
+    }
 
     /// Checks if backing types can unify directly with this nominal type
     pub fn canLiftInner(self: NominalType, cur_module_idx: Ident.Idx) bool {
-        if (self.is_opaque) {
+        if (self.isOpaque()) {
             // If opaque, then can only lift inner type if the current module is
             // the same
             return self.origin_module.eql(cur_module_idx);
@@ -725,8 +842,19 @@ pub const NumeralInfo = struct {
     /// Whether the literal had a decimal point
     is_fractional: bool,
 
+    /// Whether exact source digits can be represented by Dec.
+    /// Null means the literal was stored in a compact representation, or the
+    /// checker did not need exact Dec range facts for it.
+    fits_dec: ?bool,
+
+    /// Representation requirements for fractional literals.
+    frac_requirements: ?FracRequirements = null,
+
     /// Source region for error reporting
     region: base.Region,
+
+    /// Whether this literal had an explicit type suffix such as `12.Str`.
+    explicit_suffix: bool = false,
 
     /// Get the value as i128 (may overflow for large u128 values)
     pub fn toI128(self: NumeralInfo) i128 {
@@ -745,7 +873,10 @@ pub const NumeralInfo = struct {
             .is_u128 = false,
             .is_negative = is_negative,
             .is_fractional = is_fractional,
+            .fits_dec = null,
+            .frac_requirements = null,
             .region = region,
+            .explicit_suffix = false,
         };
     }
 
@@ -756,7 +887,29 @@ pub const NumeralInfo = struct {
             .is_u128 = true,
             .is_negative = false, // u128 values are never negative
             .is_fractional = is_fractional,
+            .fits_dec = null,
+            .frac_requirements = null,
             .region = region,
+            .explicit_suffix = false,
+        };
+    }
+
+    /// Create metadata for a literal whose exact digits are stored outside the
+    /// type store. Type checking only needs sign, fractional-ness, and region;
+    /// lowering consumes the recorded digit bytes.
+    pub fn fromExact(is_negative: bool, is_fractional: bool, fits_dec: ?bool, region: base.Region) NumeralInfo {
+        return .{
+            .bytes = [_]u8{0} ** 16,
+            .is_u128 = false,
+            .is_negative = is_negative,
+            .is_fractional = is_fractional,
+            .fits_dec = fits_dec,
+            .frac_requirements = if (is_fractional and fits_dec != null)
+                .{ .fits_in_f32 = true, .fits_in_dec = fits_dec.? }
+            else
+                null,
+            .region = region,
+            .explicit_suffix = false,
         };
     }
 };
@@ -772,21 +925,78 @@ pub const StaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
     fn_var: Var,
-    /// the origin of this constraint (operator, method call, or where clause)
+    /// the origin of this constraint (operator, method call, where clause, or
+    /// literal). Kind-specific payloads (binop negation, literal info) live
+    /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
-    /// For `desugared_binop` equality constraints, whether the original source
-    /// operator was `!=` rather than `==`.
-    binop_negated: bool = false,
-    /// Optional numeric literal info for from_numeral constraints
-    num_literal: ?NumeralInfo = null,
+
+    /// The kinds of literal that desugar to open literal-conversion constraints.
+    /// Adding a variant makes every kind-keyed `switch` fail to compile until
+    /// handled — the exhaustiveness *is* the checklist.
+    pub const LiteralKind = enum(u4) {
+        numeral, // numeric literal, dispatches `from_numeral`
+        quote, // string literal, dispatches `from_quote`
+        interpolation, // interpolated string literal, dispatches `from_interpolation`
+    };
+
+    /// The per-kind payload carried by a literal-conversion origin. The payload can't
+    /// exist without its kind, nor a literal-origin without its payload.
+    pub const LiteralInfo = union(LiteralKind) {
+        numeral: NumeralInfo,
+        /// No payload here; a string literal's bytes live in the dispatch plan,
+        /// not the type store.
+        quote,
+        /// Interpolated string literals carry no payload here either; like
+        /// quotes they default to Str.
+        interpolation,
+    };
 
     /// Tracks where a static dispatch constraint originated from
-    pub const Origin = enum(u4) {
-        desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
+    pub const Origin = union(enum) {
+        /// From binary operator desugaring (e.g., +, -, *). `negated` is true when
+        /// the source operator was `!=` rather than `==`.
+        desugared_binop: struct { negated: bool },
         desugared_unaryop, // From uniary operator desugaring (e.g., !)
         method_call, // From .method() syntax
-        where_clause, // From where clause in type annotation
-        from_numeral, // From numeric literal conversion
+        /// From a where clause in a type annotation. `body_required` is true when
+        /// the originating scheme's body provably forces this method: during the
+        /// scheme's own check a body dispatch of this method matched and unified
+        /// against this where-clause. It distinguishes a contract the
+        /// implementation actually dispatches (so an unpinnable instantiated
+        /// receiver is a genuine ambiguity) from a phantom contract the body never
+        /// uses (which stays a valid polymorphic signature).
+        where_clause: struct { body_required: bool = false },
+        from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
+
+        /// The numeral payload, if this origin is a numeric literal conversion;
+        /// null otherwise.
+        pub fn numeralInfo(self: Origin) ?NumeralInfo {
+            return switch (self) {
+                .from_literal => |lit| switch (lit) {
+                    .numeral => |info| info,
+                    .quote => null,
+                    .interpolation => null,
+                },
+                else => null,
+            };
+        }
+
+        /// The literal kind, if this origin is a literal conversion; null otherwise.
+        pub fn literalKind(self: Origin) ?LiteralKind {
+            return switch (self) {
+                .from_literal => |lit| lit,
+                else => null,
+            };
+        }
+
+        /// Whether this is a `desugared_binop` whose source operator was `!=`
+        /// rather than `==`; false otherwise.
+        pub fn binopNegated(self: Origin) bool {
+            return switch (self) {
+                .desugared_binop => |binop| binop.negated,
+                else => false,
+            };
+        }
     };
 
     /// A safe list of static dispatch constraints

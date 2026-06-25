@@ -3,12 +3,13 @@
 //! Provides type information when the user hovers over an expression.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 
 /// Handler for `textDocument/hover` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "hover requires params");
                 return;
@@ -93,10 +94,13 @@ pub fn handler(comptime ServerType: type) type {
                 text,
                 line,
                 character,
-            ) catch |err| {
-                std.log.err("hover failed: {s}", .{@errorName(err)});
-                try self.sendNullResponse(id);
-                return;
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("hover failed: {s}", .{@errorName(err)});
+                    try self.sendNullResponse(id);
+                    return;
+                },
             };
 
             if (hover_result) |result| {

@@ -33,6 +33,7 @@ Available fuzz targets:
 - `fuzz-parse` - Parser and formatter stability testing
 - `fuzz-tokenize` - Tokenizer testing
 - `fuzz-canonicalize` - Canonicalization testing
+- `fuzz-typecheck` - Type checking generated well-typed Roc programs
 
 ## Generating a Corpus
 
@@ -40,7 +41,7 @@ Generate a seed corpus from the snapshot tests:
 
 ```bash
 mkdir -p /tmp/corpus
-zig build snapshot -- --fuzz-corpus /tmp/corpus
+zig build run-snapshot-tool -- --fuzz-corpus /tmp/corpus
 ```
 
 This extracts source code from all snapshot tests. For REPL snapshots, it strips the `»` delimiters and creates separate corpus files for each expression.
@@ -51,6 +52,15 @@ Basic single-threaded fuzzing:
 
 ```bash
 afl-fuzz -i /tmp/corpus -o /tmp/parse-out zig-out/bin/fuzz-parse
+```
+
+The typecheck fuzzer generates Roc source from arbitrary input bytes, so it can
+start from a tiny byte corpus:
+
+```bash
+mkdir -p /tmp/typecheck-corpus
+printf '\0' > /tmp/typecheck-corpus/seed
+afl-fuzz -i /tmp/typecheck-corpus -o /tmp/typecheck-out zig-out/bin/fuzz-typecheck
 ```
 
 You may need to set environment variables to skip certain checks:
@@ -73,6 +83,12 @@ Use the repro executable to debug a crash:
 
 ```bash
 ./zig-out/bin/repro-parse /tmp/parse-out/default/crashes/<crash-file>
+```
+
+Use the matching repro executable for each fuzz target, for example:
+
+```bash
+./zig-out/bin/repro-typecheck /tmp/typecheck-out/default/crashes/<crash-file>
 ```
 
 The repro executables include extra debug output and full stack traces.
@@ -108,7 +124,7 @@ Keep your corpus between sessions for incremental improvement:
 
 ```bash
 # First run - generate initial corpus
-zig build snapshot -- --fuzz-corpus ~/roc-fuzz-corpus
+zig build run-snapshot-tool -- --fuzz-corpus ~/roc-fuzz-corpus
 
 # Subsequent runs - AFL++ will add new interesting inputs
 afl-fuzz -i ~/roc-fuzz-corpus -o /tmp/parse-out zig-out/bin/fuzz-parse

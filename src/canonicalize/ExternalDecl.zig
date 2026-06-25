@@ -1,5 +1,7 @@
 //! Represents an external declaration from another module
 
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const DataSpan = base.DataSpan;
@@ -21,6 +23,6 @@ pub const Idx = enum(u32) { _ };
 pub const Span = extern struct { span: DataSpan };
 
 /// Converts this external declaration to an S-expression tree representation for debugging
-pub fn pushToSExprTree(_: *const ExternalDecl, _: anytype, tree: anytype) !void {
+pub fn pushToSExprTree(_: *const ExternalDecl, _: anytype, tree: anytype) Allocator.Error!void {
     try tree.pushStaticAtom("external-decl-stub");
 }

@@ -149,7 +149,7 @@ const setupSearch = () => {
         searchTypeAhead.querySelectorAll("li").forEach((entry) => {
           const entryModule = entry
             .querySelector(".type-ahead-module-name")
-            .textContent.toLowerCase();
+            ?.textContent?.toLowerCase() ?? "";
           const entryName = entry
             .querySelector(".type-ahead-def-name")
             .textContent.toLowerCase();
@@ -158,7 +158,9 @@ const setupSearch = () => {
             ?.textContent?.toLowerCase()
             ?.replace(/\s+/g, "");
 
-          const qualifiedEntryName = `${entryModule}.${entryName}`;
+          const qualifiedEntryName = entryModule
+            ? `${entryModule}.${entryName}`
+            : entryName;
 
           if (
             qualifiedEntryName.includes(text) ||

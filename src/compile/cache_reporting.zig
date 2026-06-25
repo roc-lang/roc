@@ -39,7 +39,7 @@ pub const Stats = struct {
         return @as(f64, @floatFromInt(self.hits)) / @as(f64, @floatFromInt(total));
     }
 
-    pub fn print(self: *const Stats, writer: *std.Io.Writer) !void {
+    pub fn print(self: *const Stats, writer: *std.Io.Writer) Allocator.Error!void {
         try writer.print("Cache Stats:\n", .{});
         try writer.print("  Hits: {d}\n", .{self.hits});
         try writer.print("  Misses: {d}\n", .{self.misses});
@@ -83,7 +83,7 @@ pub fn getUnitString(unit: DataSizeUnit) []const u8 {
 }
 
 /// Create a cache statistics report using the Roc reporting framework.
-pub fn createCacheStatsReport(allocator: Allocator, stats: CacheStats) !Report {
+pub fn createCacheStatsReport(allocator: Allocator, stats: CacheStats) Allocator.Error!Report {
     var report = Report.init(allocator, "CACHE STATISTICS", .info);
 
     const total_ops = stats.getTotalOps();
@@ -166,7 +166,7 @@ pub fn createCacheStatsReport(allocator: Allocator, stats: CacheStats) !Report {
 }
 
 /// Render cache statistics to a writer using the specified target format.
-pub fn renderCacheStats(allocator: Allocator, stats: CacheStats, writer: anytype, target: RenderTarget) !void {
+pub fn renderCacheStats(allocator: Allocator, stats: CacheStats, writer: anytype, target: RenderTarget) Allocator.Error!void {
     var report = try createCacheStatsReport(allocator, stats);
     defer report.deinit();
 
@@ -174,21 +174,21 @@ pub fn renderCacheStats(allocator: Allocator, stats: CacheStats, writer: anytype
 }
 
 /// Render cache statistics to the terminal (convenience function).
-pub fn renderCacheStatsToTerminal(allocator: Allocator, stats: CacheStats, writer: anytype) !void {
+pub fn renderCacheStatsToTerminal(allocator: Allocator, stats: CacheStats, writer: anytype) Allocator.Error!void {
     try renderCacheStats(allocator, stats, writer, .color_terminal);
 }
 
 /// Render cache statistics to markdown (convenience function).
-pub fn renderCacheStatsToMarkdown(allocator: Allocator, stats: CacheStats, writer: anytype) !void {
+pub fn renderCacheStatsToMarkdown(allocator: Allocator, stats: CacheStats, writer: anytype) Allocator.Error!void {
     try renderCacheStats(allocator, stats, writer, .markdown);
 }
 
 /// Render cache statistics to HTML (convenience function).
-pub fn renderCacheStatsToHtml(allocator: Allocator, stats: CacheStats, writer: anytype) !void {
+pub fn renderCacheStatsToHtml(allocator: Allocator, stats: CacheStats, writer: anytype) Allocator.Error!void {
     try renderCacheStats(allocator, stats, writer, .html);
 }
 
 /// Render cache statistics to LSP format (convenience function).
-pub fn renderCacheStatsToLsp(allocator: Allocator, stats: CacheStats, writer: anytype) !void {
+pub fn renderCacheStatsToLsp(allocator: Allocator, stats: CacheStats, writer: anytype) Allocator.Error!void {
     try renderCacheStats(allocator, stats, writer, .language_server);
 }

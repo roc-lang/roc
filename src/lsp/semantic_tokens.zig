@@ -8,15 +8,16 @@
 //! - CIR-based: Richer semantics from canonicalized IR (function/parameter detection)
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const tokenize = @import("parse").tokenize;
 const parse = @import("parse");
 const can = @import("can");
+const CoreCtx = can.CoreCtx;
 const base = @import("base");
 const eval_mod = @import("eval");
 const compiled_builtins = @import("compiled_builtins");
 const line_info = @import("line_info.zig");
 
-const Allocators = base.Allocators;
 const Token = tokenize.Token;
 const Tokenizer = tokenize.Tokenizer;
 const CommonEnv = base.CommonEnv;
@@ -159,6 +160,8 @@ pub fn tokenTagToSemanticType(tag: Token.Tag) ?u32 {
         .OpLessThanOrEq,
         .OpBackArrow,
         .OpLessThan,
+        .OpDoubleDotLessThan,
+        .OpDoubleDotEquals,
         .OpEquals,
         .OpColonEqual,
         .OpDoubleColon,
@@ -213,7 +216,7 @@ pub fn extractSemanticTokens(
     allocator: std.mem.Allocator,
     source: []const u8,
     info: *const LineInfo,
-) ![]SemanticToken {
+) Allocator.Error![]SemanticToken {
     // Create a CommonEnv for tokenization
     const source_copy = try allocator.dupe(u8, source);
     defer allocator.free(source_copy);
@@ -234,7 +237,7 @@ pub fn extractSemanticTokens(
     const regions = tokenizer.output.tokens.items(.region);
 
     // Build semantic tokens list
-    var tokens: std.ArrayListUnmanaged(SemanticToken) = .{};
+    var tokens: std.ArrayListUnmanaged(SemanticToken) = .empty;
     errdefer tokens.deinit(allocator);
 
     for (tags, regions) |tag, region| {
@@ -268,7 +271,7 @@ pub fn extractSemanticTokensWithCIR(
     allocator: std.mem.Allocator,
     source: []const u8,
     info: *const LineInfo,
-) ![]SemanticToken {
+) Allocator.Error![]SemanticToken {
     return extractSemanticTokensWithImports(allocator, source, info, null);
 }
 
@@ -279,53 +282,39 @@ pub fn extractSemanticTokensWithImports(
     source: []const u8,
     info: *const LineInfo,
     imported_envs: ?[]*ModuleEnv,
-) ![]SemanticToken {
+) Allocator.Error![]SemanticToken {
     // Create ModuleEnv with source
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    var module_env = ModuleEnv.init(allocator, source) catch {
-        // Fall back to token-only extraction on error
-        return extractSemanticTokens(allocator, source, info);
-    };
+    var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
     defer module_env.deinit();
 
-    // Parse the source
-    const parse_ast = parse.parse(&allocators, &module_env.common) catch {
-        // Fall back to token-only extraction on parse error
-        return extractSemanticTokens(allocator, source, info);
-    };
+    // Parse the source. Syntax errors are reported through the AST diagnostics.
+    const parse_ast = try parse.file(allocator, &module_env.common);
     defer parse_ast.deinit();
 
     // Initialize CIR fields
-    module_env.initCIRFields("semantic-tokens") catch {
-        return extractSemanticTokens(allocator, source, info);
-    };
+    module_env.initCIRFields("semantic-tokens") catch return error.OutOfMemory;
 
-    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin) catch {
-        return extractSemanticTokens(allocator, source, info);
+    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return extractSemanticTokens(allocator, source, info),
     };
-    var builtin_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source) catch {
-        return extractSemanticTokens(allocator, source, info);
+    var builtin_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return extractSemanticTokens(allocator, source, info),
     };
     defer builtin_module.deinit();
 
     // Create canonicalizer and run
-    var canonicalizer = can.Can.initModule(&allocators, &module_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var canonicalizer = can.Can.initModule(roc_ctx, &module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
-    }) catch {
-        return extractSemanticTokens(allocator, source, info);
-    };
+    }) catch return error.OutOfMemory;
     defer canonicalizer.deinit();
 
-    canonicalizer.canonicalizeFile() catch {
-        // Fall back to token-only on canonicalization error
-        return extractSemanticTokens(allocator, source, info);
-    };
+    canonicalizer.canonicalizeFile() catch return error.OutOfMemory;
 
     // Build import context for cross-module lookups
     var import_context = ImportContext.init(allocator);
@@ -333,14 +322,14 @@ pub fn extractSemanticTokensWithImports(
 
     if (imported_envs) |envs| {
         for (envs) |imp_env| {
-            import_context.addModuleExports(imp_env) catch {};
+            try import_context.addModuleExports(imp_env);
         }
     }
 
     // Create a semantic collector to walk the CIR
     var collector = SemanticCollector{
         .allocator = allocator,
-        .tokens = std.ArrayListUnmanaged(SemanticToken){},
+        .tokens = .empty,
         .module_env = &module_env,
         .info = info,
         .source = source,
@@ -349,11 +338,7 @@ pub fn extractSemanticTokensWithImports(
     errdefer collector.tokens.deinit(allocator);
 
     // Walk CIR statements for semantic information
-    collector.walkStatements() catch {
-        // Fall back on error
-        collector.tokens.deinit(allocator);
-        return extractSemanticTokens(allocator, source, info);
-    };
+    collector.walkStatements() catch return error.OutOfMemory;
 
     // Also extract tokens from the tokenizer that weren't covered by CIR
     // (keywords, operators, and identifiers as fallback)
@@ -388,7 +373,7 @@ const ImportContext = struct {
     }
 
     /// Add exports from a module to the context.
-    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) !void {
+    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) std.mem.Allocator.Error!void {
         const module_name = module_env.module_name;
         if (module_name.len == 0) return;
 
@@ -437,7 +422,7 @@ const SemanticCollector = struct {
     import_context: *const ImportContext,
 
     /// Walk all top-level statements in the module.
-    fn walkStatements(self: *SemanticCollector) !void {
+    fn walkStatements(self: *SemanticCollector) Allocator.Error!void {
         const statements_slice = self.module_env.store.sliceStatements(self.module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             try self.visitStatement(stmt_idx);
@@ -445,11 +430,15 @@ const SemanticCollector = struct {
     }
 
     /// Visit a single statement and extract semantic tokens.
-    fn visitStatement(self: *SemanticCollector, stmt_idx: CIR.Statement.Idx) !void {
+    fn visitStatement(self: *SemanticCollector, stmt_idx: CIR.Statement.Idx) Allocator.Error!void {
         const stmt = self.module_env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |d| try self.visitDecl(d.pattern, d.expr),
             .s_var => |v| try self.visitDecl(v.pattern_idx, v.expr),
+            .s_var_uninitialized => |v| {
+                const pattern_region = self.module_env.store.getPatternRegion(v.pattern_idx);
+                try self.addToken(pattern_region, .variable);
+            },
             .s_expr => |e| try self.visitExpr(e.expr),
             // Type declarations and imports don't need special handling
             // since they're covered by the tokenizer
@@ -458,7 +447,7 @@ const SemanticCollector = struct {
     }
 
     /// Visit a declaration (s_decl, s_var).
-    fn visitDecl(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx, expr_idx: CIR.Expr.Idx) !void {
+    fn visitDecl(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
         // Check if RHS is a lambda/closure (then LHS is a function name)
         const expr = self.module_env.store.getExpr(expr_idx);
         const is_function = switch (expr) {
@@ -481,7 +470,7 @@ const SemanticCollector = struct {
     }
 
     /// Visit lambda parameters and mark them as parameters.
-    fn visitLambdaParams(self: *SemanticCollector, expr_idx: CIR.Expr.Idx) !void {
+    fn visitLambdaParams(self: *SemanticCollector, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
         const expr = self.module_env.store.getExpr(expr_idx);
         switch (expr) {
             .e_closure => |c| {
@@ -519,7 +508,7 @@ const SemanticCollector = struct {
     }
 
     /// Visit a pattern and mark it as a parameter.
-    fn visitPatternAsParameter(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx) !void {
+    fn visitPatternAsParameter(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
         const pattern = self.module_env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => {
@@ -567,7 +556,7 @@ const SemanticCollector = struct {
     }
 
     /// Visit an expression and extract any relevant tokens.
-    fn visitExpr(self: *SemanticCollector, expr_idx: CIR.Expr.Idx) !void {
+    fn visitExpr(self: *SemanticCollector, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
         const expr = self.module_env.store.getExpr(expr_idx);
         switch (expr) {
             .e_tag => {
@@ -590,7 +579,7 @@ const SemanticCollector = struct {
     /// Add tokens from the tokenizer that weren't covered by CIR.
     /// This includes keywords, operators, literals, and identifiers as fallback.
     /// Uses import context to distinguish Module.function from record.field.
-    fn addTokensFromTokenizer(self: *SemanticCollector, ast: *const parse.AST) !void {
+    fn addTokensFromTokenizer(self: *SemanticCollector, ast: *const parse.AST) Allocator.Error!void {
         const tags = ast.tokens.tokens.items(.tag);
         const regions = ast.tokens.tokens.items(.region);
 
@@ -660,7 +649,7 @@ const SemanticCollector = struct {
     }
 
     /// Add a token at the given region with the given semantic type.
-    fn addToken(self: *SemanticCollector, region: Region, semantic_type: SemanticType) !void {
+    fn addToken(self: *SemanticCollector, region: Region, semantic_type: SemanticType) Allocator.Error!void {
         const start_offset = region.start.offset;
         const end_offset = region.end.offset;
         const length = end_offset - start_offset;
@@ -682,7 +671,7 @@ const SemanticCollector = struct {
 /// Delta-encodes a list of semantic tokens into the LSP format.
 /// The LSP format uses 5 integers per token: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
 /// where deltaLine and deltaStartChar are relative to the previous token.
-pub fn deltaEncode(allocator: std.mem.Allocator, tokens: []const SemanticToken) ![]u32 {
+pub fn deltaEncode(allocator: std.mem.Allocator, tokens: []const SemanticToken) Allocator.Error![]u32 {
     if (tokens.len == 0) {
         return &[_]u32{};
     }

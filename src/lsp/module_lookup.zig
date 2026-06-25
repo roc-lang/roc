@@ -10,6 +10,7 @@
 //! - Extracting statement parts
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const can = @import("can");
 const compile = @import("compile");
 const base = @import("base");
@@ -176,6 +177,7 @@ pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pa
         const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
             .s_decl => |decl| decl.pattern,
             .s_var => |var_stmt| var_stmt.pattern_idx,
+            .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
             else => null,
         };
         if (pattern_idx_opt) |pat_idx| {
@@ -191,7 +193,7 @@ pub fn findDefinitionsWithPrefix(
     module_env: *ModuleEnv,
     prefix: []const u8,
     allocator: std.mem.Allocator,
-) !std.ArrayList(DefinitionInfo) {
+) Allocator.Error!std.ArrayList(DefinitionInfo) {
     var results = std.ArrayList(DefinitionInfo).empty;
 
     // Search through all_defs
@@ -239,7 +241,7 @@ pub fn findDefinitionsWithPrefix(
 /// Returns null if the module is not found or the build environment is null.
 pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
     // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
-    const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+    const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
         module_name[dot_pos + 1 ..]
     else
         module_name;
@@ -268,7 +270,7 @@ pub fn findModuleByNameWithBuiltinCheck(
     builtin_types: []const []const u8,
 ) ?ModuleInfo {
     // Extract the base module name
-    const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+    const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
         module_name[dot_pos + 1 ..]
     else
         module_name;
@@ -315,6 +317,11 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr = d.expr,
             .expr2 = null,
         },
+        .s_var_uninitialized => |d| .{
+            .pattern = d.pattern_idx,
+            .expr = null,
+            .expr2 = null,
+        },
         .s_reassign => |d| .{
             .pattern = d.pattern_idx,
             .expr = d.expr,
@@ -331,6 +338,16 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr2 = f.body,
         },
         .s_while => |w| .{
+            .pattern = null,
+            .expr = w.cond,
+            .expr2 = w.body,
+        },
+        .s_infinite_loop => |w| .{
+            .pattern = null,
+            .expr = w.cond,
+            .expr2 = w.body,
+        },
+        .s_breakable_loop => |w| .{
             .pattern = null,
             .expr = w.cond,
             .expr2 = w.body,

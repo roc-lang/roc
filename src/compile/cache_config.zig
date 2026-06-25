@@ -6,7 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const Io = @import("io").Io;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
@@ -21,8 +21,17 @@ pub const Constants = struct {
     /// Maximum cache file size (256MB)
     pub const MAX_CACHE_SIZE = 256 * 1024 * 1024;
 
-    /// Cache format version
-    pub const CACHE_VERSION = 2;
+    /// Cache format version. Folded into the module-cache version hash, so bump
+    /// this whenever the serialized layout changes in a way the automatic
+    /// top-level-field hash can't see (e.g. a node-payload layout edit).
+    /// 3: annotation node payload gained mentions/introduces-type-var flags.
+    /// 4: numeric suffix metadata was renamed to suffix targets.
+    /// 5: nominal record declared-field-order and unnamed padding fields added
+    ///    node, diagnostic, and type-annotation payloads.
+    /// 6: merge with typed node/static-dispatch payload layout changes.
+    /// 7: field-order layout metadata moved from nominal-only to general field-order.
+    /// 8: ModuleEnv stores source-relative file-import dependency metadata.
+    pub const CACHE_VERSION = 8;
 };
 
 /// Configuration for the Roc cache system.
@@ -35,7 +44,7 @@ pub const CacheConfig = struct {
     max_size_mb: u32 = 1024, // 1GB default
     max_age_days: u32 = 30, // 30 days default
     verbose: bool = false, // Print cache statistics
-    io: Io = Io.default(),
+    roc_ctx: CoreCtx = undefined,
 
     const Self = @This();
 
@@ -45,25 +54,33 @@ pub const CacheConfig = struct {
     /// - Respects XDG_CACHE_HOME if set
     /// - Falls back to ~/.cache/roc on Unix and %APPDATA%\Roc on Windows
     /// - Uses "roc" on Unix and "Roc" on Windows as the cache dir name
-    pub fn getDefaultCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getDefaultCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         // ROC_CACHE_DIR selects the cache root ahead of platform defaults.
         // Useful for test isolation and CI on any OS.
-        if (self.io.getEnvVar("ROC_CACHE_DIR", allocator)) |roc_dir| {
+        if (self.roc_ctx.getEnvVar("ROC_CACHE_DIR", allocator)) |roc_dir| {
             return roc_dir;
-        } else |_| {}
+        } else |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.EnvironmentVariableMissing => {},
+        }
         // Respect XDG_CACHE_HOME if set
-        if (self.io.getEnvVar("XDG_CACHE_HOME", allocator)) |xdg_cache| {
+        if (self.roc_ctx.getEnvVar("XDG_CACHE_HOME", allocator)) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &[_][]const u8{ xdg_cache, getCacheDirName() });
-        } else |_| {
+        } else |err| {
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.EnvironmentVariableMissing => {},
+            }
             // Fall back to platform defaults
             const home_env = switch (builtin.target.os.tag) {
                 .windows => "APPDATA",
                 else => "HOME",
             };
 
-            const home_dir = self.io.getEnvVar(home_env, allocator) catch {
-                return error.NoHomeDirectory;
+            const home_dir = self.roc_ctx.getEnvVar(home_env, allocator) catch |home_err| switch (home_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.EnvironmentVariableMissing => return error.NoHomeDirectory,
             };
             defer allocator.free(home_dir);
 
@@ -79,7 +96,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the effective cache directory, using default if none specified.
-    pub fn getEffectiveCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getEffectiveCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         if (self.cache_dir) |dir| {
             return allocator.dupe(u8, dir);
         } else {
@@ -91,7 +108,7 @@ pub const CacheConfig = struct {
     ///
     /// This isolates cache entries by compiler version to prevent
     /// conflicts when switching between compiler versions.
-    pub fn getVersionCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getVersionCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const base_dir = try self.getEffectiveCacheDir(allocator);
         defer allocator.free(base_dir);
 
@@ -102,7 +119,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the checked-artifact cache directory.
-    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
@@ -110,7 +127,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the module source cache directory for tooling-owned materialized sources.
-    pub fn getModuleCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
@@ -118,7 +135,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the executable cache directory (for cached linked executables).
-    pub fn getExeCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getExeCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
@@ -126,11 +143,16 @@ pub const CacheConfig = struct {
     }
 
     /// Get the test cache directory (for cached test results).
-    pub fn getTestCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
+    }
+
+    /// Get the cache entries directory (alias for module cache dir).
+    pub fn getCacheEntriesDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        return self.getModuleCacheDir(allocator);
     }
 
     /// Get maximum cache size in bytes.
@@ -210,12 +232,12 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get the temporary directory for runtime executables.
 /// This is in the system temp dir, not the persistent cache.
-pub fn getTempDir(io: Io, allocator: Allocator) ![]u8 {
+pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
     const temp_base = switch (builtin.target.os.tag) {
-        .windows => io.getEnvVar("TEMP", allocator) catch
-            io.getEnvVar("TMP", allocator) catch
+        .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
+            roc_ctx.getEnvVar("TMP", allocator) catch
             try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        else => io.getEnvVar("TMPDIR", allocator) catch
+        else => roc_ctx.getEnvVar("TMPDIR", allocator) catch
             try allocator.dupe(u8, "/tmp"),
     };
     defer allocator.free(temp_base);
@@ -224,8 +246,8 @@ pub fn getTempDir(io: Io, allocator: Allocator) ![]u8 {
 }
 
 /// Get the version-specific temporary directory for runtime executables.
-pub fn getVersionTempDir(io: Io, allocator: Allocator) ![]u8 {
-    const temp_base = try getTempDir(io, allocator);
+pub fn getVersionTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
+    const temp_base = try getTempDir(roc_ctx, allocator);
     defer allocator.free(temp_base);
 
     const version_dir = try getCompilerVersionDir(allocator);
@@ -238,7 +260,7 @@ pub fn getVersionTempDir(io: Io, allocator: Allocator) ![]u8 {
 ///
 /// Returns the human-readable compiler version string (e.g., "debug-abcd1234")
 /// to isolate cache entries between different compiler builds.
-pub fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
+pub fn getCompilerVersionDir(allocator: Allocator) Allocator.Error![]u8 {
     // Use build-time compiler version that includes git commit SHA
     const version_info = build_options.compiler_version;
     return allocator.dupe(u8, version_info);

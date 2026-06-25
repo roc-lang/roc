@@ -11,7 +11,7 @@ module[}('
 # EXPECTED
 UNCLOSED SINGLE QUOTE - fuzz_crash_039.md:1:10:1:11
 PARSE ERROR - fuzz_crash_039.md:1:8:1:9
-PARSE ERROR - fuzz_crash_039.md:3:1:3:1
+PARSE ERROR - fuzz_crash_039.md:1:9:1:10
 # PROBLEMS
 **UNCLOSED SINGLE QUOTE**
 This single-quoted literal is missing a closing quote.
@@ -38,11 +38,11 @@ module[}('
 A parsing error occurred: `header_expected_close_square`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_039.md:3:1:3:1:**
+**fuzz_crash_039.md:1:9:1:10:**
 ```roc
-
+module[}('
 ```
-^
+        ^
 
 
 # TOKENS

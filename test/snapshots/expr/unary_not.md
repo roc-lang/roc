@@ -27,8 +27,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-not
-	(e-runtime-error (tag "ident_not_in_scope")))
+(e-dispatch-call (method "not") (constraint-fn-var 9)
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

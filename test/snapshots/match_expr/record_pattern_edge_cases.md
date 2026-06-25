@@ -16,24 +16,9 @@ match ... {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - record_pattern_edge_cases.md:5:51:5:52
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_pattern_edge_cases.md:5:51:5:52:**
-```roc
-    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
-```
-                                                  ^
-
-It has the type:
-
-    { c: Str, .. }
-
-But you are trying to use it as:
-
-    Str
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -164,11 +149,18 @@ match ... {
 																	(required
 																		(p-assign (ident "c"))))))))))))))))
 				(value
-					(e-string
-						(e-literal (string "deeply nested: "))
-						(e-lookup-local
-							(p-assign (ident "c")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "c"))))
+						(e-interpolation (constraint-fn-var 185)
+							(first
+								(e-literal (string "deeply nested: ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -182,11 +174,18 @@ match ... {
 										(p-record-destructure
 											(destructs))))))))
 				(value
-					(e-string
-						(e-literal (string "mixed with empty: "))
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(e-interpolation (constraint-fn-var 243)
+							(first
+								(e-literal (string "mixed with empty: ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -203,14 +202,25 @@ match ... {
 									(required
 										(p-assign (ident "simple"))))))))
 				(value
-					(e-string
-						(e-literal (string "mixed: "))
-						(e-lookup-local
-							(p-assign (ident "inner")))
-						(e-literal (string " and "))
-						(e-lookup-local
-							(p-assign (ident "simple")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_2"))
+							(e-lookup-local
+								(p-assign (ident "inner"))))
+						(s-let
+							(p-assign (ident "#interp_3"))
+							(e-lookup-local
+								(p-assign (ident "simple"))))
+						(e-interpolation (constraint-fn-var 304)
+							(first
+								(e-literal (string "mixed: ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_2")))
+								(e-literal (string " and "))
+								(e-lookup-local
+									(p-assign (ident "#interp_3")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -231,14 +241,25 @@ match ... {
 													(required
 														(p-assign (ident "d"))))))))))))
 				(value
-					(e-string
-						(e-literal (string "multiple nested: "))
-						(e-lookup-local
-							(p-assign (ident "b")))
-						(e-literal (string ", "))
-						(e-lookup-local
-							(p-assign (ident "d")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_4"))
+							(e-lookup-local
+								(p-assign (ident "b"))))
+						(s-let
+							(p-assign (ident "#interp_5"))
+							(e-lookup-local
+								(p-assign (ident "d"))))
+						(e-interpolation (constraint-fn-var 366)
+							(first
+								(e-literal (string "multiple nested: ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_4")))
+								(e-literal (string ", "))
+								(e-lookup-local
+									(p-assign (ident "#interp_5")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -248,11 +269,18 @@ match ... {
 									(sub-pattern
 										(p-assign (ident "x"))))))))
 				(value
-					(e-string
-						(e-literal (string "renamed: "))
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_6"))
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(e-interpolation (constraint-fn-var 423)
+							(first
+								(e-literal (string "renamed: ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_6")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -269,17 +297,28 @@ match ... {
 													(sub-pattern
 														(p-assign (ident "userAge"))))))))))))
 				(value
-					(e-string
-						(e-literal (string "renamed nested: "))
-						(e-lookup-local
-							(p-assign (ident "firstName")))
-						(e-literal (string " ("))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 196)
-							(receiver
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_7"))
+							(e-lookup-local
+								(p-assign (ident "firstName"))))
+						(s-let
+							(p-assign (ident "#interp_8"))
+							(e-dispatch-call (method "to_str") (constraint-fn-var 427)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "userAge"))))
+								(args)))
+						(e-interpolation (constraint-fn-var 486)
+							(first
+								(e-literal (string "renamed nested: ")))
+							(parts
 								(e-lookup-local
-									(p-assign (ident "userAge"))))
-							(args))
-						(e-literal (string ")")))))
+									(p-assign (ident "#interp_7")))
+								(e-literal (string " ("))
+								(e-lookup-local
+									(p-assign (ident "#interp_8")))
+								(e-literal (string ")")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -291,5 +330,5 @@ match ... {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

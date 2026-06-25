@@ -43,10 +43,12 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "y")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 17)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-runtime-error (tag "ident_not_in_scope")))))))
 ~~~
 # TYPES
 ~~~clojure

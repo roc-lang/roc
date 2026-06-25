@@ -29,10 +29,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string
-	(e-literal (string "Hello "))
-	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-literal (string "!")))
+(e-block
+	(s-let
+		(p-assign (ident "#interp_0"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(e-interpolation
+		(first
+			(e-literal (string "Hello ")))
+		(parts
+			(e-lookup-local
+				(p-assign (ident "#interp_0")))
+			(e-literal (string "!")))))
 ~~~
 # TYPES
 ~~~clojure

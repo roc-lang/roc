@@ -5,7 +5,7 @@ This document outlines future work to reorganize the CLI module for better maint
 ## Design Principles
 
 1. **Flat structure** - No subdirectories, use descriptive filenames to group related code
-2. **TitleCase.zig** for files defining a single primary type (e.g., `CliContext.zig`)
+2. **TitleCase.zig** for files defining a single primary type (e.g., `CliCtx.zig`)
 3. **snake_case.zig** for namespace/function modules (e.g., `cli_args.zig`)
 4. **cli_roc_* prefix** for command implementation files to avoid conflicts
 5. Direct imports rather than re-export hubs
@@ -20,11 +20,11 @@ The CLI module is functional but `main.zig` is ~5,500 lines containing all comma
 src/cli/
 ├── main.zig                      # Slim entrypoint (~300 lines): dispatch only
 │
-├── CliContext.zig                # Main CLI context type (DONE)
+├── CliCtx.zig                # Main CLI context type (DONE)
 ├── CliProblem.zig                # Runtime error types (DONE)
 ├── cli_args.zig                  # Argument parsing (ArgProblem renamed, DONE)
 │
-├── cli_roc_run.zig               # rocRun command implementation
+├── cli_roc_default.zig           # default `roc <file>` execution implementation
 ├── cli_roc_build.zig             # rocBuild command implementation
 ├── cli_roc_check.zig             # rocCheck command implementation
 ├── cli_roc_test.zig              # rocTest command implementation
@@ -52,7 +52,6 @@ src/cli/
 ├── util_posix.zig                # POSIX shm wrappers
 ├── util_timing.zig               # formatElapsedTime
 │
-├── bench.zig                     # Benchmarking utility (existing)
 ├── targets/                      # Pre-compiled shim libraries (keep)
 └── test/                         # Test files (keep)
 ```
@@ -66,7 +65,7 @@ src/cli/
 
 ### Phase 2: Extract Compilation Infrastructure
 1. Create `compile_shared_memory.zig` - SharedMemoryHandle, write functions
-2. Keep compilation and runtime execution split at a viewable LIR runtime image
+2. Keep compilation and runtime execution split at a viewable LIR image
 
 ### Phase 3: Extract Platform Resolution
 1. Create `platform_resolution.zig` - extractPlatformSpecFromApp, resolvePlatformPaths
@@ -80,7 +79,7 @@ src/cli/
 5. `cli_roc_check.zig`
 6. `cli_roc_docs.zig`
 7. `cli_roc_build.zig`
-8. `cli_roc_run.zig` (most complex)
+8. `cli_roc_default.zig` (most complex)
 
 ### Phase 5: Slim main.zig
 Reduce main.zig to ~300 lines containing only:

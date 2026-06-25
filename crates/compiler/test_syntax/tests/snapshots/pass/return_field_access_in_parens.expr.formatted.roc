@@ -1,4 +1,0 @@
-(
-    return .o
-)
-ss

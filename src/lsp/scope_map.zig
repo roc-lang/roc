@@ -39,7 +39,7 @@ pub const ScopeMap = struct {
 
     pub fn init(allocator: Allocator) ScopeMap {
         return .{
-            .bindings = std.ArrayList(Binding){},
+            .bindings = .empty,
             .allocator = allocator,
         };
     }
@@ -49,7 +49,7 @@ pub const ScopeMap = struct {
     }
 
     /// Build scope map by traversing all CIR structures in the module.
-    pub fn build(self: *ScopeMap, module_env: *ModuleEnv) !void {
+    pub fn build(self: *ScopeMap, module_env: *ModuleEnv) Allocator.Error!void {
         // Process top-level definitions
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
@@ -100,6 +100,9 @@ pub const ScopeMap = struct {
                 try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
                 try self.traverseExpr(module_env, var_decl.expr, scope_end, depth + 1);
             },
+            .s_var_uninitialized => |var_decl| {
+                try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
+            },
             .s_reassign => |reassign| {
                 // Reassignment doesn't introduce new bindings, but traverse the expr
                 try self.traverseExpr(module_env, reassign.expr, scope_end, depth + 1);
@@ -113,6 +116,14 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, for_stmt.body, body_region.end.offset, depth + 1);
             },
             .s_while => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
+            .s_infinite_loop => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
+            .s_breakable_loop => |while_stmt| {
                 try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
                 try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
             },
@@ -267,9 +278,19 @@ pub const ScopeMap = struct {
                     try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
                 }
             },
+            .e_interpolation => |interpolation| {
+                try self.traverseExpr(module_env, interpolation.first, scope_end, depth + 1);
+                for (module_env.store.sliceExpr(interpolation.parts)) |part_idx| {
+                    try self.traverseExpr(module_env, part_idx, scope_end, depth + 1);
+                }
+            },
             .e_structural_eq => |eq| {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
                 try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
+            },
+            .e_structural_hash => |h| {
+                try self.traverseExpr(module_env, h.value, scope_end, depth + 1);
+                try self.traverseExpr(module_env, h.hasher, scope_end, depth + 1);
             },
             .e_method_eq => |eq| {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
@@ -308,7 +329,7 @@ pub const ScopeMap = struct {
             .e_nominal_external => |nominal| {
                 try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
             },
-            .e_hosted_lambda => |_| {},
+            .e_hosted_lambda => {},
             .e_for => |for_expr| {
                 // For loop variable is visible within the body
                 const body_region = module_env.store.getExprRegion(for_expr.body);
@@ -318,6 +339,9 @@ pub const ScopeMap = struct {
             },
             .e_dbg => |dbg_expr| {
                 try self.traverseExpr(module_env, dbg_expr.expr, scope_end, depth + 1);
+            },
+            .e_expect_err => |expect_err| {
+                try self.traverseExpr(module_env, expect_err.expr, scope_end, depth + 1);
             },
             .e_expect => |expect_expr| {
                 try self.traverseExpr(module_env, expect_expr.body, scope_end, depth + 1);
@@ -337,8 +361,10 @@ pub const ScopeMap = struct {
             .e_frac_f64,
             .e_dec,
             .e_dec_small,
+            .e_num_from_numeral,
             .e_typed_int,
             .e_typed_frac,
+            .e_typed_num_from_numeral,
             .e_str_segment,
             .e_lookup_local,
             .e_lookup_external,
@@ -350,6 +376,7 @@ pub const ScopeMap = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
+            .e_break,
             .e_bytes_literal,
             => {},
         }
@@ -445,6 +472,15 @@ pub const ScopeMap = struct {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
                     try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                }
+            },
+            .str_interpolation => |p| {
+                var i: u32 = 0;
+                while (i < p.steps.span.len) : (i += 1) {
+                    const step = module_env.store.getStrPatternStep(p.steps, i);
+                    if (step.capture) |capture| {
+                        try self.extractBindingsFromPattern(module_env, capture, visible_from, visible_to, is_parameter, depth + 1);
+                    }
                 }
             },
             // Literal and other patterns don't introduce bindings

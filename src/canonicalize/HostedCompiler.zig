@@ -4,6 +4,7 @@
 //! into explicit hosted lambda facts that will be provided by the platform at runtime.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
@@ -12,7 +13,7 @@ const CIR = @import("CIR.zig");
 /// This transforms standalone annotations into hosted lambda operations that will be
 /// provided by the host application at runtime.
 /// Returns a list of def indices that were modified.
-pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
+pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
     var modified_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
@@ -24,7 +25,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
-            _ = env.types.fresh() catch unreachable;
+            _ = try env.types.fresh();
         }
     }
 
@@ -50,11 +51,11 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             const def_region = env.store.getRegionAt(def_node_idx);
 
             // Extract the local name by stripping the module name prefix (first dot-separated segment).
-            // Use indexOfScalar (first dot) instead of lastIndexOfScalar to preserve nested type paths.
+            // Use findScalar (first dot) instead of findScalarLast to preserve nested type paths.
             // e.g., "PartDef.Idx.get!" -> "Idx.get!" (not just "get!")
             // e.g., "Echo.line!" -> "line!"
             const full_name = env.getIdent(full_ident);
-            const local_name = if (std.mem.indexOfScalar(u8, full_name, '.')) |dot_idx|
+            const local_name = if (std.mem.findScalar(u8, full_name, '.')) |dot_idx|
                 full_name[dot_idx + 1 ..]
             else
                 full_name;
@@ -133,7 +134,7 @@ pub const HostedFunctionInfo = struct {
 
 /// Collect all hosted functions from the module (transitively through imports)
 /// and sort them alphabetically by fully-qualified name (with `!` stripped).
-pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunctionInfo) {
+pub fn collectAndSortHostedFunctions(env: *ModuleEnv) Allocator.Error!std.ArrayList(HostedFunctionInfo) {
     var hosted_fns = std.ArrayList(HostedFunctionInfo).empty;
 
     // Use a hash set to deduplicate by symbol identifier (not string comparison)

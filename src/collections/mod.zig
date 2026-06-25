@@ -5,21 +5,42 @@
 //! for stack allocations in the interpreter.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// The highest alignment any Roc type can have.
 /// This is used as the base alignment for the allocation used
 /// in the interpreter for stack allocations.
 pub const max_roc_alignment: std.mem.Alignment = .@"16";
 
+/// Helper for creating an Io.Writer.Allocating from a deprecated Managed(u8).
+/// Zig 0.16 removed Managed.writer(); this bridges the gap.
+pub fn managedWriter(managed: *std.array_list.Managed(u8)) std.Io.Writer.Allocating {
+    var unmanaged: std.ArrayList(u8) = .{ .items = managed.items, .capacity = managed.capacity };
+    return std.Io.Writer.Allocating.fromArrayList(managed.allocator, &unmanaged);
+}
+
+/// Sync an Io.Writer.Allocating back to a Managed(u8).
+pub fn managedWriterFinish(aw: *std.Io.Writer.Allocating, managed: *std.array_list.Managed(u8)) void {
+    const unmanaged = aw.toArrayList();
+    managed.items = unmanaged.items;
+    managed.capacity = unmanaged.capacity;
+}
+
 pub const SafeList = @import("safe_list.zig").SafeList;
 pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
+pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
+pub const ExposedItemTarget = @import("ExposedItems.zig").ExposedItemTarget;
 pub const CompactWriter = @import("CompactWriter.zig");
+
+/// Single-threaded arena allocator; the non-atomic counterpart to
+/// `std.heap.ArenaAllocator`.
+pub const SingleThreadArena = @import("SingleThreadArena.zig");
 
 /// Serialization format definitions for embedded module data.
 pub const serialization = @import("serialization.zig");
@@ -58,7 +79,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
 
         entries: []V,
 
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
+        pub fn init(allocator: std.mem.Allocator, capacity: usize) Allocator.Error!Self {
             const entries = try allocator.alloc(V, capacity);
             @memset(entries, V.none);
 
@@ -88,7 +109,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             return minimum +| (minimum / 2 + init_capacity);
         }
 
-        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
+        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) Allocator.Error!void {
             const idx = @intFromEnum(key);
 
             // Grow if necessary
@@ -115,4 +136,5 @@ test "collections tests" {
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
+    std.testing.refAllDecls(@import("SingleThreadArena.zig"));
 }

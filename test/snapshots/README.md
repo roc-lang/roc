@@ -8,10 +8,10 @@ Each snapshot file contains the expected output and helps us to detect regressio
 
 ## Usage
 
-- **Generate all snapshots**: `zig build snapshot`
-- **Update specific snapshot**: `zig build snapshot -- <file_path>`
-- **Update expected from problems**: `zig build update-expected -- <file_path>`
-- **Debug REPL evaluation with trace**: `zig build snapshot -- <repl_snapshot.md> --trace-eval`
+- **Generate all snapshots**: `zig build run-snapshot-tool`
+- **Update specific snapshot**: `zig build run-snapshot-tool -- <file_path>`
+- **Update expected from problems**: `zig build run-snapshot-tool -- <file_path> --update-expected`
+- **Debug REPL evaluation with trace**: `zig build run-snapshot-tool -- <repl_snapshot.md> --trace-eval`
 
 ### Trace Debugging
 
@@ -19,7 +19,7 @@ The `--trace-eval` flag enables detailed interpreter tracing for debugging REPL 
 
 ```bash
 # Debug build (trace support enabled by default)
-zig build snapshot -- src/snapshots/repl/repl_record_field_access.md --trace-eval
+zig build run-snapshot-tool -- src/snapshots/repl/repl_record_field_access.md --trace-eval
 ```
 
 **Requirements:**

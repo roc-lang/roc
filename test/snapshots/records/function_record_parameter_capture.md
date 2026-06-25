@@ -61,11 +61,18 @@ NO CHANGE
 	(e-record
 		(fields
 			(field (name "greeting")
-				(e-string
-					(e-literal (string "Hello "))
-					(e-lookup-local
-						(p-assign (ident "name")))
-					(e-literal (string ""))))
+				(e-block
+					(s-let
+						(p-assign (ident "#interp_0"))
+						(e-lookup-local
+							(p-assign (ident "name"))))
+					(e-interpolation (constraint-fn-var 86)
+						(first
+							(e-literal (string "Hello ")))
+						(parts
+							(e-lookup-local
+								(p-assign (ident "#interp_0")))
+							(e-literal (string ""))))))
 			(field (name "full_record")
 				(e-lookup-local
 					(p-as (as "person")
@@ -81,12 +88,14 @@ NO CHANGE
 									(rest-pattern
 										(p-assign (ident "a")))))))))
 			(field (name "is_adult")
-				(e-binop (op "ge")
-					(e-lookup-local
-						(p-assign (ident "age")))
-					(e-num (value "18")))))))
+				(e-dispatch-call (method "is_gte") (constraint-fn-var 124)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "age"))))
+					(args
+						(e-num (value "18"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: b, name: Str, .. } -> { full_record: { age: b, name: Str, .. }, greeting: Str, is_adult: Bool } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gte : b, b -> Bool]"))
+(expr (type "{ age: b, name: c, .. } -> { full_record: { age: b, name: c, .. }, greeting: d, is_adult: Bool } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gte : b, b -> Bool, d.from_interpolation : Str, Iter((_field, Str)) -> d]"))
 ~~~

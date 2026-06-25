@@ -104,13 +104,13 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStringPair("name", ir.getIdentText(a.name));
 
                 switch (a.base) {
-                    .builtin => |_| {
+                    .builtin => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("builtin");
                         const field_attrs = tree.beginNode();
                         try tree.endNode(field_begin, field_attrs);
                     },
-                    .local => |_| {
+                    .local => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("local");
                         const field_attrs = tree.beginNode();
@@ -122,7 +122,7 @@ pub const TypeAnno = union(enum) {
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
-                        if (std.mem.eql(u8, module_name, "Builtin")) {
+                        if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
                             const field_begin = tree.beginNode();
                             try tree.pushStaticAtom("builtin");
                             const field_attrs = tree.beginNode();
@@ -164,7 +164,7 @@ pub const TypeAnno = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .underscore => |_| {
+            .underscore => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("ty-underscore");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
@@ -180,13 +180,13 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStringPair("name", ir.getIdentText(t.name));
 
                 switch (t.base) {
-                    .builtin => |_| {
+                    .builtin => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("builtin");
                         const field_attrs = tree.beginNode();
                         try tree.endNode(field_begin, field_attrs);
                     },
-                    .local => |_| {
+                    .local => {
                         const field_begin = tree.beginNode();
                         try tree.pushStaticAtom("local");
                         const field_attrs = tree.beginNode();
@@ -198,7 +198,7 @@ pub const TypeAnno = union(enum) {
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
-                        if (std.mem.eql(u8, module_name, "Builtin")) {
+                        if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
                             const field_begin = tree.beginNode();
                             try tree.pushStaticAtom("builtin");
                             const field_attrs = tree.beginNode();
@@ -317,7 +317,7 @@ pub const TypeAnno = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .malformed => |_| {
+            .malformed => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("ty-malformed");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
@@ -332,6 +332,12 @@ pub const TypeAnno = union(enum) {
     pub const RecordField = struct {
         name: Ident.Idx,
         ty: TypeAnno.Idx,
+        /// True for unnamed fields (`_` / `_name`), which are only permitted in
+        /// nominal record declarations and act as layout padding rather than
+        /// real fields. Such fields are kept in the declaration's canonical
+        /// record annotation (preserving declared order) but excluded from the
+        /// backing record row, so they are never name-resolved or constructed.
+        is_unnamed: bool = false,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: DataSpan };
@@ -345,7 +351,7 @@ pub const TypeAnno = union(enum) {
         },
         external: struct {
             module_idx: CIR.Import.Idx,
-            target_node_idx: u16,
+            target_node_idx: u32,
         },
         /// Pending external lookup - deferred until dependencies are canonicalized
         pending: struct {
@@ -433,7 +439,6 @@ pub const TypeAnno = union(enum) {
         pub fn fromBytes(bytes: []const u8) ?@This() {
             if (std.mem.eql(u8, bytes, "List")) return .list;
             if (std.mem.eql(u8, bytes, "Box")) return .box;
-            if (std.mem.eql(u8, bytes, "Num")) return .num;
             if (std.mem.eql(u8, bytes, "U8")) return .u8;
             if (std.mem.eql(u8, bytes, "U16")) return .u16;
             if (std.mem.eql(u8, bytes, "U32")) return .u32;

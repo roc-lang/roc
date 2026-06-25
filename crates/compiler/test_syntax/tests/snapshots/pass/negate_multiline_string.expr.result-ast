@@ -1,8 +1,0 @@
-@0-7 UnaryOp(
-    @1-7 Str(
-        Block(
-            [],
-        ),
-    ),
-    @0-1 Negate,
-)

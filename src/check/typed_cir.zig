@@ -93,23 +93,54 @@ pub const Modules = struct {
         fn initModuleData(self: @This(), allocator: Allocator) Allocator.Error!ModuleData {
             return switch (self) {
                 .precompiled => |module_env| blk: {
-                    try module_env.getIdentStore().enableRuntimeInserts(allocator);
-                    try ensureModuleNameIdents(module_env);
+                    try prepareRuntimeEnv(allocator, module_env);
                     break :blk ModuleData.initBorrowed(module_env);
                 },
                 .owned_checked => |owned| blk: {
-                    try owned.env.getIdentStore().enableRuntimeInserts(allocator);
-                    try ensureModuleNameIdents(owned.env);
+                    try prepareRuntimeEnv(allocator, owned.env);
                     break :blk ModuleData.initOwnedChecked(owned.env, owned.owned_source);
                 },
                 .owned_cached => |owned| blk: {
-                    try owned.env.getIdentStore().enableRuntimeInserts(allocator);
-                    try ensureModuleNameIdents(owned.env);
+                    try prepareRuntimeEnv(allocator, owned.env);
                     break :blk ModuleData.initOwnedCached(owned.env, owned.buffer);
                 },
             };
         }
     };
+
+    /// The graph for a single root module plus its imports, with the root's index.
+    pub const RootModules = struct { modules: Modules, module_idx: u32 };
+
+    /// Build the `Modules` graph for `root_env` plus `imported_envs`, returning the
+    /// root's `module_idx`. A builtin root does not re-include builtin imports. This is
+    /// the one place the "source-modules + `init`" dance lives, shared by the publish
+    /// and cache-key paths so a single graph can be built once and reused (e.g. for both
+    /// the cache-key probe and, on a miss, the republish) instead of rebuilt per call.
+    pub fn initForRootModule(
+        allocator: Allocator,
+        root_env: *ModuleEnv,
+        imported_envs: []const *ModuleEnv,
+    ) Allocator.Error!RootModules {
+        var imported_source_count: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
+            imported_source_count += 1;
+        }
+
+        const source_modules = try allocator.alloc(SourceModule, imported_source_count + 1);
+        defer allocator.free(source_modules);
+
+        var source_index: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
+            source_modules[source_index] = .{ .precompiled = imported_env };
+            source_index += 1;
+        }
+        const module_idx: u32 = @intCast(imported_source_count);
+        source_modules[imported_source_count] = .{ .precompiled = root_env };
+
+        return .{ .modules = try Modules.init(allocator, source_modules), .module_idx = module_idx };
+    }
 
     /// Initialize typed CIR module storage from checked module environments.
     pub fn init(allocator: Allocator, source_modules: []const SourceModule) Allocator.Error!Modules {
@@ -136,17 +167,14 @@ pub const Modules = struct {
             }
             module_result.value_ptr.* = @intCast(i);
 
-            for (module_.allDefs()) |def_idx| {
+            for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().global_value_defs)) |def_idx| {
                 const def = module_.def(def_idx);
                 if (def.data.kind != .let) continue;
                 switch (def.pattern.data) {
                     .assign => |assign| {
                         const def_result = try module_data.top_level_defs_by_ident.getOrPut(allocator, assign.ident);
                         if (def_result.found_existing) {
-                            std.debug.panic(
-                                "typed_cir invariant violated: duplicate top-level def ident in module {s}",
-                                .{module_name},
-                            );
+                            continue;
                         }
                         def_result.value_ptr.* = def_idx;
                     },
@@ -184,6 +212,18 @@ pub const Modules = struct {
         return self.module_idxs_by_name.get(target_name);
     }
 };
+
+/// Prepare a checked `ModuleEnv` for runtime use so it can pair with a published or
+/// relocated artifact: enable runtime ident inserts, ensure module-name idents, and
+/// finalize method tables. This is the single source of that 3-step prep — used by
+/// `Modules.init`'s `SourceModule` handling and called DIRECTLY (without building a
+/// whole `Modules` graph) by the builtin and cache-hit load paths, which only need
+/// the env prepared.
+pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!void {
+    try env.getIdentStore().enableRuntimeInserts(allocator);
+    try ensureModuleNameIdents(env);
+    env.finalizeMethodTables();
+}
 
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
     if (env.display_module_name_idx.isNone()) {
@@ -318,7 +358,20 @@ pub const Module = struct {
 
     /// Return the checked module's method identifier table for tooling and lowering.
     pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.env().method_idents.sorted);
+            std.debug.assert(self.env().method_idents.deduplicated);
+        }
         return self.env().method_idents.entries.items;
+    }
+
+    /// Return the checked module's method definition table for static-dispatch lowering.
+    pub fn methodDefEntries(self: @This()) []const ModuleEnv.MethodDefs.Entry {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.env().method_defs.sorted);
+            std.debug.assert(self.env().method_defs.deduplicated);
+        }
+        return self.env().method_defs.entries.items;
     }
 
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {
@@ -339,7 +392,7 @@ pub const Module = struct {
             .flex => |flex| blk: {
                 const constraints = self.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
                 for (constraints) |constraint| {
-                    if (constraint.origin == .from_numeral) break :blk true;
+                    if (constraint.origin == .from_literal) break :blk true;
                 }
                 break :blk false;
             },

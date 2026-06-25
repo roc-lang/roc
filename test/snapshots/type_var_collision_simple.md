@@ -210,34 +210,38 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 103)
+					(e-call (constraint-fn-var 195)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 112)
+					(e-call (constraint-fn-var 214)
 						(e-lookup-local
 							(p-assign (ident "identity2")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 117)
+					(e-call (constraint-fn-var 219)
 						(e-lookup-local
 							(p-assign (ident "pair")))
 						(e-lookup-local
 							(p-assign (ident "result1")))
 						(e-lookup-local
 							(p-assign (ident "result2")))))
-				(e-binop (op "add")
-					(e-binop (op "add")
+				(e-dispatch-call (method "plus") (constraint-fn-var 222)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 220)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "a"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "b"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "a")))
-						(e-lookup-local
-							(p-assign (ident "b"))))
-					(e-lookup-local
-						(p-assign (ident "c"))))))))
+							(p-assign (ident "c")))))))))
 ~~~
 # TYPES
 ~~~clojure

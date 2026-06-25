@@ -14,71 +14,9 @@ match ... {
 }
 ~~~
 # EXPECTED
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
+NIL
 # PROBLEMS
-**REDUNDANT PATTERN**
-The second branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The third branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The fourth branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The fifth branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -189,17 +127,32 @@ match ... {
 													(required
 														(p-assign (ident "country"))))))))))))
 				(value
-					(e-string
-						(e-literal (string ""))
-						(e-lookup-local
-							(p-assign (ident "name")))
-						(e-literal (string " lives in "))
-						(e-lookup-local
-							(p-assign (ident "city")))
-						(e-literal (string ", "))
-						(e-lookup-local
-							(p-assign (ident "country")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "name"))))
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-lookup-local
+								(p-assign (ident "city"))))
+						(s-let
+							(p-assign (ident "#interp_2"))
+							(e-lookup-local
+								(p-assign (ident "country"))))
+						(e-interpolation (constraint-fn-var 167)
+							(first
+								(e-literal (string "")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string " lives in "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string ", "))
+								(e-lookup-local
+									(p-assign (ident "#interp_2")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -223,20 +176,35 @@ match ... {
 													(required
 														(p-assign (ident "city"))))))))))))
 				(value
-					(e-string
-						(e-literal (string ""))
-						(e-lookup-local
-							(p-assign (ident "name")))
-						(e-literal (string " ("))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 114)
-							(receiver
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_3"))
+							(e-lookup-local
+								(p-assign (ident "name"))))
+						(s-let
+							(p-assign (ident "#interp_4"))
+							(e-dispatch-call (method "to_str") (constraint-fn-var 172)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "age"))))
+								(args)))
+						(s-let
+							(p-assign (ident "#interp_5"))
+							(e-lookup-local
+								(p-assign (ident "city"))))
+						(e-interpolation (constraint-fn-var 234)
+							(first
+								(e-literal (string "")))
+							(parts
 								(e-lookup-local
-									(p-assign (ident "age"))))
-							(args))
-						(e-literal (string ") from "))
-						(e-lookup-local
-							(p-assign (ident "city")))
-						(e-literal (string "")))))
+									(p-assign (ident "#interp_3")))
+								(e-literal (string " ("))
+								(e-lookup-local
+									(p-assign (ident "#interp_4")))
+								(e-literal (string ") from "))
+								(e-lookup-local
+									(p-assign (ident "#interp_5")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -254,11 +222,18 @@ match ... {
 																	(required
 																		(p-assign (ident "value"))))))))))))))))
 				(value
-					(e-string
-						(e-literal (string "Deep nested: "))
-						(e-lookup-local
-							(p-assign (ident "value")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_6"))
+							(e-lookup-local
+								(p-assign (ident "value"))))
+						(e-interpolation (constraint-fn-var 293)
+							(first
+								(e-literal (string "Deep nested: ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_6")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -268,11 +243,18 @@ match ... {
 									(required
 										(p-assign (ident "simple"))))))))
 				(value
-					(e-string
-						(e-literal (string "Simple: "))
-						(e-lookup-local
-							(p-assign (ident "simple")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_7"))
+							(e-lookup-local
+								(p-assign (ident "simple"))))
+						(e-interpolation (constraint-fn-var 350)
+							(first
+								(e-literal (string "Simple: ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_7")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

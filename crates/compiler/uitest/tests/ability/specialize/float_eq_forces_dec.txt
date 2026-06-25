@@ -1,6 +1,0 @@
-app "test" provides [main] to "./platform"
-
-n : Num *
-
-main = n == 1.
-#      ^ Dec

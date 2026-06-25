@@ -66,7 +66,7 @@ foo = |num| {
 				(p-assign (ident "num")))
 			(e-block
 				(s-dbg
-					(e-dispatch-call (method "to_str") (constraint-fn-var 16)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 18)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "num"))))
@@ -79,7 +79,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a => {} where [a.to_str : a -> _ret]")))
+		(patt (type "a -> {} where [a.to_str : a -> _ret]")))
 	(expressions
-		(expr (type "a => {} where [a.to_str : a -> _ret]"))))
+		(expr (type "a -> {} where [a.to_str : a -> _ret]"))))
 ~~~

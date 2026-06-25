@@ -1,3 +1,0 @@
-procedure Test.0 ():
-    let Test.2 : [<rnu><null>, C List *self] = TagId(1) ;
-    ret Test.2;

@@ -27,6 +27,15 @@ const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
 const Ident = base.Ident;
 
+/// Hard ceiling on instantiation recursion depth. Finite types never approach
+/// this; a self-referential static-dispatch `where` constraint (e.g.
+/// `Vec(a) ... where [a.join : Vec(a), a -> a]` used nested) would otherwise
+/// recurse forever, minting fresh constrained vars at each level that the
+/// `var_map` memo cannot dedup. On hitting this ceiling the instantiator stops
+/// and flags `recursion_overflow`; the caller turns that into an infinite-type
+/// error rather than hanging.
+pub const max_instantiation_depth: u32 = 8192;
+
 /// Type to manage instantiation.
 ///
 /// Entry point is `instantiateVar`
@@ -38,10 +47,18 @@ pub const Instantiator = struct {
     store: *TypesStore,
     idents: *const base.Ident.Store,
     var_map: *std.AutoHashMap(Var, Var),
+    constraint_fn_var_map: ?*std.AutoHashMap(Var, Var) = null,
 
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
+
+    /// Live recursion depth, guarded against non-terminating instantiation.
+    depth: u32 = 0,
+    /// Set once `depth` exceeds `max_instantiation_depth`. The entry point
+    /// (`Check.instantiateVarHelp`) turns this into an infinite-type error
+    /// instead of using the (partial, err-filled) result.
+    recursion_overflow: bool = false,
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -84,6 +101,16 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
+
+        // Guard against non-terminating instantiation (e.g. a self-referential
+        // static-dispatch `where` constraint). Stop recursing and flag overflow;
+        // the caller reports an infinite-type error.
+        self.depth += 1;
+        defer self.depth -= 1;
+        if (self.depth > max_instantiation_depth) {
+            self.recursion_overflow = true;
+            return try self.store.freshFromContentWithRank(.err, self.current_rank);
+        }
 
         // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
         if (self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
@@ -147,17 +174,12 @@ pub const Instantiator = struct {
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
 
-                const from_numeral_origin = switch (resolved.desc.content) {
-                    .flex => resolved.desc.from_numeral_origin,
-                    else => false,
-                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -173,17 +195,12 @@ pub const Instantiator = struct {
 
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
-                const from_numeral_origin = switch (resolved.desc.content) {
-                    .flex => resolved.desc.from_numeral_origin,
-                    else => false,
-                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -220,19 +237,31 @@ pub const Instantiator = struct {
     }
 
     fn instantiateAlias(self: *Self, alias: Alias) std.mem.Allocator.Error!Content {
-        var fresh_vars = std.ArrayList(Var).empty;
-        defer fresh_vars.deinit(self.store.gpa);
+        var arg_span = alias.vars.nonempty;
+        arg_span.dropFirstElem();
 
-        var iter = self.store.iterAliasArgs(alias);
-        while (iter.next()) |arg_var| {
-            const fresh_elem = try self.instantiateVar(arg_var);
-            try fresh_vars.append(self.store.gpa, fresh_elem);
+        var fresh_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
+        const fresh_vars_alloc = fresh_vars_sfa.get();
+        var fresh_vars = try std.ArrayList(Var).initCapacity(fresh_vars_alloc, arg_span.count);
+        defer fresh_vars.deinit(fresh_vars_alloc);
+
+        const args_start: usize = @intFromEnum(arg_span.start);
+        for (0..arg_span.count) |i| {
+            const arg_var = self.store.vars.items.items[args_start + i];
+            fresh_vars.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
 
         const backing_var = self.store.getAliasBackingVar(alias);
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
-        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items, alias.origin_module);
+        return self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
+            alias.ident,
+            fresh_backing_var,
+            fresh_vars.items,
+            alias.origin_module,
+            alias.source_decl.toOptional(),
+            alias.source_decl.originIsBuiltin(),
+        );
     }
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
@@ -254,29 +283,41 @@ pub const Instantiator = struct {
         const backing_var = self.store.getNominalBackingVar(nominal);
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
-        var fresh_vars = std.ArrayList(Var).empty;
-        defer fresh_vars.deinit(self.store.gpa);
+        const arg_span = TypesStore.getNominalArgsRange(nominal);
+        var fresh_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
+        const fresh_vars_alloc = fresh_vars_sfa.get();
+        var fresh_vars = try std.ArrayList(Var).initCapacity(fresh_vars_alloc, arg_span.count);
+        defer fresh_vars.deinit(fresh_vars_alloc);
 
-        var iter = self.store.iterNominalArgs(nominal);
-        while (iter.next()) |arg_var| {
-            const fresh_elem = try self.instantiateVar(arg_var);
-            try fresh_vars.append(self.store.gpa, fresh_elem);
+        const args_start: usize = @intFromEnum(arg_span.start);
+        for (0..arg_span.count) |i| {
+            const arg_var = self.store.vars.items.items[args_start + i];
+            fresh_vars.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
 
-        return (try self.store.mkNominal(nominal.ident, fresh_backing_var, fresh_vars.items, nominal.origin_module, nominal.is_opaque)).structure.nominal_type;
+        return (try self.store.mkNominalWithSourceDeclAndBuiltinOrigin(
+            nominal.ident,
+            fresh_backing_var,
+            fresh_vars.items,
+            nominal.origin_module,
+            nominal.sourceDeclOptional(),
+            nominal.isOpaque(),
+            nominal.originIsBuiltin(),
+        )).structure.nominal_type;
     }
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
         // Use index-based iteration to avoid iterator invalidation
         // (see comment in instantiateFunc for details)
-        var fresh_elems = std.ArrayList(Var).empty;
-        defer fresh_elems.deinit(self.store.gpa);
+        var fresh_elems_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
+        const fresh_elems_alloc = fresh_elems_sfa.get();
+        var fresh_elems = try std.ArrayList(Var).initCapacity(fresh_elems_alloc, tuple.elems.count);
+        defer fresh_elems.deinit(fresh_elems_alloc);
 
         const elems_start: usize = @intFromEnum(tuple.elems.start);
         for (0..tuple.elems.count) |i| {
             const elem_var = self.store.vars.items.items[elems_start + i];
-            const fresh_elem = try self.instantiateVar(elem_var);
-            try fresh_elems.append(self.store.gpa, fresh_elem);
+            fresh_elems.appendAssumeCapacity(try self.instantiateVar(elem_var));
         }
 
         const fresh_elems_range = try self.store.appendVars(fresh_elems.items);
@@ -287,15 +328,16 @@ pub const Instantiator = struct {
         // The slice would point into the backing ArrayList, but instantiateVar
         // can recursively call appendVars which may reallocate the array,
         // invalidating the slice pointer.
-        var fresh_args = std.ArrayList(Var).empty;
-        defer fresh_args.deinit(self.store.gpa);
+        var fresh_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
+        const fresh_args_alloc = fresh_args_sfa.get();
+        var fresh_args = try std.ArrayList(Var).initCapacity(fresh_args_alloc, func.args.count);
+        defer fresh_args.deinit(fresh_args_alloc);
 
         const args_start: usize = @intFromEnum(func.args.start);
         for (0..func.args.count) |i| {
             // Re-fetch the var on each iteration since the backing array may have moved
             const arg_var = self.store.vars.items.items[args_start + i];
-            const fresh_arg = try self.instantiateVar(arg_var);
-            try fresh_args.append(self.store.gpa, fresh_arg);
+            fresh_args.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
 
         const fresh_ret = try self.instantiateVar(func.ret);
@@ -316,15 +358,17 @@ pub const Instantiator = struct {
             return try self.store.appendRecordFields(&.{});
         }
 
-        var fresh_fields = std.ArrayList(RecordField).empty;
-        defer fresh_fields.deinit(self.store.gpa);
+        var fresh_fields_sfa = std.heap.stackFallback(16 * @sizeOf(RecordField), self.store.gpa);
+        const fresh_fields_alloc = fresh_fields_sfa.get();
+        var fresh_fields = try std.ArrayList(RecordField).initCapacity(fresh_fields_alloc, fields.count);
+        defer fresh_fields.deinit(fresh_fields_alloc);
 
         const fields_start: usize = @intFromEnum(fields.start);
         for (0..fields.count) |i| {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            try fresh_fields.append(self.store.gpa, RecordField{
+            fresh_fields.appendAssumeCapacity(RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -345,15 +389,17 @@ pub const Instantiator = struct {
             };
         }
 
-        var fresh_fields = std.ArrayList(RecordField).empty;
-        defer fresh_fields.deinit(self.store.gpa);
+        var fresh_fields_sfa = std.heap.stackFallback(16 * @sizeOf(RecordField), self.store.gpa);
+        const fresh_fields_alloc = fresh_fields_sfa.get();
+        var fresh_fields = try std.ArrayList(RecordField).initCapacity(fresh_fields_alloc, record.fields.count);
+        defer fresh_fields.deinit(fresh_fields_alloc);
 
         const fields_start: usize = @intFromEnum(record.fields.start);
         for (0..record.fields.count) |i| {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            try fresh_fields.append(self.store.gpa, RecordField{
+            fresh_fields.appendAssumeCapacity(RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -378,8 +424,10 @@ pub const Instantiator = struct {
             };
         }
 
-        var fresh_tags = std.ArrayList(Tag).empty;
-        defer fresh_tags.deinit(self.store.gpa);
+        var fresh_tags_sfa = std.heap.stackFallback(16 * @sizeOf(Tag), self.store.gpa);
+        const fresh_tags_alloc = fresh_tags_sfa.get();
+        var fresh_tags = try std.ArrayList(Tag).initCapacity(fresh_tags_alloc, tag_union.tags.count);
+        defer fresh_tags.deinit(fresh_tags_alloc);
 
         const tags_start: usize = @intFromEnum(tag_union.tags.start);
         for (0..tag_union.tags.count) |tag_i| {
@@ -388,8 +436,10 @@ pub const Instantiator = struct {
             const tag_name = tag.name;
             const tag_args = tag.args;
 
-            var fresh_args = std.ArrayList(Var).empty;
-            defer fresh_args.deinit(self.store.gpa);
+            var fresh_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
+            const fresh_args_alloc = fresh_args_sfa.get();
+            var fresh_args = try std.ArrayList(Var).initCapacity(fresh_args_alloc, tag_args.count);
+            defer fresh_args.deinit(fresh_args_alloc);
 
             // Skip the loop entirely for tags with no arguments.
             // This avoids accessing tag_args.start which may be undefined when count is 0.
@@ -399,14 +449,13 @@ pub const Instantiator = struct {
                 const args_start: usize = @intFromEnum(tag_args.start);
                 for (0..tag_args.count) |i| {
                     const arg_var = self.store.vars.items.items[args_start + i];
-                    const fresh_arg = try self.instantiateVar(arg_var);
-                    try fresh_args.append(self.store.gpa, fresh_arg);
+                    fresh_args.appendAssumeCapacity(try self.instantiateVar(arg_var));
                 }
             }
 
             const fresh_args_range = try self.store.appendVars(fresh_args.items);
 
-            try fresh_tags.append(self.store.gpa, Tag{
+            fresh_tags.appendAssumeCapacity(Tag{
                 .name = tag_name,
                 .args = fresh_args_range,
             });
@@ -436,8 +485,10 @@ pub const Instantiator = struct {
         if (constraints_len == 0) {
             return StaticDispatchConstraint.SafeList.Range.empty();
         } else {
-            var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
-            defer fresh_constraints.deinit(self.store.gpa);
+            var fresh_constraints_sfa = std.heap.stackFallback(8 * @sizeOf(StaticDispatchConstraint), self.store.gpa);
+            const fresh_constraints_alloc = fresh_constraints_sfa.get();
+            var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(fresh_constraints_alloc, constraints.len());
+            defer fresh_constraints.deinit(fresh_constraints_alloc);
 
             // IMPORTANT: We must re-fetch on each iteration, not cache the slice.
             // The slice would point into the backing ArrayList, but instantiateVar
@@ -448,8 +499,7 @@ pub const Instantiator = struct {
             for (0..constraints_len) |i| {
                 // Re-fetch the constraint on each iteration since the backing array may have moved
                 const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
-                const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
-                try fresh_constraints.append(self.store.gpa, fresh_constraint);
+                fresh_constraints.appendAssumeCapacity(try self.instantiateStaticDispatchConstraint(constraint));
             }
 
             const fresh_constraints_range = try self.store.appendStaticDispatchConstraints(fresh_constraints.items);
@@ -460,6 +510,9 @@ pub const Instantiator = struct {
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
         var result = constraint;
         result.fn_var = try self.instantiateVar(constraint.fn_var);
+        if (self.constraint_fn_var_map) |map| {
+            try map.put(constraint.fn_var, result.fn_var);
+        }
         return result;
     }
 };

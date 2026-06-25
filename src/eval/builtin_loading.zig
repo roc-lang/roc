@@ -1,6 +1,7 @@
 //! Utilities for loading compiled builtin modules
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const can = @import("can");
 const collections = @import("collections");
 
@@ -29,7 +30,7 @@ pub const LoadedModule = struct {
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
-pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
+pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) (Allocator.Error || error{Internal})!can.CIR.BuiltinIndices {
     if (bin_data.len < @sizeOf(can.CIR.BuiltinIndices)) {
         return error.Internal;
     }
@@ -44,7 +45,7 @@ pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !
 }
 
 /// Load a compiled ModuleEnv from embedded binary data
-pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) (Allocator.Error || error{Internal})!LoadedModule {
     if (bin_data.len < @sizeOf(ModuleEnv.Serialized)) {
         return error.Internal;
     }
@@ -53,6 +54,7 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
     // CompactWriter requires specific alignment for serialization
     const CompactWriter = collections.CompactWriter;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    errdefer gpa.free(buffer);
     @memcpy(buffer, bin_data);
 
     // Cast to the serialized structure and deserialize

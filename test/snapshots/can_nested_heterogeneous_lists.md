@@ -8,46 +8,19 @@ type=expr
 [[1, "hello"], [2, 3]]
 ~~~
 # EXPECTED
-TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:3:1:4
-TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:20:1:21
+TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:6:1:13
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_nested_heterogeneous_lists.md:1:3:1:4:**
-```roc
-[[1, "hello"], [2, 3]]
-```
-  ^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **can_nested_heterogeneous_lists.md:1:6:1:13:**
 ```roc
 [[1, "hello"], [2, 3]]
 ```
      ^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_nested_heterogeneous_lists.md:1:20:1:21:**
-```roc
-[[1, "hello"], [2, 3]]
-```
-                   ^
-
-The type was determined to be non-numeric here:
-**can_nested_heterogeneous_lists.md:1:17:1:18:**
-```roc
-[[1, "hello"], [2, 3]]
-```
-                ^
-
-Other code expects this to have the type:
-
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -85,5 +58,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(Str))"))
+(expr (type "List(List(Dec))"))
 ~~~

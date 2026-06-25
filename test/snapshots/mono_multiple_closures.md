@@ -15,7 +15,6 @@ result = func(10, 20)
 ~~~
 # MONO
 ~~~roc
-func : Dec, Dec -> Dec
 func = |x, y| {
 	add_x = |a| a + x
 	add_y = |b| b + y
@@ -104,11 +103,13 @@ EndOfFile,
 						(e-lambda
 							(args
 								(p-assign (ident "a")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "a")))
-								(e-lookup-local
-									(p-assign (ident "x")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 43)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "a"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "x"))))))))
 				(s-let
 					(p-assign (ident "add_y"))
 					(e-closure
@@ -117,23 +118,27 @@ EndOfFile,
 						(e-lambda
 							(args
 								(p-assign (ident "b")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "b")))
-								(e-lookup-local
-									(p-assign (ident "y")))))))
-				(e-binop (op "add")
-					(e-call (constraint-fn-var 60)
-						(e-lookup-local
-							(p-assign (ident "add_x")))
-						(e-num (value "5")))
-					(e-call (constraint-fn-var 74)
-						(e-lookup-local
-							(p-assign (ident "add_y")))
-						(e-num (value "5")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 45)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "b"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "y"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 121)
+					(receiver
+						(e-call (constraint-fn-var 83)
+							(e-lookup-local
+								(p-assign (ident "add_x")))
+							(e-num (value "5"))))
+					(args
+						(e-call (constraint-fn-var 120)
+							(e-lookup-local
+								(p-assign (ident "add_y")))
+							(e-num (value "5"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 103)
+		(e-call (constraint-fn-var 201)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "10"))
@@ -143,9 +148,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
+		(patt (type "c, d -> e where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, d -> c, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, c -> e]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
+		(expr (type "c, d -> e where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, d -> c, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, c -> e]"))
 		(expr (type "Dec"))))
 ~~~

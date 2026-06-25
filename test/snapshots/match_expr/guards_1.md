@@ -102,37 +102,55 @@ describe = |value| match value {
 								(pattern (degenerate false)
 									(p-assign (ident "x"))))
 							(value
-								(e-string
-									(e-literal (string "positive: "))
-									(e-dispatch-call (method "to_str") (constraint-fn-var 128)
-										(receiver
+								(e-block
+									(s-let
+										(p-assign (ident "#interp_0"))
+										(e-dispatch-call (method "to_str") (constraint-fn-var 195)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "x"))))
+											(args)))
+									(e-interpolation (constraint-fn-var 265)
+										(first
+											(e-literal (string "positive: ")))
+										(parts
 											(e-lookup-local
-												(p-assign (ident "x"))))
-										(args))
-									(e-literal (string ""))))
+												(p-assign (ident "#interp_0")))
+											(e-literal (string ""))))))
 							(guard
-								(e-binop (op "gt")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "0")))))
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 106)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "0"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-assign (ident "x"))))
 							(value
-								(e-string
-									(e-literal (string "negative: "))
-									(e-dispatch-call (method "to_str") (constraint-fn-var 218)
-										(receiver
+								(e-block
+									(s-let
+										(p-assign (ident "#interp_1"))
+										(e-dispatch-call (method "to_str") (constraint-fn-var 392)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "x"))))
+											(args)))
+									(e-interpolation (constraint-fn-var 462)
+										(first
+											(e-literal (string "negative: ")))
+										(parts
 											(e-lookup-local
-												(p-assign (ident "x"))))
-										(args))
-									(e-literal (string ""))))
+												(p-assign (ident "#interp_1")))
+											(e-literal (string ""))))))
 							(guard
-								(e-binop (op "lt")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "0")))))
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 303)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "0"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)

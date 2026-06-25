@@ -17,8 +17,8 @@ If you want to debug the rust compiler instead of a roc program, you need to com
 Example:
 
 ```
-❯ zig build test
-test
+❯ zig build run-test-zig
+run-test-zig
 └─ run echo
    └─ run test failure
 error: while executing test 'test.test_0', the following command terminated with signal 11 (expected exited with code 0):
@@ -29,7 +29,7 @@ test transitive failure
 └─ run echo transitive failure
    └─ run test (+1 more reused dependencies)
 error: the following build command failed with exit code 1:
-/home/username/gitrepos/roc2/roc/.zig-cache/o/6e344dd24cd22c7b75f5c380fe9169ed/build /home/username/Downloads/zig-x86_64-linux-0.14.1/zig /home/username/Downloads/zig-x86_64-linux-0.14.1/lib /home/username/gitrepos/roc2/roc /home/username/gitrepos/roc2/roc/.zig-cache /home/username/.cache/zig --seed 0x5772e400 -Z47c7adeb63ed8ed2 test
+/home/username/gitrepos/roc2/roc/.zig-cache/o/6e344dd24cd22c7b75f5c380fe9169ed/build /home/username/Downloads/zig-x86_64-linux-0.14.1/zig /home/username/Downloads/zig-x86_64-linux-0.14.1/lib /home/username/gitrepos/roc2/roc /home/username/gitrepos/roc2/roc/.zig-cache /home/username/.cache/zig --seed 0x5772e400 -Z47c7adeb63ed8ed2 run-test-zig
 ```
 
 The key is to remove the listen flag from the command that zig provided, so:

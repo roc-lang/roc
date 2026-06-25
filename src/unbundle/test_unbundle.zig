@@ -6,6 +6,8 @@
 //! - Error handling
 
 const std = @import("std");
+const collections = @import("collections");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const unbundle = @import("unbundle.zig");
 const base58 = @import("base58");
@@ -134,7 +136,7 @@ test "validateBase58Hash - valid and invalid hashes" {
 test "BufferExtractWriter - basic functionality" {
     const allocator = testing.allocator;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
     var writer = unbundle.BufferExtractWriter.init(alloc);
@@ -143,7 +145,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Hello, World!");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Create a directory (should be no-op for buffer writer)
     try writer.extractWriter().makeDir("test_dir");
@@ -151,7 +153,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create another file in a subdirectory
     const file_writer2 = try writer.extractWriter().createFile("subdir/test2.txt");
     try file_writer2.writeAll("Second file");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify files were stored
     try testing.expectEqual(@as(usize, 2), writer.files.count());
@@ -168,42 +170,45 @@ test "BufferExtractWriter - basic functionality" {
 }
 
 test "DirExtractWriter - basic functionality" {
+    const io = testing.io;
+
     // Create temp directory for extraction
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var writer = unbundle.DirExtractWriter.init(tmp.dir, testing.allocator);
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, io, testing.allocator);
     defer writer.deinit();
 
     // Create a directory
     try writer.extractWriter().makeDir("test_dir");
 
     // Verify directory was created
-    var test_dir = try tmp.dir.openDir("test_dir", .{});
-    test_dir.close();
+    var test_dir = try tmp.dir.openDir(io, "test_dir", .{});
+    test_dir.close(io);
 
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Test content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify file was created
-    const content = try tmp.dir.readFileAlloc(testing.allocator, "test.txt", 1024);
+    const content = try tmp.dir.readFileAlloc(io, "test.txt", testing.allocator, .limited(1024));
     defer testing.allocator.free(content);
     try testing.expectEqualStrings("Test content", content);
 
     // Create a file in a subdirectory (should create parent dirs)
     const file_writer2 = try writer.extractWriter().createFile("deep/nested/file.txt");
     try file_writer2.writeAll("Nested content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify nested file was created
-    const nested_content = try tmp.dir.readFileAlloc(testing.allocator, "deep/nested/file.txt", 1024);
+    const nested_content = try tmp.dir.readFileAlloc(io, "deep/nested/file.txt", testing.allocator, .limited(1024));
     defer testing.allocator.free(nested_content);
     try testing.expectEqualStrings("Nested content", nested_content);
 }
 
 test "unbundle filename validation" {
+    const io = testing.io;
     // Use a dummy reader and directory that won't actually be used
     const dummy_data = "";
     var stream_reader = std.Io.Reader.fixed(dummy_data);
@@ -211,15 +216,15 @@ test "unbundle filename validation" {
     defer tmp.cleanup();
 
     // Test with invalid filename (no .tar.zst extension)
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader, tmp.dir, "invalid.txt", null));
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader, tmp.dir, io, "invalid.txt", null));
 
     // Test with invalid base58 hash (create a new reader)
     var stream_reader2 = std.Io.Reader.fixed(dummy_data);
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader2, tmp.dir, "not-valid-base58!@#.tar.zst", null));
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader2, tmp.dir, io, "not-valid-base58!@#.tar.zst", null));
 
     // Test with empty hash (create a new reader)
     var stream_reader3 = std.Io.Reader.fixed(dummy_data);
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader3, tmp.dir, ".tar.zst", null));
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader3, tmp.dir, io, ".tar.zst", null));
 }
 
 test "pathHasUnbundleErr - long paths" {
@@ -295,7 +300,7 @@ test "validateBase58Hash - edge cases" {
 test "BufferExtractWriter - overwrite existing file" {
     const allocator = testing.allocator;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
     var writer = unbundle.BufferExtractWriter.init(alloc);
@@ -304,12 +309,12 @@ test "BufferExtractWriter - overwrite existing file" {
     // Create a file with initial content
     const file_writer1 = try writer.extractWriter().createFile("test.txt");
     try file_writer1.writeAll("Initial content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Overwrite the same file
     const file_writer2 = try writer.extractWriter().createFile("test.txt");
     try file_writer2.writeAll("New content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify it was overwritten
     const file = writer.files.get("test.txt");
@@ -318,19 +323,21 @@ test "BufferExtractWriter - overwrite existing file" {
 }
 
 test "DirExtractWriter - nested directory creation" {
+    const io = testing.io;
+
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var writer = unbundle.DirExtractWriter.init(tmp.dir, testing.allocator);
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, io, testing.allocator);
     defer writer.deinit();
 
     // Create a file in a deeply nested path
     const file_writer = try writer.extractWriter().createFile("a/b/c/d/e/file.txt");
     try file_writer.writeAll("Nested content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify the file was created
-    const content = try tmp.dir.readFileAlloc(testing.allocator, "a/b/c/d/e/file.txt", 1024);
+    const content = try tmp.dir.readFileAlloc(io, "a/b/c/d/e/file.txt", testing.allocator, .limited(1024));
     defer testing.allocator.free(content);
     try testing.expectEqualStrings("Nested content", content);
 }
@@ -352,23 +359,134 @@ test "ErrorContext population" {
 
 const download = @import("download.zig");
 
-test "downloadAndExtract with unreachable URL returns error without crash" {
-    // Regression test: downloading from an unreachable URL should return an error,
-    // not crash due to double-close of file handle.
+test "download URL validation parses optional version component" {
+    const expected_hash = "4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
+
+    {
+        const url = "https://example.com/packages/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try download.validateUrl(url);
+
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(@as(u32, 1), parsed.version.major);
+        try testing.expectEqual(@as(u32, 2), parsed.version.minor);
+        try testing.expectEqual(@as(u32, 3), parsed.version.patch);
+        try testing.expect(parsed.version.isPresent());
+        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
+    }
+
+    {
+        const url = "https://example.com/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try download.validateUrl(url);
+
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expect(!parsed.version.isPresent());
+        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
+    }
+}
+
+test "download URL validation only recognizes strict version components" {
+    const expected_hash = "4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
+    const urls = [_][]const u8{
+        "https://example.com/packages/v1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2.3.4/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2.x/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/-1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2.4294967296/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+    };
+
+    for (urls) |url| {
+        const parsed = try download.validateUrl(url);
+
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expect(!parsed.version.isPresent());
+        try testing.expectEqualStrings(url[8 .. url.len - "/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst".len], parsed.urlId(url));
+    }
+}
+
+test "downloadAndExtract with bad archive returns error without crash" {
+    const io = testing.io;
+
+    // Regression test: a bad downloaded archive should return an error, not
+    // crash due to double-close of the temporary file handle.
     var allocator: std.mem.Allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // Resolve the temp dir to an absolute path for the new path-based API
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    // Port 1 on localhost will fail to connect, triggering error handling path
+    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const port = server.socket.address.getPort();
+
+    const ServerContext = struct {
+        server: *std.Io.net.Server,
+        response_sent: std.Io.Semaphore = .{},
+
+        const ThreadError = std.Io.net.Server.AcceptError || std.Io.net.Stream.Reader.Error || std.Io.net.Stream.Writer.Error || std.Io.Writer.Error || error{Unexpected};
+
+        fn run(ctx: *@This()) void {
+            const thread_io = testing.io;
+            ctx.runImpl() catch {
+                ctx.response_sent.post(thread_io);
+            };
+        }
+
+        fn runImpl(ctx: *@This()) ThreadError!void {
+            const thread_io = testing.io;
+
+            const stream = ctx.server.accept(thread_io) catch return;
+            defer stream.close(thread_io);
+
+            var request_buf: [1024]u8 = undefined;
+            var recv_buffer: [512]u8 = undefined;
+            var reader = stream.reader(thread_io, &recv_buffer);
+            var slices = [_][]u8{request_buf[0..]};
+            _ = std.Io.Reader.readVec(&reader.interface, &slices) catch |err| switch (err) {
+                error.EndOfStream => 0,
+                error.ReadFailed => return reader.err orelse error.Unexpected,
+            };
+
+            const body = "not a roc bundle";
+            var write_buf: [256]u8 = undefined;
+            var writer = stream.writer(thread_io, &write_buf);
+            try writer.interface.print(
+                "HTTP/1.1 200 OK\r\n" ++
+                    "Content-Length: {d}\r\n" ++
+                    "Connection: close\r\n" ++
+                    "\r\n" ++
+                    "{s}",
+                .{ body.len, body },
+            );
+            try writer.interface.flush();
+            ctx.response_sent.post(thread_io);
+        }
+    };
+
+    var server_ctx = ServerContext{ .server = &server };
+    const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
+    defer server_thread.join();
+
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst",
+        .{port},
+    );
+    defer allocator.free(url);
+
     const result = download.downloadAndExtract(
         &allocator,
-        "https://127.0.0.1:1/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst",
+        io,
+        url,
         tmp_path,
+        .{},
     );
 
-    try testing.expectError(download.DownloadError.HttpError, result);
+    try testing.expectError(download.DownloadError.InvalidTarHeader, result);
+    try server_ctx.response_sent.wait(io);
 }
