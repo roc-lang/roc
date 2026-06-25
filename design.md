@@ -1355,6 +1355,16 @@ propagate iterator information by replaying checked expressions, re-lowering
 declaration right-hand sides, mining the public record/closure representation,
 or asking a backend to recover iterator semantics from generated code.
 
+The implementation owner for this is a post-check iterator-plan elimination
+step, not LIR lowering and not a backend optimization. Monotype lowering may
+produce `iter_plan` expressions with the public `Iter(item)` type, and later
+post-check passes may clone, specialize, inline, or scalarize around those
+values. Before Lambda-to-LIR lowering, the elimination step must prove every
+remaining plan value has either been consumed by an optimized builtin consumer
+or replaced by the ordinary public `Iter` value. No raw plan value may survive
+into LIR, because LIR has only ordinary values, control flow, calls, and
+explicit ARC statements.
+
 Because plans are post-check values, source evaluation order is preserved by
 normal IR evaluation. For example, a declaration whose right-hand side is an
 `if` expression evaluates the condition and selected branch at the declaration
@@ -1363,6 +1373,17 @@ already-produced plan value; it does not re-evaluate the condition, branch body,
 or any appended item expressions. This matters for `dbg`, `expect`, `crash`,
 and any other observable runtime behavior that is not modeled as an ordinary
 effectful function call.
+
+The plan representation is therefore not a binder side table. A compiler pass
+may keep temporary maps from locals to plan values while rewriting a body, but
+those maps are indexes into already-lowered IR values. They must not point back
+to checked expressions or source declarations that would need to be re-evaluated
+later. If an iterator value is produced by an `if` or `match`, the condition,
+scrutinee, pattern tests, selected branch, and branch-local observable behavior
+belong at that expression's source position. Optimized consumption must
+preserve that order, either by consuming the already-produced plan value or by
+rewriting the surrounding IR into explicit private plan state at that same
+point.
 
 The reason for the split is purity. Source such as:
 
@@ -1445,6 +1466,15 @@ post-check plan value must be in one of these states:
 LIR and backends consume ordinary values, control flow, and explicit ARC
 statements. They must not know builtin iterator semantics, public `Iter`
 closure layouts, or special reference-counting rules for iterator wrappers.
+
+Private plan state produced by iterator-plan elimination is still ordinary
+post-check IR: locals, tuples, tag unions, loop parameters, branches, calls, and
+low-level operations. It is compiler-owned state, not a public `Iter` wrapper.
+For example, an `if` that chooses between two known iterator plans may lower to
+a private phase value plus the fields needed by the selected plan. A following
+optimized `for` consumes that private state. If the same source iterator is also
+observed publicly, the public observation receives a separately materialized
+`Iter` value with the same source meaning.
 
 Optimized consumers lower plans directly. For example, consuming a
 `ListIter(list, index, len)` in a `for` loop produces loop state carrying the

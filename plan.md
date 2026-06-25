@@ -2,29 +2,50 @@
 
 ## Goal
 
-Make optimized Roc iterator code compile like an explicit state machine while
-preserving the public `Iter` API as ordinary pure Roc functions.
+Make optimized Roc iterator code compile like explicit state machines while the
+public `Iter` API remains ordinary pure Roc.
 
-The end state is:
+The final state is:
 
-- every builtin iterator producer that the compiler understands lowers to an
-  explicit post-check iterator plan value
-- iterator plan values propagate through ordinary post-check value positions,
-  including locals, blocks, `if`, `match`, and specialized function calls
+- builtin iterator producers lower to explicit post-check iterator plan values
+- those plan values are ordinary post-check values with the public `Iter(item)`
+  type until a later post-check elimination pass consumes or materializes them
+- source evaluation order is preserved for producers, conditions, branch
+  selection, appended items, `dbg`, `expect`, and `crash`
 - optimized consumers consume known plans directly without constructing public
-  `Iter` records, public step records, or step closures in the hot loop
-- public observation boundaries materialize exactly the same public `Iter`
-  value that the Roc builtin implementation would have produced
-- unmaterialized plans never reach LIR or any backend
+  `Iter` records, step closures, or public step tags in the hot loop
+- public observation boundaries materialize exactly the public `Iter` value the
+  Roc builtin implementation promises
+- no raw iterator plan reaches Lambda-to-LIR lowering, LIR, ARC, or any backend
 - Rocci Bird with and without a top-level `.iter()` in `on_screen_collided!`
-  produces equivalent optimized code shape and a comparable `--opt=size`
-  wasm size
+  has the same optimized collision-loop shape and comparable `--opt=size` wasm
+  size
 
 ## Motivation
 
-Rocci Bird exposed that Roc's current optimized wasm output is sensitive to
-whether collision points are written as a list or as `list.iter()`. After
-adding an `Append` step to the public iterator API, a `for` loop over:
+Rocci Bird exposed a size and code-shape problem in optimized wasm output. A
+collision loop written over a static list was much smaller than the same loop
+written over `list.iter()` plus `Iter.append`. The public iterator path builds
+`Iter` records, zero-argument step closures, and public step values such as
+`One`, `Append`, `Skip`, and `Done`; the optimized loop immediately destructures
+those values again.
+
+That is the wrong optimized representation. The source program is pure and
+public `Iter` values are reusable, but a consuming loop should see a private
+cursor state machine. For a list, the loop needs a list reference, an index, and
+a length. For `Iter.append`, it needs the source plan, the appended item, and a
+phase. For `Iter.map` and filters, it needs child plan state plus the captured
+function.
+
+Earlier work on this branch proves direct syntactic cases can be optimized:
+
+- `for x in list`
+- `for x in list.iter()`
+- `for x in list.iter().append(a).append(b)`
+- `for x in Iter.single(item)`
+
+That is not enough. Rocci Bird's real shape flows through locals and `if`
+branches:
 
 ```roc
 base_points = [...].iter()
@@ -43,89 +64,85 @@ for point in collision_points {
 }
 ```
 
-should not allocate iterator wrappers, call public step closures, construct
-public `One`/`Append`/`Done` values, or keep unreachable step variants alive in
-the hot path. The public source is pure and reusable, but the optimized
-consumer should see a private cursor state machine.
+Re-recognizing the checked RHS of `collision_points` at the `for` use site would
+be wrong: it can move or duplicate branch conditions, appended item expressions,
+`dbg`, `expect`, and `crash`. Mining the public `Iter` record is also wrong:
+that makes compiler optimization depend on the private Roc implementation of
+the public builtin. The right source of truth is a first-class iterator-plan
+value in post-check IR.
 
-The earlier direct-recognition work proved that lowering a syntactically
-visible `list.iter()`, `Iter.single(...)`, or append chain can remove the
-public iterator overhead for a direct `for`. That is not enough. Rocci Bird's
-important case flows through locals and conditionals. Re-recognizing the
-checked expression at the `for` use site would be wrong because it can
-re-evaluate declaration RHSs, branch conditions, appended item expressions,
-`dbg`, `expect`, or `crash`. Mining the materialized public `Iter` record is
-also wrong because that makes compiler optimization depend on the private shape
-of the Roc builtin implementation.
+## Research Summary
 
-The correct long-term design is first-class iterator plan values in the
-post-check IR. A plan value is produced once, at the same source point where the
-public `Iter` value would have been produced. Later consumers either consume
-that plan directly or force materialization to the public representation.
+Rust iterator loops do not preserve a uniform public iterator object in
+optimized code. After monomorphization and inlining, Rust generally lowers
+iterator pipelines to concrete state machines over fields such as pointer,
+index, end, phase, and captured function values. There is no heap-allocated
+universal iterator wrapper on the hot path.
 
-## Research Findings
+Roc should reach the same optimized shape for builtin iterators, with one
+additional constraint: Roc's public `Iter` API is pure. Public iterator values
+must be immutable and reusable. Any mutation used by optimized iteration must be
+mutation of compiler-owned private state, not mutation of the source `Iter`
+value.
 
-Rust does not carry a uniform heap-allocated public iterator wrapper through
-optimized loops. After monomorphization and inlining, Rust loops are ordinary
-state machines over concrete fields such as pointer, index, end, phase, and
-captured functions. Roc should reach the same kind of IR shape for builtin
-iterators, while still presenting a pure public `Iter` API.
+Current branch status:
 
-Current Roc status on this branch:
+- Monotype has an `ExprData.iter_plan` form.
+- Monotype has an `iter_plans` side store.
+- Monotype Lifted preserves plan expressions and plan stores.
+- LIR lowering rejects raw plan expressions as an invariant.
+- direct `List.iter`, visible append chains, and direct `Iter.single` have
+  optimized `for` shape tests.
+- user-defined methods named `iter` or `single` are not recognized as builtins.
 
-- `IterPlan` storage exists in Monotype.
-- direct optimized `for` over `List.iter` has a shape test and avoids the
-  public step path
-- visible `Iter.append` chains on a list source can be lowered directly for
-  optimized `for`
-- direct optimized `for` over `Iter.single` has a shape test and avoids the
-  public step path
-- user-defined methods named `iter` and `single` are not recognized as builtin
-  iterator producers
-- recognition has moved away from display-string matching toward checked method
-  identity, but this must be completed for every producer
+That is only scaffolding. The full design still requires producer emission,
+plan elimination, materialization, optimized consumers through locals and
+branches, and integration measurements.
 
-Important constraints:
+## Non-Negotiable Invariants
 
-- `dbg`, `expect`, and `crash` are observable and cannot be moved or duplicated
-  just because an expression is otherwise pure.
-- checked function effectfulness is not a sufficient "safe to replay" fact.
-- LIR and backends must not understand builtin iterator semantics.
-- ARC must only follow explicit LIR `incref`, `decref`, and `free` statements.
-- No stage after parsing/error reporting may guess, recover, or mine missing
-  semantic information.
+- Checked method identity is the only way to recognize builtin iterator
+  producers and consumers.
+- Source names, generated symbol text, public record shape, wasm output, closure
+  layout, or backend code shape must not be used for recognition.
+- Plan propagation must never replay checked expressions or declaration RHSs.
+- A temporary environment may map locals to already-lowered plan values while
+  rewriting IR, but it must not map locals back to checked source.
+- `dbg`, `expect`, and `crash` are observable. They must not be moved or
+  duplicated by iterator optimization.
+- Public `Iter` values remain pure and reusable.
+- Private cursor mutation is allowed only for compiler-created state whose
+  mutation cannot be observed by Roc source.
+- Plan wrappers themselves must not require heap allocation or refcounting.
+- Refcounted payloads inside plan state are ordinary Roc values and are managed
+  only by explicit LIR ARC statements.
+- LIR and backends must not know builtin iterator semantics.
+- No raw iterator plan may reach Lambda-to-LIR lowering.
 
 ## Core Design
 
 ### Plan Values
 
-Add an explicit Monotype expression form for a first-class iterator plan value.
-It has the public `Iter(item)` type, but its data is an `IterPlanId` rather
-than a materialized public record/closure value.
+Add and use `ExprData.iter_plan` as a first-class Monotype expression whose type
+is the public `Iter(item)` type. The expression stores an `IterPlanId`; the plan
+store contains explicit operands, child plan ids, known length information, step
+reachability, and the item type.
 
-The plan expression is a post-check value only. It may appear wherever an
-ordinary expression may appear during Monotype and Monotype Lifted passes:
+An iterator plan may appear anywhere an ordinary expression can appear during
+post-check optimization:
 
 - declaration RHSs
 - `let` values
 - block final expressions
-- `if` and `match` branches
-- function return values before specialization decides whether to materialize
-- call arguments before specialization decides whether the callee consumes a
-  plan
+- `if` and `match` branch bodies
+- function call arguments before specialization decides whether to materialize
+- specialized function return values before callers decide how to consume them
 
-Every plan expression must be eliminated before LIR lowering by either:
+This is a real IR value, not a source replay recipe.
 
-- optimized consumption
-- materialization to the public `Iter` value
-- conversion to `Public(iter_value)` where the compiler already has an ordinary
-  public iterator value and no more precise plan
+### Plan Vocabulary
 
-LIR must reject unmaterialized plan expressions as an invariant violation.
-
-### Producer Plans
-
-The plan vocabulary is:
+The initial vocabulary is:
 
 ```text
 ListIter(list, index, len)
@@ -140,259 +157,269 @@ Custom(state, step_fn)
 Public(iter_value)
 ```
 
-Each plan records:
+Finite and infinite iterators use the same model. A finite iterator has a
+reachable `Done`. An unbounded range or custom infinite iterator can have
+`Done` marked unreachable unless a later adapter introduces a finite boundary.
 
-- item type
-- known or unknown length
-- whether `Done` is reachable
-- which public step variants are reachable if materialized
-- operands as already-lowered Monotype values or child plan ids
-- materialization recipe
+### Producer Lowering
 
-Producer recognition must use exact checked identity:
+When iterator plans are enabled, builtin producer calls lower to plan
+expressions instead of immediately lowering to public `Iter` construction.
 
-- builtin method owner
-- method name id
-- resolved method target
-- checked procedure/template identity
-- monomorphic receiver/result types
+Initial recognized producers:
 
-It must not use source text, generated symbol names, closure layout shape,
-display strings, wasm output, or backend code shape.
+- `List.iter`
+- `Iter.iter`
+- `Iter.single`
+- `Iter.prepended`
+- `Iter.append`
+- `Iter.concat`
+- `Iter.map`
+- `Iter.keep_if`
+- `Iter.drop_if`
+- `Iter.custom`
+- `Iter.exclusive_range`
+- `Iter.inclusive_range`
+- source range syntax that lowers through the builtin range producers
+
+Recognition must be exact checked identity: resolved owner, method name id,
+resolved procedure/template, dispatch plan, and monomorphic receiver/result
+types. A user method with the same spelling is never a builtin producer.
+
+### Plan Elimination
+
+Add a post-check iterator-plan elimination pass before Lambda-to-LIR lowering.
+This pass owns every remaining `iter_plan` expression.
+
+For every plan value it sees, the pass must choose exactly one outcome:
+
+- consume it directly in a recognized optimized consumer
+- rewrite it into compiler-owned private plan state that a later consumer in
+  the same body can consume without changing source evaluation order
+- materialize it to the public `Iter` representation
+- wrap an already-public value as `Public(iter_value)` when there is no more
+  precise plan
+
+The pass may maintain environments from locals to already-lowered plan values or
+private plan-state values while traversing a body. It must not point an
+environment entry back to checked source. It must preserve ordinary evaluation
+order by rewriting producer sites, not by moving producer evaluation to consumer
+sites.
+
+Example:
+
+```roc
+iter =
+    if cond {
+        [1].iter().append(dbg 2)
+    } else {
+        Iter.single(crash "bad")
+    }
+
+side_effect_free_value = 1
+
+for x in iter {
+    ...
+}
+```
+
+The condition and selected branch belong at the `iter = ...` site. The pass may
+turn the `if` into private plan-state construction, but it must not delay or
+duplicate the condition, the `dbg`, or the `crash` by replaying branch source at
+the `for`.
+
+### Private Plan State
+
+Optimized consumers need private mutable cursor state. The elimination pass may
+represent that state using ordinary post-check IR:
+
+- locals
+- tuples
+- tag unions for phase or variant selection
+- loop parameters
+- `if` and `match`
+- direct calls
+- low-level operations
+
+This state is not the public `Iter` representation. It is compiler-owned. For
+example, an `if` whose branches produce different known plan shapes may lower
+to a private phase tag plus payload fields for the selected branch. A later
+optimized `for` can consume that phase and payload without constructing public
+step tags.
 
 ### Materialization
 
-Materialization converts a known plan value to the public `Iter` representation
-with the same behavior as the Roc builtin implementation. It is required when:
+Materialization converts a known plan to the public `Iter` representation. It is
+a semantic operation, not a cleanup pass.
+
+Materialization is required when:
 
 - `.step` is accessed directly
-- `Iter.next` is used as a public value rather than specialized
-- a plan value is stored inside a public aggregate that survives
-- a plan value is returned from an unspecialized function
-- a plan value is passed to a call that is not specialized to consume a plan
-- lowering reaches a `Public(iter_value)` boundary
+- `Iter.next` is used outside a specialized consumer
+- a value is stored in an aggregate that is observed publicly
+- a value is returned from unspecialized code
+- a value is passed to a call not specialized to consume a plan
+- the optimizer cannot prove all uses are private optimized consumers
 
-Materialization is a semantic lowering step, not a cleanup pass. It exists so
-public Roc values keep their documented behavior. Later size passes may remove
-dead materialization code, but correctness must not depend on that.
+Materialization should reuse the checked builtin method targets where that is
+the most direct representation, rather than duplicating public record layout
+knowledge. For example, materializing `Single(item)` can call the resolved
+`Iter.single` target; materializing `Append(before, after)` can materialize
+`before` and call the resolved `Iter.append` target. Generated public record
+construction is allowed only when the compiler already owns that generated
+representation and has explicit checked data for it.
 
 ### Optimized Consumers
 
-Optimized consumers consume plan values directly:
+The first optimized consumers are:
 
 - source `for`
-- specialized `Iter.fold`
-- specialized `List.from_iter`
+- `Iter.fold`
+- `List.from_iter`
 
-The source `for` lowering should:
+They consume known plans directly.
 
-- evaluate the iterable expression once, producing a plan value
-- allocate private loop state fields for that plan
-- step the plan with ordinary Monotype control flow
+For source `for`, optimized lowering should:
+
+- evaluate the iterable expression once
+- consume the resulting known plan or private plan state
+- allocate private loop state fields
+- step child plans directly
 - bind produced items to the source pattern
-- continue with updated private state
-- break on the plan's explicit done condition
-- avoid public `Iter` records and public step values in the hot loop
+- update loop-carried mutable variables normally
+- avoid public `Iter` records, step closures, and public step tags in the hot
+  loop
 
-For `Append` and `Concat`, the loop state must include a phase or equivalent
-variant. For `Map` and `Filter`, the loop state must include child plan state
-and the captured callable values. For finite plans, known-length information
-should flow into `List.from_iter` capacity decisions.
-
-### Local And Branch Propagation
-
-Plan propagation must be ordinary value propagation, not a side table that
-replays checked expressions.
-
-This means:
-
-- `base_points = [...].iter()` creates a plan value at the declaration site
-- `saved = base_points` copies the same immutable public-value meaning
-- `collision_points = if ...` creates a plan value by evaluating exactly one
-  branch at the declaration site
-- `for point in collision_points` consumes the already-produced plan value
-- if `saved` later crosses a public boundary, it materializes without affecting
-  the private cursor used by the `for`
-
-The compiler may use local side tables as indexes into plan values during
-Monotype lowering, but those tables must point at already-lowered plan values or
-locals, not at checked expressions that would be evaluated again.
-
-### Function Specialization
-
-Function specialization may propagate plan values through calls when all of
-these are true:
-
-- the callee is specialized at a monomorphic function type
-- the argument position is known to be an iterator plan value
-- the callee body consumes or returns the plan in a way the specialization can
-  represent explicitly
-
-Otherwise the argument must materialize before the call. This keeps the public
-calling convention ordinary and prevents unspecialized code from depending on
-hidden iterator-plan state.
-
-### Existing Pass Responsibilities
-
-SpecConstr may remain a generic call-pattern optimization, but it must not be
-the owner of builtin iterator semantics.
-
-ScalarizeJoins may clean up residual aggregate state, but optimized iterator
-loops must already carry plan fields explicitly before relying on scalarization.
-
-TagReachability may remove residual impossible public-tag branches, but plan
-lowering should avoid emitting unreachable internal branches in the first
-place.
-
-ARC works after plans are lowered to ordinary values/control flow. Refcounted
-payloads inside plan state are managed through normal explicit LIR ARC
-statements. Iterator wrapper uniqueness is never decided by ARC.
-
-Binaryen remains a final wasm optimizer for wasm targets. It is not responsible
-for discovering Roc iterator semantics.
+For `List.from_iter`, known length information should choose the initial
+capacity. For `Iter.fold`, the accumulator is a loop parameter.
 
 ## Implementation Plan
 
-### Phase 1: Lock Current Behavior With Tests
+### Phase 1: Current Direct Cases And Guard Rails
 
-Add or keep focused shape tests for the current optimized producers:
+Keep the existing tests:
 
 - direct `for` over `List.iter`
+- direct `for` over visible `Iter.append` chains
 - direct `for` over `Iter.single`
-- direct `for` over visible `Iter.append` chains from a list source
-- user-defined `.iter` methods are not recognized as builtin `List.iter`
-- user-defined `.single` methods are not recognized as builtin `Iter.single`
+- user-defined `.iter` is not recognized as builtin `List.iter`
+- user-defined `.single` is not recognized as builtin `Iter.single`
 
-Add failing tests for the missing plan-value behavior:
+Keep the invariant tests:
+
+- Monotype has `ExprData.iter_plan`
+- Monotype Lifted preserves plan expressions
+- LIR lowering rejects unmaterialized plan expressions
+
+### Phase 2: Producer Plan Emission
+
+Implement producer lowering in Monotype:
+
+- add exact checked identity helpers for all builtin producers
+- lower producer operands exactly once in source order
+- build `IterPlan` operands from lowered `ExprId`s and child `IterPlanId`s
+- return `ExprData.iter_plan` with the public result type
+- preserve `Public(iter_value)` for unknown or already-public iterators
+- keep direct user methods with matching names on the ordinary public path
+
+Tests:
+
+- each recognized producer emits the expected plan expression
+- direct calls and dispatch calls both use exact checked identity
+- user methods with the same names do not emit plans
+- operands containing `dbg`, `expect`, and `crash` are not duplicated in the
+  Monotype tree
+- finite and unbounded ranges carry the right done reachability
+
+### Phase 3: Iterator-Plan Elimination Pass
+
+Add a pass before Lambda-to-LIR lowering that removes all raw plan expressions.
+
+Tasks:
+
+- traverse definitions, nested definitions, statements, and expressions
+- maintain a body-local environment from locals to plan/private-state values
+- track whether a local has public observations
+- rewrite known producer sites into private plan-state construction when all
+  uses are optimized private consumers
+- materialize producer sites when public observations exist
+- preserve source evaluation order for block statements, `if`, `match`, and
+  calls
+- reject any raw plan that cannot be consumed or materialized
+
+Tests:
 
 - `iter = [1, 2].iter(); for x in iter { ... }` avoids public step values
-- `base = [1, 2].iter(); iter = base.append(3); for x in iter { ... }`
-  avoids public step values
+- `base = [1, 2].iter(); iter = base.append(3); for x in iter { ... }` avoids
+  public step values
 - `iter = if cond { [1].iter() } else { [2].iter() }; for x in iter { ... }`
-  evaluates the condition once and avoids public step values
-- `saved = iter; for x in iter { ... }; use(saved)` keeps `saved` public
-  behavior correct
-- a branch containing `dbg`, `expect`, or `crash` is not duplicated or moved
-  across the declaration site
+  evaluates `cond` once and avoids public step values
+- `saved = iter; for x in iter { ... }; use(saved)` preserves public behavior
+  for `saved`
+- branch-local `dbg`, `expect`, and `crash` are not moved or duplicated
 
-### Phase 2: Add First-Class Plan Expressions
+### Phase 4: Materialization For Every Plan
 
-Extend Monotype AST with a plan expression form.
+Implement semantic materialization:
 
-Tasks:
-
-- add `ExprData.iter_plan: IterPlanId`
-- ensure the expression type remains the public `Iter(item)` type
-- teach Monotype debug/dump/test helpers to print or inspect plan expressions
-- teach Monotype Lifted cloning/lifting passes to preserve plan expressions
-- update any expression walkers that must recurse through plan operands by
-  reading the explicit plan store
-- make solved LIR lowering reject unmaterialized plan expressions with an
-  invariant until materialization is implemented
-
-Tests:
-
-- a manually lowered plan expression survives Monotype Lifted cloning
-- LIR lowering rejects an unmaterialized plan expression
-
-### Phase 3: Lower Producers To Plan Values
-
-Move producer recognition out of consumer-only paths. A builtin producer
-expression should lower to an `iter_plan` expression whenever iterator plans are
-enabled.
-
-Initial producers:
-
-- `List.iter`
-- `Iter.single`
-- `Iter.append`
-- `Iter.concat`
-- numeric finite ranges
-- numeric unbounded ranges
-- `Iter.map`
-- `Iter.keep_if`
-- `Iter.drop_if`, if it remains public
-- `Iter.custom`
-
-Tasks:
-
-- recognize producers by checked identity
-- lower operands exactly once in source order
-- store child plans by `IterPlanId`
-- store public fallback/materialization recipes
-- keep `Public(iter_value)` for unknown iterator values
+- `ListIter`
+- `Range`
+- `UnboundedRange`
+- `Single`
+- `Append`
+- `Concat`
+- `Map`
+- `Filter`
+- `Custom`
+- nested child plans
+- `Public(iter_value)`
 
 Tests:
 
-- each producer emits the expected plan expression
-- operands with `dbg`, `expect`, or `crash` are evaluated exactly once
-- user code with the same method names does not produce builtin plans
-- imported builtin methods still produce plans by identity
-
-### Phase 4: Implement Materialization
-
-Add a Monotype materialization function from `IterPlanId` to public `Iter`
-expression.
-
-Tasks:
-
-- materialize `ListIter` to the public list iterator representation
-- materialize `Single`
-- materialize `Append`
-- materialize `Concat`
-- materialize `Map`
-- materialize `Filter`
-- materialize `Range` and `UnboundedRange`
-- materialize `Custom`
-- materialize nested child plans recursively
-- insert materialization at all public observation boundaries
-- ensure no unmaterialized plan reaches LIR
-
-Tests:
-
-- returning `List.iter(list)` from a function works
-- storing a plan in a record and reading `.step` works
-- public `Iter.next` on every materialized producer matches current behavior
+- returning each producer from a function works
+- storing each producer in a record works
+- direct `.step` access works
+- public `Iter.next` matches current behavior for each producer
 - materialized rest iterators can be consumed later
 - `saved = iter; for x in iter { ... }; use(saved)` behaves correctly
 
-### Phase 5: Consume Plans Directly In `for`
+### Phase 5: Optimized `for`
 
-Replace consumer-only source recognition with plan consumption.
+Replace consumer-only source peeking with plan/private-state consumption.
 
 Tasks:
 
-- lower the iterable expression once to a value
-- if the value is a plan expression, consume its plan directly
-- if the value is a local bound to a plan expression, consume that plan through
-  ordinary local/plan value tracking
-- if the value is public, use the current public `Iter.next` lowering
+- stop replaying checked expressions in `lowerIteratorFor`
+- introduce an internal representation for source `for` that can survive until
+  iterator-plan elimination, or otherwise ensure the elimination pass sees the
+  consumer before public fallback lowering has erased it
 - lower `ListIter` with list/index/len state
 - lower `Single` with item/emitted state
-- lower `Append` with source state, appended item, and phase
-- lower `Concat` with two child states and phase
-- lower `Map` and `Filter` over child states
-- lower finite and unbounded ranges
+- lower `Append` and `Concat` with phase state
+- lower `Map` and `Filter` over child plan state
+- lower finite and unbounded ranges directly
 - lower `Custom` by calling the custom step function
+- preserve loop-carried mutable variable behavior
 
 Tests:
 
 - no public step values in optimized direct loops
 - no public step values through locals
-- no public step values through `if` and `match`
-- public behavior is unchanged for unknown/public iterators
+- no public step values through `if`
+- no public step values through `match`
+- unknown/public iterators continue through the public path
 - loop-carried mutable variables still merge correctly
 
-### Phase 6: Specialize `Iter.fold`
+### Phase 6: Optimized `Iter.fold`
 
-Teach the builtin `Iter.fold` consumer to consume known plans directly.
+Specialize `Iter.fold` for known plans.
 
 Tasks:
 
 - lower accumulator as a loop parameter
 - lower plan state fields as loop parameters
 - call the folding function directly for produced items
-- materialize only when the source plan is public or unknown
+- materialize only when the source is public or unknown
 
 Tests:
 
@@ -400,16 +427,16 @@ Tests:
 - fold over public/unknown iterators remains correct
 - accumulator refcounts are correct under ARC
 
-### Phase 7: Specialize `List.from_iter`
+### Phase 7: Optimized `List.from_iter`
 
-Teach `List.from_iter` to consume known plans directly.
+Specialize `List.from_iter` for known plans.
 
 Tasks:
 
-- use known length when available for initial capacity
+- use known length for initial capacity
 - append produced items with existing list low-levels
 - avoid public iterator and step allocation in the hot loop
-- preserve behavior for unknown/public iterators
+- preserve unknown/public iterator behavior
 
 Tests:
 
@@ -418,49 +445,39 @@ Tests:
 - unknown-length plans grow correctly
 - refcounted item payloads are correct under ARC
 
-### Phase 8: Cleanup And Invariants
+### Phase 8: Cleanup
 
-Remove obsolete consumer-only recognition paths once plan values own the model.
+Remove obsolete temporary paths:
 
-Tasks:
-
-- delete source-name/display-string recognition
-- delete direct-only append-chain special cases that are replaced by plan values
-- add invariant checks that LIR never receives raw plan expressions
-- keep backend code free of iterator semantics
-- keep ARC code free of iterator-wrapper uniqueness decisions
-- update `design.md` and this plan as implementation details settle
-
-Tests:
-
-- `zig build run-test-zig-module-postcheck`
-- `zig build run-test-zig-module-lir`
-- iterator-specific LIR shape tests
-- builtin iterator behavior tests
-- wasm build smoke tests
+- delete source-peeking append-chain recognition once plan values cover it
+- delete display-string/name-shape recognition
+- keep backend and ARC code free of iterator semantics
+- keep LIR raw-plan rejection as a permanent invariant
+- update `design.md` when implementation details settle
 
 ### Phase 9: Rocci Bird Verification
 
-Use Rocci Bird as an integration check, not as a special case.
+Use Rocci Bird as integration evidence, not as a special case.
 
 Tasks:
 
-- keep `examples/rocci-bird.roc` written with the top-level `.iter()` in
-  `on_screen_collided!`
-- keep a temporary no-`.iter()` comparison file only for measuring parity
+- keep `examples/rocci-bird.roc` in the intended source style
+- build a temporary no-`.iter()` comparison variant only for measurement
 - build both with the current compiler using `--opt=size`
 - disassemble both wasm binaries
-- verify collision-point sprite/list data is static where expected
-- verify `on_screen_collided!` no longer contains public iterator wrapper or
+- verify sprite/list data that should be static is static
+- verify `on_screen_collided!` no longer contains public iterator-wrapper or
   step-value hot-path code
 - verify `.iter()` and no-`.iter()` versions have comparable wasm sizes
-- run the optimized game locally and verify it behaves correctly
-- record the final byte sizes in this file and in the final report
+- run optimized and dev builds locally and verify the game behaves correctly
+- record final byte sizes in this file and in the final report
 
 ## Completion Checklist
 
 - [x] `design.md` documents public `Iter` purity and private cursor plans.
 - [x] `design.md` documents first-class post-check plan values.
+- [x] `design.md` documents that iterator-plan elimination is a post-check
+  responsibility before LIR.
 - [x] `design.md` states that LIR and backends must not see raw plan values.
 - [x] Current direct `List.iter` optimized `for` shape test exists.
 - [x] Current direct visible append-chain optimized `for` shape test exists.
@@ -474,21 +491,30 @@ Tasks:
 - [ ] All recognized producers lower to plan expressions.
 - [ ] Recognition uses checked identity for every producer.
 - [ ] `List.iter` produces `ListIter`.
+- [ ] `Iter.iter` preserves or forwards known plans correctly.
 - [ ] numeric finite ranges produce `Range`.
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
 - [ ] `Iter.single` produces `Single`.
+- [ ] `Iter.prepended` produces the correct plan shape.
 - [ ] `Iter.append` produces `Append`.
 - [ ] `Iter.concat` produces `Concat`.
 - [ ] `Iter.map` produces `Map`.
 - [ ] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [ ] `Iter.custom` produces `Custom`.
 - [ ] `Public(iter_value)` exists for unknown iterator values.
+- [ ] Iterator-plan elimination pass exists before Lambda-to-LIR lowering.
+- [ ] Plan elimination preserves producer-site evaluation order.
+- [ ] Plan elimination never replays checked expressions.
+- [ ] Private plan state can cross locals.
+- [ ] Private plan state can cross `if`.
+- [ ] Private plan state can cross `match`.
 - [ ] Materialization is implemented for every plan.
 - [ ] Public `.step` access materializes.
 - [ ] Public `Iter.next` materializes when not specialized.
 - [ ] Public aggregate storage materializes.
 - [ ] Unspecialized function return materializes.
 - [ ] Unspecialized call argument materializes.
+- [ ] Raw plan expressions cannot reach Lambda-to-LIR lowering.
 - [ ] Raw plan expressions cannot reach LIR.
 - [ ] Optimized `for` consumes plan values directly.
 - [ ] Optimized `for` through locals avoids public step values.
@@ -513,9 +539,29 @@ Tasks:
   optimized collision loop shape.
 - [ ] Final Rocci Bird optimized wasm sizes are recorded here.
 
+## Required Verification Commands
+
+Run these before marking the checklist complete:
+
+```sh
+zig build run-test-zig-module-postcheck
+zig build run-test-zig-module-lir
+zig build run-test-zig-lir-inline
+zig build minici
+```
+
+For Rocci Bird, run:
+
+```sh
+roc build --opt=size examples/rocci-bird.roc
+wasm-objdump -d <optimized wasm>
+```
+
+Also build and disassemble the temporary no-`.iter()` comparison variant.
+
 ## Final Measurements
 
-To be filled in when the implementation checklist is complete:
+To be filled in only when the implementation checklist is complete:
 
 - Rocci Bird with `.iter()` in `on_screen_collided!`: pending
 - Rocci Bird without `.iter()` in `on_screen_collided!`: pending
