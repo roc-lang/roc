@@ -206,6 +206,7 @@ pub const CanonicalizedResult = struct {
 pub const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
     checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+    user_errors_allow_lowering: bool = false,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
         if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);

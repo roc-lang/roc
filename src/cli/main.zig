@@ -2306,6 +2306,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
                 &reporter,
+                true,
             );
             const result = if (lowered_result) |*value| value else unreachable;
             entrypoint_names = result.entrypoint_names;
@@ -2323,6 +2324,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
                 &reporter,
+                true,
             );
             shm_handle_opt = shm_result.handle;
             entrypoint_names = shm_result.entrypoint_names;
@@ -2334,7 +2336,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         .size, .speed => unreachable,
     }
 
-    if (error_count > 0) {
+    if (error_count > 0 and entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -2943,10 +2945,10 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter, true);
     defer closeSharedMemoryHandle(shm_result.handle);
 
-    if (shm_result.error_count > 0) {
+    if (shm_result.error_count > 0 and shm_result.entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -3062,10 +3064,11 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         debugEffectsForOpt(args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
         &reporter,
+        true,
     );
     defer lowered_result.deinit();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -5108,6 +5111,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         debugEffectsForOpt(.dev),
         resolutionConfigFromLimits(args.resolve_limits),
         null,
+        false,
     );
     defer lowered_result.deinit();
 
@@ -5411,6 +5415,7 @@ fn lowerLirWithCoordinator(
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
 
@@ -5555,7 +5560,7 @@ fn lowerLirWithCoordinator(
         return err;
     };
 
-    if (coord.hasUserErrors()) {
+    if (coord.hasUserErrors() and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
         if (reporter) |r| r.fail();
         const watch_inputs = try coord.collectWatchInputStates();
@@ -5570,11 +5575,15 @@ fn lowerLirWithCoordinator(
         };
     }
 
-    try coord.finalizeExecutableArtifacts();
+    if (allow_user_errors) {
+        try coord.finalizeExecutableArtifactsAllowUserErrors();
+    } else {
+        try coord.finalizeExecutableArtifacts();
+    }
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     const watch_inputs = try coord.collectWatchInputStates();
     errdefer coord.freeWatchInputStates(watch_inputs);
-    if (finalized_counts.errors > 0) {
+    if (finalized_counts.errors > 0 and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         if (reporter) |r| r.fail();
         return .{
             .lowered = null,
@@ -5664,6 +5673,7 @@ pub fn buildLirImageWithCoordinator(
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
@@ -5683,10 +5693,11 @@ pub fn buildLirImageWithCoordinator(
         debug_effects,
         resolution_config,
         reporter,
+        allow_user_errors,
     );
     defer lowered_result.deinitWatchInputs();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         shm.updateHeader();
         return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
     }
@@ -5720,7 +5731,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, true);
 }
 
 /// Platform resolution result containing the platform source path

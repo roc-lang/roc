@@ -7,6 +7,8 @@
 //! - Constraint satisfaction
 //! - Error cases
 
+const std = @import("std");
+const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
 // Basic where clause tests
@@ -261,6 +263,33 @@ test "where clause - method signature mismatch" {
     try test_env_b.assertFirstTypeError("TYPE MISMATCH");
 }
 
+test "where clause - discarded unpinned return type reports missing method" {
+    const source =
+        \\Thing := [Thing]
+        \\
+        \\Sink := [Sink].{
+        \\  from_thing : Thing -> Sink
+        \\  from_thing = |_| Sink
+        \\}
+        \\
+        \\make : Thing -> output where [output.from_thing : Thing -> output]
+        \\make = |thing| {
+        \\  Output : output
+        \\  Output.from_thing(thing)
+        \\}
+        \\
+        \\main = {
+        \\  _ = make(Thing)
+        \\  {}
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("MISSING METHOD");
+    try std.testing.expect(hasRuntimeErrorExpr(&test_env));
+}
+
 // Let polymorphism with where clauses
 
 test "where clause - same type used multiple times with where constraint" {
@@ -314,4 +343,17 @@ test "where clause - inferred from method call without annotation" {
         "a -> b where [a.to_str : a -> b]",
     );
     try test_env_b.assertDefType("main", "Str");
+}
+
+fn hasRuntimeErrorExpr(test_env: *const TestEnv) bool {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node = test_env.checker.cir.store.nodes.get(node_idx);
+        if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_") and node.tag != .malformed) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        if (test_env.checker.cir.store.getExpr(expr_idx) == .e_runtime_error) return true;
+    }
+    return false;
 }
