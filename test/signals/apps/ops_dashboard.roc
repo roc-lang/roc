@@ -45,6 +45,27 @@ set_true = |_| True
 health_score : I64, I64 -> I64
 health_score = |requests, failing| requests - failing * 10
 
+page_class : Str
+page_class = "grid gap-6"
+
+hero_class : Str
+hero_class = "grid gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-5"
+
+panel_class : Str
+panel_class = "grid gap-4"
+
+subpanel_class : Str
+subpanel_class = "grid gap-3 border-t border-zinc-200 pt-4"
+
+primary_button_class : Str
+primary_button_class = "border-emerald-600 bg-emerald-600 text-white hover:border-emerald-700 hover:bg-emerald-700"
+
+danger_button_class : Str
+danger_button_class = "border-rose-600 bg-rose-600 text-white hover:border-rose-700 hover:bg-rose-700"
+
+quiet_button_class : Str
+quiet_button_class = "border-zinc-300 bg-zinc-50 text-zinc-800 hover:border-zinc-400 hover:bg-white"
+
 initial_alerts : List(Str)
 initial_alerts = ["Database warmup"]
 
@@ -168,40 +189,46 @@ main = |_| {
 																)
 															search_label = Signal.map(search.signal(), |value| Str.concat("Runbook search: ", value))
 
-															Html.div(
-																[],
+															Html.div_c(
+																page_class,
 																[
-																	Html.heading("Ops dashboard"),
-																	Html.section(
-																		"Traffic",
-																		[],
+																	Html.div_c(
+																		hero_class,
 																		[
-																			Html.button("Add traffic sample", traffic.on_unit(add_traffic_sample)),
+																			Html.heading_c("Ops dashboard", "text-3xl font-semibold text-zinc-950"),
+																			Html.paragraph_c("Live service signals, queue health, incident status, and alert acknowledgement stay reactive without rebuilding unrelated UI.", "max-w-3xl text-sm text-zinc-700"),
+																		],
+																	),
+																	Html.section_c(
+																		"Traffic",
+																		panel_class,
+																		[
+																			Html.button_c("Add traffic sample", primary_button_class, traffic.on_unit(add_traffic_sample)),
 																			Html.text_s(traffic_label),
-																			Html.button("Record failure", failures.on_unit(increment_i64)),
+																			Html.button_c("Record failure", danger_button_class, failures.on_unit(increment_i64)),
 																			Html.button("Record recovery", failures.on_unit(record_recovery)),
 																			Html.text_s(failure_label),
 																		],
 																	),
-																	Html.section(
+																	Html.section_c(
 																		"Queue",
-																		[],
+																		panel_class,
 																		[
-																			Html.button("Enqueue jobs", queue.on_unit(enqueue_jobs)),
+																			Html.button_c("Enqueue jobs", primary_button_class, queue.on_unit(enqueue_jobs)),
 																			Html.button("Drain jobs", queue.on_unit(drain_jobs)),
 																			Html.text_s(queue_label),
 																			Html.text_s(score_label),
 																		],
 																	),
-																	Html.section(
+																	Html.section_c(
 																		"Incident",
-																		[],
+																		panel_class,
 																		[
-																			Html.section(
+																			Html.section_c(
 																				"Pruning",
-																				[],
+																				subpanel_class,
 																				[
-																					Html.button("No-op fanout", fanout_base.on_unit(same_i64)),
+																					Html.button_c("No-op fanout", quiet_button_class, fanout_base.on_unit(same_i64)),
 																					Html.text_s(fanout_label_a),
 																					Html.text_s(fanout_label_b),
 																					Html.text_s(fanout_label_c),
@@ -212,22 +239,22 @@ main = |_| {
 																					Html.text_s(fanout_label_h),
 																				],
 																			),
-																			Html.button("Toggle incident", incident_active.on_unit(toggle_bool)),
+																			Html.button_c("Toggle incident", danger_button_class, incident_active.on_unit(toggle_bool)),
 																			Html.text_s(incident_label),
 																			Ui.when(
 																				incident_signal,
 																				|_| Html.paragraph("Incident room open"),
 																				|_| Html.paragraph("No active incident"),
 																			),
-																			Html.text_input("Runbook search", search.signal(), search.on_str(|_, value| value)),
+																			Html.text_input_c("Runbook search", search.signal(), "w-full max-w-md", search.on_str(|_, value| value)),
 																			Html.text_s(search_label),
 																		],
 																	),
-																	Html.section(
+																	Html.section_c(
 																		"Alerts",
-																		[],
+																		panel_class,
 																		[
-																			Html.button("Clear alerts", alerts_cleared.on_unit(set_true)),
+																			Html.button_c("Clear alerts", quiet_button_class, alerts_cleared.on_unit(set_true)),
 																			Ui.each(alerts, |label| label, Ui.str_key_hash, render_alert),
 																		],
 																	),

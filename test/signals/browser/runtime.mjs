@@ -22,6 +22,7 @@ export const Op = Object.freeze({
   cancelInterval: 19,
   startTask: 20,
   cancelTask: 21,
+  setClass: 22,
 });
 
 // RenderEventKind enum (render_commands.zig) -> DOM event name. The host emits
@@ -252,6 +253,10 @@ export class SignalsRuntime {
         this.node(record.a).setAttribute("data-testid", this.readString(record.b, record.c));
         return;
 
+      case Op.setClass:
+        setClass(this.node(record.a), this.readString(record.b, record.c));
+        return;
+
       case Op.bindClick:
         this.bindEvent(record.a, "click", record.b, record.c);
         return;
@@ -437,5 +442,13 @@ function setRole(node, value) {
   node.setAttribute("role", value);
   if (node.tagName === "INPUT" && value === "checkbox") {
     node.type = "checkbox";
+  }
+}
+
+function setClass(node, value) {
+  if (value === "") {
+    node.removeAttribute("class");
+  } else {
+    node.className = value;
   }
 }

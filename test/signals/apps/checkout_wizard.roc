@@ -51,6 +51,21 @@ team_lines = ["3 seats", "Priority support", "Audit log export"]
 basic_lines : List(Str)
 basic_lines = ["3 seats"]
 
+page_class : Str
+page_class = "grid gap-6"
+
+hero_class : Str
+hero_class = "grid gap-2 rounded-lg border border-sky-200 bg-sky-50 p-5"
+
+panel_class : Str
+panel_class = "grid gap-4"
+
+primary_button_class : Str
+primary_button_class = "border-sky-600 bg-sky-600 text-white hover:border-sky-700 hover:bg-sky-700"
+
+input_class : Str
+input_class = "w-full max-w-md"
+
 render_line : Str, Signal.Signal(Str) -> Elem
 render_line = |label, _line_signal| {
 	initial_quantity : I64
@@ -136,31 +151,31 @@ main = |_| {
 													address_review = Signal.map(address.signal(), |value| Str.concat("Address: ", value))
 
 													cart_panel =
-														Html.section(
+														Html.section_c(
 															"Cart",
-															[],
+															panel_class,
 															[
 																Html.paragraph("Cart editor"),
-																Html.button("Use team plan", lines.on_unit(|_| team_lines)),
+																Html.button_c("Use team plan", primary_button_class, lines.on_unit(|_| team_lines)),
 																Html.button("Use basic plan", lines.on_unit(|_| basic_lines)),
 																Ui.each(lines.signal(), |label| label, Ui.str_key_hash, render_line),
 															],
 														)
 													delivery_panel =
-														Html.section(
+														Html.section_c(
 															"Delivery",
-															[],
+															panel_class,
 															[
-																Html.text_input("Email", email.signal(), email.on_str(|_, value| value)),
-																Html.text_input("Address", address.signal(), address.on_str(|_, value| value)),
+																Html.text_input_c("Email", email.signal(), input_class, email.on_str(|_, value| value)),
+																Html.text_input_c("Address", address.signal(), input_class, address.on_str(|_, value| value)),
 																Html.checkbox("Accept terms", terms_signal, terms.on_bool(|_, checked| checked)),
 																Html.text_s(terms_text),
 															],
 														)
 													review_panel =
-														Html.section(
+														Html.section_c(
 															"Review",
-															[],
+															panel_class,
 															[
 																Html.text_s(email_review),
 																Html.text_s(address_review),
@@ -173,12 +188,18 @@ main = |_| {
 															],
 														)
 
-													Html.div(
-														[],
+													Html.div_c(
+														page_class,
 														[
-															Html.heading("Checkout wizard"),
+															Html.div_c(
+																hero_class,
+																[
+																	Html.heading_c("Checkout wizard", "text-3xl font-semibold text-zinc-950"),
+																	Html.paragraph_c("A three-step purchase flow with retained cart rows, controlled inputs, checkbox state, and a disabled review action.", "max-w-3xl text-sm text-zinc-700"),
+																],
+															),
 															Html.button("Back", step.on_unit(prev_step)),
-															Html.button("Next", step.on_unit(next_step)),
+															Html.button_c("Next", primary_button_class, step.on_unit(next_step)),
 															Html.text_s(step_text),
 															Ui.when(
 																is_cart,

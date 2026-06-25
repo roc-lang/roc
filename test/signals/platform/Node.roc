@@ -103,6 +103,9 @@ Node := [].{
 	field_value : U64
 	field_value = 5
 
+	field_class : U64
+	field_class = 6
+
 	bool_field_checked : U64
 	bool_field_checked = 1
 

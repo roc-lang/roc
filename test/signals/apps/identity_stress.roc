@@ -47,6 +47,21 @@ reordered_filtered_rows = [row_c, row_a]
 inserted_reordered_filtered_rows : List(Str)
 inserted_reordered_filtered_rows = [row_c, row_a, row_d]
 
+page_class : Str
+page_class = "grid gap-6"
+
+hero_class : Str
+hero_class = "grid gap-2 rounded-lg border border-cyan-200 bg-cyan-50 p-5"
+
+panel_class : Str
+panel_class = "grid gap-4"
+
+primary_button_class : Str
+primary_button_class = "border-cyan-600 bg-cyan-600 text-white hover:border-cyan-700 hover:bg-cyan-700"
+
+quiet_button_class : Str
+quiet_button_class = "border-zinc-300 bg-zinc-50 text-zinc-800 hover:border-zinc-400 hover:bg-white"
+
 rows_for_shape : I64, Bool -> List(Str)
 rows_for_shape = |shape, hide_beta| {
 	if hide_beta {
@@ -146,35 +161,41 @@ main = |_| {
 											|shape_code, hide_beta| rows_for_shape(shape_code, hide_beta),
 										)
 
-									Html.div(
-										[],
+									Html.div_c(
+										page_class,
 										[
-											Html.heading("Identity stress"),
-											Html.section(
-												"Controls",
-												[],
+											Html.div_c(
+												hero_class,
 												[
-													Html.button("Reorder rows", reordered.on_unit(|flag| !flag)),
-													Html.button("Insert Delta", inserted.on_unit(|flag| !flag)),
+													Html.heading_c("Identity stress", "text-3xl font-semibold text-zinc-950"),
+													Html.paragraph_c("A regression-focused view for keyed row identity across reorder, insert, filter, and branch disposal.", "max-w-3xl text-sm text-zinc-700"),
+												],
+											),
+											Html.section_c(
+												"Controls",
+												panel_class,
+												[
+													Html.button_c("Reorder rows", primary_button_class, reordered.on_unit(|flag| !flag)),
+													Html.button_c("Insert Delta", primary_button_class, inserted.on_unit(|flag| !flag)),
 													Html.button("Filter Beta", filtered.on_unit(|flag| !flag)),
-													Html.button("Toggle rows active", active.on_unit(|flag| !flag)),
+													Html.button_c("Toggle rows active", quiet_button_class, active.on_unit(|flag| !flag)),
 												],
 											),
 											Ui.when(
 												active.signal(),
 												|_| {
-													Html.section(
+													Html.section_c(
 														"Rows active",
-														[],
+														panel_class,
 														[
 															Ui.each(rows, |label| label, Ui.str_key_hash, render_row),
 														],
 													)
 												},
 												|_| {
-													Html.section(
+													Html.section_c(
 														"Rows inactive",
-														[],
+														panel_class,
 														[
 															Html.paragraph("Rows hidden"),
 														],

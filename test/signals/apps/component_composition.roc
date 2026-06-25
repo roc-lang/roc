@@ -17,6 +17,21 @@ initial_components = ["Alpha", "Beta"]
 reordered_components : List(Str)
 reordered_components = ["Beta", "Alpha"]
 
+page_class : Str
+page_class = "grid gap-6"
+
+hero_class : Str
+hero_class = "grid gap-2 rounded-lg border border-lime-200 bg-lime-50 p-5"
+
+panel_class : Str
+panel_class = "grid gap-4"
+
+primary_button_class : Str
+primary_button_class = "border-lime-700 bg-lime-600 text-white hover:border-lime-800 hover:bg-lime-700"
+
+quiet_button_class : Str
+quiet_button_class = "border-zinc-300 bg-zinc-50 text-zinc-800 hover:border-zinc-400 hover:bg-white"
+
 visible_components : Bool, List(Str) -> List(Str)
 visible_components = |show_beta, labels| if show_beta {
 	labels
@@ -72,17 +87,23 @@ main = |_| {
 							visible_components,
 						)
 
-					Html.div(
-						[],
+					Html.div_c(
+						page_class,
 						[
-							Html.heading("Component composition"),
-							Html.section(
-								"Component controls",
-								[],
+							Html.div_c(
+								hero_class,
 								[
-									Html.button("Reorder components", order.on_unit(|_| reordered_components)),
+									Html.heading_c("Component composition", "text-3xl font-semibold text-zinc-950"),
+									Html.paragraph_c("Reusable component scopes keep local state attached to each keyed component as rows move and disappear.", "max-w-3xl text-sm text-zinc-700"),
+								],
+							),
+							Html.section_c(
+								"Component controls",
+								panel_class,
+								[
+									Html.button_c("Reorder components", primary_button_class, order.on_unit(|_| reordered_components)),
 									Html.button("Reset order", order.on_unit(|_| initial_components)),
-									Html.button("Toggle Beta", show_beta.on_unit(|value| !value)),
+									Html.button_c("Toggle Beta", quiet_button_class, show_beta.on_unit(|value| !value)),
 								],
 							),
 							Ui.each(visible, |label| label, Ui.str_key_hash, render_component),

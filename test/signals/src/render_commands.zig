@@ -22,6 +22,7 @@ pub const Op = enum(u32) {
     cancel_interval = 19,
     start_task = 20,
     cancel_task = 21,
+    set_class = 22,
 };
 
 pub const Record = extern struct {
@@ -78,6 +79,7 @@ pub const TextField = enum(u64) {
     label = 3,
     test_id = 4,
     value = 5,
+    class = 6,
 
     pub fn setOp(self: TextField) Op {
         return switch (self) {
@@ -86,6 +88,7 @@ pub const TextField = enum(u64) {
             .label => .set_label,
             .test_id => .set_test_id,
             .value => .set_value,
+            .class => .set_class,
         };
     }
 };
@@ -148,7 +151,7 @@ pub const Counts = struct {
             .set_value => self.set_value += 1,
             .set_checked => self.set_checked += 1,
             .set_disabled => self.set_disabled += 1,
-            .set_role, .set_label, .set_test_id => self.set_metadata += 1,
+            .set_role, .set_label, .set_test_id, .set_class => self.set_metadata += 1,
             .bind_click, .bind_input, .bind_check => self.bind_event += 1,
             // Event-unbinding is counted through `addEventBinding` alongside the
             // bind it supersedes, so the raw wire op never reaches this counter.
@@ -252,13 +255,14 @@ test "render command counts group detailed host-independent ops" {
     counts.addTextField(.role);
     counts.addTextField(.label);
     counts.addTextField(.test_id);
+    counts.addTextField(.class);
     counts.addBoolField(.checked);
     counts.addBoolField(.disabled);
     counts.addEventBindingKind(.click);
     counts.addEventBindingKind(.input);
     counts.addEventBindingKind(.check);
 
-    try std.testing.expectEqual(@as(u64, 16), counts.total);
+    try std.testing.expectEqual(@as(u64, 17), counts.total);
     try std.testing.expectEqual(@as(u64, 1), counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 2), counts.create_element);
     try std.testing.expectEqual(@as(u64, 1), counts.append_child);
@@ -268,7 +272,7 @@ test "render command counts group detailed host-independent ops" {
     try std.testing.expectEqual(@as(u64, 1), counts.set_value);
     try std.testing.expectEqual(@as(u64, 1), counts.set_checked);
     try std.testing.expectEqual(@as(u64, 1), counts.set_disabled);
-    try std.testing.expectEqual(@as(u64, 3), counts.set_metadata);
+    try std.testing.expectEqual(@as(u64, 4), counts.set_metadata);
     try std.testing.expectEqual(@as(u64, 3), counts.bind_event);
 }
 

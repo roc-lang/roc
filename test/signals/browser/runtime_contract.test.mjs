@@ -143,6 +143,7 @@ test("command opcodes map to the expected DOM operations", () => {
     { op: Op.setRole, a: 2, s: "textbox" },
     { op: Op.setLabel, a: 2, s: "Name" },
     { op: Op.setTestId, a: 2, s: "name-field" },
+    { op: Op.setClass, a: 2, s: "rounded-md border-zinc-300" },
     { op: Op.appendChild, a: 1, b: 2 },
     { op: Op.createText, a: 3, s: "before" },
     { op: Op.appendChild, a: 1, b: 3 },
@@ -168,6 +169,7 @@ test("command opcodes map to the expected DOM operations", () => {
   assert.equal(input.getAttribute("role"), "textbox");
   assert.equal(input.getAttribute("aria-label"), "Name");
   assert.equal(input.getAttribute("data-testid"), "name-field");
+  assert.equal(input.getAttribute("class"), "rounded-md border-zinc-300");
   assert.equal(findTextNode(root, "before"), null);
 });
 

@@ -8,6 +8,21 @@ import pf.Ui
 concat3 : Str, Str, Str -> Str
 concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
 
+page_class : Str
+page_class = "grid gap-6"
+
+hero_class : Str
+hero_class = "grid gap-2 rounded-lg border border-teal-200 bg-teal-50 p-5"
+
+panel_class : Str
+panel_class = "grid gap-4"
+
+primary_button_class : Str
+primary_button_class = "border-teal-600 bg-teal-600 text-white hover:border-teal-700 hover:bg-teal-700"
+
+input_class : Str
+input_class = "w-full max-w-md"
+
 panel = |query, task| {
 	ticks = Signal.interval(1000)
 	tick_text = Signal.map(ticks, |n| concat3("Ticks: ", n.to_str(), ""))
@@ -19,11 +34,11 @@ panel = |query, task| {
 			|err| concat3("Status: failed ", err, ""),
 		)
 
-	Html.section(
+	Html.section_c(
 		"Async panel",
-		[],
+		panel_class,
 		[
-			Html.text_input("Search", query.signal(), query.on_str(|_, value| value)),
+			Html.text_input_c("Search", query.signal(), input_class, query.on_str(|_, value| value)),
 			Html.text_s(status_text),
 			Html.text_s(tick_text),
 			Ui.on_change(query.signal(), |value| Signal.start_str(task, value)),
@@ -42,15 +57,21 @@ main = |_| {
 				|query| {
 					task = Signal.fake_task("lookup", |value| value, |err| err)
 
-					Html.div(
-						[],
+					Html.div_c(
+						page_class,
 						[
-							Html.heading("Async effects"),
-							Html.button("Toggle panel", show_panel.on_unit(|value| !value)),
+							Html.div_c(
+								hero_class,
+								[
+									Html.heading_c("Async effects", "text-3xl font-semibold text-zinc-950"),
+									Html.paragraph_c("A deterministic async surface for task lifecycle, interval ticks, cancellation, and cleanup descriptors.", "max-w-3xl text-sm text-zinc-700"),
+								],
+							),
+							Html.button_c("Toggle panel", primary_button_class, show_panel.on_unit(|value| !value)),
 							Ui.when(
 								show_panel.signal(),
 								|_| panel(query, task),
-								|_| Html.section("Panel closed", [], [Html.text("Closed")]),
+								|_| Html.section_c("Panel closed", panel_class, [Html.text("Closed")]),
 							),
 						],
 					)

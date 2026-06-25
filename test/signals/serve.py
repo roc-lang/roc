@@ -16,6 +16,9 @@ SIGNALS_DIR = SCRIPT_PATH.parent
 REPO_ROOT = SIGNALS_DIR.parent.parent
 BROWSER_DIR = SIGNALS_DIR / "browser"
 DEFAULT_ROC_BIN = REPO_ROOT / "zig-out" / "bin" / "roc"
+TAILWIND_INPUT = BROWSER_DIR / "signals.tailwind.css"
+TAILWIND_OUTPUT = BROWSER_DIR / "signals.generated.css"
+TAILWIND_CONFIG = SIGNALS_DIR / "tailwind.config.js"
 APP_SUITE = (
     SIGNALS_DIR / "apps" / "ops_dashboard.roc",
     SIGNALS_DIR / "apps" / "checkout_wizard.roc",
@@ -57,13 +60,24 @@ def parse_args():
     parser.add_argument(
         "--app-opt",
         choices=("dev", "size"),
-        default=os.environ.get("APP_OPT", "size"),
-        help="Roc --opt mode for the app build. Defaults to APP_OPT or size.",
+        default=os.environ.get("APP_OPT", "dev"),
+        help="Roc --opt mode for the app build. Defaults to APP_OPT or dev.",
     )
     parser.add_argument(
         "--roc-bin",
-        default=os.environ.get("ROC_BIN", str(DEFAULT_ROC_BIN)),
+        default=os.environ.get("ROC_BIN", "zig-out/bin/roc"),
         help="Roc compiler path. Defaults to ROC_BIN or ./zig-out/bin/roc.",
+    )
+    parser.add_argument(
+        "--tailwind-bin",
+        default=os.environ.get("TAILWIND_BIN", "tailwindcss"),
+        help="Tailwind CSS standalone CLI path. Defaults to TAILWIND_BIN or tailwindcss.",
+    )
+    parser.add_argument(
+        "--skip-tailwind",
+        action="store_true",
+        default=os.environ.get("SKIP_TAILWIND") == "1",
+        help="Skip generating test/signals/browser/signals.generated.css.",
     )
     parser.add_argument(
         "--no-server",
@@ -86,11 +100,23 @@ def command_path(value):
     if path.is_absolute() or len(path.parts) > 1:
         return repo_path(value)
 
-    resolved = shutil.which(value)
-    if resolved:
-        return pathlib.Path(resolved)
-
     return path
+
+
+def command_arg(value):
+    if isinstance(value, pathlib.Path):
+        try:
+            return str(value.relative_to(REPO_ROOT))
+        except ValueError:
+            return str(value)
+    return str(value)
+
+
+def repo_display(path):
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def browser_relative(path):
@@ -102,7 +128,8 @@ def browser_relative(path):
 
 
 def run(command):
-    quoted = " ".join(shlex.quote(str(part)) for part in command)
+    command = [command_arg(part) for part in command]
+    quoted = " ".join(shlex.quote(part) for part in command)
     print(f"\n==> {quoted}", flush=True)
     subprocess.run(command, cwd=REPO_ROOT, check=True)
 
@@ -130,16 +157,44 @@ def ensure_roc(roc_bin):
         raise SystemExit(f"missing Roc compiler: {roc_bin}")
 
 
+def ensure_tailwind(tailwind_bin):
+    if tailwind_bin.is_absolute() or len(tailwind_bin.parts) > 1:
+        if tailwind_bin.exists() and os.access(tailwind_bin, os.X_OK):
+            return
+    elif shutil.which(str(tailwind_bin)):
+        return
+
+    raise SystemExit(
+        "missing Tailwind CSS CLI: install the standalone tailwindcss executable "
+        "or set TAILWIND_BIN"
+    )
+
+
+def build_css(tailwind_bin):
+    run(
+        [
+            tailwind_bin,
+            "-c",
+            TAILWIND_CONFIG,
+            "-i",
+            TAILWIND_INPUT,
+            "-o",
+            TAILWIND_OUTPUT,
+            "--minify",
+        ]
+    )
+
+
 def build_app(roc_bin, app, output, app_opt):
     run(
         [
-            str(roc_bin),
+            roc_bin,
             "build",
             "--target=wasm32",
             f"--opt={app_opt}",
             "--no-cache",
-            f"--output={output}",
-            str(app),
+            f"--output={command_arg(output)}",
+            app,
         ]
     )
 
@@ -191,7 +246,7 @@ def main():
     apps = [repo_path(args.app)] if args.app else list(default_apps())
     for app in apps:
         if not app.is_file():
-            raise SystemExit(f"missing app: {app}")
+            raise SystemExit(f"missing app: {repo_display(app)}")
 
     if len(apps) > 1 and args.output:
         raise SystemExit("--output is only valid when building one app")
@@ -205,11 +260,16 @@ def main():
         wasm_relative = browser_relative(output)
         if not args.no_server and wasm_relative is None:
             raise SystemExit(
-                f"when serving, --output must be under {BROWSER_DIR}: {output}"
+                "when serving, --output must be under "
+                f"{repo_display(BROWSER_DIR)}: {repo_display(output)}"
             )
 
     roc_bin = command_path(args.roc_bin)
     ensure_roc(roc_bin)
+    tailwind_bin = command_path(args.tailwind_bin)
+    if not args.skip_tailwind:
+        ensure_tailwind(tailwind_bin)
+        build_css(tailwind_bin)
     build_host()
 
     pages = []
@@ -220,7 +280,8 @@ def main():
         relative = browser_relative(app_output)
         if not args.no_server and relative is None:
             raise SystemExit(
-                f"when serving, app output must be under {BROWSER_DIR}: {app_output}"
+                "when serving, app output must be under "
+                f"{repo_display(BROWSER_DIR)}: {repo_display(app_output)}"
             )
         if relative is not None:
             pages.append((app.stem, relative, app_title(app)))

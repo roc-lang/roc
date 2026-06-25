@@ -91,12 +91,24 @@ export class FakeElement extends FakeNode {
     this.type = "";
   }
 
+  set className(value) {
+    this.setAttribute("class", value);
+  }
+
+  get className() {
+    return this.getAttribute("class") ?? "";
+  }
+
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
   }
 
   getAttribute(name) {
     return this.attributes.has(name) ? this.attributes.get(name) : null;
+  }
+
+  removeAttribute(name) {
+    this.attributes.delete(name);
   }
 
   get textContent() {

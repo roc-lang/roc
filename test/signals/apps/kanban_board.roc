@@ -26,6 +26,24 @@ archived_tasks = ["Design signal graph", "Tune keyed diff"]
 focused_tasks : List(Str)
 focused_tasks = ["Tune keyed diff"]
 
+page_class : Str
+page_class = "grid gap-6"
+
+hero_class : Str
+hero_class = "grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-5"
+
+panel_class : Str
+panel_class = "grid gap-4"
+
+primary_button_class : Str
+primary_button_class = "border-amber-600 bg-amber-500 text-white hover:border-amber-700 hover:bg-amber-600"
+
+quiet_button_class : Str
+quiet_button_class = "border-zinc-300 bg-zinc-50 text-zinc-800 hover:border-zinc-400 hover:bg-white"
+
+input_class : Str
+input_class = "w-full max-w-sm"
+
 render_task : Str, Signal.Signal(Str) -> Elem
 render_task = |label, _task_signal| {
 	initial_count : I64
@@ -100,26 +118,32 @@ main = |_| {
 								)
 							reviewer_label = Signal.map(reviewer.signal(), |value| Str.concat("Reviewer: ", value))
 
-							Html.div(
-								[],
+							Html.div_c(
+								page_class,
 								[
-									Html.heading("Kanban board"),
-									Html.section(
-										"Board controls",
-										[],
+									Html.div_c(
+										hero_class,
 										[
-											Html.button("Reorder cards", tasks.on_unit(|_| reordered_tasks)),
+											Html.heading_c("Kanban board", "text-3xl font-semibold text-zinc-950"),
+											Html.paragraph_c("Keyed rows preserve local card state while controls reorder, archive, reset, and filter the board.", "max-w-3xl text-sm text-zinc-700"),
+										],
+									),
+									Html.section_c(
+										"Board controls",
+										panel_class,
+										[
+											Html.button_c("Reorder cards", primary_button_class, tasks.on_unit(|_| reordered_tasks)),
 											Html.button("Archive platform glue", tasks.on_unit(|_| archived_tasks)),
 											Html.button("Reset board", tasks.on_unit(|_| initial_tasks)),
-											Html.button("Toggle focus filter", filter_active.on_unit(|active| !active)),
+											Html.button_c("Toggle focus filter", quiet_button_class, filter_active.on_unit(|active| !active)),
 											Html.text_s(filter_label),
-											Html.text_input("Reviewer", reviewer.signal(), reviewer.on_str(|_, value| value)),
+											Html.text_input_c("Reviewer", reviewer.signal(), input_class, reviewer.on_str(|_, value| value)),
 											Html.text_s(reviewer_label),
 										],
 									),
-									Html.section(
+									Html.section_c(
 										"Doing",
-										[],
+										panel_class,
 										[
 											Ui.each(visible_tasks, |label| label, Ui.str_key_hash, render_task),
 										],

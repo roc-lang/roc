@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  body {
+    @apply bg-zinc-100 text-zinc-950 antialiased;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  #app button {
+    @apply inline-flex min-h-9 items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 shadow-sm transition hover:border-zinc-400 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 active:translate-y-px disabled:cursor-not-allowed disabled:border-zinc-200 disabled:bg-zinc-100 disabled:text-zinc-400;
+  }
+
+  #app input {
+    @apply min-h-9 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 shadow-sm outline-none transition placeholder:text-zinc-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20;
+  }
+
+  #app input[type="checkbox"] {
+    @apply min-h-0 h-4 w-4 rounded border-zinc-300 p-0 accent-emerald-600 shadow-none;
+  }
+
+  #app > div {
+    @apply mx-auto grid w-full max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:px-8;
+  }
+
+  #app h2[role="heading"] {
+    @apply text-2xl font-semibold text-zinc-950;
+  }
+
+  #app p {
+    @apply text-sm text-zinc-600;
+  }
+
+  #app > div > section[role="region"] {
+    @apply grid gap-4 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm;
+  }
+
+  #app section[role="region"] > section[role="region"] {
+    @apply grid gap-3 border-t border-zinc-200 pt-4;
+  }
+
+  #app section[role="region"] > div {
+    @apply flex flex-wrap items-center gap-3;
+  }
+}

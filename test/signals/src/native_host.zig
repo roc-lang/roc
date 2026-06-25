@@ -243,6 +243,7 @@ const DomElement = struct {
     role: ?[]const u8,
     label: ?[]const u8,
     test_id: ?[]const u8,
+    class: ?[]const u8,
     text: ?[]const u8,
     value: ?[]const u8,
     checked: bool,
@@ -265,6 +266,7 @@ const DomElement = struct {
             .role = null,
             .label = null,
             .test_id = null,
+            .class = null,
             .text = null,
             .value = null,
             .checked = false,
@@ -287,6 +289,7 @@ const DomElement = struct {
         if (self.role) |role| allocator.free(role);
         if (self.label) |label| allocator.free(label);
         if (self.test_id) |test_id| allocator.free(test_id);
+        if (self.class) |class| allocator.free(class);
         if (self.text) |text| allocator.free(text);
         if (self.value) |value| allocator.free(value);
         self.children.deinit(allocator);
@@ -1842,6 +1845,7 @@ fn setRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, valu
         .label => setOwnedString(host.gpa.allocator(), &elem.label, value),
         .test_id => setOwnedString(host.gpa.allocator(), &elem.test_id, value),
         .value => setElementValue(host, elem, value),
+        .class => setOwnedString(host.gpa.allocator(), &elem.class, value),
     }
 }
 
@@ -1861,6 +1865,7 @@ fn clearRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField) vo
         .label => clearOwnedString(host.gpa.allocator(), &elem.label),
         .test_id => clearOwnedString(host.gpa.allocator(), &elem.test_id),
         .value => clearElementValue(host, elem),
+        .class => clearOwnedString(host.gpa.allocator(), &elem.class),
     }
 }
 

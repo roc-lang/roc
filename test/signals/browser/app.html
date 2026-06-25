@@ -4,95 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Signals App</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        line-height: 1.45;
-      }
-
-      body {
-        margin: 0;
-        min-height: 100vh;
-        background: Canvas;
-        color: CanvasText;
-      }
-
-      main {
-        box-sizing: border-box;
-        width: min(100%, 860px);
-        padding: 28px;
-      }
-
-      header {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px 16px;
-        align-items: baseline;
-        margin: 0 0 18px;
-      }
-
-      a {
-        color: LinkText;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 1.4rem;
-        font-weight: 650;
-      }
-
-      h2 {
-        flex-basis: 100%;
-        margin: 0;
-        font-size: 1.05rem;
-        font-weight: 650;
-      }
-
-      button,
-      input {
-        min-width: 112px;
-        padding: 7px 10px;
-        border: 1px solid color-mix(in srgb, CanvasText 32%, transparent);
-        border-radius: 6px;
-        background: ButtonFace;
-        color: ButtonText;
-        font: inherit;
-      }
-
-      button:active {
-        transform: translateY(1px);
-      }
-
-      #app {
-        display: grid;
-        gap: 14px;
-        align-items: start;
-      }
-
-      #app div,
-      #app section {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        align-items: center;
-      }
-
-      #error {
-        color: MarkText;
-        background: Mark;
-        padding: 10px 12px;
-        border-radius: 6px;
-      }
-    </style>
+    <link href="./signals.generated.css" rel="stylesheet">
   </head>
-  <body>
-    <main>
-      <header>
-        <h1 id="title">Signals App</h1>
-        <a href="./">All apps</a>
+  <body class="min-h-screen">
+    <main class="min-h-screen">
+      <header class="border-b border-zinc-200 bg-white/90">
+        <div class="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 lg:px-8">
+          <h1 id="title" class="text-lg font-semibold text-zinc-950">Signals App</h1>
+          <a class="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:border-emerald-500 hover:text-emerald-700" href="./">All apps</a>
+        </div>
       </header>
-      <div id="error" hidden></div>
+      <div id="error" class="mx-auto mt-4 hidden w-full max-w-6xl rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" hidden></div>
       <div id="app"></div>
     </main>
 
@@ -115,6 +37,7 @@
         });
       } catch (err) {
         error.hidden = false;
+        error.classList.remove("hidden");
         error.textContent = String(err?.message || err);
       }
     </script>

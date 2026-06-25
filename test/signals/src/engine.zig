@@ -47,6 +47,7 @@ const RenderScalarNodeCache = struct {
     label: ?[]const u8 = null,
     test_id: ?[]const u8 = null,
     value: ?[]const u8 = null,
+    class: ?[]const u8 = null,
     checked: ?bool = null,
     disabled: ?bool = null,
 
@@ -57,6 +58,7 @@ const RenderScalarNodeCache = struct {
         if (self.label) |label| allocator.free(label);
         if (self.test_id) |test_id| allocator.free(test_id);
         if (self.value) |value| allocator.free(value);
+        if (self.class) |class| allocator.free(class);
         self.children.deinit(allocator);
         self.* = .{};
     }
@@ -75,6 +77,7 @@ const RenderScalarNodeCache = struct {
             .label => &self.label,
             .test_id => &self.test_id,
             .value => &self.value,
+            .class => &self.class,
         };
     }
 
@@ -1038,6 +1041,7 @@ pub const HostTextFieldDescriptorIndexes = struct {
     label: ?usize = null,
     test_id: ?usize = null,
     value: ?usize = null,
+    class: ?usize = null,
 
     pub fn get(self: HostTextFieldDescriptorIndexes, field: RenderTextField) ?usize {
         return switch (field) {
@@ -1046,6 +1050,7 @@ pub const HostTextFieldDescriptorIndexes = struct {
             .label => self.label,
             .test_id => self.test_id,
             .value => self.value,
+            .class => self.class,
         };
     }
 
@@ -1056,6 +1061,7 @@ pub const HostTextFieldDescriptorIndexes = struct {
             .label => &self.label,
             .test_id => &self.test_id,
             .value => &self.value,
+            .class => &self.class,
         };
     }
 };
@@ -1927,6 +1933,7 @@ pub fn renderTextFieldFromAbi(field: u64) RenderTextField {
         @intFromEnum(RenderTextField.label) => .label,
         @intFromEnum(RenderTextField.test_id) => .test_id,
         @intFromEnum(RenderTextField.value) => .value,
+        @intFromEnum(RenderTextField.class) => .class,
         else => @panic("Roc render text descriptor used an unknown field"),
     };
 }
@@ -5507,7 +5514,7 @@ pub fn Engine(comptime Ctx: type) type {
 
         pub fn applyActiveStreamFieldsForElem(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, counts: *render.Counts) void {
             const descriptor_index = self.active_stream.elemDescriptorIndex(elem_id) orelse @panic("active render node had no descriptor index");
-            const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
+            const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value, .class };
             const bool_fields = [_]RenderBoolField{ .checked, .disabled };
 
             for (text_fields) |field| {
@@ -5591,7 +5598,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.replaceRenderChildren(ctx, parent_elem_id, children, &counts);
             }
 
-            const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
+            const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value, .class };
             const bool_fields = [_]RenderBoolField{ .checked, .disabled };
             for (seen, 0..) |is_seen, index| {
                 if (index == 0 or !is_seen) continue;
@@ -5846,7 +5853,7 @@ pub fn Engine(comptime Ctx: type) type {
                 self.replaceRenderChildren(ctx, @intCast(index), children.items, &counts);
             }
 
-            const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value };
+            const text_fields = [_]RenderTextField{ .text, .role, .label, .test_id, .value, .class };
             const bool_fields = [_]RenderBoolField{ .checked, .disabled };
             for (seen, 0..) |is_seen, index| {
                 if (index == 0 or !is_seen) continue;
