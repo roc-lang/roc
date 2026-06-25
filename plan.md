@@ -107,6 +107,7 @@ Current branch status:
   known child plans and wrapping unknown iterator operands as `Public`.
 - `Iter.iter` forwards known iterator plans and wraps unknown iterator operands
   as `Public`.
+- `Iter.concat` can emit a `Concat` plan behind the producer-plan flag.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -528,7 +529,7 @@ Tasks:
 - [x] `Iter.single` produces `Single`.
 - [ ] `Iter.prepended` produces the correct plan shape.
 - [x] `Iter.append` produces `Append`.
-- [ ] `Iter.concat` produces `Concat`.
+- [x] `Iter.concat` produces `Concat`.
 - [ ] `Iter.map` produces `Map`.
 - [ ] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [ ] `Iter.custom` produces `Custom`.

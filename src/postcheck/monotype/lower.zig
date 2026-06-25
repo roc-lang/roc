@@ -14034,6 +14034,12 @@ const BodyContext = struct {
             return try self.lowerAppendIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
         }
 
+        if (self.methodNameIs(plan.method, "concat") and
+            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "concat"))
+        {
+            return try self.lowerConcatIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
+        }
+
         if (!self.methodNameIs(plan.method, "iter")) return null;
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list) and
             self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "iter"))
@@ -14110,6 +14116,76 @@ const BodyContext = struct {
         const receiver_expr = self.builder.program.exprs.items[@intFromEnum(lowered_args[receiver_index])];
         return try self.builder.program.addExpr(.{
             .ty = receiver_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lowerConcatIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: Type.TypeId,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.concat dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.concat dispatch plan had an unexpected argument shape");
+        }
+        const second_index: usize = if (receiver_index == 0) 1 else 0;
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter.concat call argument count differed from its dispatch plan");
+        }
+
+        const first_plan = try self.iteratorPlanForLoweredPublicExpr(lowered_args[receiver_index], dispatcher_ty);
+        const second_expr = self.builder.program.exprs.items[@intFromEnum(lowered_args[second_index])];
+        if (!self.sameType(second_expr.ty, dispatcher_ty)) {
+            Common.invariant("checked Iter.concat second iterator type differed from its receiver type");
+        }
+        const second_plan = try self.iteratorPlanForLoweredPublicExpr(lowered_args[second_index], dispatcher_ty);
+        const first = self.builder.program.iterPlan(first_plan);
+        const second = self.builder.program.iterPlan(second_plan);
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const phase_expr = try self.boolLiteral(false, bool_ty);
+
+        var steps = first.steps;
+        if (first.done == .reachable) {
+            steps.append = steps.append or second.steps.append;
+            steps.one = steps.one or second.steps.one;
+            steps.skip = steps.skip or second.steps.skip;
+            steps.done = second.steps.done;
+        }
+
+        const done = if (first.done == .reachable) second.done else .never;
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(dispatcher_ty),
+            .length = switch (first.length) {
+                .known => |first_len| switch (second.length) {
+                    .known => |second_len| .{ .known = try self.builder.lowLevelExpr(.num_plus, &.{ first_len, second_len }, u64_ty) },
+                    .unknown => .unknown,
+                },
+                .unknown => .unknown,
+            },
+            .steps = steps,
+            .done = done,
+            .materialized = materialized,
+            .data = .{ .concat = .{
+                .first = first_plan,
+                .second = second_plan,
+                .phase = phase_expr,
+            } },
+        });
+
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+        return try self.builder.program.addExpr(.{
+            .ty = materialized_expr.ty,
             .data = .{ .iter_plan = plan_id },
         });
     }
