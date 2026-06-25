@@ -329,6 +329,13 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(22.0)" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/9783
+        // The exact mathematical result is 16129, which does not fit in I8.
+        .name = "issue 9783: signed times crashes on overflow",
+        .source = "I8.times(I8.highest, I8.highest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/9812
         // The exact mathematical result is 128, which does not fit in I8.
         .name = "issue 9812: signed negate crashes on lowest value",
