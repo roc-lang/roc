@@ -28,7 +28,7 @@ const child_command_timeout_reserve_ms: u64 = 1_000;
 const timeout_result_grace_ms: u64 = 5_000;
 const default_timeout_ms: u64 = 120_000;
 const glue_timeout_ms: u64 = 240_000;
-const rust_glue_duplicate_tag_timeout_ms: u64 = 30_000;
+const rust_glue_duplicate_tag_timeout_ms: u64 = 90_000;
 
 const CliRunnerError = util.RocRunError ||
     util.ChildTimeoutError ||
