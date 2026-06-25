@@ -486,6 +486,14 @@ footer p {
     display: block;
 }
 
+/* When a module entry is itself nested inside another entry's sub-entry list
+   (e.g. the builtin type modules under "Builtin Types"), indent its members so
+   they sit underneath their type rather than level with it. Top-level modules
+   and types are not descendants of a sub-entry list, so they are unaffected. */
+.sidebar-sub-entries .sidebar-entry > .sidebar-sub-entries {
+    margin-left: 16px;
+}
+
 .sidebar-sub-entries a {
   display: flex;
   align-items: center;
