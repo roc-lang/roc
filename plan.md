@@ -105,6 +105,8 @@ Current branch status:
   rather than preexisting loop locals.
 - `Iter.append` can emit an `Append` plan behind the producer-plan flag, reusing
   known child plans and wrapping unknown iterator operands as `Public`.
+- `Iter.iter` forwards known iterator plans and wraps unknown iterator operands
+  as `Public`.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -520,7 +522,7 @@ Tasks:
 - [ ] All recognized producers lower to plan expressions.
 - [ ] Recognition uses checked identity for every producer.
 - [x] `List.iter` uses exact checked identity when producing `ListIter`.
-- [ ] `Iter.iter` preserves or forwards known plans correctly.
+- [x] `Iter.iter` preserves or forwards known plans correctly.
 - [ ] numeric finite ranges produce `Range`.
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
 - [x] `Iter.single` produces `Single`.

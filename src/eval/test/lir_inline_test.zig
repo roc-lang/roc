@@ -1121,6 +1121,30 @@ fn markReachableLiftedExpr(
     }
 }
 
+fn expectNoReachableLiftedIterPlans(
+    allocator: Allocator,
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+) !void {
+    const reachable = try allocator.alloc(bool, program.exprs.items.len);
+    defer allocator.free(reachable);
+    @memset(reachable, false);
+
+    for (program.fns.items) |fn_| {
+        switch (fn_.body) {
+            .roc => |body| markReachableLiftedExpr(program, body, reachable),
+            .hosted => {},
+        }
+    }
+
+    for (program.exprs.items, reachable) |expr, is_reachable| {
+        if (!is_reachable) continue;
+        switch (expr.data) {
+            .iter_plan => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 fn markReachableLiftedIterPlan(
     program: *const postcheck.MonotypeLifted.Ast.Program,
     plan_id: postcheck.MonotypeLifted.Ast.IterPlanId,
@@ -1711,6 +1735,33 @@ test "Iter.append producer wraps unknown receiver as public plan" {
     try std.testing.expect(found);
 }
 
+test "Iter.iter producer forwards known iterator plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = Iter.single(42.I64).iter()
+    );
+    defer mono_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), mono_source.mono.roots.items.len);
+    const root = mono_source.mono.roots.items[0];
+    const def = mono_source.mono.defs.items[@intFromEnum(root.def)];
+    const body = switch (def.body) {
+        .roc => |body| body,
+        .hosted => return error.TestUnexpectedResult,
+    };
+    const plan_id = switch (mono_source.mono.exprs.items[@intFromEnum(body)].data) {
+        .iter_plan => |plan_id| plan_id,
+        else => return error.TestUnexpectedResult,
+    };
+    switch (mono_source.mono.iterPlan(plan_id).data) {
+        .single => {},
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "List.iter producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
     var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
@@ -1721,12 +1772,7 @@ test "List.iter producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    for (lifted_source.lifted.exprs.items) |expr| {
-        switch (expr.data) {
-            .iter_plan => return error.TestUnexpectedResult,
-            else => {},
-        }
-    }
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
 }
 
 test "Iter.single producer materializes before Lambda when returned publicly" {
@@ -1739,12 +1785,7 @@ test "Iter.single producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    for (lifted_source.lifted.exprs.items) |expr| {
-        switch (expr.data) {
-            .iter_plan => return error.TestUnexpectedResult,
-            else => {},
-        }
-    }
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
 }
 
 test "Iter.append producer materializes before Lambda when returned publicly" {
@@ -1757,12 +1798,20 @@ test "Iter.append producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    for (lifted_source.lifted.exprs.items) |expr| {
-        switch (expr.data) {
-            .iter_plan => return error.TestUnexpectedResult,
-            else => {},
-        }
-    }
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "Iter.iter producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = Iter.single(42.I64).iter()
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
 }
 
 test "optimized for over list.iter append chain uses private iterator cursor" {

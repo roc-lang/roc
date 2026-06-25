@@ -14035,6 +14035,12 @@ const BodyContext = struct {
         }
 
         if (!self.methodNameIs(plan.method, "iter")) return null;
+        if (!self.typeHasBuiltinOwner(dispatcher_ty, .list) and
+            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "iter"))
+        {
+            return try self.lowerIdentityIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call);
+        }
+
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) return null;
         if (!self.resolvedDispatchMatchesBuiltinMethod(resolved, .list, "iter")) return null;
 
@@ -14076,6 +14082,34 @@ const BodyContext = struct {
 
         return try self.builder.program.addExpr(.{
             .ty = materialized_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lowerIdentityIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: Type.TypeId,
+        lowered_call: LoweredResolvedDispatchCall,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.iter dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 1 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.iter dispatch plan had an unexpected argument shape");
+        }
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter.iter call argument count differed from its dispatch plan");
+        }
+
+        const plan_id = try self.iteratorPlanForLoweredPublicExpr(lowered_args[receiver_index], dispatcher_ty);
+        const receiver_expr = self.builder.program.exprs.items[@intFromEnum(lowered_args[receiver_index])];
+        return try self.builder.program.addExpr(.{
+            .ty = receiver_expr.ty,
             .data = .{ .iter_plan = plan_id },
         });
     }
