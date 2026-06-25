@@ -859,18 +859,13 @@ const Lowerer = struct {
         if (self.type_map.get(root)) |cached| return cached;
 
         const content = self.solved.types.get(root);
-        switch (content) {
-            .func => |func| return try self.lowerType(func.callable),
-            else => {},
-        }
-
         const reserved = try self.types.add(.zst);
         try self.type_map.put(root, reserved);
-        self.types.set(reserved, try self.lowerTypeContent(content));
+        self.types.set(reserved, try self.lowerTypeContent(root, content));
         return reserved;
     }
 
-    fn lowerTypeContent(self: *Lowerer, content: SolvedType.Content) Common.LowerError!Type.Content {
+    fn lowerTypeContent(self: *Lowerer, root: SolvedType.TypeVarId, content: SolvedType.Content) Common.LowerError!Type.Content {
         return switch (content) {
             .link => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved link"),
             .unbound, .forall => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved type"),
@@ -880,7 +875,7 @@ const Lowerer = struct {
                 .source_fn_ty = erased.source_fn_ty,
                 .members = try self.lowerFnMembers(erased.members, .erased),
             } },
-            .func => |func| return self.types.get(try self.lowerType(func.callable)),
+            .func => |func| try self.lowerCallableContentForFunction(root, func.callable, .finite),
             .list => |elem| .{ .list = try self.lowerType(elem) },
             .box => |elem| .{ .box = try self.lowerType(elem) },
             .tuple => |items| blk: {
@@ -930,6 +925,22 @@ const Lowerer = struct {
         };
     }
 
+    fn lowerCallableContentForFunction(
+        self: *Lowerer,
+        solved_fn_ty: SolvedType.TypeVarId,
+        callable_ty: SolvedType.TypeVarId,
+        abi: CaptureAbi,
+    ) Common.LowerError!Type.Content {
+        return switch (self.solved.types.rootContent(callable_ty)) {
+            .lambda_set => |members| .{ .callable = try self.lowerFnMembersWithType(members, abi, solved_fn_ty) },
+            .erased => |erased| .{ .erased_fn = .{
+                .source_fn_ty = erased.source_fn_ty,
+                .members = try self.lowerFnMembersWithType(erased.members, .erased, solved_fn_ty),
+            } },
+            else => Common.invariant("function callable slot resolved to a non-callable type"),
+        };
+    }
+
     /// Re-materializes a nominal record's declared field order from the Lambda
     /// Solved store into this lowerer's Lambda Mono store. Named entries copy the
     /// shared field-name id; padding entries re-lower their reserved type.
@@ -948,6 +959,15 @@ const Lowerer = struct {
     }
 
     fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Common.LowerError!Type.Span {
+        return try self.lowerFnMembersWithType(members, abi, null);
+    }
+
+    fn lowerFnMembersWithType(
+        self: *Lowerer,
+        members: SolvedType.Span,
+        abi: CaptureAbi,
+        maybe_solved_fn_ty: ?SolvedType.TypeVarId,
+    ) Common.LowerError!Type.Span {
         const solved_members = self.solved.types.memberSpan(members);
         const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
         defer self.allocator.free(variants);
@@ -956,7 +976,7 @@ const Lowerer = struct {
             const source = self.sourceFnForSymbol(member.lambda);
             const target = try self.ensureFnSpec(
                 source,
-                self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(source)]),
+                maybe_solved_fn_ty orelse self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(source)]),
                 abi,
                 member.captures,
             );
@@ -2084,9 +2104,6 @@ const Lowerer = struct {
         if (try self.assignStructBoundary(target, target_content, source, source_content, next)) |stmt| {
             return stmt;
         }
-        if (try self.assignTagUnionBoundary(target, target_content, source, source_content, next)) |stmt| {
-            return stmt;
-        }
 
         if (self.isZstLocal(target)) {
             if (!self.isZstLocal(source)) {
@@ -2175,99 +2192,6 @@ const Lowerer = struct {
         return current;
     }
 
-    fn assignTagUnionBoundary(
-        self: *Lowerer,
-        target: LIR.LocalId,
-        target_content: layout.Layout,
-        source: LIR.LocalId,
-        source_content: layout.Layout,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!?LIR.CFStmtId {
-        if (target_content.tag != .tag_union or source_content.tag != .tag_union) return null;
-        if (!self.tagUnionLayoutsAssignable(target_content, source_content)) return null;
-
-        const target_variants = self.tagUnionVariants(target_content);
-        const source_variants = self.tagUnionVariants(source_content);
-
-        var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
-        var i = source_variants.len;
-        while (i > 0) {
-            i -= 1;
-            const variant_index: u16 = @intCast(i);
-            const target_payload_layout = target_variants.get(variant_index).payload_layout;
-            const source_payload_layout = source_variants.get(variant_index).payload_layout;
-            const branch_body = try self.assignTagUnionVariantBoundary(
-                target,
-                target_payload_layout,
-                source,
-                source_payload_layout,
-                variant_index,
-                next,
-            );
-            current = try self.discriminantSwitch(source, variant_index, branch_body, current, false);
-        }
-        return current;
-    }
-
-    fn assignTagUnionVariantBoundary(
-        self: *Lowerer,
-        target: LIR.LocalId,
-        target_payload_layout: layout.Idx,
-        source: LIR.LocalId,
-        source_payload_layout: layout.Idx,
-        variant_index: u16,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const target_payload_content = self.result.layouts.getLayout(target_payload_layout);
-        const payload = if (self.result.layouts.isZeroSized(target_payload_content))
-            null
-        else
-            try self.addLocalForLayout(target_payload_layout);
-
-        const assign_tag = try self.result.store.addCFStmt(.{ .assign_tag = .{
-            .target = target,
-            .variant_index = variant_index,
-            .discriminant = variant_index,
-            .payload = payload,
-            .next = next,
-        } });
-
-        const target_payload = payload orelse return assign_tag;
-        const source_payload = try self.addLocalForLayout(source_payload_layout);
-        const assign_payload = try self.assignBoxBoundary(target_payload, source_payload, source_payload_layout, assign_tag);
-        return try self.assignRefRead(
-            source_payload,
-            source_payload_layout,
-            .{ .tag_payload_struct = .{
-                .source = source,
-                .variant_index = variant_index,
-                .tag_discriminant = variant_index,
-            } },
-            assign_payload,
-        );
-    }
-
-    fn tagUnionLayoutsAssignable(self: *Lowerer, target_content: layout.Layout, source_content: layout.Layout) bool {
-        if (target_content.tag != .tag_union or source_content.tag != .tag_union) return false;
-        const target_variants = self.tagUnionVariants(target_content);
-        const source_variants = self.tagUnionVariants(source_content);
-        if (target_variants.len != source_variants.len) return false;
-
-        var variant_index: usize = 0;
-        while (variant_index < target_variants.len) : (variant_index += 1) {
-            const target_payload_layout = target_variants.get(@intCast(variant_index)).payload_layout;
-            const source_payload_layout = source_variants.get(@intCast(variant_index)).payload_layout;
-            if (!self.layoutsAssignable(target_payload_layout, source_payload_layout)) return false;
-        }
-        return true;
-    }
-
-    fn tagUnionVariants(self: *Lowerer, content: layout.Layout) layout.TagUnionVariant.SafeMultiList.Slice {
-        if (content.tag != .tag_union) Common.invariant("tag union variant access expected a tag-union layout");
-        const data = self.result.layouts.getTagUnionData(content.getTagUnion().idx);
-        return self.result.layouts.getTagUnionVariants(data);
-    }
-
     fn structLayoutsAssignable(self: *Lowerer, target_content: layout.Layout, source_content: layout.Layout) bool {
         if (target_content.tag != .struct_ or source_content.tag != .struct_) return false;
         const target_count = self.semanticStructFieldCount(target_content.getStruct().idx);
@@ -2316,7 +2240,6 @@ const Lowerer = struct {
         if (source_content.tag == .box and self.result.layouts.getLayout(source_content.getIdx()).eql(target_content)) return true;
         if (source_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) return true;
         if (target_content.tag == .struct_ and source_content.tag == .struct_) return self.structLayoutsAssignable(target_content, source_content);
-        if (target_content.tag == .tag_union and source_content.tag == .tag_union) return self.tagUnionLayoutsAssignable(target_content, source_content);
         return false;
     }
 

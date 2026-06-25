@@ -3594,17 +3594,17 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Known(4)" },
     },
     .{
-        .name = "inspect: Iter.next normalizes appended tail",
+        .name = "inspect: Iter.next exposes appended tail",
         .source =
         \\{
         \\    first = Iter.next([1.I64, 2].iter().append(3))
         \\    match first {
-        \\        One({ item, rest }) => [item].concat(Iter.fold(rest, [], |acc, n| acc.append(n)))
+        \\        Append({ before, after }) => [after].concat(Iter.fold(before, [], |acc, n| acc.append(n)))
         \\        _ => []
         \\    }
         \\}
         ,
-        .expected = .{ .inspect_str = "[1, 2, 3]" },
+        .expected = .{ .inspect_str = "[3, 1, 2]" },
     },
     .{
         .name = "for loop over appended iterator",

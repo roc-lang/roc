@@ -1252,9 +1252,6 @@ const Lowerer = struct {
         if (try self.assignStructBoundary(target, target_content, source, source_content, next)) |stmt| {
             return stmt;
         }
-        if (try self.assignTagUnionBoundary(target, target_content, source, source_content, next)) |stmt| {
-            return stmt;
-        }
 
         if (self.isZstLocal(target)) {
             if (!self.isZstLocal(source)) {
@@ -1343,99 +1340,6 @@ const Lowerer = struct {
         return current;
     }
 
-    fn assignTagUnionBoundary(
-        self: *Lowerer,
-        target: LIR.LocalId,
-        target_content: layout.Layout,
-        source: LIR.LocalId,
-        source_content: layout.Layout,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!?LIR.CFStmtId {
-        if (target_content.tag != .tag_union or source_content.tag != .tag_union) return null;
-        if (!self.tagUnionLayoutsAssignable(target_content, source_content)) return null;
-
-        const target_variants = self.tagUnionVariants(target_content);
-        const source_variants = self.tagUnionVariants(source_content);
-
-        var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
-        var i = source_variants.len;
-        while (i > 0) {
-            i -= 1;
-            const variant_index: u16 = @intCast(i);
-            const target_payload_layout = target_variants.get(variant_index).payload_layout;
-            const source_payload_layout = source_variants.get(variant_index).payload_layout;
-            const branch_body = try self.assignTagUnionVariantBoundary(
-                target,
-                target_payload_layout,
-                source,
-                source_payload_layout,
-                variant_index,
-                next,
-            );
-            current = try self.discriminantSwitch(source, variant_index, branch_body, current, false);
-        }
-        return current;
-    }
-
-    fn assignTagUnionVariantBoundary(
-        self: *Lowerer,
-        target: LIR.LocalId,
-        target_payload_layout: layout.Idx,
-        source: LIR.LocalId,
-        source_payload_layout: layout.Idx,
-        variant_index: u16,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const target_payload_content = self.result.layouts.getLayout(target_payload_layout);
-        const payload = if (self.result.layouts.isZeroSized(target_payload_content))
-            null
-        else
-            try self.addLocalForLayout(target_payload_layout);
-
-        const assign_tag = try self.result.store.addCFStmt(.{ .assign_tag = .{
-            .target = target,
-            .variant_index = variant_index,
-            .discriminant = variant_index,
-            .payload = payload,
-            .next = next,
-        } });
-
-        const target_payload = payload orelse return assign_tag;
-        const source_payload = try self.addLocalForLayout(source_payload_layout);
-        const assign_payload = try self.assignBoxBoundary(target_payload, source_payload, source_payload_layout, assign_tag);
-        return try self.assignRefRead(
-            source_payload,
-            source_payload_layout,
-            .{ .tag_payload_struct = .{
-                .source = source,
-                .variant_index = variant_index,
-                .tag_discriminant = variant_index,
-            } },
-            assign_payload,
-        );
-    }
-
-    fn tagUnionLayoutsAssignable(self: *Lowerer, target_content: layout.Layout, source_content: layout.Layout) bool {
-        if (target_content.tag != .tag_union or source_content.tag != .tag_union) return false;
-        const target_variants = self.tagUnionVariants(target_content);
-        const source_variants = self.tagUnionVariants(source_content);
-        if (target_variants.len != source_variants.len) return false;
-
-        var variant_index: usize = 0;
-        while (variant_index < target_variants.len) : (variant_index += 1) {
-            const target_payload_layout = target_variants.get(@intCast(variant_index)).payload_layout;
-            const source_payload_layout = source_variants.get(@intCast(variant_index)).payload_layout;
-            if (!self.layoutsAssignable(target_payload_layout, source_payload_layout)) return false;
-        }
-        return true;
-    }
-
-    fn tagUnionVariants(self: *Lowerer, content: layout.Layout) layout.TagUnionVariant.SafeMultiList.Slice {
-        if (content.tag != .tag_union) Common.invariant("tag union variant access expected a tag-union layout");
-        const data = self.result.layouts.getTagUnionData(content.getTagUnion().idx);
-        return self.result.layouts.getTagUnionVariants(data);
-    }
-
     fn structLayoutsAssignable(self: *Lowerer, target_content: layout.Layout, source_content: layout.Layout) bool {
         if (target_content.tag != .struct_ or source_content.tag != .struct_) return false;
         const target_count = self.semanticStructFieldCount(target_content.getStruct().idx);
@@ -1484,7 +1388,6 @@ const Lowerer = struct {
         if (source_content.tag == .box and self.result.layouts.getLayout(source_content.getIdx()).eql(target_content)) return true;
         if (source_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) return true;
         if (target_content.tag == .struct_ and source_content.tag == .struct_) return self.structLayoutsAssignable(target_content, source_content);
-        if (target_content.tag == .tag_union and source_content.tag == .tag_union) return self.tagUnionLayoutsAssignable(target_content, source_content);
         return false;
     }
 

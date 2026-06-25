@@ -4485,7 +4485,7 @@ fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Er
     return iter_var;
 }
 
-fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env, include_append: bool) Allocator.Error!Content {
+fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4530,23 +4530,14 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env, i
     const one_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("One"));
     const skip_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Skip"));
 
+    const tags = [_]types_mod.Tag{
+        try self.types.mkTag(append_ident, &.{append_payload_record}),
+        try self.types.mkTag(one_ident, &.{payload_record}),
+        try self.types.mkTag(skip_ident, &.{skip_payload_record}),
+        try self.types.mkTag(done_ident, &.{}),
+    };
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
-    if (include_append) {
-        const tags = [_]types_mod.Tag{
-            try self.types.mkTag(append_ident, &.{append_payload_record}),
-            try self.types.mkTag(one_ident, &.{payload_record}),
-            try self.types.mkTag(skip_ident, &.{skip_payload_record}),
-            try self.types.mkTag(done_ident, &.{}),
-        };
-        return try self.types.mkTagUnion(&tags, ext_var);
-    } else {
-        const tags = [_]types_mod.Tag{
-            try self.types.mkTag(one_ident, &.{payload_record}),
-            try self.types.mkTag(skip_ident, &.{skip_payload_record}),
-            try self.types.mkTag(done_ident, &.{}),
-        };
-        return try self.types.mkTagUnion(&tags, ext_var);
-    }
+    return try self.types.mkTagUnion(&tags, ext_var);
 }
 
 /// Create a nominal number type content (e.g., U8, I32, Dec)
@@ -10798,7 +10789,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const rest_var = try self.mkIterVar(pair_var, env, expr_region);
             try self.setVarRank(rest_var, env);
 
-            const step_content = try self.mkIteratorStepContent(pair_var, rest_var, env, true);
+            const step_content = try self.mkIteratorStepContent(pair_var, rest_var, env);
             const step_ret_var = try self.freshFromContent(step_content, env, expr_region);
             const empty_args = try self.types.appendVars(&.{});
             const step_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
@@ -13586,7 +13577,7 @@ fn checkIteratorForLoop(
         iterable_region,
     );
 
-    const step_var = try self.freshFromContent(try self.mkIteratorStepContent(item_var, iterator_var, env, false), env, loop_region);
+    const step_var = try self.freshFromContent(try self.mkIteratorStepContent(item_var, iterator_var, env), env, loop_region);
     const next_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("next"));
     const next_fn_var = try self.mkSyntheticReceiverDispatchConstraint(
         iterator_var,
