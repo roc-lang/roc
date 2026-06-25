@@ -111,6 +111,12 @@ const RenderContext = struct {
     /// True when the package being documented is Builtin itself, so references
     /// to builtin types stay local instead of pointing at roc-lang.org.
     documenting_builtin: bool = false,
+    /// Maps a builtin type's short name to its owning promoted module (e.g.
+    /// "U8" -> "Num", "Utf8Problem" -> "Str"), for the modules reshaped out of
+    /// `Builtin`. Lets a bare `[U8]` shorthand in one type's docs resolve to the
+    /// page that actually documents it. Keys/values are slices into the
+    /// PackageDocs and live for the duration of rendering.
+    builtin_type_owners: std.StringHashMapUnmanaged([]const u8) = .empty,
     /// Every `id="…"` value that will be emitted across all module pages,
     /// computed up front so `writeDocRefHref` can verify each `[Name]`
     /// shorthand resolves to a real anchor. Keys are slices into
@@ -149,9 +155,20 @@ const RenderContext = struct {
         var known = std.StringHashMapUnmanaged(void){};
         errdefer known.deinit(gpa);
         var documenting_builtin = false;
+        var builtin_type_owners = std.StringHashMapUnmanaged([]const u8){};
+        errdefer builtin_type_owners.deinit(gpa);
         for (package_docs.modules) |mod| {
             try known.put(gpa, mod.name, {});
-            if (std.mem.eql(u8, mod.name, "Builtin")) documenting_builtin = true;
+            // A module literally named "Builtin" means we're rendering the
+            // builtins before reshaping; a `builtin_derived` module means the
+            // types have been promoted out of `Builtin`. Either way we're
+            // documenting the builtins, so builtin type refs stay on-site.
+            if (std.mem.eql(u8, mod.name, "Builtin") or mod.builtin_derived) documenting_builtin = true;
+            if (mod.builtin_derived) {
+                for (mod.entries) |*entry| {
+                    try collectBuiltinTypeOwners(&builtin_type_owners, gpa, entry, mod.name);
+                }
+            }
         }
 
         var arena = collections.SingleThreadArena.init(gpa);
@@ -177,6 +194,7 @@ const RenderContext = struct {
             .current_module = null,
             .current_module_entries = null,
             .documenting_builtin = documenting_builtin,
+            .builtin_type_owners = builtin_type_owners,
             .all_anchors = anchors,
             .anchor_arena = arena,
             .current_source_path = current_source_path,
@@ -187,8 +205,15 @@ const RenderContext = struct {
     fn deinit(self: *RenderContext, gpa: Allocator) void {
         self.current_module_anchors.deinit(gpa);
         self.known_modules.deinit(gpa);
+        self.builtin_type_owners.deinit(gpa);
         self.all_anchors.deinit(gpa);
         self.anchor_arena.deinit();
+    }
+
+    /// The promoted module that documents builtin type `head` (e.g. "Num" for
+    /// "U8"), or null when `head` is not a builtin type.
+    fn builtinTypeOwner(self: *const RenderContext, head: []const u8) ?[]const u8 {
+        return self.builtin_type_owners.get(head);
     }
 
     /// Record a broken `[Name]` reference. `bracket_offset` is the byte
@@ -312,6 +337,25 @@ fn populateAnchorMap(
         }
 
         try populateAnchorMap(map, gpa, arena, module_name, entry.children, entry_rel_path);
+    }
+}
+
+/// Record every type (not value) reachable from `entry` as owned by `module`,
+/// keyed by its short name, so a bare `[U8]` reference resolves to the page that
+/// documents it. First-seen wins on short-name collisions.
+fn collectBuiltinTypeOwners(
+    map: *std.StringHashMapUnmanaged([]const u8),
+    gpa: Allocator,
+    entry: *const DocModel.DocEntry,
+    module: []const u8,
+) Allocator.Error!void {
+    if (entry.kind != .value) {
+        const short = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |d| entry.name[d + 1 ..] else entry.name;
+        const result = try map.getOrPut(gpa, short);
+        if (!result.found_existing) result.value_ptr.* = module;
+    }
+    for (entry.children) |*child| {
+        try collectBuiltinTypeOwners(map, gpa, child, module);
     }
 }
 
@@ -1737,18 +1781,48 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
         return;
     }
 
+    // A bare reference to a builtin type that lives on another promoted page
+    // (e.g. `[U8]` from `Str`, where `U8` is documented under `Num`). Its id is
+    // `<owner>.<label>`, so link there directly.
+    if (ctx.builtinTypeOwner(head)) |owner| {
+        const is_same_module = if (ctx.current_module) |cur| std.mem.eql(u8, owner, cur) else false;
+        if (is_same_module) {
+            try w.writeAll("#");
+        } else {
+            if (ctx.current_module) |_| try w.writeAll("../");
+            try writeHtmlEscaped(w, owner);
+            try w.writeAll("/#");
+        }
+        try writeHtmlEscaped(w, owner);
+        try w.writeAll(".");
+        try writeHtmlEscaped(w, label);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, owner);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
+        append(&anchor_buf, &anchor_len, &anchor_overflow, label);
+        try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+        return;
+    }
+
     // Not a known module — treat as a reference relative to the current
     // module. Entry ids are `<module>.<label>`. Substitute the first segment
     // through the anchor map so a label like `U8` resolves to `Num.U8` and
     // `U8.default` resolves to `Num.U8.default`.
+    const resolved_head = ctx.lookupAnchorHead(head) orelse head;
     try w.writeAll("#");
     if (ctx.current_module) |cur| {
-        try writeHtmlEscaped(w, cur);
-        try w.writeAll(".");
-        append(&anchor_buf, &anchor_len, &anchor_overflow, cur);
-        append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
+        // When the resolved path already begins with the module name — which
+        // happens for the promoted builtin modules, whose top node matches the
+        // module name and is collapsed into the anchor id — don't prepend it
+        // again (avoids `#Num.Num.F32`).
+        const already_qualified = std.mem.startsWith(u8, resolved_head, cur) and
+            resolved_head.len > cur.len and resolved_head[cur.len] == '.';
+        if (!already_qualified) {
+            try writeHtmlEscaped(w, cur);
+            try w.writeAll(".");
+            append(&anchor_buf, &anchor_len, &anchor_overflow, cur);
+            append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
+        }
     }
-    const resolved_head = ctx.lookupAnchorHead(head) orelse head;
     try writeHtmlEscaped(w, resolved_head);
     append(&anchor_buf, &anchor_len, &anchor_overflow, resolved_head);
     if (first_dot) |d| {

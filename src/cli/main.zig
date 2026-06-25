@@ -12750,6 +12750,10 @@ fn generateDocs(
     };
     defer package_docs.deinit(ctx.gpa);
 
+    // Promote the builtin types (Str, Num, …) to top-level modules so the
+    // internal `Builtin` container never surfaces in the generated docs.
+    try package_docs.reshapeBuiltin(ctx.gpa);
+
     // Remove existing output directory to ensure a clean build
     try std.Io.Dir.cwd().deleteTree(ctx.io.std_io, base_output_dir);
 
