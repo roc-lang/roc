@@ -491,7 +491,7 @@ footer p {
    they sit underneath their type rather than level with it. Top-level modules
    and types are not descendants of a sub-entry list, so they are unaffected. */
 .sidebar-sub-entries .sidebar-entry > .sidebar-sub-entries {
-    margin-left: 16px;
+    margin-left: 22px;
 }
 
 .sidebar-sub-entries a {
@@ -512,6 +512,7 @@ footer p {
 
 .sidebar-sub-entries a.sidebar-value {
   border-left-color: var(--gray-border-subtle);
+  padding-left: 20px;
 }
 
 .sidebar-sub-entries > li:first-child > a {
