@@ -28,6 +28,7 @@ const child_command_timeout_reserve_ms: u64 = 1_000;
 const timeout_result_grace_ms: u64 = 5_000;
 const default_timeout_ms: u64 = 120_000;
 const glue_timeout_ms: u64 = 240_000;
+const rust_glue_duplicate_tag_timeout_ms: u64 = 30_000;
 
 const CliRunnerError = util.RocRunError ||
     util.ChildTimeoutError ||
@@ -253,6 +254,7 @@ const CustomCase = enum {
     glue_zig_compiles,
     glue_zig_opaque_box,
     glue_rust,
+    glue_rust_duplicate_tag_unions,
     glue_zig_bang_record_fields,
     glue_c_tests,
 };
@@ -512,6 +514,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command generated Zig compiles with zig build-obj", .body = .{ .custom = .glue_zig_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue uses RocBox for opaque boxed app types", .body = .{ .custom = .glue_zig_opaque_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue handles duplicate tag-union names", .body = .{ .custom = .glue_rust_duplicate_tag_unions } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -1644,6 +1647,7 @@ fn runCustomCase(
         .glue_zig_compiles => customGlueZigCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_opaque_box => customGlueZigOpaqueBox(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust_duplicate_tag_unions => customGlueRustDuplicateTagUnions(io, allocator, &env, &timer),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
     };
@@ -4286,6 +4290,33 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         test_zig_path,
         emit_flag,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn customGlueRustDuplicateTagUnions(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "rust-duplicate-tag-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, rust_glue_duplicate_tag_timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/RustGlue.roc", output_dir, "test/glue/rust-duplicate-tag-platform/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
+
+    for ([_][]const u8{
+        "pub struct TryType",
+        "pub struct IOErrType",
+        "pub fn roc_a_nested",
+        "pub fn roc_d_nested",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Rust duplicate-tag fixture missing {s}", .{needle});
+        }
+    }
+
     return null;
 }
 
