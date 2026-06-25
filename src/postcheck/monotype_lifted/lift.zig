@@ -77,6 +77,7 @@ pub fn run(
         allocator,
         name_store,
         types,
+        .empty,
         exprs,
         pats,
         stmts,
@@ -236,6 +237,7 @@ const Lifter = struct {
             self.registerFn(def.fn_id, fn_id);
         }
 
+        try self.lowerIterPlans();
         try self.computeCaptureFixpoint();
 
         for (self.source.defs.items, 0..) |def, index| {
@@ -279,6 +281,75 @@ const Lifter = struct {
                 .static_data = request.static_data,
             });
         }
+    }
+
+    fn lowerIterPlans(self: *Lifter) Allocator.Error!void {
+        if (self.source.iter_plans.items.len != 0) {
+            try self.output.iter_plans.ensureTotalCapacity(self.allocator, self.source.iter_plans.items.len);
+        }
+        for (self.source.iter_plans.items) |plan| {
+            self.output.iter_plans.appendAssumeCapacity(try self.lowerIterPlan(plan));
+        }
+    }
+
+    fn lowerIterPlan(self: *Lifter, plan: Mono.IterPlan) Allocator.Error!Ast.IterPlan {
+        return .{
+            .item_ty = plan.item_ty,
+            .length = switch (plan.length) {
+                .known => |expr| .{ .known = expr },
+                .unknown => .unknown,
+            },
+            .steps = plan.steps,
+            .done = plan.done,
+            .data = switch (plan.data) {
+                .list => |list| .{ .list = .{
+                    .list = list.list,
+                    .index = list.index,
+                    .len = list.len,
+                } },
+                .range => |range| .{ .range = .{
+                    .current = range.current,
+                    .end = range.end,
+                    .step = range.step,
+                    .inclusivity = range.inclusivity,
+                } },
+                .unbounded_range => |range| .{ .unbounded_range = .{
+                    .current = range.current,
+                    .step = range.step,
+                } },
+                .single => |single| .{ .single = .{
+                    .item = single.item,
+                    .emitted = single.emitted,
+                } },
+                .append => |append| .{ .append = .{
+                    .before = append.before,
+                    .after = append.after,
+                    .phase = append.phase,
+                } },
+                .concat => |concat| .{ .concat = .{
+                    .first = concat.first,
+                    .second = concat.second,
+                    .phase = concat.phase,
+                } },
+                .map => |map| .{ .map = .{
+                    .source = map.source,
+                    .mapping_fn = map.mapping_fn,
+                } },
+                .filter => |filter| .{ .filter = .{
+                    .source = filter.source,
+                    .predicate_fn = filter.predicate_fn,
+                    .kind = filter.kind,
+                } },
+                .custom => |custom| .{ .custom = .{
+                    .state = custom.state,
+                    .step_fn = custom.step_fn,
+                } },
+                .public => |public| .{ .public = .{
+                    .iter_value = public.iter_value,
+                    .materializer = if (public.materializer) |fn_id| self.liftedFn(fn_id) else null,
+                } },
+            },
+        };
     }
 
     fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
@@ -356,6 +427,7 @@ const Lifter = struct {
             .comptime_exhaustiveness_failed,
             .fn_ref,
             => {},
+            .iter_plan => |plan_id| try self.rewriteIterPlan(plan_id),
             .static_data_candidate => |candidate| try self.rewriteExpr(candidate.fallback),
             .list,
             .tuple,
@@ -445,6 +517,54 @@ const Lifter = struct {
             },
             .break_ => |maybe| if (maybe) |value| try self.rewriteExpr(value),
             .continue_ => |continue_| for (self.output.exprSpan(continue_.values)) |value| try self.rewriteExpr(value),
+        }
+    }
+
+    fn rewriteIterPlan(self: *Lifter, plan_id: Ast.IterPlanId) Allocator.Error!void {
+        const raw = @intFromEnum(plan_id);
+        if (raw >= self.output.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan");
+        const plan = self.output.iter_plans.items[raw];
+        switch (plan.length) {
+            .known => |expr| try self.rewriteExpr(expr),
+            .unknown => {},
+        }
+        switch (plan.data) {
+            .list => |list| {
+                try self.rewriteExpr(list.list);
+                try self.rewriteExpr(list.index);
+                try self.rewriteExpr(list.len);
+            },
+            .range => |range| {
+                try self.rewriteExpr(range.current);
+                try self.rewriteExpr(range.end);
+                try self.rewriteExpr(range.step);
+            },
+            .unbounded_range => |range| {
+                try self.rewriteExpr(range.current);
+                try self.rewriteExpr(range.step);
+            },
+            .single => |single| try self.rewriteExpr(single.item),
+            .append => |append| {
+                try self.rewriteIterPlan(append.before);
+                try self.rewriteExpr(append.after);
+            },
+            .concat => |concat| {
+                try self.rewriteIterPlan(concat.first);
+                try self.rewriteIterPlan(concat.second);
+            },
+            .map => |map| {
+                try self.rewriteIterPlan(map.source);
+                try self.rewriteExpr(map.mapping_fn);
+            },
+            .filter => |filter| {
+                try self.rewriteIterPlan(filter.source);
+                try self.rewriteExpr(filter.predicate_fn);
+            },
+            .custom => |custom| {
+                try self.rewriteExpr(custom.state);
+                try self.rewriteExpr(custom.step_fn);
+            },
+            .public => |public| try self.rewriteExpr(public.iter_value),
         }
     }
 
@@ -755,6 +875,7 @@ const CaptureSet = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
+            .iter_plan => |plan_id| try self.collectIterPlan(plan_id, bound),
             .static_data_candidate => |candidate| try self.collectExpr(candidate.fallback, bound),
             .fn_ref => |fn_id| try self.collectFnCaptures(fn_id, bound),
             .fn_def => |fn_id| try self.collectFnCaptures(self.lifter.liftedFn(fn_id), bound),
@@ -862,6 +983,58 @@ const CaptureSet = struct {
             },
             .break_ => |maybe| if (maybe) |value| try self.collectExpr(value, bound),
             .continue_ => |continue_| for (input.exprSpan(continue_.values)) |value| try self.collectExpr(value, bound),
+        }
+    }
+
+    fn collectIterPlan(self: *CaptureSet, plan_id: Ast.IterPlanId, bound: *BoundSet) Allocator.Error!void {
+        const input = self.lifter.output;
+        const raw = @intFromEnum(plan_id);
+        if (raw >= input.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan");
+        const plan = input.iter_plans.items[raw];
+        switch (plan.length) {
+            .known => |expr| try self.collectExpr(expr, bound),
+            .unknown => {},
+        }
+        switch (plan.data) {
+            .list => |list| {
+                try self.collectExpr(list.list, bound);
+                try self.collectExpr(list.index, bound);
+                try self.collectExpr(list.len, bound);
+            },
+            .range => |range| {
+                try self.collectExpr(range.current, bound);
+                try self.collectExpr(range.end, bound);
+                try self.collectExpr(range.step, bound);
+            },
+            .unbounded_range => |range| {
+                try self.collectExpr(range.current, bound);
+                try self.collectExpr(range.step, bound);
+            },
+            .single => |single| try self.collectExpr(single.item, bound),
+            .append => |append| {
+                try self.collectIterPlan(append.before, bound);
+                try self.collectExpr(append.after, bound);
+            },
+            .concat => |concat| {
+                try self.collectIterPlan(concat.first, bound);
+                try self.collectIterPlan(concat.second, bound);
+            },
+            .map => |map| {
+                try self.collectIterPlan(map.source, bound);
+                try self.collectExpr(map.mapping_fn, bound);
+            },
+            .filter => |filter| {
+                try self.collectIterPlan(filter.source, bound);
+                try self.collectExpr(filter.predicate_fn, bound);
+            },
+            .custom => |custom| {
+                try self.collectExpr(custom.state, bound);
+                try self.collectExpr(custom.step_fn, bound);
+            },
+            .public => |public| {
+                if (public.materializer) |fn_id| try self.collectFnCaptures(fn_id, bound);
+                try self.collectExpr(public.iter_value, bound);
+            },
         }
     }
 

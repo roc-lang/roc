@@ -901,6 +901,7 @@ const Lowerer = struct {
         self.result.store.current_loc = self.program.exprLoc(expr_id);
         self.result.store.current_region = self.program.exprRegion(expr_id);
         return switch (expr_data.data) {
+            .iter_plan => Common.invariant("unmaterialized iterator plan reached LIR lowering"),
             .local => |local| blk: {
                 const source = try self.localFor(local);
                 break :blk try self.assignLocalBoundary(target, source, next);

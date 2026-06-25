@@ -467,9 +467,9 @@ Tasks:
 - [x] Current direct `Iter.single` optimized `for` shape test exists.
 - [x] User-defined `.iter` is not recognized as builtin `List.iter`.
 - [x] User-defined `.single` is not recognized as builtin `Iter.single`.
-- [ ] Monotype has `ExprData.iter_plan`.
-- [ ] Monotype Lifted preserves plan expressions.
-- [ ] LIR lowering rejects raw plan expressions before materialization is
+- [x] Monotype has `ExprData.iter_plan`.
+- [x] Monotype Lifted preserves plan expressions.
+- [x] LIR lowering rejects raw plan expressions before materialization is
   implemented.
 - [ ] All recognized producers lower to plan expressions.
 - [ ] Recognition uses checked identity for every producer.

@@ -361,6 +361,7 @@ pub const StaticDataCandidate = struct {
 /// Monotype expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
+    iter_plan: IterPlanId,
     unit,
     int_lit: can.CIR.IntValue,
     frac_f32_lit: f32,

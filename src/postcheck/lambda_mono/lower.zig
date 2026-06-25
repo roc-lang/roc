@@ -481,6 +481,7 @@ const Lowerer = struct {
         const ty = try self.lowerExprTy(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| try self.lowerLocalExpr(local, ty),
+            .iter_plan => |plan_id| .{ .iter_plan = plan_id },
             .unit => .unit,
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },

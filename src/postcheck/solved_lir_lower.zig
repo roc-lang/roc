@@ -1725,6 +1725,7 @@ const Lowerer = struct {
         self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
+            .iter_plan => Common.invariant("unmaterialized iterator plan reached LIR lowering"),
             .unit => try self.assignZst(target, next),
             .int_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
@@ -5122,6 +5123,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .next_symbol = program.next_symbol,
         .types = types,
         .fns = try cloneArrayList(Lifted.Fn, allocator, &program.fns),
+        .iter_plans = try cloneArrayList(Lifted.IterPlan, allocator, &program.iter_plans),
         .exprs = try cloneArrayList(Lifted.Expr, allocator, &program.exprs),
         .pats = try cloneArrayList(Lifted.Pat, allocator, &program.pats),
         .stmts = try cloneArrayList(Lifted.Stmt, allocator, &program.stmts),

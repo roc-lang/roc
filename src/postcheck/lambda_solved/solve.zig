@@ -380,6 +380,7 @@ const Solver = struct {
             .dec_lit,
             .str_lit,
             .static_data,
+            .iter_plan,
             .uninitialized,
             .uninitialized_payload,
             .crash,
