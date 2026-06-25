@@ -39,7 +39,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "nix develop ./src/ -c bash -c 'zig build build-release'"
-          error_string_contains: "build.zig.zon"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Prepare main artifacts
@@ -60,7 +60,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "nix develop ./src/ -c bash -c 'zig build build-release'"
-          error_string_contains: "build.zig.zon"
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Prepare PR artifacts
