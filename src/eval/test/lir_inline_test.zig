@@ -2216,6 +2216,35 @@ test "local list.iter with public alias keeps public iterator semantics" {
     try expectOptimizedDbgEvents(source, &.{"(3, 1)"});
 }
 
+test "public Iter.next materializes iterator plan before Lambda" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg match Iter.next([10.I64, 20.I64].iter()) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\    {}
+        \\}
+    , &.{"10"});
+
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = match Iter.next([10.I64, 20.I64].iter()) {
+        \\    One({ item, .. }) => item
+        \\    _ => 0
+        \\}
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
 test "List.iter producer lowers to a materialized iterator plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,

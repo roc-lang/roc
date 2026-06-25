@@ -599,6 +599,8 @@ Tasks:
 - [ ] Materialization is implemented for every plan.
 - [ ] Public `.step` access materializes.
 - [ ] Public `Iter.next` materializes when not specialized.
+  - [x] Direct `Iter.next(List.iter(...))` materializes before Lambda and
+    preserves public iterator behavior.
 - [ ] Public aggregate storage materializes.
 - [ ] Unspecialized function return materializes.
 - [ ] Unspecialized call argument materializes.
