@@ -301,6 +301,7 @@ const Lifter = struct {
             },
             .steps = plan.steps,
             .done = plan.done,
+            .materialized = plan.materialized,
             .data = switch (plan.data) {
                 .list => |list| .{ .list = .{
                     .list = list.list,
@@ -524,6 +525,7 @@ const Lifter = struct {
         const raw = @intFromEnum(plan_id);
         if (raw >= self.output.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan");
         const plan = self.output.iter_plans.items[raw];
+        if (plan.materialized) |expr| try self.rewriteExpr(expr);
         switch (plan.length) {
             .known => |expr| try self.rewriteExpr(expr),
             .unknown => {},
@@ -991,6 +993,7 @@ const CaptureSet = struct {
         const raw = @intFromEnum(plan_id);
         if (raw >= input.iter_plans.items.len) Common.invariant("iterator plan expression referenced a missing plan");
         const plan = input.iter_plans.items[raw];
+        if (plan.materialized) |expr| try self.collectExpr(expr, bound);
         switch (plan.length) {
             .known => |expr| try self.collectExpr(expr, bound),
             .unknown => {},

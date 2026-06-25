@@ -294,6 +294,12 @@ pub const Program = struct {
         return id;
     }
 
+    pub fn addIterPlan(self: *Program, plan: IterPlan) std.mem.Allocator.Error!IterPlanId {
+        const id: IterPlanId = @enumFromInt(@as(u32, @intCast(self.iter_plans.items.len)));
+        try self.iter_plans.append(self.allocator, plan);
+        return id;
+    }
+
     pub fn setProcDebugName(self: *Program, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
         try self.proc_debug_names.put(symbol, name);
     }

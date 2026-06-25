@@ -231,6 +231,8 @@ pub fn lowerCheckedModulesToLir(
         try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
     }
 
+    try postcheck.IterPlanEliminate.run(allocator, &lifted);
+
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
     lifted_owned = false;
     lifted = undefined;

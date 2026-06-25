@@ -6,6 +6,8 @@ const std = @import("std");
 pub const Common = @import("common.zig");
 /// Compiler-internal builtin iterator plan data.
 pub const IterPlan = @import("iter_plan.zig");
+/// Eliminate compiler-internal iterator plan values before Lambda solving.
+pub const IterPlanEliminate = @import("iter_plan_eliminate.zig");
 /// Closed source-shape IR after checking has removed dispatch syntax.
 pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");

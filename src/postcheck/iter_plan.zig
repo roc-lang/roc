@@ -47,6 +47,11 @@ pub fn IterPlan(
         length: Length(ExprId),
         steps: StepReachability,
         done: DoneReachability,
+        /// Ordinary public `Iter` value for this plan. The iterator-plan
+        /// elimination rewrite uses this when a plan crosses a public
+        /// observation boundary or is not yet consumed by an optimized
+        /// consumer.
+        materialized: ?ExprId = null,
         data: Data,
 
         pub const Data = union(enum) {
