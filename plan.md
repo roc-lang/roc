@@ -111,6 +111,8 @@ Current branch status:
 - `Iter.map` can emit a `Map` plan behind the producer-plan flag.
 - `Iter.keep_if` and `Iter.drop_if` can emit `Filter` plans behind the
   producer-plan flag.
+- `Iter.prepended` can emit a `Concat(Single(item), rest)` plan behind the
+  producer-plan flag.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -534,7 +536,7 @@ Tasks:
 - [ ] numeric finite ranges produce `Range`.
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
 - [x] `Iter.single` produces `Single`.
-- [ ] `Iter.prepended` produces the correct plan shape.
+- [x] `Iter.prepended` produces the correct plan shape.
 - [x] `Iter.append` produces `Append`.
 - [x] `Iter.concat` produces `Concat`.
 - [x] `Iter.map` produces `Map`.

@@ -1658,6 +1658,70 @@ test "user single producer is not lowered as builtin Iter.single plan" {
     }
 }
 
+test "Iter.prepended producer lowers to concat of single and receiver plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().prepended(5)
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .concat => |concat| {
+                const materialized = plan.materialized orelse continue;
+                if (mono_source.mono.exprs.items[@intFromEnum(materialized)].ty != expr.ty) continue;
+                switch (mono_source.mono.iterPlan(concat.first).data) {
+                    .single => {},
+                    else => return error.TestUnexpectedResult,
+                }
+                switch (mono_source.mono.iterPlan(concat.second).data) {
+                    .list => {},
+                    else => return error.TestUnexpectedResult,
+                }
+                found = true;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "user prepended producer is not lowered as builtin Iter.prepended plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Bag := [Bag].{
+        \\    prepended : Bag, I64 -> Bag
+        \\    prepended = |bag, _| bag
+        \\}
+        \\
+        \\main : Bag
+        \\main = Bag.prepended(Bag.Bag, 42)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .concat, .single => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 test "Iter.append producer lowers to a materialized append plan" {
     const allocator = std.testing.allocator;
     var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
@@ -2078,6 +2142,19 @@ test "Iter.append producer materializes before Lambda when returned publicly" {
         \\
         \\main : Iter(I64)
         \\main = [10.I64, 20.I64].iter().append(30)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "Iter.prepended producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().prepended(5)
     );
     defer lifted_source.deinit(allocator);
 
