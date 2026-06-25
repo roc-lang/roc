@@ -1875,6 +1875,7 @@ pub const Interpreter = struct {
                         .ret_layout = self.store.getLocal(assign.target).layout_idx,
                         .callable_proc = null,
                         .unique_args = assign.unique_args,
+                        .interchangeable = assign.interchangeable,
                     }));
                     current = assign.next;
                 },
@@ -4316,6 +4317,11 @@ pub const Interpreter = struct {
         /// means argument i's runtime uniqueness check is redundant and the
         /// in-place path may be taken unconditionally.
         unique_args: u64 = 0,
+        /// For `list_map_can_reuse`: per-width interchangeability of the input
+        /// and output element layouts. On a width whose bit is false the
+        /// in-place branch is statically dead, so the op yields 0 without the
+        /// runtime uniqueness check. Ignored by every other op.
+        interchangeable: layout_mod.WidthValues(bool) = layout_mod.WidthValues(bool).both(true, true),
     };
 
     fn lowLevelArgLayout(self: *const LirInterpreter, ll: LowLevelEvalInput, index: usize) Error!layout_mod.Idx {
@@ -4896,8 +4902,13 @@ pub const Interpreter = struct {
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_map_can_reuse => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
+                if (!ll.interchangeable.get(self.layout_store.targetUsize())) {
+                    // The in-place branch is statically dead on this width.
+                    val.write(u8, 0);
+                    break :blk val;
+                }
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 val.write(u8, if (builtins.list.listMapCanReuse(rl, &self.roc_ops)) 1 else 0);
                 break :blk val;
             },

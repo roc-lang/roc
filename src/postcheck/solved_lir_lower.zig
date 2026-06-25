@@ -2274,18 +2274,37 @@ const Lowerer = struct {
             .box_box,
             .box_unbox,
             => return try self.lowerBoxBoundaryLowLevelInto(target, op, args, next),
-            .list_map_can_reuse => if (!try self.listMapLayoutsInterchangeable(args)) {
-                // Reuse is statically impossible (or disabled), so the
-                // runtime uniqueness check never needs to run. The op's
-                // arguments are pure local reads, so dropping them is safe.
-                return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .list_map_can_reuse => {
+                const interchangeable = try self.listMapLayoutsInterchangeable(args);
+                if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
+                    // Reuse is statically impossible (or disabled) on every
+                    // width, so the runtime uniqueness check never needs to
+                    // run. The op's arguments are pure local reads, so dropping
+                    // them is safe.
+                    return try self.result.store.addCFStmt(.{ .assign_literal = .{
+                        .target = target,
+                        .value = .{ .i64_literal = .{
+                            .value = 0,
+                            .layout_idx = self.result.store.getLocal(target).layout_idx,
+                        } },
+                        .next = next,
+                    } });
+                }
+                // Reuse is possible on at least one width; carry the per-width
+                // bits so codegen forces a constant 0 on any width where the
+                // layouts are not interchangeable.
+                const lowered = try self.lowerExprsToTemps(args);
+                defer self.allocator.free(lowered.ids);
+                var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = target,
-                    .value = .{ .i64_literal = .{
-                        .value = 0,
-                        .layout_idx = self.result.store.getLocal(target).layout_idx,
-                    } },
+                    .op = op,
+                    .rc_effect = op.rcEffect(),
+                    .args = try self.result.store.addLocalSpan(lowered.ids),
+                    .interchangeable = interchangeable,
                     .next = next,
                 } });
+                current = try self.prependExprs(lowered, current);
+                return current;
             },
             else => {},
         }
@@ -2306,23 +2325,25 @@ const Lowerer = struct {
         return current;
     }
 
-    /// Compile-time half of the `list_map_can_reuse` decision. Returns true
-    /// when the input and output element layouts of a `List.map` call are
-    /// interchangeable in one allocation, meaning the same element stride,
-    /// the same allocation alignment class, and the same refcounted-elements
-    /// header shape — in that case the runtime uniqueness check decides.
-    /// Returns false when reuse is statically impossible or disabled, in
-    /// which case the op lowers to a constant 0.
-    fn listMapLayoutsInterchangeable(self: *Lowerer, args: []const Lifted.ExprId) Common.LowerError!bool {
+    /// Compile-time half of the `list_map_can_reuse` decision, computed for
+    /// both pointer widths. A width's bit is true when the input and output
+    /// element layouts of a `List.map` call are interchangeable in one
+    /// allocation on that width — same element stride, same allocation
+    /// alignment class, and same refcounted-elements header shape — in which
+    /// case the runtime uniqueness check decides at that width. A false bit
+    /// means reuse is statically impossible (or the optimization is disabled)
+    /// on that width, so the op resolves to a constant 0 there. Both bits are
+    /// stored so the lowered op is target-independent: codegen selects the bit
+    /// for the width it is building.
+    fn listMapLayoutsInterchangeable(self: *Lowerer, args: []const Lifted.ExprId) Common.LowerError!layout.WidthValues(bool) {
+        const none = layout.WidthValues(bool).both(false, false);
         if (args.len != 2) Common.invariant("list_map_can_reuse reached LIR lowering with the wrong arity");
-        if (!self.list_in_place_map) return false;
+        if (!self.list_in_place_map) return none;
 
         const list_layout_idx = try self.layoutOfType(try self.lowerExprTy(args[0]));
         const list_layout = self.result.layouts.getLayout(list_layout_idx);
-        // A list of zero-sized elements has no allocation to reuse.
-        if (list_layout.tag != .list) return false;
-        const in_abi = self.result.layouts.builtinListAbi(list_layout_idx);
-        if (in_abi.elem_size == 0) return false;
+        if (list_layout.tag != .list) return none;
+        const in_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(list_layout.getIdx());
 
         const transform_ty = self.solved.expr_tys.items[@intFromEnum(args[1])];
         const transform_root = self.solved.types.root(transform_ty);
@@ -2333,21 +2354,41 @@ const Lowerer = struct {
         const out_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(
             try self.layoutOfType(try self.lowerType(out_ret)),
         );
-        const out_elem = self.result.layouts.getLayout(out_elem_idx);
 
-        if (self.result.layouts.layoutSize(out_elem) != in_abi.elem_size) return false;
+        return layout.WidthValues(bool).both(
+            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
+            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
+        );
+    }
+
+    /// Whether the input and output element layouts share one allocation at the
+    /// given pointer width. See `listMapLayoutsInterchangeable`.
+    fn listMapInterchangeableAtWidth(
+        self: *Lowerer,
+        in_elem_idx: layout.Idx,
+        out_elem_idx: layout.Idx,
+        target_usize: base.target.TargetUsize,
+    ) bool {
+        const layouts = &self.result.layouts;
+        const in_elem = layouts.getLayout(in_elem_idx);
+        // A list of zero-sized elements has no allocation to reuse.
+        const in_size = layouts.sizeAt(in_elem, target_usize);
+        if (in_size == 0) return false;
+
+        const out_elem = layouts.getLayout(out_elem_idx);
+        if (layouts.sizeAt(out_elem, target_usize) != in_size) return false;
 
         // The allocation's hidden header and the alignment passed to the
         // allocator both derive from max(ptr_width, element alignment) and
         // from whether elements are refcounted (which reserves an extra
         // element-count slot for seamless slices). Both must agree or a
         // later free would compute the wrong allocation pointer.
-        const target_usize = self.result.layouts.targetUsize();
         const ptr_width = target_usize.size();
+        const in_alignment: u32 = @intCast(in_elem.alignment(target_usize).toByteUnits());
         const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
-        if (@max(ptr_width, in_abi.elem_alignment) != @max(ptr_width, out_alignment)) return false;
+        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
 
-        if (in_abi.contains_refcounted != self.result.layouts.layoutContainsRefcounted(out_elem)) return false;
+        if (layouts.layoutContainsRefcounted(in_elem) != layouts.layoutContainsRefcounted(out_elem)) return false;
 
         return true;
     }
@@ -2593,8 +2634,10 @@ const Lowerer = struct {
     ) Common.LowerError!?LIR.CFStmtId {
         const match = self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span) orelse return null;
         const args = self.solved.lifted.exprSpan(match.call_args);
-        if (self.list_in_place_map and try self.listMapLayoutsInterchangeable(args)) {
-            // Reuse is possible; the runtime uniqueness check decides.
+        const interchangeable = try self.listMapLayoutsInterchangeable(args);
+        if (interchangeable.get(.u32) or interchangeable.get(.u64)) {
+            // Reuse is possible on at least one width; keep the match so each
+            // backend can decide per the width it is building.
             return null;
         }
         if (builtin.mode == .Debug) {

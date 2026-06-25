@@ -7384,6 +7384,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .args = assign.args,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
                 .unique_args = assign.unique_args,
+                .interchangeable = assign.interchangeable,
             });
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -9664,6 +9665,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_map_can_reuse => {
+            // On a width where the element layouts are not interchangeable, the
+            // in-place branch is statically dead, so the result is a constant 0
+            // and the uniqueness check must not run.
+            if (!ll.interchangeable.get(self.getLayoutStore().targetUsize())) {
+                try self.emitI32Const(0);
+                return;
+            }
             // list_map_can_reuse(list, transform) -> U8: the list uniquely owns
             // its allocation and is not a seamless slice. Wasm is
             // single-threaded, so a plain refcount load suffices.

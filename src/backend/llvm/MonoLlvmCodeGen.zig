@@ -2123,7 +2123,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -2503,7 +2503,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64) Error!void {
+    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64, interchangeable: layout.WidthValues(bool)) Error!void {
         try self.prepareLocalWrite(target);
         const arg_locals = self.store.getLocalSpan(args);
         if (!op.acceptsStrViewArgs()) {
@@ -2547,7 +2547,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
             .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
-            .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals),
+            .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals, interchangeable),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(arg_locals[0]).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
             .list_map_write_unsafe => try self.emitListMapWriteUnsafe(target, arg_locals),
@@ -5733,7 +5733,15 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(self.slot(target).ptr, src, self.slot(target).size, self.slot(target).alignment);
     }
 
-    fn emitListMapCanReuse(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListMapCanReuse(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, interchangeable: layout.WidthValues(bool)) Error!void {
+        if (!interchangeable.get(self.layouts().targetUsize())) {
+            // On this width the element layouts are not interchangeable, so the
+            // in-place branch is statically dead: the result is a constant 0.
+            const builder = self.builder orelse return error.CompilationFailed;
+            const zero = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+            try self.storeIntToLayout(self.slot(target).ptr, zero, self.localLayout(target));
+            return;
+        }
         var call_args = try self.rocListArgs1(args[0]);
         defer call_args.deinit(self.allocator);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());

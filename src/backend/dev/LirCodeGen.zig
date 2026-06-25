@@ -1880,6 +1880,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_map_can_reuse => {
                     // list_map_can_reuse(list, transform) -> U8; only the list is inspected.
                     std.debug.assert(args.len == 2);
+                    // On a width where the element layouts are not
+                    // interchangeable, the in-place branch is statically dead;
+                    // resolve to a constant 0 so the runtime check never runs.
+                    if (!ll.interchangeable.get(self.layout_store.targetUsize())) {
+                        return .{ .immediate_i64 = 0 };
+                    }
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
                     const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
@@ -1920,10 +1926,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .list_map_extract_unsafe => {
                     // list_map_extract_unsafe(list, index) -> element of the input
-                    // type. The list local already carries the output element type;
-                    // lowering only emits this op when both element layouts share
-                    // one stride, so the result layout supplies both the copy size
-                    // and the stride.
+                    // type. The list local already carries the output element type,
+                    // so the result layout supplies both the copy size and the
+                    // stride. This op only executes on a width where the input and
+                    // output element layouts are interchangeable (one stride); on a
+                    // width where they are not, `list_map_can_reuse` resolves to a
+                    // constant 0 and this op sits in a statically-dead branch.
                     std.debug.assert(args.len == 2);
                     const list_loc = try self.emitValueLocal(args[0]);
                     const index_loc = try self.emitValueLocal(args[1]);
@@ -1939,12 +1947,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
                     if (elem_size == 0) {
                         return .{ .immediate_i64 = 0 };
-                    }
-                    if (builtin.mode == .Debug) {
-                        const list_layout_val = ls.getLayout(self.valueLayout(args[0]));
-                        if (list_layout_val.tag != .list or ls.layoutSizeAlign(ls.getLayout(list_layout_val.getIdx())).size != elem_size) {
-                            std.debug.panic("LIR/codegen invariant violated: list_map_extract_unsafe stride mismatch", .{});
-                        }
                     }
 
                     const index_reg = try self.ensureInGeneralReg(index_loc);
@@ -14947,6 +14949,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .args = assign.args,
                                 .ret_layout = self.localLayout(assign.target),
                                 .unique_args = assign.unique_args,
+                                .interchangeable = assign.interchangeable,
                             });
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
