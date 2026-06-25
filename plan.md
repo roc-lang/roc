@@ -9,8 +9,8 @@ The final state is:
 
 - builtin iterator producers lower to explicit post-check iterator plan values
 - those plan values are ordinary post-check values with the public `Iter(item)`
-  type until the iterator-aware post-check normalization consumes or
-  materializes them
+  type until an existing iterator-aware lowering path consumes or materializes
+  them at the semantic point that observes the value
 - source evaluation order is preserved for producers, conditions, branch
   selection, appended items, `dbg`, `expect`, and `crash`
 - optimized consumers consume known plans directly without constructing public
@@ -153,7 +153,7 @@ Current branch status:
 - user-defined methods named `iter` or `single` are not recognized as builtins.
 
 That is only scaffolding. The full design still requires producer emission,
-iterator-aware normalization, semantic materialization, optimized consumers
+iterator-aware lowering decisions, semantic materialization, optimized consumers
 through locals and branches, and integration measurements.
 
 ## Non-Negotiable Invariants
@@ -227,10 +227,9 @@ added.
 When iterator producer plans are enabled, builtin producer calls lower to plan
 expressions. Plans that can be observed publicly also carry the already-lowered
 public `Iter` expression for materialization. This producer flag stays separate
-from the existing
-direct optimized-consumer flag until the iterator-aware normalization can
-consume common plans privately instead of materializing them back to the public
-representation.
+from the existing direct optimized-consumer flag until iterator-aware lowering
+can consume common plans privately instead of materializing them back to the
+public representation.
 
 Initial recognized producers:
 
@@ -252,14 +251,14 @@ Recognition must be exact checked identity: resolved owner, method name id,
 resolved procedure/template, dispatch plan, and monomorphic receiver/result
 types. A user method with the same spelling is never a builtin producer.
 
-### Iterator Normalization Boundary
+### Iterator Lowering Boundaries
 
-Iterator plans are normalized by the existing lowering paths that already own
-the relevant semantic decision. A source `for` that receives a known plan
-consumes it directly. A public `.step` access, function return, aggregate
-storage, or unspecialized call argument materializes the plan at that boundary.
-This is not a standalone pass whose job is to walk around after the fact and
-clean up leftover plans.
+Iterator plans are handled by the existing lowering paths that already own the
+relevant semantic decision. A source `for` that receives a known plan consumes
+it directly. A public `.step` access, function return, aggregate storage, or
+unspecialized call argument materializes the plan at that boundary. This is not
+a standalone pass whose job is to walk around after the fact and clean up
+leftover plans.
 
 For every plan value it sees, the rewrite must choose exactly one outcome:
 
@@ -300,8 +299,8 @@ the `for`.
 
 ### Private Plan State
 
-Optimized consumers need private mutable cursor state. Iterator normalization may
-represent that state using ordinary post-check IR:
+Optimized consumers need private mutable cursor state. Iterator-aware lowering
+may represent that state using ordinary post-check IR:
 
 - locals
 - tuples
@@ -401,7 +400,7 @@ Tests:
   Monotype tree
 - finite ranges and custom iterators carry the right done reachability
 
-### Phase 3: Iterator Normalization Boundary
+### Phase 3: Iterator Lowering Boundaries
 
 Teach the existing post-check lowering decisions to handle plan values at the
 semantic boundary where each value is observed. This is not a new whole-body or
@@ -471,8 +470,8 @@ Tasks:
 
 - stop replaying checked expressions in `lowerIteratorFor`
 - introduce an internal representation for source `for` that can survive until
-  iterator normalization, or otherwise ensure normalization sees the consumer
-  before public fallback lowering has erased it
+  iterator-aware lowering handles it, or otherwise ensure lowering sees the
+  consumer before public fallback lowering has erased it
 - lower `ListIter` with list/index/len state
 - lower `Single` with item/emitted state
 - lower `Append` and `Concat` with phase state
@@ -556,7 +555,7 @@ Tasks:
 
 - [x] `design.md` documents public `Iter` purity and private cursor plans.
 - [x] `design.md` documents first-class post-check plan values.
-- [x] `design.md` documents that iterator normalization is a post-check
+- [x] `design.md` documents that iterator-aware lowering is a post-check
   responsibility before ordinary LIR lowering.
 - [x] `design.md` states that LIR and backends must not see raw plan values.
 - [x] Current direct `List.iter` optimized `for` shape test exists.
@@ -568,7 +567,7 @@ Tasks:
 - [x] Monotype Lifted preserves plan expressions.
 - [x] Publicly observable iterator plans carry a public materialization
   expression.
-- [x] Iterator-plan normalization boundary exists before Lambda-to-LIR lowering.
+- [x] Iterator-plan lowering boundary exists before Lambda-to-LIR lowering.
 - [x] General call-pattern specialization treats raw iterator plans as opaque.
 - [x] `List.iter` can produce `ListIter` behind the producer-plan flag.
 - [x] LIR lowering rejects raw plan expressions before materialization is
@@ -586,10 +585,10 @@ Tasks:
 - [x] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [x] `Iter.custom` produces `Custom`.
 - [x] `Public(iter_value)` exists for unknown iterator values.
-- [ ] Iterator normalization consumes common plans privately before ordinary
+- [ ] Iterator-aware lowering consumes common plans privately before ordinary
   lowering.
-- [ ] Iterator normalization preserves producer-site evaluation order.
-- [ ] Iterator normalization never replays checked expressions.
+- [ ] Iterator-aware lowering preserves producer-site evaluation order.
+- [ ] Iterator-aware lowering never replays checked expressions.
 - [ ] Private plan state can cross locals.
   - [x] Direct `ListIter` private state can cross an immutable local when every
     later use is the exact iterable in a `for`.

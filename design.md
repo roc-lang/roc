@@ -1368,8 +1368,9 @@ Passes that do not explicitly own iterator-plan semantics must treat
 `iter_plan` as opaque. In particular, general call-pattern specialization must
 not mine private plan operands or the materialized public fallback to discover
 new call patterns. If those optimizations should compose, iterator-plan
-normalization must first rewrite the plan into ordinary post-check IR that the
-general pass already understands.
+lowering must first rewrite the plan into ordinary post-check IR that the
+general pass already understands, at the semantic boundary already being
+lowered.
 
 Because plans are post-check values, source evaluation order is preserved by
 normal IR evaluation. For example, a declaration whose right-hand side is an
@@ -1380,9 +1381,10 @@ or any appended item expressions. This matters for `dbg`, `expect`, `crash`,
 and any other observable runtime behavior that is not modeled as an ordinary
 effectful function call.
 
-The plan representation is therefore not a binder side table. The iterator
-normalization boundary may keep temporary maps from locals to plan values while
-rewriting a body, but those maps are indexes into already-lowered IR values.
+The plan representation is therefore not a binder side table. The
+iterator-aware lowering boundary may keep temporary maps from locals to plan
+values while rewriting a body, but those maps are indexes into already-lowered
+IR values.
 They must not point back to checked expressions or source declarations that
 would need to be re-evaluated later. If an iterator value is produced by an
 `if` or `match`, the condition, scrutinee, pattern tests, selected branch, and
@@ -1479,7 +1481,7 @@ LIR and backends consume ordinary values, control flow, and explicit ARC
 statements. They must not know builtin iterator semantics, public `Iter`
 closure layouts, or special reference-counting rules for iterator wrappers.
 
-Private plan state produced by iterator normalization is still ordinary
+Private plan state produced by iterator-aware lowering is still ordinary
 post-check IR: locals, tuples, tag unions, loop parameters, branches, calls, and
 low-level operations. It is compiler-owned state, not a public `Iter` wrapper.
 For example, an `if` that chooses between two known iterator plans may lower to

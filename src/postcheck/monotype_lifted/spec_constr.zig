@@ -356,6 +356,7 @@ const Pass = struct {
     program: *Ast.Program,
     plans: []FnPlan,
     symbols: Common.SymbolGen,
+    spec_ids_reserved: bool,
 
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -382,6 +383,7 @@ const Pass = struct {
             .program = program,
             .plans = plans,
             .symbols = .{ .next = program.next_symbol },
+            .spec_ids_reserved = false,
         };
     }
 
@@ -397,6 +399,7 @@ const Pass = struct {
         try self.collectArgUses(original_fn_count);
         try self.collectCallPatterns(original_fn_count);
         try self.reserveSpecIds();
+        self.spec_ids_reserved = true;
         try self.createSpecializations(original_fn_count);
         try self.rewriteExistingCalls();
 
@@ -440,6 +443,7 @@ const Pass = struct {
         for (self.plans, 0..) |*plan, source_index| {
             const source_fn = self.program.fns.items[source_index];
             for (plan.specs.items) |*spec| {
+                if (spec.fn_id != null) Common.invariant("call-pattern specialization id was assigned before the reserve phase");
                 const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
                 const symbol = self.symbols.fresh();
                 spec.fn_id = fn_id;
@@ -822,22 +826,28 @@ const Pass = struct {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
 
-        const source_fn = self.program.fns.items[raw];
-        const fn_id_reserved: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
-        const symbol = self.symbols.fresh();
-        try self.plans[raw].specs.append(self.allocator, .{
-            .pattern = pattern,
-            .fn_id = fn_id_reserved,
-        });
-        try self.program.fns.append(self.allocator, .{
-            .symbol = symbol,
-            .source = source_fn.source,
-            .args = .empty(),
-            .captures = source_fn.captures,
-            .body = .hosted,
-            .ret = source_fn.ret,
-        });
-        try self.copyProcDebugName(source_fn.symbol, symbol);
+        if (self.spec_ids_reserved) {
+            const source_fn = self.program.fns.items[raw];
+            const fn_id_reserved: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
+            const symbol = self.symbols.fresh();
+            try self.plans[raw].specs.append(self.allocator, .{
+                .pattern = pattern,
+                .fn_id = fn_id_reserved,
+            });
+            try self.program.fns.append(self.allocator, .{
+                .symbol = symbol,
+                .source = source_fn.source,
+                .args = .empty(),
+                .captures = source_fn.captures,
+                .body = .hosted,
+                .ret = source_fn.ret,
+            });
+            try self.copyProcDebugName(source_fn.symbol, symbol);
+        } else {
+            try self.plans[raw].specs.append(self.allocator, .{
+                .pattern = pattern,
+            });
+        }
     }
 
     fn writeSpecialization(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize) Common.LowerError!void {
@@ -1063,8 +1073,13 @@ const Pass = struct {
         out: *std.ArrayList(Ast.ExprId),
     ) Allocator.Error!bool {
         if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
+        var cloner = Cloner.initForExistingCallRewrite(self);
+        defer cloner.deinit();
+
         for (pattern.args, args) |shape, arg| {
-            if (!try self.appendExistingExprsForShape(shape, arg, out)) return false;
+            const value = try cloner.cloneExprValue(arg);
+            if (!shapeMatchesValue(self.program, shape, value)) return false;
+            try cloner.appendExprsFromValue(shape, value, out);
         }
         return true;
     }
@@ -1281,7 +1296,7 @@ const Cloner = struct {
     loop_stack: std.ArrayList(LoopPattern),
     inline_direct_calls: bool,
     inline_direct_requires_known_arg: bool,
-    reserve_call_patterns: bool,
+    record_call_patterns: bool,
     current_loc: SourceLoc,
     current_region: Region,
 
@@ -1298,7 +1313,7 @@ const Cloner = struct {
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = true,
-            .reserve_call_patterns = true,
+            .record_call_patterns = true,
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
         };
@@ -1317,10 +1332,17 @@ const Cloner = struct {
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = false,
-            .reserve_call_patterns = false,
+            .record_call_patterns = true,
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
         };
+    }
+
+    fn initForExistingCallRewrite(pass: *Pass) Cloner {
+        var cloner = Cloner.initForRewrite(pass);
+        cloner.inline_direct_requires_known_arg = true;
+        cloner.record_call_patterns = false;
+        return cloner;
     }
 
     fn deinit(self: *Cloner) void {
@@ -2103,13 +2125,13 @@ const Cloner = struct {
             for (args, 0..) |arg, index| {
                 values[index] = try self.cloneExprValue(arg);
             }
-            if (self.reserve_call_patterns) {
+            if (self.record_call_patterns) {
                 try self.pass.ensureCallPatternForValues(callee, values);
             }
 
             for (self.pass.plans[raw].specs.items) |spec| {
                 const spec_fn_id = spec.fn_id orelse {
-                    if (self.reserve_call_patterns) {
+                    if (self.record_call_patterns and self.pass.spec_ids_reserved) {
                         Common.invariant("call-pattern specialization id was not assigned before cloning calls");
                     }
                     continue;
