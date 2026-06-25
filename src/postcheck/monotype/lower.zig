@@ -4646,6 +4646,7 @@ const BodyContext = struct {
     fn lowerCallExpr(self: *BodyContext, checked_expr_id: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!Ast.ExprId {
         if (try self.lowerParseIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| return expr;
         const lowered = try self.lowerCall(checked_ret_ty, call);
+        if (try self.lowerIteratorDirectConsumerCallExpr(call, lowered)) |consumer_expr| return consumer_expr;
         const call_expr = try self.builder.program.addExpr(.{
             .ty = lowered.ret_ty,
             .data = lowered.data,
@@ -9998,6 +9999,7 @@ const BodyContext = struct {
                 if (!self.sameType(ty, lowered.ret_ty)) {
                     Common.invariant("checked call expression lowered at a type different from its context type");
                 }
+                if (try self.lowerIteratorDirectConsumerCallExpr(call, lowered)) |consumer_expr| return consumer_expr;
                 const call_expr = try self.builder.program.addExpr(.{
                     .ty = ty,
                     .data = lowered.data,
@@ -14641,6 +14643,11 @@ const BodyContext = struct {
         value: Ast.ExprId,
     };
 
+    const IteratorFoldFn = union(enum) {
+        direct: Ast.FnId,
+        value: Ast.ExprId,
+    };
+
     const ListIteratorItemAdapter = union(enum) {
         none,
         map: struct {
@@ -14681,6 +14688,10 @@ const BodyContext = struct {
             else => return null,
         }
 
+        if (try self.lowerIteratorFoldConsumerDispatchExpr(plan, resolved, lowered_call, ret_ty)) |fold_expr| {
+            return fold_expr;
+        }
+
         if (!self.typeHasBuiltinOwner(ret_ty, .list)) return null;
 
         const is_list_from_iter =
@@ -14707,6 +14718,76 @@ const BodyContext = struct {
 
         const plan_id = try self.iteratorPlanForLoweredPublicExpr(args[0], iter_ty);
         return try self.lowerIteratorPlanToList(plan_id, ret_ty);
+    }
+
+    fn lowerIteratorFoldConsumerDispatchExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        resolved: MethodLookup,
+        lowered_call: LoweredResolvedDispatchCall,
+        acc_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        if (!self.methodNameIs(plan.method, "fold")) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const args = self.builder.program.exprSpan(lowered_call.args);
+        if (plan_args.len != 3 or args.len != 3) {
+            Common.invariant("checked Iter.fold dispatch plan had an unexpected arity");
+        }
+
+        const iter_expr = args[0];
+        const iter_ty = self.builder.program.exprs.items[@intFromEnum(iter_expr)].ty;
+        if (!self.resolvedDispatchMatchesIteratorMethod(resolved, iter_ty, "fold")) return null;
+
+        return try self.lowerIteratorFoldConsumerArgs(iter_expr, args[1], args[2], acc_ty);
+    }
+
+    fn lowerIteratorFoldConsumerArgs(
+        self: *BodyContext,
+        iter_expr: Ast.ExprId,
+        acc_expr: Ast.ExprId,
+        step_expr: Ast.ExprId,
+        acc_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const iter_ty = self.builder.program.exprs.items[@intFromEnum(iter_expr)].ty;
+        const item_ty = self.iterItemType(iter_ty);
+
+        const acc_expr_ty = self.builder.program.exprs.items[@intFromEnum(acc_expr)].ty;
+        if (!self.sameType(acc_expr_ty, acc_ty)) {
+            Common.invariant("checked Iter.fold accumulator argument type differed from return type");
+        }
+
+        const step_expr_data = self.builder.program.exprs.items[@intFromEnum(step_expr)];
+        if (!self.foldStepFunctionMatches(step_expr_data.ty, acc_ty, item_ty)) {
+            Common.invariant("checked Iter.fold step function type differed from iterator item and accumulator types");
+        }
+        const step_fn: IteratorFoldFn = switch (step_expr_data.data) {
+            .fn_def => |fn_id| .{ .direct = fn_id },
+            else => .{ .value = step_expr },
+        };
+
+        const plan_id = try self.iteratorPlanForLoweredPublicExpr(iter_expr, iter_ty);
+        const append_plan = (try self.listAppendIteratorPlanFromPlan(plan_id)) orelse return null;
+        defer append_plan.deinit(self.allocator);
+
+        return try self.lowerListAppendIteratorPlanFold(append_plan, acc_expr, step_fn, step_expr_data.ty, acc_ty);
+    }
+
+    fn foldStepFunctionMatches(
+        self: *BodyContext,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+        item_ty: Type.TypeId,
+    ) bool {
+        const step_shape = switch (self.builder.shapeContent(step_fn_ty)) {
+            .func => |func| FunctionShape{ .args = func.args, .ret = func.ret },
+            else => return false,
+        };
+        const step_args = self.builder.program.types.span(step_shape.args);
+        if (step_args.len != 2) return false;
+        return self.sameType(step_args[0], acc_ty) and
+            self.sameType(step_args[1], item_ty) and
+            self.sameType(step_shape.ret, acc_ty);
     }
 
     fn lowerIteratorProducerPlanExpr(
@@ -15328,6 +15409,30 @@ const BodyContext = struct {
         }
 
         return try self.singleIteratorProducerPlanExpr(lowered_args[0], materialized, materialized_expr.ty);
+    }
+
+    fn lowerIteratorDirectConsumerCallExpr(
+        self: *BodyContext,
+        call: anytype,
+        lowered: LoweredCall,
+    ) Allocator.Error!?Ast.ExprId {
+        if (!self.iteratorProducerPlansEnabled()) return null;
+        const direct_target = call.direct_target orelse return null;
+
+        const lowered_args = switch (lowered.data) {
+            .call_proc => |call_proc| self.builder.program.exprSpan(call_proc.args),
+            else => return null,
+        };
+        if (lowered_args.len == 0) return null;
+
+        const iter_expr = lowered_args[0];
+        const iter_ty = self.builder.program.exprs.items[@intFromEnum(iter_expr)].ty;
+        if (!self.directTargetMatchesIteratorMethod(direct_target, iter_ty, "fold")) return null;
+        if (lowered_args.len != 3) {
+            Common.invariant("checked Iter.fold direct call had an unexpected arity");
+        }
+
+        return try self.lowerIteratorFoldConsumerArgs(iter_expr, lowered_args[1], lowered_args[2], lowered.ret_ty);
     }
 
     fn singleIteratorProducerPlanExpr(
@@ -16362,6 +16467,170 @@ const BodyContext = struct {
         rest = try self.wrapLet(limit_local, u64_ty, limit_value, rest, list_ty);
         rest = try self.wrapLet(len_local, u64_ty, len_value, rest, list_ty);
         return try self.wrapLet(source_list_local, source_list_ty, plan.list.list, rest, list_ty);
+    }
+
+    fn lowerListAppendIteratorPlanFold(
+        self: *BodyContext,
+        plan: ListAppendIteratorPlan,
+        initial_acc: Ast.ExprId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+
+        const source_list_ty = self.builder.program.exprs.items[@intFromEnum(plan.list.list)].ty;
+        const source_list_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_list_ty);
+        const source_list_expr = try self.builder.localExpr(source_list_local, source_list_ty);
+
+        const len_value = try self.builder.lowLevelExpr(.list_len, &.{source_list_expr}, u64_ty);
+        const len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const len_expr = try self.builder.localExpr(len_local, u64_ty);
+
+        const limit_value = if (plan.append_items.len == 0)
+            len_expr
+        else
+            try self.builder.lowLevelExpr(
+                .num_plus,
+                &.{ len_expr, try self.builder.intLiteralExpr(plan.append_items.len, u64_ty) },
+                u64_ty,
+            );
+        const limit_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const limit_expr = try self.builder.localExpr(limit_local, u64_ty);
+
+        const append_locals = try self.allocator.alloc(Ast.LocalId, plan.append_items.len);
+        defer self.allocator.free(append_locals);
+        const append_exprs = try self.allocator.alloc(Ast.ExprId, plan.append_items.len);
+        defer self.allocator.free(append_exprs);
+        for (plan.append_items, 0..) |_, index| {
+            append_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), plan.item_ty);
+            append_exprs[index] = try self.builder.localExpr(append_locals[index], plan.item_ty);
+        }
+
+        const initial_acc_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), acc_ty);
+        const initial_acc_expr = try self.builder.localExpr(initial_acc_local, acc_ty);
+        const acc_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), acc_ty);
+        const acc_expr = try self.builder.localExpr(acc_local, acc_ty);
+
+        const step_fn_local: ?Ast.LocalId = switch (step_fn) {
+            .direct => null,
+            .value => try self.builder.program.addLocal(self.builder.symbols.fresh(), step_fn_ty),
+        };
+        const loop_step_fn: IteratorFoldFn = switch (step_fn) {
+            .direct => |fn_id| .{ .direct = fn_id },
+            .value => .{ .value = try self.builder.localExpr(step_fn_local orelse Common.invariant("Iter.fold step local was missing"), step_fn_ty) },
+        };
+
+        const index_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const index_expr = try self.builder.localExpr(index_local, u64_ty);
+        const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
+        const next_index = try self.builder.lowLevelExpr(.num_plus, &.{ index_expr, one_expr }, u64_ty);
+
+        const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, limit_expr }, bool_ty);
+        const done_body = try self.builder.program.addExpr(.{
+            .ty = acc_ty,
+            .data = .{ .break_ = acc_expr },
+        });
+        const continue_body = try self.lowerListAppendIteratorPlanFoldContinue(
+            source_list_expr,
+            len_expr,
+            index_expr,
+            next_index,
+            acc_expr,
+            loop_step_fn,
+            step_fn_ty,
+            acc_ty,
+            plan.item_ty,
+            append_exprs,
+        );
+        const body = try self.builder.ifExpr(done_cond, done_body, continue_body, acc_ty);
+
+        const params = [_]Ast.TypedLocal{
+            .{ .local = index_local, .ty = u64_ty },
+            .{ .local = acc_local, .ty = acc_ty },
+        };
+        const initial_values = [_]Ast.ExprId{ plan.list.index, initial_acc_expr };
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = acc_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(&params),
+            .initial_values = try self.builder.program.addExprSpan(&initial_values),
+            .body = body,
+        } } });
+
+        var rest = loop_expr;
+        if (step_fn_local) |local| {
+            const value = switch (step_fn) {
+                .direct => Common.invariant("direct Iter.fold step unexpectedly needed a local binding"),
+                .value => |expr| expr,
+            };
+            rest = try self.wrapLet(local, step_fn_ty, value, rest, acc_ty);
+        }
+        rest = try self.wrapLet(initial_acc_local, acc_ty, initial_acc, rest, acc_ty);
+        var append_index = append_locals.len;
+        while (append_index > 0) {
+            append_index -= 1;
+            rest = try self.wrapLet(append_locals[append_index], plan.item_ty, plan.append_items[append_index], rest, acc_ty);
+        }
+        rest = try self.wrapLet(limit_local, u64_ty, limit_value, rest, acc_ty);
+        rest = try self.wrapLet(len_local, u64_ty, len_value, rest, acc_ty);
+        return try self.wrapLet(source_list_local, source_list_ty, plan.list.list, rest, acc_ty);
+    }
+
+    fn lowerListAppendIteratorPlanFoldContinue(
+        self: *BodyContext,
+        source_list_expr: Ast.ExprId,
+        len_expr: Ast.ExprId,
+        index_expr: Ast.ExprId,
+        next_index: Ast.ExprId,
+        acc_expr: Ast.ExprId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+        item_ty: Type.TypeId,
+        append_exprs: []const Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ source_list_expr, index_expr }, item_ty);
+        const list_continue = try self.foldContinue(acc_expr, list_item, step_fn, step_fn_ty, acc_ty, item_ty, next_index);
+        if (append_exprs.len == 0) return list_continue;
+
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const in_list = try self.builder.lowLevelExpr(.num_is_lt, &.{ index_expr, len_expr }, bool_ty);
+        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, item_ty, append_exprs);
+        const tail_continue = try self.foldContinue(acc_expr, tail_item, step_fn, step_fn_ty, acc_ty, item_ty, next_index);
+        return try self.builder.ifExpr(in_list, list_continue, tail_continue, acc_ty);
+    }
+
+    fn foldContinue(
+        self: *BodyContext,
+        acc_expr: Ast.ExprId,
+        item_expr: Ast.ExprId,
+        step_fn: IteratorFoldFn,
+        step_fn_ty: Type.TypeId,
+        acc_ty: Type.TypeId,
+        item_ty: Type.TypeId,
+        next_index: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!self.foldStepFunctionMatches(step_fn_ty, acc_ty, item_ty)) {
+            Common.invariant("Iter.fold step function type differed from iterator item and accumulator types");
+        }
+        const next_acc_data: Ast.ExprData = switch (step_fn) {
+            .direct => |fn_id| .{ .call_proc = .{
+                .callee = .{ .func = fn_id },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ acc_expr, item_expr }),
+            } },
+            .value => |step_expr| .{ .call_value = .{
+                .callee = step_expr,
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ acc_expr, item_expr }),
+            } },
+        };
+        const next_acc = try self.builder.program.addExpr(.{
+            .ty = acc_ty,
+            .data = next_acc_data,
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = acc_ty,
+            .data = .{ .continue_ = .{ .values = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ next_index, next_acc }) } },
+        });
     }
 
     fn lowerListAppendIteratorPlanCollectContinue(

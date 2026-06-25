@@ -1381,7 +1381,7 @@ fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
     try std.testing.expect(try reachableIterCollectShape(allocator, &unoptimized.lowered, .generic));
 }
 
-fn expectRangeMapCollectUsesDirectListLoop(source: []const u8) anyerror!void {
+fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_unsafe_count: usize) anyerror!void {
     const allocator = std.testing.allocator;
 
     var optimized = try lowerModule(allocator, source, .wrappers);
@@ -1393,7 +1393,7 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8) anyerror!void {
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
-    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_append_unsafe_count"));
+    try std.testing.expectEqual(expected_append_unsafe_count, try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_append_unsafe_count"));
 }
 
 fn rootDirectCallTarget(
@@ -1751,6 +1751,63 @@ test "optimized Iter.collect to List over direct list append consumes iterator p
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_append_unsafe_count"));
+}
+
+test "optimized Iter.fold over direct list append consumes iterator plan" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold([1.I64, 2.I64].iter().append(3.I64), 0.I64, |acc, item| acc + item)
+        \\    {}
+        \\}
+    , &.{"6"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = Iter.fold([1.I64, 2.I64].iter().append(3.I64), 0.I64, |acc, item| acc + item)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "tag_assign_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_tag_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+}
+
+test "optimized Iter.fold over direct append preserves producer and accumulator effects" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold([1.I64].iter().append(tap(2.I64)), tap(10.I64), |acc, item| acc + item)
+        \\    dbg 4.I64
+        \\    {}
+        \\}
+    , &.{ "2", "10", "13", "4" });
+}
+
+test "optimized Iter.fold over direct append keeps refcounted items" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold(["a"].iter().append("b"), "", |acc, item| Str.concat(acc, item))
+        \\    {}
+        \\}
+    , &.{"\"ab\""});
 }
 
 test "local list.iter with public alias keeps public iterator semantics" {
@@ -3388,7 +3445,7 @@ test "plant iter pipeline collect uses direct range map list loop" {
         \\
         \\main : () -> List(Plant)
         \\main = || starting_plants()
-    );
+    , 1);
 }
 
 test "known-length List.iter collect specializes without unbound locals" {
@@ -3425,7 +3482,7 @@ test "direct range map collect uses direct list loop" {
         \\    Iter.collect(
         \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
         \\    )
-    );
+    , 2);
 }
 
 test "spec constr does not duplicate opaque let-bound direct calls" {

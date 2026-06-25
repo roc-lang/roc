@@ -629,6 +629,9 @@ Tasks:
 - [x] Optimized `for` over ranges uses direct numeric state.
 - [x] Optimized `for` over direct `Iter.custom` uses private custom state.
 - [ ] Optimized `Iter.fold` consumes plan values directly.
+  - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
+    direct-call `Iter.fold` as accumulator loop parameters without public
+    iterator step values.
 - [ ] Optimized `List.from_iter` consumes plan values directly.
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     `List.from_iter` and list-result `Iter.collect` as exact-capacity list
@@ -643,9 +646,14 @@ Tasks:
   moved.
   - [x] Direct append operands consumed by `List.from_iter` preserve `dbg`
     ordering relative to collection and following expressions.
+  - [x] Direct append operands and accumulator operands consumed by `Iter.fold`
+    preserve `dbg` ordering relative to the fold result and following
+    expressions.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
   - [x] Direct `List.from_iter(List(Str).iter().append(...))` passes optimized
     LIR interpretation with the expected string list.
+  - [x] Direct `Iter.fold(List(Str).iter().append(...))` passes optimized LIR
+    interpretation with the expected string accumulator result.
 - [ ] Infinite iterator tests pass.
 - [ ] Full builtin iterator behavior tests pass.
 - [ ] Post-check and LIR module tests pass.
