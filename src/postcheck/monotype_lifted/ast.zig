@@ -32,7 +32,7 @@ pub const IterPlanId = Mono.IterPlanId;
 /// Local binding shared with Monotype IR.
 pub const Local = Mono.Local;
 /// Compiler-internal iterator plan after function ids have been lifted.
-pub const IterPlan = iter_plan.IterPlan(ExprId, LocalId, FnId, Type.TypeId);
+pub const IterPlan = iter_plan.IterPlan(ExprId, FnId, Type.TypeId);
 /// Local id paired with a monomorphic type.
 pub const TypedLocal = Mono.TypedLocal;
 /// Owned string literal id shared with Monotype IR.

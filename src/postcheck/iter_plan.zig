@@ -38,7 +38,6 @@ pub const RangeInclusivity = enum {
 
 pub fn IterPlan(
     comptime ExprId: type,
-    comptime LocalId: type,
     comptime FnId: type,
     comptime TypeId: type,
 ) type {
@@ -87,19 +86,19 @@ pub fn IterPlan(
 
         pub const SingleIter = struct {
             item: ExprId,
-            emitted: LocalId,
+            emitted: ExprId,
         };
 
         pub const AppendIter = struct {
             before: IterPlanId,
             after: ExprId,
-            phase: LocalId,
+            phase: ExprId,
         };
 
         pub const ConcatIter = struct {
             first: IterPlanId,
             second: IterPlanId,
-            phase: LocalId,
+            phase: ExprId,
         };
 
         pub const MapIter = struct {

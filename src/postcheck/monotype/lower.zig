@@ -4632,10 +4632,12 @@ const BodyContext = struct {
     fn lowerCallExpr(self: *BodyContext, checked_expr_id: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!Ast.ExprId {
         if (try self.lowerParseIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| return expr;
         const lowered = try self.lowerCall(checked_ret_ty, call);
-        return try self.builder.program.addExpr(.{
+        const call_expr = try self.builder.program.addExpr(.{
             .ty = lowered.ret_ty,
             .data = lowered.data,
         });
+        if (try self.lowerIteratorDirectProducerPlanExpr(call, lowered, call_expr)) |plan_expr| return plan_expr;
+        return call_expr;
     }
 
     fn checkedFunctionType(self: *BodyContext, checked_fn_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
@@ -9980,10 +9982,12 @@ const BodyContext = struct {
                 if (!self.sameType(ty, lowered.ret_ty)) {
                     Common.invariant("checked call expression lowered at a type different from its context type");
                 }
-                return try self.builder.program.addExpr(.{
+                const call_expr = try self.builder.program.addExpr(.{
                     .ty = ty,
                     .data = lowered.data,
                 });
+                if (try self.lowerIteratorDirectProducerPlanExpr(call, lowered, call_expr)) |plan_expr| return plan_expr;
+                return call_expr;
             },
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, ty),
@@ -14017,6 +14021,13 @@ const BodyContext = struct {
             .value => {},
             else => return null,
         }
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+        if (self.methodNameIs(plan.method, "single") and
+            self.resolvedDispatchMatchesTypeMethod(resolved, materialized_expr.ty, "single"))
+        {
+            return try self.lowerSingleIteratorProducerPlanExpr(plan, lowered_call, materialized);
+        }
+
         if (!self.methodNameIs(plan.method, "iter")) return null;
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) return null;
         if (!self.resolvedDispatchMatchesBuiltinMethod(resolved, .list, "iter")) return null;
@@ -14057,9 +14068,80 @@ const BodyContext = struct {
             } },
         });
 
-        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
         return try self.builder.program.addExpr(.{
             .ty = materialized_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lowerSingleIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 1) {
+            Common.invariant("checked Iter.single dispatch plan had an unexpected argument shape");
+        }
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter.single call argument count differed from its dispatch plan");
+        }
+
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+        return try self.singleIteratorProducerPlanExpr(lowered_args[0], materialized, materialized_expr.ty);
+    }
+
+    fn lowerIteratorDirectProducerPlanExpr(
+        self: *BodyContext,
+        call: anytype,
+        lowered: LoweredCall,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!?Ast.ExprId {
+        if (!self.builder.iterator_producer_plans) return null;
+        const direct_target = call.direct_target orelse return null;
+
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+        if (!self.directTargetMatchesIteratorMethod(direct_target, materialized_expr.ty, "single")) return null;
+
+        const lowered_args = switch (lowered.data) {
+            .call_proc => |call_proc| self.builder.program.exprSpan(call_proc.args),
+            else => Common.invariant("checked direct iterator producer lowered to a non-direct call"),
+        };
+        if (lowered_args.len != 1) {
+            Common.invariant("checked Iter.single direct call had an unexpected arity");
+        }
+
+        return try self.singleIteratorProducerPlanExpr(lowered_args[0], materialized, materialized_expr.ty);
+    }
+
+    fn singleIteratorProducerPlanExpr(
+        self: *BodyContext,
+        item_expr: Ast.ExprId,
+        materialized: Ast.ExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const item_ty = self.builder.program.exprs.items[@intFromEnum(item_expr)].ty;
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const emitted_expr = try self.boolLiteral(false, bool_ty);
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = item_ty,
+            .length = .{ .known = try self.builder.intLiteralExpr(1, u64_ty) },
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .materialized = materialized,
+            .data = .{ .single = .{
+                .item = item_expr,
+                .emitted = emitted_expr,
+            } },
+        });
+
+        return try self.builder.program.addExpr(.{
+            .ty = iterator_ty,
             .data = .{ .iter_plan = plan_id },
         });
     }
@@ -14339,6 +14421,17 @@ const BodyContext = struct {
         return methodLookupMatches(resolved, expected);
     }
 
+    fn resolvedDispatchMatchesTypeMethod(
+        self: *BodyContext,
+        resolved: MethodLookup,
+        owner_ty: Type.TypeId,
+        comptime method_name: []const u8,
+    ) bool {
+        const owner = methodOwnerFromType(&self.builder.program.types, owner_ty) orelse return false;
+        const expected = self.builder.lookupMethodTargetByName(owner, method_name) orelse return false;
+        return methodLookupMatches(resolved, expected);
+    }
+
     fn methodLookupMatches(actual: MethodLookup, expected: MethodLookup) bool {
         if (!moduleBytesEqual(actual.view.key.bytes, expected.view.key.bytes)) return false;
         if (actual.target.module_idx != expected.target.module_idx) return false;
@@ -14484,7 +14577,7 @@ const BodyContext = struct {
             .done = .reachable,
             .data = .{ .single = .{
                 .item = item_expr,
-                .emitted = emitted_local,
+                .emitted = emitted_expr,
             } },
         });
 

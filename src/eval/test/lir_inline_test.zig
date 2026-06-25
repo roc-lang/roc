@@ -1149,14 +1149,19 @@ fn markReachableLiftedIterPlan(
             markReachableLiftedExpr(program, range.current, reachable);
             markReachableLiftedExpr(program, range.step, reachable);
         },
-        .single => |single| markReachableLiftedExpr(program, single.item, reachable),
+        .single => |single| {
+            markReachableLiftedExpr(program, single.item, reachable);
+            markReachableLiftedExpr(program, single.emitted, reachable);
+        },
         .append => |append| {
             markReachableLiftedIterPlan(program, append.before, reachable);
             markReachableLiftedExpr(program, append.after, reachable);
+            markReachableLiftedExpr(program, append.phase, reachable);
         },
         .concat => |concat| {
             markReachableLiftedIterPlan(program, concat.first, reachable);
             markReachableLiftedIterPlan(program, concat.second, reachable);
+            markReachableLiftedExpr(program, concat.phase, reachable);
         },
         .map => |map| {
             markReachableLiftedIterPlan(program, map.source, reachable);
@@ -1555,6 +1560,80 @@ test "user iter producer is not lowered as builtin List.iter plan" {
     }
 }
 
+test "Iter.single producer lowers to a materialized iterator plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = Iter.single(42.I64)
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .single => |single| {
+                found = true;
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                try std.testing.expectEqual(postcheck.IterPlan.DoneReachability.reachable, plan.done);
+                try std.testing.expect(plan.steps.one);
+                try std.testing.expect(plan.steps.done);
+                switch (plan.length) {
+                    .known => |len| switch (mono_source.mono.exprs.items[@intFromEnum(len)].data) {
+                        .int_lit => {},
+                        else => return error.TestUnexpectedResult,
+                    },
+                    .unknown => return error.TestUnexpectedResult,
+                }
+                switch (mono_source.mono.exprs.items[@intFromEnum(materialized)].data) {
+                    .call_proc => {},
+                    else => return error.TestUnexpectedResult,
+                }
+                switch (mono_source.mono.exprs.items[@intFromEnum(single.emitted)].data) {
+                    .low_level => {},
+                    else => return error.TestUnexpectedResult,
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "user single producer is not lowered as builtin Iter.single plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\Boxed := [Boxed].{
+        \\    single : I64 -> Iter(I64)
+        \\    single = |item| [item].iter()
+        \\}
+        \\
+        \\main : Iter(I64)
+        \\main = Boxed.single(42.I64)
+    );
+    defer mono_source.deinit(allocator);
+
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        switch (mono_source.mono.iterPlan(plan_id).data) {
+            .single => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
 test "List.iter producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
     var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
@@ -1562,6 +1641,24 @@ test "List.iter producer materializes before Lambda when returned publicly" {
         \\
         \\main : Iter(I64)
         \\main = [10.I64, 20.I64].iter()
+    );
+    defer lifted_source.deinit(allocator);
+
+    for (lifted_source.lifted.exprs.items) |expr| {
+        switch (expr.data) {
+            .iter_plan => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
+test "Iter.single producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = Iter.single(42.I64)
     );
     defer lifted_source.deinit(allocator);
 

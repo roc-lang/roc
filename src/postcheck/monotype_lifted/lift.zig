@@ -545,14 +545,19 @@ const Lifter = struct {
                 try self.rewriteExpr(range.current);
                 try self.rewriteExpr(range.step);
             },
-            .single => |single| try self.rewriteExpr(single.item),
+            .single => |single| {
+                try self.rewriteExpr(single.item);
+                try self.rewriteExpr(single.emitted);
+            },
             .append => |append| {
                 try self.rewriteIterPlan(append.before);
                 try self.rewriteExpr(append.after);
+                try self.rewriteExpr(append.phase);
             },
             .concat => |concat| {
                 try self.rewriteIterPlan(concat.first);
                 try self.rewriteIterPlan(concat.second);
+                try self.rewriteExpr(concat.phase);
             },
             .map => |map| {
                 try self.rewriteIterPlan(map.source);
@@ -1013,14 +1018,19 @@ const CaptureSet = struct {
                 try self.collectExpr(range.current, bound);
                 try self.collectExpr(range.step, bound);
             },
-            .single => |single| try self.collectExpr(single.item, bound),
+            .single => |single| {
+                try self.collectExpr(single.item, bound);
+                try self.collectExpr(single.emitted, bound);
+            },
             .append => |append| {
                 try self.collectIterPlan(append.before, bound);
                 try self.collectExpr(append.after, bound);
+                try self.collectExpr(append.phase, bound);
             },
             .concat => |concat| {
                 try self.collectIterPlan(concat.first, bound);
                 try self.collectIterPlan(concat.second, bound);
+                try self.collectExpr(concat.phase, bound);
             },
             .map => |map| {
                 try self.collectIterPlan(map.source, bound);

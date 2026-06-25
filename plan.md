@@ -100,6 +100,9 @@ Current branch status:
   recognition checks the resolved builtin method target, and the normal
   pipeline keeps that flag off until private consumers through locals and
   branches are implemented.
+- `Iter.single` can emit a `Single` plan behind the producer-plan flag; cursor
+  state that belongs to first-class plans is represented as initial expressions
+  rather than preexisting loop locals.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -518,7 +521,7 @@ Tasks:
 - [ ] `Iter.iter` preserves or forwards known plans correctly.
 - [ ] numeric finite ranges produce `Range`.
 - [ ] numeric unbounded ranges produce `UnboundedRange`.
-- [ ] `Iter.single` produces `Single`.
+- [x] `Iter.single` produces `Single`.
 - [ ] `Iter.prepended` produces the correct plan shape.
 - [ ] `Iter.append` produces `Append`.
 - [ ] `Iter.concat` produces `Concat`.

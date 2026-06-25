@@ -1809,17 +1809,17 @@ const Cloner = struct {
                 } },
                 .single => |single| .{ .single = .{
                     .item = try self.cloneExpr(single.item),
-                    .emitted = single.emitted,
+                    .emitted = try self.cloneExpr(single.emitted),
                 } },
                 .append => |append| .{ .append = .{
                     .before = try self.cloneIterPlan(append.before),
                     .after = try self.cloneExpr(append.after),
-                    .phase = append.phase,
+                    .phase = try self.cloneExpr(append.phase),
                 } },
                 .concat => |concat| .{ .concat = .{
                     .first = try self.cloneIterPlan(concat.first),
                     .second = try self.cloneIterPlan(concat.second),
-                    .phase = concat.phase,
+                    .phase = try self.cloneExpr(concat.phase),
                 } },
                 .map => |map| .{ .map = .{
                     .source = try self.cloneIterPlan(map.source),

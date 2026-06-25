@@ -38,7 +38,7 @@ pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
-pub const IterPlan = iter_plan.IterPlan(ExprId, LocalId, FnId, Type.TypeId);
+pub const IterPlan = iter_plan.IterPlan(ExprId, FnId, Type.TypeId);
 
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {

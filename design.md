@@ -1413,12 +1413,15 @@ because they are fresh lowering state whose mutation is not observable by Roc
 source.
 
 Iterator plans must not require heap allocation or reference counting for the
-`Iter` wrapper itself. A plan carries state as fields, loop parameters, local
-values, static data references, or nested plans. Refcounted payloads inside the
-state, such as lists, strings, elements, or captured function values, are still
-ordinary Roc values and are managed only by LIR ARC insertion through explicit
-`incref`, `decref`, and `free` statements. ARC may optimize those payloads, but
-ARC must not be used to decide whether an `Iter` wrapper is unique.
+`Iter` wrapper itself. A first-class plan value carries initial state as
+ordinary expressions, static data references, or nested plans. An optimized
+consumer may later introduce private loop locals or loop parameters for that
+state, but those locals belong to the consumer rewrite, not to the producer
+plan value. Refcounted payloads inside the state, such as lists, strings,
+elements, or captured function values, are still ordinary Roc values and are
+managed only by LIR ARC insertion through explicit `incref`, `decref`, and
+`free` statements. ARC may optimize those payloads, but ARC must not be used to
+decide whether an `Iter` wrapper is unique.
 
 The internal plan vocabulary is extensible, but the core cases are:
 
