@@ -94,8 +94,8 @@ Current branch status:
 - Monotype Lifted preserves plan expressions and plan stores.
 - Plan values carry the already-lowered public materialization expression needed
   when they cross a public observation boundary.
-- A focused post-check normalization boundary currently materializes remaining
-  raw plans before Lambda-to-LIR lowering.
+- Lambda solving currently owns the fallback normalization boundary that
+  materializes remaining raw plans before ordinary Lambda-to-LIR lowering.
 - `List.iter` can emit a `ListIter` plan behind an explicit producer-plan flag;
   recognition checks the resolved builtin method target, and the normal
   pipeline keeps that flag off until private consumers through locals and

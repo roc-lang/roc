@@ -36,6 +36,16 @@ const LiftedSource = struct {
     }
 };
 
+const LambdaSolvedSource = struct {
+    resources: helpers.ParsedResources,
+    solved: postcheck.LambdaSolved.Ast.Program,
+
+    fn deinit(self: *LambdaSolvedSource, allocator: Allocator) void {
+        self.solved.deinit();
+        helpers.cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
 const MonotypeSource = struct {
     resources: helpers.ParsedResources,
     mono: postcheck.Monotype.Ast.Program,
@@ -496,10 +506,10 @@ fn lowerMonotypeModuleWithIteratorPlans(
     };
 }
 
-fn liftModuleWithIteratorPlansAfterElimination(
+fn solveModuleWithIteratorPlans(
     allocator: Allocator,
     source: []const u8,
-) anyerror!LiftedSource {
+) anyerror!LambdaSolvedSource {
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -535,13 +545,17 @@ fn liftModuleWithIteratorPlansAfterElimination(
     var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
     mono_owned = false;
     mono = undefined;
-    errdefer lifted.deinit();
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
 
-    try postcheck.IterPlanEliminate.run(allocator, &lifted);
+    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    errdefer solved.deinit();
 
     return .{
         .resources = resources,
-        .lifted = lifted,
+        .solved = solved,
     };
 }
 
@@ -2308,7 +2322,7 @@ test "user filter producers are not lowered as builtin Iter filter plans" {
 
 test "List.iter producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2316,12 +2330,12 @@ test "List.iter producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.single producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2329,12 +2343,12 @@ test "Iter.single producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "exclusive range producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2342,12 +2356,12 @@ test "exclusive range producer materializes before Lambda when returned publicly
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "inclusive range producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2355,12 +2369,12 @@ test "inclusive range producer materializes before Lambda when returned publicly
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.custom producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\advance : I64 -> Try((I64, I64), [NoMore])
@@ -2376,12 +2390,12 @@ test "Iter.custom producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.append producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2389,12 +2403,12 @@ test "Iter.append producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.prepended producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2402,12 +2416,12 @@ test "Iter.prepended producer materializes before Lambda when returned publicly"
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.iter producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2415,12 +2429,12 @@ test "Iter.iter producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.concat producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2428,12 +2442,12 @@ test "Iter.concat producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.map producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2441,12 +2455,12 @@ test "Iter.map producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.keep_if producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2454,12 +2468,12 @@ test "Iter.keep_if producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "Iter.drop_if producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
-    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
         \\module [main]
         \\
         \\main : Iter(I64)
@@ -2467,7 +2481,7 @@ test "Iter.drop_if producer materializes before Lambda when returned publicly" {
     );
     defer lifted_source.deinit(allocator);
 
-    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
 test "optimized for over list.iter append chain uses private iterator cursor" {
