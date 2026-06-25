@@ -16,8 +16,10 @@ We deliberately defer further optimisation of the implementation until:
    `engine.zig` now owns the structural collection/splice/apply/rebind and
    effect-source dispatch path; no reactive or structural logic remains in either
    host file, only host-specific glue),
-2. the architecture and abstractions have been reviewed (are the seams good, do
-   we have good unit tests), and
+2. the architecture and abstractions have been reviewed (**done** —
+   `verifyCtx`/`verifyRegistryOps`/`verifySink`/`verifyMetrics` pin the host
+   seam contracts explicitly, native/wasm host files only expose host glue and
+   sinks, and the seam unit modules plus native app/spec gate are green), and
 3. baseline measurements have been updated and reviewed to inform decisions.
 
 Only then do we re-prioritise the optimisation backlog. The phases below are in
@@ -29,24 +31,28 @@ With the engine fully extracted, enable structural behaviour in the wasm host an
 get every app in the suite running in the browser *and* under the native spec
 runner from the same Roc source.
 
-- [ ] Enable the structural wasm path (`Ui.each`, `Ui.when`, `remove_node`,
+- [x] Enable the structural wasm path (`Ui.each`, `Ui.when`, `remove_node`,
       `move_before`, async) now that the structural engine is shared. The
       previously-noted comptime kill switch becomes unnecessary once the path is
       green — remove it rather than leaving a dormant flag.
-- [ ] Event-payload accessor path: carry the accessor descriptor in the
+- [x] Event-payload accessor path: carry the accessor descriptor in the
       descriptor tree; JS walks it against the live `Event` and serializes only
       the requested leaves into a `roc_alloc`'d buffer, transferring ownership on
       `roc_ui_event`. No payload reconstruction in JS.
-- [ ] Structural splicing against a live DOM: `Ui.each`/`Ui.when` detach/move via
+- [x] Structural splicing against a live DOM: `Ui.each`/`Ui.when` detach/move via
       the shared `RemoveNode`/`MoveBefore` commands; surviving rows keep DOM and
       local state; disposed scopes clear `nodes[]`/listeners and drop closures.
-- [ ] Async/timers/cancellation in the browser: `roc_ui_resolve` / `roc_ui_timer`
+- [x] Async/timers/cancellation in the browser: `roc_ui_resolve` / `roc_ui_timer`
       exports with host-assigned `request_id` / `token`, `AbortController` /
       `clearInterval` driven by host-emitted cancel commands on scope dispose.
-- [ ] `serve.py` builds and serves **any** app in the suite (parameterised app
-      selection + both backends), not just the counter/demo.
+- [x] `serve.py` builds and serves **any** app in the suite (parameterised app
+      selection + both backends), not just the counter/demo. With no app
+      argument it builds the maintained six-app suite and serves the suite index;
+      pass one app path for targeted QA.
 - [ ] Run each of the six apps in the browser as manual QA, and confirm each runs
-      green under the native spec runner.
+      green under the native spec runner. The native spec runner and JS runtime
+      smoke are green for all six; the suite index now makes the human browser
+      pass available from one URL.
 
 We do **not** add an automated real-browser harness. The native spec runner
 already asserts semantics and work budgets — the things the browser cannot show
@@ -60,30 +66,30 @@ The current browser tests re-prove engine semantics through a DOM double, which
 duplicates native coverage across the boundary. Keep only the JS↔WASM contract
 guards.
 
-- [ ] Remove `browser/counter_app.test.mjs`, `browser/executor.test.mjs`, and
+- [x] Remove `browser/counter_app.test.mjs`, `browser/executor.test.mjs`, and
       `browser/stable_text_app.test.mjs` — these assert engine semantics (count
       changes, one `set_text` per click, pruning, retained-value budget) that the
       native spec runner already owns and asserts more precisely.
-- [ ] Keep `browser/wasm_memory_views.test.mjs` (memory.grow view invalidation)
+- [x] Keep `browser/wasm_memory_views.test.mjs` (memory.grow view invalidation)
       and `browser/controlled_input_policy.test.mjs` (`SetValue` focus/IME
       policy) — these guard the genuine JS↔WASM boundary contract, not engine
       semantics.
-- [ ] Ensure the remaining JS guards cover the codec contract: op-code →
+- [x] Ensure the remaining JS guards cover the codec contract: op-code →
       DOM-op mapping, payload marshalling round-trip, and the view-refresh rule.
 
 ## Phase 2 — Architecture and abstractions review
 
 A deliberate review pass, once the app suite is online, before any optimisation.
 
-- [ ] Are `Ctx` and `sink()` good seams? Is the `Ctx` contract minimal and
+- [x] Are `Ctx` and `sink()` good seams? Is the `Ctx` contract minimal and
       explicit (every decl checked by `verifyCtx`/`verifyRegistryOps`, no duck
       typing)?
-- [ ] Is the native/wasm split clean — does anything reactive or structural still
+- [x] Is the native/wasm split clean — does anything reactive or structural still
       leak into a host file?
-- [ ] Do we have good unit tests at each seam (engine, scope tree, keyed rows,
+- [x] Do we have good unit tests at each seam (engine, scope tree, keyed rows,
       identity table, host-value registry, render sink), or are seams only covered
       transitively through app specs?
-- [ ] Record the review outcome and any seam changes; fix seam defects here rather
+- [x] Record the review outcome and any seam changes; fix seam defects here rather
       than carrying them into the optimisation phase.
 
 ## Phase 3 — Update and review baseline measurements
