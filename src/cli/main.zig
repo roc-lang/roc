@@ -4205,13 +4205,19 @@ fn hotReloadChooseImageAllocation(
 
     var best_region: ?HotReloadFreeRegion = null;
     for (tracker.free_regions.items) |region| {
-        if (best_region == null or region.len() > best_region.?.len()) {
-            best_region = region;
+        if (region.start >= tracker.descriptor_floor) continue;
+
+        const bounded_region = HotReloadFreeRegion{
+            .start = region.start,
+            .end = @min(region.end, tracker.descriptor_floor),
+        };
+        if (best_region == null or bounded_region.len() > best_region.?.len()) {
+            best_region = bounded_region;
         }
     }
 
     const descriptor_slot = try hotReloadChooseDescriptorSlot(gpa, tracker);
-    if (best_region == null and tracker.descriptor_floor <= append_offset) {
+    if (descriptor_slot.fresh and tracker.descriptor_floor <= append_offset) {
         try hotReloadReturnDescriptorSlotAfterFailedChoice(gpa, tracker, descriptor_slot);
         return error.OutOfMemory;
     }
@@ -4511,8 +4517,8 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
     };
 }
 
-fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) *ipc.hot_reload.ImageDescriptor {
-    return @ptrCast(@alignCast(shm.base_ptr + offset));
+fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    return hotReloadDescriptorForWrite(shm, offset);
 }
 
 fn testingPrepareHotReloadDescriptor(
@@ -4523,8 +4529,8 @@ fn testingPrepareHotReloadDescriptor(
     image_bound: usize,
     allocation_start: usize,
     allocation_end: usize,
-) *ipc.hot_reload.ImageDescriptor {
-    const descriptor = testingHotReloadDescriptor(shm, descriptor_offset);
+) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    const descriptor = try testingHotReloadDescriptor(shm, descriptor_offset);
     ipc.hot_reload.prepareDescriptor(
         descriptor,
         generation,
@@ -4558,15 +4564,15 @@ test "hot reload allocation coalesces adjacent reclaimed image regions" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -4601,11 +4607,11 @@ test "hot reload sweep keeps acknowledged current descriptor live" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.acknowledge(control, 2, .accepted);
@@ -4638,11 +4644,11 @@ test "hot reload sweep keeps top reclaimed descriptor region addressable" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.publishDescriptor(control, 3, desc0_offset, desc0);
 
@@ -4676,17 +4682,17 @@ test "hot reload allocation skips retired retained descriptors" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     ipc.hot_reload.retainDescriptor(desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     ipc.hot_reload.retainDescriptor(desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -4722,7 +4728,7 @@ test "hot reload allocation rolls back fresh descriptor when append has no room"
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
@@ -4740,7 +4746,7 @@ test "hot reload allocation rolls back fresh descriptor when append has no room"
     try std.testing.expectEqual(@as(usize, 0), tracker.free_descriptor_slots.items.len);
 }
 
-test "hot reload allocation can use reclaimed region when append has no room" {
+test "hot reload allocation rejects fresh descriptor when append has no room despite reclaimed region" {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
     defer shm.deinit(std.testing.allocator);
@@ -4750,7 +4756,7 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
@@ -4760,13 +4766,44 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
     try hotReloadAddFreeRegion(std.testing.allocator, &tracker, handle, @sizeOf(SharedMemoryAllocator.Header), 512, 4096);
 
+    try std.testing.expectError(
+        error.OutOfMemory,
+        hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 2),
+    );
+    try std.testing.expectEqual(desc0_offset, tracker.descriptor_floor);
+    try std.testing.expectEqual(desc1_offset, tracker.next_descriptor_offset);
+    try std.testing.expectEqual(@as(usize, 0), tracker.free_descriptor_slots.items.len);
+}
+
+test "hot reload allocation clips reclaimed region to descriptor floor" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 4096, 512, 4096);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadReleaseDescriptorSlot(std.testing.allocator, &tracker, desc1_offset, true);
+    try hotReloadAddFreeRegion(std.testing.allocator, &tracker, handle, @sizeOf(SharedMemoryAllocator.Header), 8192, handle.mapped_size);
+
     const allocation = try hotReloadChooseImageAllocation(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker, 2);
 
     try std.testing.expectEqual(desc1_offset, allocation.descriptor_offset);
     try std.testing.expectEqual(desc1_offset, allocation.image_limit);
-    try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
-    try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
-    try std.testing.expectEqual(desc1_offset, allocation.append_offset);
+    try std.testing.expectEqual(@as(usize, 8192), allocation.region_start);
+    try std.testing.expectEqual(desc1_offset, allocation.region_end);
+    try std.testing.expectEqual(handle.mapped_size, allocation.append_offset);
+    try std.testing.expectEqual(true, allocation.preserve_descriptor_refs);
 }
 
 /// Result of setting up shared memory with type checking information.
