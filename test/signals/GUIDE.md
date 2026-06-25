@@ -558,6 +558,133 @@ strings, so re-evaluation never refires a request, and disposing a scope cancels
 its in-flight work. A test host can assert that an app requested an HTTP call and
 then inject a fake result without running a network stack.
 
+## Structuring a Larger App
+
+The primitives above tell you how the runtime behaves. They do not tell you how
+to organize an app with many panels, remote data, and styling. The conventions
+below scale from the small form to a full dashboard. They are conventions, not
+new platform features — the platform only ever sees the `Elem` you build.
+
+A pattern from other UI ecosystems does **not** transfer here: building one large
+model and recomputing one `view : Model -> Elem` on every change. That shape
+exists because frameworks without fine-grained reactivity must re-diff the whole
+view. This platform already updates only the leaves that changed, so funneling
+everything through a single god record and re-deriving every panel from it on
+each tick fights the runtime instead of using it. Lean on signals at the seams.
+
+### Components are functions from a signal to an `Elem`
+
+Adopt one shape and hold it: a component takes **one** `Signal` of **one** props
+record and returns an `Elem`. Lower that record to individual fields with
+`Signal.map` at the leaves, *inside* the component:
+
+```roc
+service_row : Signal(ServiceRow) -> Elem
+service_row = |row|
+    Ui.component(|_|
+        Html.div_c(
+            "service-row",
+            [
+                Html.text_s(Signal.map(row, |r| r.label)),
+                Html.text_s(Signal.map(row, |r| r.status)),
+            ],
+        ))
+```
+
+Do not pre-explode a record into a parameter list of field-signals
+(`row_label : Signal(Str), row_status : Signal(Str), ...`). It adds wiring and
+prop-drilling with no benefit: the leaf still does one `Signal.map` either way,
+and a single `Signal(record)` keeps boundaries narrow and components testable in
+isolation. The small `Signal.map(row, |r| r.field)` calls are not boilerplate to
+eliminate — each one *is* the fine-grained binding that lets a single field patch
+a single node.
+
+Wrap reusable or stateful components in `Ui.component`. A component that uses
+`Ui.state`, `Ui.when`, or `Ui.each` without its own scope consumes the *caller's*
+construction-order sequence, so two instances collide and adding a sibling shifts
+identity. `Ui.component` gives each instance a local ordinal sequence. Pure leaf
+components with no identity-bearing sites do not strictly need it, but defaulting
+to wrapping section-level components is the safe habit.
+
+### Split containers from presentational components
+
+Use two tiers:
+
+- **Containers** take the app's source signals (state, effect results) and wire
+  them into props signals. They own data and effects. They are the only code that
+  reads the top-level application state.
+- **Presentational components** take `Signal(Props)` and return an `Elem`. They
+  hold no knowledge of where the data came from. They never read the application
+  state directly and never import the container.
+
+This keeps the dependency direction one-way (`app -> features -> ui/theme ->
+domain`) and means a panel can be mounted, tested, and reasoned about with a
+hand-built `Signal(Props)`.
+
+### Model per-section remote state with `RemoteData`
+
+A real dashboard has sections on different latencies. Do not force the whole page
+into one `Loading | Ready | Failed` state, and do not synthesize placeholder rows
+that pretend to be real rows — a "loading service row" is not a service row, and
+leaking it into your props type makes every consumer handle a fake case.
+
+Model each section's lifecycle with one small type and render it in one place:
+
+```roc
+RemoteData(a) : [Loading, Ready(a), Empty, Failed(Str)]
+
+remote_view : Signal(RemoteData(a)), (Signal(a) -> Elem) -> Elem
+```
+
+`remote_view` is the single home for loading, empty, and error chrome (including
+skeletons sized to match the loaded layout). A container derives each section's
+`Signal(RemoteData(_))` with a *selector* off the one source signal, so sections
+load and fail independently. When you genuinely want a whole-page gate, compose
+the section states with `Signal.combine`/`map2` — you get both policies from
+composition instead of two hand-maintained view-model twins.
+
+### Transform domain values to view-models per section
+
+Keep domain types (parsed records, enums, parse errors) free of UI concerns: no
+display strings, no CSS classes. Convert domain values into preformatted
+view-model records (`Str` fields plus a small presentation enum like `Tone`) in a
+per-section transform — `service_rows : Dashboard -> List(ServiceRow)`, not one
+`from_state : State -> WholePage`. Per-section transforms are what let you add a
+section by adding a file, rather than editing one central function that becomes a
+merge-conflict magnet.
+
+### Keep styling in a theme layer
+
+Components should pass a presentation enum (`Tone`, `Severity`) and hold no
+literal class strings beyond structural layout. Map the enum to concrete classes
+in a small theme module, built from a single set of design tokens. Structural
+grid/flex classes that belong to one layout component can stay local; the
+semantic color/state mappings should live in one place so a theme change is one
+edit.
+
+### Suggested layout
+
+A module's dotted name maps to its file path: `Theme.Tokens` lives at
+`Theme/Tokens.roc`, and `Dashboard.Services` at `Dashboard/Services.roc`. Group
+related modules under a shared prefix so the directory tree mirrors the
+architecture:
+
+```
+Domain.Dashboard       Domain/Dashboard.roc       pure types, enums, parsing — no UI, no formatting, no classes
+Theme.Tokens           Theme/Tokens.roc           design tokens (raw class strings)
+Theme.Tone             Theme/Tone.roc             presentation enum -> class mappers
+Ui.RemoteData          Ui/RemoteData.roc          RemoteData type + remote_view chrome
+Ui.Layout              Ui/Layout.roc              app-agnostic layout shells, atoms
+Dashboard.Page         Dashboard/Page.roc         container: reads state, wires selectors
+Dashboard.Selectors    Dashboard/Selectors.roc    per-section RemoteData selectors
+Dashboard.Services     Dashboard/Services.roc     view-model + presentational components
+<app>.roc              <app>.roc                  entry: build sources (fold_task, interval), mount the container
+```
+
+The `apps/ops_dashboard.roc` example follows this shape: a domain module, a
+view-model module, a theme/presentation split, and `Ui.each`-keyed sections fed
+by per-section signals.
+
 ## Common Mistakes
 
 - **Do not treat a signal like a mutable variable.** You do not assign to a
@@ -572,6 +699,17 @@ then inject a fake result without running a network stack.
 - **Do not push work into the host's lap.** If the host needs to update
   something, the runtime emits a patch. If Roc needs to know something happened,
   the host sends an explicit event. Nothing is recovered by guessing.
+- **Do not funnel everything through one god view-model.** Re-deriving every
+  panel from a single record on each change recomputes work the runtime would
+  otherwise skip. Derive per-section signals with selectors instead.
+- **Do not pre-explode a props record into many field-signals at a component
+  boundary.** Pass one `Signal(Props)` and lower it to fields at the leaves with
+  `Signal.map`.
+- **Do not synthesize fake placeholder rows.** Model section lifecycle with
+  `RemoteData` and render loading/empty/error chrome in one place; keep the
+  loading shape out of your props type.
+- **Do not leak CSS into domain or props types.** Domain types stay UI-free;
+  components carry a presentation enum and let a theme module map it to classes.
 
 ## Where To Look Next
 
