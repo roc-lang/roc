@@ -15,6 +15,7 @@ import {
 const PAGE = 65536;
 const CMD_BASE = 1024;
 const STR_BASE = 16384;
+const ERROR_BASE = 32768;
 const DEFAULT_ALLOC_BASE = 40960;
 const RECORD_WORDS = 6;
 
@@ -26,10 +27,12 @@ class MockHost {
     this.memory = new WebAssembly.Memory({ initial: 1 });
     this.cmdLen = 0;
     this.strLen = 0;
+    this.lastErrorLen = 0;
     this.allocPtr = allocBase;
     this.dispatches = [];
     this.timers = [];
     this.resolutions = [];
+    this.resolveTrapMessage = null;
     this.mountScript = [];
     this.eventResponses = new Map();
     this.timerResponses = new Map();
@@ -41,6 +44,8 @@ class MockHost {
       roc_ui_command_buffer_len: () => this.cmdLen,
       roc_ui_string_buffer_ptr: () => STR_BASE,
       roc_ui_string_buffer_len: () => this.strLen,
+      roc_ui_last_error_ptr: () => (this.lastErrorLen === 0 ? 0 : ERROR_BASE),
+      roc_ui_last_error_len: () => this.lastErrorLen,
       roc_ui_live_host_values: () => 0,
       roc_alloc: (len) => this.alloc(len),
       roc_dealloc: () => {},
@@ -60,6 +65,10 @@ class MockHost {
           payload: decoder.decode(new Uint8Array(this.memory.buffer, ptr, len)),
           failed: failed !== 0,
         });
+        if (this.resolveTrapMessage !== null) {
+          this.writeLastError(this.resolveTrapMessage);
+          throw new WebAssembly.RuntimeError("unreachable");
+        }
         this.writeCommands([]);
       },
       roc_ui_event: (eventId, kind, ptr, len, boolValue) => {
@@ -74,6 +83,12 @@ class MockHost {
         this.writeCommands(respond ? respond(dispatch) : []);
       },
     };
+  }
+
+  writeLastError(message) {
+    const bytes = encoder.encode(message);
+    new Uint8Array(this.memory.buffer).set(bytes, ERROR_BASE);
+    this.lastErrorLen = bytes.length;
   }
 
   alloc(len) {
@@ -123,11 +138,11 @@ class MockHost {
 }
 
 function mountWith(mountScript, options = {}) {
-  const { taskHandler, ...hostOptions } = options;
+  const { taskHandler, onError, ...hostOptions } = options;
   const host = new MockHost(hostOptions);
   host.mountScript = mountScript;
   const root = installDomDouble();
-  const runtime = new SignalsRuntime(host.exports, root, { taskHandler });
+  const runtime = new SignalsRuntime(host.exports, root, { taskHandler, onError });
   runtime.mount();
   return { host, root, runtime };
 }
@@ -305,6 +320,49 @@ test("task commands marshal request and resolve payloads by request id", () => {
   runtime.applyCommand({ op: Op.startTask, a: 6, b: 0, c: 6, d: 6, e: 3 });
   runtime.applyCommand({ op: Op.cancelTask, a: 6, b: 0, c: 0, d: 0, e: 0 });
   assert.equal(runtime.tasks.has(6), false);
+});
+
+test("task handler rejections resolve through the task failure path", async () => {
+  const { host } = mountWith(
+    [
+      { op: Op.resetDom },
+      { op: Op.startTask, a: 8, strings: ["lookup", "roc"] },
+    ],
+    {
+      taskHandler: () => Promise.reject(new Error("offline")),
+    },
+  );
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(host.resolutions, [
+    { requestId: 8, payload: "offline", failed: true },
+  ]);
+});
+
+test("async task resolution traps report onError without retrying as task failure", async () => {
+  const errors = [];
+  const { host } = mountWith(
+    [
+      { op: Op.resetDom },
+      { op: Op.startTask, a: 9, strings: ["lookup", "roc"] },
+    ],
+    {
+      taskHandler: () => Promise.resolve("ready payload"),
+      onError: (err) => errors.push(err),
+    },
+  );
+  host.resolveTrapMessage = "roc_ui_resolve trapped while applying task result";
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(host.resolutions, [
+    { requestId: 9, payload: "ready payload", failed: false },
+  ]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /roc_ui_resolve trapped while applying task result/);
 });
 
 test("ops API text task handler fetches only documented endpoints", async () => {

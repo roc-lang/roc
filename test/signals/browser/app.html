@@ -27,6 +27,12 @@
       const title = document.getElementById("title");
       const error = document.getElementById("error");
 
+      const showError = (err) => {
+        error.hidden = false;
+        error.classList.remove("hidden");
+        error.textContent = String(err?.message || err);
+      };
+
       document.title = appName;
       title.textContent = appName;
 
@@ -35,11 +41,10 @@
           wasmUrl,
           root: document.getElementById("app"),
           taskHandler: opsApiTextTaskHandler,
+          onError: showError,
         });
       } catch (err) {
-        error.hidden = false;
-        error.classList.remove("hidden");
-        error.textContent = String(err?.message || err);
+        showError(err);
       }
     </script>
   </body>

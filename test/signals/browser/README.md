@@ -93,15 +93,18 @@ the maintained six-app suite with `--target=wasm32 --opt=size`, writes each
 artifact under `test/signals/browser`, and serves an app index from
 `test/signals/browser/index.html`.
 
-Build one targeted app or use the dev app optimization mode with:
+Build one maintained example, build one arbitrary app path, or use the dev app
+optimization mode with:
 
 ```sh
+test/signals/serve.py --example ops_dashboard --port 9001
 test/signals/serve.py test/signals/apps/ops_dashboard.roc --port 9001
 test/signals/serve.py --app-opt dev
 ```
 
 Use `--no-server` when you only want the build steps. With no app argument, the
-helper builds the maintained six-app suite; pass one app path for targeted QA.
+helper builds the maintained six-app suite; pass `--example <stem>` or one app
+path for targeted QA.
 
 `../src/signal_graph.zig` owns the active graph node shape, dependent-edge
 mutation, reachable-dependent traversal, and rank sorting. Both hosts reach it

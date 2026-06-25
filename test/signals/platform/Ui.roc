@@ -23,7 +23,7 @@ Ui := [].{
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
-	State(a) := { ref : Node.BinderRef, tag : Box(HostValue.TypeTag(a)) }.{
+	State(a) := { ref : Node.BinderRef, tag : HostValue.TypeTag(a) }.{
 		signal : State(a) -> Signal(a)
 		signal = |st| Signal.from_expr(Node.SignalExpr.Ref(st.ref), st.tag)
 
@@ -32,11 +32,11 @@ Ui := [].{
 		on_unit : State(a), (a -> a) -> Node.Msg
 		on_unit = |st, f| {
 			current_tag = st.tag
-			payload_unit_tag : Box(HostValue.TypeTag({}))
+			payload_unit_tag : HostValue.TypeTag({})
 			payload_unit_tag = HostValue.new_unit_payload_tag({})
-			payload_str_tag : Box(HostValue.TypeTag(Str))
+			payload_str_tag : HostValue.TypeTag(Str)
 			payload_str_tag = HostValue.new_str_payload_tag({})
-			payload_bool_tag : Box(HostValue.TypeTag(Bool))
+			payload_bool_tag : HostValue.TypeTag(Bool)
 			payload_bool_tag = HostValue.new_bool_payload_tag({})
 			wrapped : HostValue, HostValue -> HostValue
 			wrapped = |current_hv, _payload_hv| {
@@ -59,11 +59,11 @@ Ui := [].{
 		on_str : State(a), (a, Str -> a) -> Node.Msg
 		on_str = |st, f| {
 			current_tag = st.tag
-			payload_unit_tag : Box(HostValue.TypeTag({}))
+			payload_unit_tag : HostValue.TypeTag({})
 			payload_unit_tag = HostValue.new_unit_payload_tag({})
-			payload_str_tag : Box(HostValue.TypeTag(Str))
+			payload_str_tag : HostValue.TypeTag(Str)
 			payload_str_tag = HostValue.new_str_payload_tag({})
-			payload_bool_tag : Box(HostValue.TypeTag(Bool))
+			payload_bool_tag : HostValue.TypeTag(Bool)
 			payload_bool_tag = HostValue.new_bool_payload_tag({})
 			wrapped : HostValue, HostValue -> HostValue
 			wrapped = |current_hv, payload_hv| {
@@ -88,11 +88,11 @@ Ui := [].{
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
 		on_bool = |st, f| {
 			current_tag = st.tag
-			payload_unit_tag : Box(HostValue.TypeTag({}))
+			payload_unit_tag : HostValue.TypeTag({})
 			payload_unit_tag = HostValue.new_unit_payload_tag({})
-			payload_str_tag : Box(HostValue.TypeTag(Str))
+			payload_str_tag : HostValue.TypeTag(Str)
 			payload_str_tag = HostValue.new_str_payload_tag({})
-			payload_bool_tag : Box(HostValue.TypeTag(Bool))
+			payload_bool_tag : HostValue.TypeTag(Bool)
 			payload_bool_tag = HostValue.new_bool_payload_tag({})
 			wrapped : HostValue, HostValue -> HostValue
 			wrapped = |current_hv, payload_hv| {

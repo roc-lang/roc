@@ -18,8 +18,7 @@ const hv = @import("host_values.zig");
 const engine = @import("engine.zig");
 
 const HostValue = u64;
-const WasmHostValueTypeTag = *u64;
-const HostValueTypeTag = WasmHostValueTypeTag;
+const HostValueTypeTag = hv.HostValueTypeTag;
 const HostValueList = abi.RocListWith(HostValue, false);
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RenderTextField = render.TextField;
@@ -32,8 +31,8 @@ const HostActiveEventDesc = SharedEngine.ActiveEventDesc;
 
 const WasmCtx = struct {
     pub const Handle = WasmCtx;
-    pub const HostValueTypeTag = WasmHostValueTypeTag;
-    pub const host_value_type_tags_enabled = false;
+    pub const HostValueTypeTag = hv.HostValueTypeTag;
+    pub const host_value_type_tags_enabled = true;
     pub const RegistryOps = hv.RegistryOps(@This().HostValueTypeTag);
     pub const Metrics = engine.NoMetrics;
     pub const Sink = WasmSink;
@@ -66,6 +65,10 @@ const WasmCtx = struct {
 
     pub fn sink(_: Handle) Sink {
         return .{};
+    }
+
+    pub fn debugPhase(_: Handle, phase: u32) void {
+        roc_allocation_phase = phase;
     }
 };
 
@@ -169,14 +172,33 @@ var command_buffer: render.Buffer = .{};
 var string_buffer: std.ArrayListUnmanaged(u8) = .empty;
 
 const RocAllocation = struct {
-    base_ptr: [*]u8,
     user_ptr: [*]u8,
     requested_size: usize,
-    total_size: usize,
+    allocated_size: usize,
     alignment: std.mem.Alignment,
 };
 
+const FreedRocAllocation = struct {
+    user_ptr_addr: usize,
+    requested_size: usize,
+    allocated_size: usize,
+    alignment: std.mem.Alignment,
+    phase: u32,
+};
+
+const NearestRocAllocation = struct {
+    user_ptr_addr: usize,
+    allocated_size: usize,
+    distance: usize,
+};
+
+const recent_freed_roc_allocation_capacity = 4096;
+
 var roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty;
+var recent_freed_roc_allocations: [recent_freed_roc_allocation_capacity]FreedRocAllocation = undefined;
+var recent_freed_roc_allocation_len: usize = 0;
+var recent_freed_roc_allocation_next: usize = 0;
+var roc_allocation_phase: u32 = 0;
 var roc_host_env: u8 = 0;
 var roc_host = abi.RocHost{
     .env = @ptrCast(&roc_host_env),
@@ -188,8 +210,25 @@ var roc_host = abi.RocHost{
     .roc_crashed = &rocCrashedForAbi,
 };
 
-fn failHost() noreturn {
+var last_host_error: []const u8 = "";
+var last_host_error_buf: [512]u8 = undefined;
+
+fn clearHostError() void {
+    last_host_error = "";
+}
+
+fn failHostWith(message: []const u8) noreturn {
+    last_host_error = message;
     @trap();
+}
+
+fn failHostWithFmt(comptime fmt: []const u8, args: anytype) noreturn {
+    last_host_error = std.fmt.bufPrint(&last_host_error_buf, fmt, args) catch "Signals wasm host invariant failed while formatting diagnostic";
+    @trap();
+}
+
+fn failHost() noreturn {
+    failHostWith("Signals wasm host invariant failed");
 }
 
 fn allocator() std.mem.Allocator {
@@ -238,13 +277,16 @@ fn registryOps() hv.RegistryOps(HostValueTypeTag) {
     return .{ .roc_host = &roc_host };
 }
 
-fn failHostValueRegistryError(_: host_value_registry.Error) noreturn {
-    failHost();
-}
-
-fn tagFromBox(box: abi.RocBox) ?HostValueTypeTag {
-    const ptr = box orelse return null;
-    return @ptrCast(@alignCast(ptr));
+fn failHostValueRegistryError(err: host_value_registry.Error) noreturn {
+    switch (err) {
+        error.InvalidHandle => failHostWith("HostValue handle referenced an unknown value"),
+        error.ReleasedHandle => failHostWith("HostValue handle referenced a released value"),
+        error.UnconsumedHandle => failHostWith("HostValue consuming callback returned without taking the transferred value"),
+        error.MissingTag => failHostWith("HostValue read crossed erasure boundary without a type tag"),
+        error.TagMismatch => failHostWith("HostValue read crossed erasure boundary with the wrong type tag"),
+        error.ConflictingTag => failHostWith("HostValue was tagged with a conflicting type tag"),
+        error.OutOfMemory => failHostWith("HostValue registry allocation failed"),
+    }
 }
 
 fn cloneHostValue(value: HostValue) HostValue {
@@ -255,6 +297,36 @@ fn cloneHostValue(value: HostValue) HostValue {
 
 fn setHostValueTypeTag(value: HostValue, tag: HostValueTypeTag) void {
     shared_engine.host_values.setTag(value, tag, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
+}
+
+fn assertHostValueTypeTag(value: HostValue, expected_tag: HostValueTypeTag) void {
+    const actual_tag = (shared_engine.host_values.tag(value) catch |err| {
+        failHostValueRegistryError(err);
+    }) orelse failHostWith("HostValue read crossed erasure boundary without a type tag");
+    if (host_value_registry.tagsMatch(HostValueTypeTag, actual_tag, expected_tag, registryOps())) return;
+
+    const actual_split = hv.hostValueTypeTagSplitFn(actual_tag);
+    const expected_split = hv.hostValueTypeTagSplitFn(expected_tag);
+    failHostWithFmt(
+        "HostValue read crossed erasure boundary with the wrong type tag value={} actual_id={} expected_id={} actual_split=0x{x} expected_split=0x{x}",
+        .{
+            value,
+            hv.hostValueTypeTagId(actual_tag),
+            hv.hostValueTypeTagId(expected_tag),
+            if (actual_split) |ptr| @intFromPtr(ptr) else 0,
+            if (expected_split) |ptr| @intFromPtr(ptr) else 0,
+        },
+    );
+}
+
+fn hostValueTakeEpoch() u64 {
+    return shared_engine.host_values.takeEpoch();
+}
+
+fn assertHostValueTakenAfter(value: HostValue, epoch: u64) void {
+    shared_engine.host_values.assertTakenAfter(value, epoch) catch |err| {
         failHostValueRegistryError(err);
     };
 }
@@ -363,31 +435,37 @@ fn dispatchEvent(event_id: u32, payload_kind: EventPayloadKind, payload: HostVal
 
     _ = shared_engine.applyDirtyRenderSinks(ctx, &roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
     if (dirty_structural_signals.len != 0) {
-        _ = shared_engine.applyDirtyStructuralSignalsLocally(ctx, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+        _ = shared_engine.applyDirtyStructuralSignalsLocally(ctx, &roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
     }
 }
 
 fn resolveTask(request_id: u64, payload_text: []const u8, failed: bool) void {
+    const previous_phase = roc_allocation_phase;
+    defer roc_allocation_phase = previous_phase;
     const ctx = WasmCtx{};
-    const pending_index = shared_engine.pendingTaskIndexByRequestId(request_id) orelse failHost();
+    const pending_index = shared_engine.pendingTaskIndexByRequestId(request_id) orelse failHostWith("task result had no matching pending request");
     var pending = shared_engine.removePendingTaskAt(pending_index);
     defer shared_engine.deinitPendingTask(ctx, &pending);
 
-    const record = shared_engine.activeTaskRecordByToken(pending.task_token) orelse failHost();
+    const record = shared_engine.activeTaskRecordByToken(pending.task_token) orelse failHostWith("task result matched no active task source");
     const task_payload = switch (record.payload) {
         .task_source => |payload| payload,
         .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
     };
-    if (task_payload.token != pending.task_token) failHost();
+    if (task_payload.token != pending.task_token) failHostWith("task result matched a pending request for a different task source");
 
+    roc_allocation_phase = 10;
     const payload = hostValueStr(payload_text);
-    setHostValueTypeTag(payload, @ptrCast(@alignCast(task_payload.payload_tag)));
-    defer callErasedHostValueToUnit(&roc_host, task_payload.payload_drop, payload);
+    setHostValueTypeTag(payload, task_payload.payload_tag);
+    const payload_take_epoch = hostValueTakeEpoch();
 
+    roc_allocation_phase = 20;
     const next = if (failed)
         callErasedHostValueToHostValue(&roc_host, task_payload.failed, payload)
     else
         callErasedHostValueToHostValue(&roc_host, task_payload.done, payload);
+    assertHostValueTakenAfter(payload, payload_take_epoch);
+    roc_allocation_phase = 30;
     _ = shared_engine.dispatchEffectSourceValue(ctx, &roc_host, record, next);
 }
 
@@ -515,41 +593,118 @@ fn allocatedSizeForRocRequest(length: usize) usize {
     return if (length == 0) 1 else length;
 }
 
-fn rocAllocationHeaderBytes(alignment: usize) usize {
-    return @max(alignment, @sizeOf(usize));
-}
-
 fn findRocAllocationIndex(ptr: *anyopaque) ?usize {
     const ptr_addr = @intFromPtr(ptr);
     for (roc_allocations.items, 0..) |alloc, index| {
         const user_addr = @intFromPtr(alloc.user_ptr);
-        const end_addr = @intFromPtr(alloc.base_ptr) + alloc.total_size;
+        const end_addr = user_addr + alloc.allocated_size;
         if (ptr_addr >= user_addr and ptr_addr < end_addr) return index;
     }
     return null;
 }
 
-fn rocAllocationUserOffset(alloc: RocAllocation, ptr: *anyopaque) usize {
+fn findExactRocAllocationIndex(ptr: *anyopaque) ?usize {
     const ptr_addr = @intFromPtr(ptr);
-    const user_addr = @intFromPtr(alloc.user_ptr);
-    const end_addr = @intFromPtr(alloc.base_ptr) + alloc.total_size;
-    if (ptr_addr < user_addr or ptr_addr >= end_addr) failHost();
-    return ptr_addr - user_addr;
+    for (roc_allocations.items, 0..) |alloc, index| {
+        if (ptr_addr == @intFromPtr(alloc.user_ptr)) return index;
+    }
+    return null;
 }
 
-fn removeRocAllocationAt(index: usize, ptr: *anyopaque) RocAllocation {
-    if (index >= roc_allocations.items.len) failHost();
-    const alloc = roc_allocations.items[index];
-    _ = rocAllocationUserOffset(alloc, ptr);
+fn removeRocAllocationAt(index: usize) RocAllocation {
+    if (index >= roc_allocations.items.len) failHostWith("Roc allocation ledger index is out of bounds");
     return roc_allocations.swapRemove(index);
 }
 
-fn recordRocAllocation(base_ptr: [*]u8, user_ptr: [*]u8, requested_size: usize, total_size: usize, alignment: std.mem.Alignment) bool {
+fn recordFreedRocAllocation(alloc: RocAllocation) void {
+    recent_freed_roc_allocations[recent_freed_roc_allocation_next] = .{
+        .user_ptr_addr = @intFromPtr(alloc.user_ptr),
+        .requested_size = alloc.requested_size,
+        .allocated_size = alloc.allocated_size,
+        .alignment = alloc.alignment,
+        .phase = roc_allocation_phase,
+    };
+    recent_freed_roc_allocation_next = (recent_freed_roc_allocation_next + 1) % recent_freed_roc_allocation_capacity;
+    recent_freed_roc_allocation_len = @min(recent_freed_roc_allocation_len + 1, recent_freed_roc_allocation_capacity);
+}
+
+fn findRecentlyFreedRocAllocation(ptr: *anyopaque) ?FreedRocAllocation {
+    const ptr_addr = @intFromPtr(ptr);
+    for (recent_freed_roc_allocations[0..recent_freed_roc_allocation_len]) |alloc| {
+        if (alloc.user_ptr_addr == ptr_addr) return alloc;
+    }
+    return null;
+}
+
+fn distanceBetweenAddresses(left: usize, right: usize) usize {
+    return if (left >= right) left - right else right - left;
+}
+
+fn nearestLiveRocAllocation(ptr: *anyopaque) ?NearestRocAllocation {
+    const ptr_addr = @intFromPtr(ptr);
+    var nearest: ?NearestRocAllocation = null;
+    for (roc_allocations.items) |alloc| {
+        const user_ptr_addr = @intFromPtr(alloc.user_ptr);
+        const distance = distanceBetweenAddresses(ptr_addr, user_ptr_addr);
+        if (nearest == null or distance < nearest.?.distance) {
+            nearest = .{
+                .user_ptr_addr = user_ptr_addr,
+                .allocated_size = alloc.allocated_size,
+                .distance = distance,
+            };
+        }
+    }
+    return nearest;
+}
+
+fn nearestRecentlyFreedRocAllocation(ptr: *anyopaque) ?NearestRocAllocation {
+    const ptr_addr = @intFromPtr(ptr);
+    var nearest: ?NearestRocAllocation = null;
+    for (recent_freed_roc_allocations[0..recent_freed_roc_allocation_len]) |alloc| {
+        const distance = distanceBetweenAddresses(ptr_addr, alloc.user_ptr_addr);
+        if (nearest == null or distance < nearest.?.distance) {
+            nearest = .{
+                .user_ptr_addr = alloc.user_ptr_addr,
+                .allocated_size = alloc.allocated_size,
+                .distance = distance,
+            };
+        }
+    }
+    return nearest;
+}
+
+fn failUnknownRocAllocation(comptime op: []const u8, ptr: *anyopaque, alignment_arg: usize) noreturn {
+    const nearest_live = nearestLiveRocAllocation(ptr);
+    const nearest_freed = nearestRecentlyFreedRocAllocation(ptr);
+    if (nearest_live) |live| {
+        if (nearest_freed) |freed| {
+            failHostWithFmt(
+                "{s} unknown ptr=0x{x} align={} live={} nearest_live=0x{x}/{} dist={} recent_freed={} nearest_freed=0x{x}/{} dist={}",
+                .{ op, @intFromPtr(ptr), alignment_arg, roc_allocations.items.len, live.user_ptr_addr, live.allocated_size, live.distance, recent_freed_roc_allocation_len, freed.user_ptr_addr, freed.allocated_size, freed.distance },
+            );
+        }
+        failHostWithFmt(
+            "{s} unknown ptr=0x{x} align={} live={} nearest_live=0x{x}/{} dist={} recent_freed=0",
+            .{ op, @intFromPtr(ptr), alignment_arg, roc_allocations.items.len, live.user_ptr_addr, live.allocated_size, live.distance },
+        );
+    }
+    if (nearest_freed) |freed| {
+        failHostWithFmt(
+            "{s} unknown ptr=0x{x} align={} live=0 recent_freed={} nearest_freed=0x{x}/{} dist={}",
+            .{ op, @intFromPtr(ptr), alignment_arg, recent_freed_roc_allocation_len, freed.user_ptr_addr, freed.allocated_size, freed.distance },
+        );
+    }
+    failHostWithFmt(
+        "{s} unknown ptr=0x{x} align={} live=0 recent_freed=0",
+        .{ op, @intFromPtr(ptr), alignment_arg },
+    );
+}
+
+fn recordRocAllocation(user_ptr: [*]u8, requested_size: usize, allocated_size: usize, alignment: std.mem.Alignment) bool {
     roc_allocations.append(allocator(), .{
-        .base_ptr = base_ptr,
         .user_ptr = user_ptr,
         .requested_size = requested_size,
-        .total_size = total_size,
+        .allocated_size = allocated_size,
         .alignment = alignment,
     }) catch return false;
     return true;
@@ -558,15 +713,10 @@ fn recordRocAllocation(base_ptr: [*]u8, user_ptr: [*]u8, requested_size: usize, 
 fn allocRocMemory(length: usize, alignment_arg: usize) ?*anyopaque {
     const min_alignment = @max(alignment_arg, @sizeOf(usize));
     const alignment = alignmentFromBytes(min_alignment);
-    const header_size = rocAllocationHeaderBytes(min_alignment);
     const allocated_size = allocatedSizeForRocRequest(length);
-    const total_size = std.math.add(usize, header_size, allocated_size) catch {
-        failHost();
-    };
-    const base_ptr = std.heap.wasm_allocator.rawAlloc(total_size, alignment, @returnAddress()) orelse return null;
-    const user_ptr = base_ptr + header_size;
-    if (!recordRocAllocation(base_ptr, user_ptr, length, total_size, alignment)) {
-        std.heap.wasm_allocator.rawFree(base_ptr[0..total_size], alignment, @returnAddress());
+    const user_ptr = std.heap.wasm_allocator.rawAlloc(allocated_size, alignment, @returnAddress()) orelse return null;
+    if (!recordRocAllocation(user_ptr, length, allocated_size, alignment)) {
+        std.heap.wasm_allocator.rawFree(user_ptr[0..allocated_size], alignment, @returnAddress());
         return null;
     }
     return @ptrCast(user_ptr);
@@ -574,10 +724,25 @@ fn allocRocMemory(length: usize, alignment_arg: usize) ?*anyopaque {
 
 fn freeRocAllocation(ptr: *anyopaque, alignment_arg: usize) RocAllocation {
     const min_alignment = @max(alignment_arg, @sizeOf(usize));
-    _ = alignmentFromBytes(min_alignment);
-    const index = findRocAllocationIndex(ptr) orelse failHost();
-    const alloc = removeRocAllocationAt(index, ptr);
-    std.heap.wasm_allocator.rawFree(alloc.base_ptr[0..alloc.total_size], alloc.alignment, @returnAddress());
+    const alignment = alignmentFromBytes(min_alignment);
+    const index = findExactRocAllocationIndex(ptr) orelse {
+        if (findRocAllocationIndex(ptr) != null) {
+            failHostWithFmt("roc_dealloc received an interior pointer ptr=0x{x} align={} instead of the pointer returned by roc_alloc", .{ @intFromPtr(ptr), alignment_arg });
+        }
+        if (findRecentlyFreedRocAllocation(ptr)) |freed| {
+            if (freed.alignment != alignment) {
+                failHostWithFmt("roc_dealloc received an already freed pointer ptr=0x{x} align={} with tracked_align={} requested_size={} allocated_size={} freed_phase={} current_phase={}", .{ @intFromPtr(ptr), alignment_arg, freed.alignment.toByteUnits(), freed.requested_size, freed.allocated_size, freed.phase, roc_allocation_phase });
+            }
+            failHostWithFmt("roc_dealloc received a pointer that was already freed ptr=0x{x} align={} requested_size={} allocated_size={} freed_phase={} current_phase={}", .{ @intFromPtr(ptr), alignment_arg, freed.requested_size, freed.allocated_size, freed.phase, roc_allocation_phase });
+        }
+        failUnknownRocAllocation("roc_dealloc", ptr, alignment_arg);
+    };
+    if (roc_allocations.items[index].alignment != alignment) {
+        failHostWithFmt("roc_dealloc alignment did not match the tracked allocation ptr=0x{x} align={} tracked_align={}", .{ @intFromPtr(ptr), alignment_arg, roc_allocations.items[index].alignment.toByteUnits() });
+    }
+    const alloc = removeRocAllocationAt(index);
+    recordFreedRocAllocation(alloc);
+    std.heap.wasm_allocator.rawFree(alloc.user_ptr[0..alloc.allocated_size], alloc.alignment, @returnAddress());
     return alloc;
 }
 
@@ -590,26 +755,36 @@ export fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
 }
 
 export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
-    const old_index = findRocAllocationIndex(ptr) orelse failHost();
-    const old_alloc = roc_allocations.items[old_index];
-    const old_offset = rocAllocationUserOffset(old_alloc, ptr);
-    if (old_offset > old_alloc.requested_size) failHost();
-    const min_alignment = @max(alignment_arg, @sizeOf(usize));
-    _ = alignmentFromBytes(min_alignment);
-
-    const new_requested_size = std.math.add(usize, new_length, old_offset) catch {
-        failHost();
+    const old_index = findExactRocAllocationIndex(ptr) orelse {
+        if (findRocAllocationIndex(ptr) != null) {
+            failHostWithFmt("roc_realloc received an interior pointer ptr=0x{x} align={} instead of the pointer returned by roc_alloc", .{ @intFromPtr(ptr), alignment_arg });
+        }
+        if (findRecentlyFreedRocAllocation(ptr)) |freed| {
+            const min_alignment = @max(alignment_arg, @sizeOf(usize));
+            const alignment = alignmentFromBytes(min_alignment);
+            if (freed.alignment != alignment) {
+                failHostWithFmt("roc_realloc received an already freed pointer ptr=0x{x} align={} with tracked_align={}", .{ @intFromPtr(ptr), alignment_arg, freed.alignment.toByteUnits() });
+            }
+            failHostWithFmt("roc_realloc received a pointer that was already freed ptr=0x{x} align={}", .{ @intFromPtr(ptr), alignment_arg });
+        }
+        failUnknownRocAllocation("roc_realloc", ptr, alignment_arg);
     };
-    const new_alignment = @max(alignment_arg, old_alloc.alignment.toByteUnits());
-    const new_allocation_ptr = allocRocMemory(new_requested_size, new_alignment) orelse return null;
+    const old_alloc = roc_allocations.items[old_index];
+    const min_alignment = @max(alignment_arg, @sizeOf(usize));
+    const alignment = alignmentFromBytes(min_alignment);
+    if (old_alloc.alignment != alignment) {
+        failHostWithFmt("roc_realloc alignment did not match the tracked allocation ptr=0x{x} align={} tracked_align={}", .{ @intFromPtr(ptr), alignment_arg, old_alloc.alignment.toByteUnits() });
+    }
+
+    const new_allocation_ptr = allocRocMemory(new_length, alignment_arg) orelse return null;
     const new_allocation_user_ptr: [*]u8 = @ptrCast(new_allocation_ptr);
-    const new_user_ptr = new_allocation_user_ptr + old_offset;
     const old_user_ptr: [*]const u8 = @ptrCast(ptr);
-    const old_available_size = old_alloc.requested_size - old_offset;
-    const copy_size = @min(old_available_size, new_length);
-    @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
-    _ = freeRocAllocation(ptr, alignment_arg);
-    return @ptrCast(new_user_ptr);
+    const copy_size = @min(old_alloc.requested_size, new_length);
+    @memcpy(new_allocation_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
+    const freed = removeRocAllocationAt(old_index);
+    recordFreedRocAllocation(freed);
+    std.heap.wasm_allocator.rawFree(freed.user_ptr[0..freed.allocated_size], freed.alignment, @returnAddress());
+    return @ptrCast(new_allocation_user_ptr);
 }
 
 // --- Command-buffer wire surface (drained by the JS executor) ---
@@ -639,6 +814,14 @@ export fn roc_ui_command_buffer_clear() callconv(.c) void {
     clearCommandBuffers();
 }
 
+export fn roc_ui_last_error_ptr() callconv(.c) usize {
+    return @intFromPtr(last_host_error.ptr);
+}
+
+export fn roc_ui_last_error_len() callconv(.c) usize {
+    return last_host_error.len;
+}
+
 /// Number of retained host values currently live in the registry.
 ///
 /// The browser leak guard asserts this returns to zero after `roc_ui_unmount`,
@@ -648,6 +831,7 @@ export fn roc_ui_live_host_values() callconv(.c) usize {
 }
 
 export fn roc_ui_mount() callconv(.c) void {
+    clearHostError();
     clearActiveRuntime();
     clearCommandBuffers();
 
@@ -659,6 +843,7 @@ export fn roc_ui_mount() callconv(.c) void {
 }
 
 export fn roc_ui_event(event_id: u32, payload_kind_id: u32, payload_ptr: usize, payload_len: usize, bool_value: u32) callconv(.c) void {
+    clearHostError();
     clearCommandBuffers();
     const payload_kind: EventPayloadKind = switch (payload_kind_id) {
         @intFromEnum(EventPayloadKind.unit) => .unit,
@@ -675,11 +860,13 @@ export fn roc_ui_event(event_id: u32, payload_kind_id: u32, payload_ptr: usize, 
 }
 
 export fn roc_ui_timer(token: u32) callconv(.c) void {
+    clearHostError();
     clearCommandBuffers();
     tickInterval(token);
 }
 
 export fn roc_ui_resolve(request_id: u32, payload_ptr: usize, payload_len: usize, failed: u32) callconv(.c) void {
+    clearHostError();
     clearCommandBuffers();
     resolveTask(
         request_id,
@@ -689,6 +876,7 @@ export fn roc_ui_resolve(request_id: u32, payload_ptr: usize, payload_len: usize
 }
 
 export fn roc_ui_unmount() callconv(.c) void {
+    clearHostError();
     clearCommandBuffers();
     clearActiveRuntime();
 }
@@ -726,46 +914,70 @@ fn rocCrashedForAbi(_: *abi.RocHost, bytes: [*]const u8, len: usize) callconv(.c
 }
 
 export fn roc_host_value_clone(value: HostValue) callconv(.c) HostValue {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 101;
+    defer roc_allocation_phase = previous_phase;
     return shared_engine.host_values.clone(std.heap.wasm_allocator, value, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
 export fn roc_host_value_get(value: HostValue) callconv(.c) abi.RocBox {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 102;
+    defer roc_allocation_phase = previous_phase;
     return shared_engine.host_values.get(value, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-export fn roc_host_value_get_tagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
-    defer registryOps().releaseTag(tag);
-    return shared_engine.host_values.getTagged(value, tag, registryOps()) catch |err| {
+export fn roc_host_value_get_tagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 103;
+    defer roc_allocation_phase = previous_phase;
+    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
+    defer registryOps().releaseTag(normalized_tag);
+    assertHostValueTypeTag(value, normalized_tag);
+    return shared_engine.host_values.getTagged(value, normalized_tag, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
 export fn roc_host_value_store(box: abi.RocBox) callconv(.c) HostValue {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 104;
+    defer roc_allocation_phase = previous_phase;
     return shared_engine.host_values.storeOwnedTag(std.heap.wasm_allocator, box, null, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-export fn roc_host_value_store_tagged(box: abi.RocBox, tag_box: abi.RocBox) callconv(.c) HostValue {
-    const tag = tagFromBox(tag_box);
-    return shared_engine.host_values.storeOwnedTag(std.heap.wasm_allocator, box, tag, registryOps()) catch |err| {
+export fn roc_host_value_store_tagged(box: abi.RocBox, tag: abi.__AnonStruct7) callconv(.c) HostValue {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 105;
+    defer roc_allocation_phase = previous_phase;
+    return shared_engine.host_values.storeOwnedTag(std.heap.wasm_allocator, box, hv.normalizeHostValueTypeTag(tag), registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
 export fn roc_host_value_take(value: HostValue) callconv(.c) abi.RocBox {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 106;
+    defer roc_allocation_phase = previous_phase;
     return shared_engine.host_values.take(value, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-export fn roc_host_value_take_tagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
-    defer registryOps().releaseTag(tag);
-    return shared_engine.host_values.takeTagged(value, tag, registryOps()) catch |err| {
+export fn roc_host_value_take_tagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 107;
+    defer roc_allocation_phase = previous_phase;
+    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
+    defer registryOps().releaseTag(normalized_tag);
+    assertHostValueTypeTag(value, normalized_tag);
+    return shared_engine.host_values.takeTagged(value, normalized_tag, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }

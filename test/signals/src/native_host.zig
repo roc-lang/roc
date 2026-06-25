@@ -19,7 +19,7 @@ const engine = @import("engine.zig");
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
 const HostValue = u64;
-const HostValueTypeTag = *anyopaque;
+const HostValueTypeTag = hv.HostValueTypeTag;
 const HostValueList = abi.RocListWith(HostValue, false);
 const I64List = abi.RocListWith(i64, false);
 const RenderTextField = render.TextField;
@@ -28,14 +28,11 @@ const RenderEventKind = render.EventKind;
 const CommandCounts = render.Counts;
 const HostScopeBranch = scope_tree.Branch;
 
-const native_host_value_type_tags_enabled = switch (builtin.mode) {
-    .Debug, .ReleaseSafe => true,
-    .ReleaseFast, .ReleaseSmall => false,
-};
+const native_host_value_type_tags_enabled = true;
 
 const NativeCtx = struct {
     pub const Handle = *HostEnv;
-    pub const HostValueTypeTag = *anyopaque;
+    pub const HostValueTypeTag = hv.HostValueTypeTag;
     pub const host_value_type_tags_enabled = native_host_value_type_tags_enabled;
     pub const RegistryOps = hv.RegistryOps(@This().HostValueTypeTag);
     pub const Metrics = RuntimeMetrics;
@@ -663,6 +660,7 @@ fn failHostValueRegistryError(err: anyerror) noreturn {
         error.OutOfMemory => std.process.exit(1),
         error.InvalidHandle => failHost("HostValue handle referenced an unknown value"),
         error.ReleasedHandle => failHost("HostValue handle referenced a released value"),
+        error.UnconsumedHandle => failHost("HostValue consuming callback returned without taking the transferred value"),
         error.MissingTag => failHost("HostValue read crossed erasure boundary without a type tag"),
         error.TagMismatch => failHost("HostValue read crossed erasure boundary with the wrong type tag"),
         error.ConflictingTag => failHost("HostValue was tagged with a conflicting type tag"),
@@ -671,15 +669,20 @@ fn failHostValueRegistryError(err: anyerror) noreturn {
 }
 
 const RocAllocation = struct {
-    ptr: [*]u8,
-    total_size: usize,
+    user_ptr: [*]u8,
+    requested_size: usize,
+    allocated_size: usize,
     alignment: std.mem.Alignment,
 };
 
-const RocAllocationHeader = extern struct {
-    total_size: usize,
-    ledger_index: usize,
+const FreedRocAllocation = struct {
+    user_ptr_addr: usize,
+    requested_size: usize,
+    allocated_size: usize,
+    alignment: std.mem.Alignment,
 };
+
+const recent_freed_roc_allocation_capacity = 4096;
 
 const TestHostValueKind = enum {
     unit,
@@ -694,6 +697,9 @@ const HostEnv = struct {
     engine: HostEngine = .{},
     test_state: TestState,
     roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
+    recent_freed_roc_allocations: [recent_freed_roc_allocation_capacity]FreedRocAllocation = undefined,
+    recent_freed_roc_allocation_len: usize = 0,
+    recent_freed_roc_allocation_next: usize = 0,
     test_host_value_kinds: std.ArrayListUnmanaged(?TestHostValueKind) = .empty,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
@@ -790,7 +796,7 @@ const HostEnv = struct {
     }
 
     fn releaseOwnedHostValueTypeTag(self: *HostEnv, tag: HostValueTypeTag) void {
-        abi.decrefBox(@ptrCast(tag), self.activeRocHost());
+        hv.releaseHostValueTypeTag(tag, self.activeRocHost());
     }
 
     fn hostValueRegistryOps(self: *HostEnv) hv.RegistryOps(HostValueTypeTag) {
@@ -810,17 +816,6 @@ const HostEnv = struct {
             .bool => .bool,
             .i64 => .i64,
         });
-    }
-
-    fn hostValueTypeTagId(tag: HostValueTypeTag) u64 {
-        const payload: *const u64 = @ptrCast(@alignCast(tag));
-        return payload.*;
-    }
-
-    fn hostValueTypeTagsMatch(actual_tag: HostValueTypeTag, expected_tag: HostValueTypeTag) bool {
-        if (actual_tag == expected_tag) return true;
-        const actual_id = HostEnv.hostValueTypeTagId(actual_tag);
-        return actual_id != 0 and actual_id == HostEnv.hostValueTypeTagId(expected_tag);
     }
 
     fn resetTestHostValueKind(self: *HostEnv, value: HostValue) void {
@@ -890,12 +885,20 @@ const HostEnv = struct {
     fn assertHostValueTypeTag(self: *HostEnv, value: HostValue, expected_tag: HostValueTypeTag) void {
         if (comptime native_host_value_type_tags_enabled) {
             const actual_tag = self.hostValueTypeTag(value) orelse failHost("HostValue read crossed erasure boundary without a type tag");
-            if (!HostEnv.hostValueTypeTagsMatch(actual_tag, expected_tag)) {
-                var buf: [192]u8 = undefined;
+            if (!self.hostValueRegistryOps().tagsMatch(actual_tag, expected_tag)) {
+                const actual_split = hv.hostValueTypeTagSplitFn(actual_tag);
+                const expected_split = hv.hostValueTypeTagSplitFn(expected_tag);
+                var buf: [224]u8 = undefined;
                 const message = std.fmt.bufPrint(
                     &buf,
-                    "HostValue read crossed erasure boundary with the wrong type tag: value={} actual=0x{x} expected=0x{x}",
-                    .{ value, @intFromPtr(actual_tag), @intFromPtr(expected_tag) },
+                    "HostValue read crossed erasure boundary with the wrong type tag: value={} actual_id={} expected_id={} actual_split=0x{x} expected_split=0x{x}",
+                    .{
+                        value,
+                        hv.hostValueTypeTagId(actual_tag),
+                        hv.hostValueTypeTagId(expected_tag),
+                        if (actual_split) |ptr| @intFromPtr(ptr) else 0,
+                        if (expected_split) |ptr| @intFromPtr(ptr) else 0,
+                    },
                 ) catch "HostValue read crossed erasure boundary with the wrong type tag";
                 failHost(message);
             }
@@ -924,6 +927,16 @@ const HostEnv = struct {
     fn takeTaggedHostValue(self: *HostEnv, value: HostValue, tag: HostValueTypeTag) abi.RocBox {
         self.assertHostValueTypeTag(value, tag);
         return self.takeHostValue(value);
+    }
+
+    fn hostValueTakeEpoch(self: *const HostEnv) u64 {
+        return self.engine.host_values.takeEpoch();
+    }
+
+    fn assertHostValueTakenAfter(self: *HostEnv, value: HostValue, epoch: u64) void {
+        self.engine.host_values.assertTakenAfter(value, epoch) catch |err| {
+            failHostValueRegistryError(err);
+        };
     }
 
     // `pub` so the shared `engine.HostValueCell.cloneRetained` can clone a value
@@ -1177,21 +1190,24 @@ const HostEnv = struct {
     }
 
     fn internRootScope(self: *HostEnv) u64 {
-        return self.engine.internRootScope(self.gpa.allocator()) catch |err| {
+        const result = self.engine.internRootScope(self.gpa.allocator()) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
+        return result.scope_id;
     }
 
     fn internComponentScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64) u64 {
-        return self.engine.internComponentScope(self.gpa.allocator(), parent_scope_id, site_ordinal) catch |err| {
+        const result = self.engine.internComponentScope(self.gpa.allocator(), parent_scope_id, site_ordinal) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
+        return result.scope_id;
     }
 
     fn internWhenBranchScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, branch: HostScopeBranch) u64 {
-        return self.engine.internWhenBranchScope(self.gpa.allocator(), parent_scope_id, site_ordinal, branch) catch |err| {
+        const result = self.engine.internWhenBranchScope(self.gpa.allocator(), parent_scope_id, site_ordinal, branch) catch |err| {
             failScopeTreeError(err, "scope id has no host scope descriptor");
         };
+        return result.scope_id;
     }
 
     fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
@@ -1303,7 +1319,7 @@ const HostEnv = struct {
         self.test_host_value_kinds.deinit(allocator);
 
         for (self.roc_allocations.items) |alloc| {
-            allocator.rawFree(alloc.ptr[0..alloc.total_size], alloc.alignment, @returnAddress());
+            allocator.rawFree(alloc.user_ptr[0..alloc.allocated_size], alloc.alignment, @returnAddress());
         }
         self.roc_allocations.deinit(allocator);
     }
@@ -1451,119 +1467,142 @@ fn currentRocHost() *abi.RocHost {
     return current_roc_host orelse @panic("signals RocHost is not initialized");
 }
 
-fn rocAllocationHeaderBytes(byte_alignment: usize) usize {
-    return std.mem.alignForward(usize, @sizeOf(RocAllocationHeader), byte_alignment);
+fn allocatedSizeForRocRequest(length: usize) usize {
+    return if (length == 0) 1 else length;
 }
 
-fn rocAllocationHeaderFromUserPtr(ptr: *anyopaque) *RocAllocationHeader {
-    return @ptrFromInt(@intFromPtr(ptr) - @sizeOf(RocAllocationHeader));
+fn findRocAllocationIndex(host: *HostEnv, ptr: *anyopaque) ?usize {
+    const ptr_addr = @intFromPtr(ptr);
+    for (host.roc_allocations.items, 0..) |alloc, index| {
+        const user_addr = @intFromPtr(alloc.user_ptr);
+        const end_addr = user_addr + alloc.allocated_size;
+        if (ptr_addr >= user_addr and ptr_addr < end_addr) return index;
+    }
+    return null;
 }
 
-fn rocAllocationUserPtr(alloc: RocAllocation) *anyopaque {
-    return @ptrFromInt(@intFromPtr(alloc.ptr) + rocAllocationHeaderBytes(alloc.alignment.toByteUnits()));
+fn findExactRocAllocationIndex(host: *HostEnv, ptr: *anyopaque) ?usize {
+    const ptr_addr = @intFromPtr(ptr);
+    for (host.roc_allocations.items, 0..) |alloc, index| {
+        if (ptr_addr == @intFromPtr(alloc.user_ptr)) return index;
+    }
+    return null;
 }
 
-fn removeRocAllocationAt(host: *HostEnv, ledger_index: usize, base_ptr: [*]u8) void {
-    if (ledger_index >= host.roc_allocations.items.len) {
-        failHost("Roc allocation header referenced an unknown ledger index");
-    }
-    const recorded = host.roc_allocations.items[ledger_index];
-    if (recorded.ptr != base_ptr) {
-        failHost("Roc allocation header did not match its ledger slot");
-    }
+fn removeRocAllocationAt(host: *HostEnv, index: usize) RocAllocation {
+    if (index >= host.roc_allocations.items.len) failHost("Roc allocation ledger index is out of bounds");
+    return host.roc_allocations.swapRemove(index);
+}
 
-    const last_index = host.roc_allocations.items.len - 1;
-    _ = host.roc_allocations.swapRemove(ledger_index);
-    if (ledger_index != last_index) {
-        const moved = host.roc_allocations.items[ledger_index];
-        rocAllocationHeaderFromUserPtr(rocAllocationUserPtr(moved)).ledger_index = ledger_index;
+fn recordFreedRocAllocation(host: *HostEnv, alloc: RocAllocation) void {
+    host.recent_freed_roc_allocations[host.recent_freed_roc_allocation_next] = .{
+        .user_ptr_addr = @intFromPtr(alloc.user_ptr),
+        .requested_size = alloc.requested_size,
+        .allocated_size = alloc.allocated_size,
+        .alignment = alloc.alignment,
+    };
+    host.recent_freed_roc_allocation_next = (host.recent_freed_roc_allocation_next + 1) % recent_freed_roc_allocation_capacity;
+    host.recent_freed_roc_allocation_len = @min(host.recent_freed_roc_allocation_len + 1, recent_freed_roc_allocation_capacity);
+}
+
+fn findRecentlyFreedRocAllocation(host: *HostEnv, ptr: *anyopaque) ?FreedRocAllocation {
+    const ptr_addr = @intFromPtr(ptr);
+    for (host.recent_freed_roc_allocations[0..host.recent_freed_roc_allocation_len]) |alloc| {
+        if (alloc.user_ptr_addr == ptr_addr) return alloc;
     }
+    return null;
+}
+
+fn rocAlignmentFromAbi(alignment: usize) std.mem.Alignment {
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
+    return std.mem.Alignment.fromByteUnits(min_alignment);
+}
+
+fn recordRocAllocation(host: *HostEnv, user_ptr: [*]u8, requested_size: usize, allocated_size: usize, alignment: std.mem.Alignment) void {
+    host.roc_allocations.append(host.gpa.allocator(), .{
+        .user_ptr = user_ptr,
+        .requested_size = requested_size,
+        .allocated_size = allocated_size,
+        .alignment = alignment,
+    }) catch std.process.exit(1);
+}
+
+fn allocRocMemory(host: *HostEnv, length: usize, alignment_arg: usize) ?*anyopaque {
+    const allocator = host.gpa.allocator();
+    const alignment = rocAlignmentFromAbi(alignment_arg);
+    const allocated_size = allocatedSizeForRocRequest(length);
+    const user_ptr = allocator.rawAlloc(allocated_size, alignment, @returnAddress()) orelse std.process.exit(1);
+    recordRocAllocation(host, user_ptr, length, allocated_size, alignment);
+    host.alloc_count += 1;
+    host.engine.pending_roc_metrics.bump(.allocs_this_event, 1);
+    return @ptrCast(user_ptr);
+}
+
+fn freeRocAllocation(host: *HostEnv, ptr: *anyopaque, alignment_arg: usize) RocAllocation {
+    const alignment = rocAlignmentFromAbi(alignment_arg);
+    const index = findExactRocAllocationIndex(host, ptr) orelse {
+        if (findRocAllocationIndex(host, ptr) != null) {
+            failHost("roc_dealloc received an interior pointer instead of the pointer returned by roc_alloc");
+        }
+        if (findRecentlyFreedRocAllocation(host, ptr)) |freed| {
+            if (freed.alignment != alignment) {
+                failHost("roc_dealloc received an already freed pointer with a different alignment");
+            }
+            failHost("roc_dealloc received a pointer that was already freed");
+        }
+        failHost("roc_dealloc received an unknown pointer");
+    };
+    if (host.roc_allocations.items[index].alignment != alignment) {
+        failHost("roc_dealloc alignment did not match the tracked allocation");
+    }
+    const alloc = removeRocAllocationAt(host, index);
+    recordFreedRocAllocation(host, alloc);
+    host.dealloc_count += 1;
+    host.engine.pending_roc_metrics.bump(.deallocs_this_event, 1);
+    host.gpa.allocator().rawFree(alloc.user_ptr[0..alloc.allocated_size], alloc.alignment, @returnAddress());
+    return alloc;
 }
 
 fn rocAllocFn(roc_host: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    const host = hostFromRocHost(roc_host);
-    const allocator = host.gpa.allocator();
-    const min_alignment: usize = @max(alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const header_bytes = rocAllocationHeaderBytes(min_alignment);
-    const total_size = length + header_bytes;
-
-    const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse std.process.exit(1);
-    const user_ptr: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + header_bytes);
-    const ledger_index = host.roc_allocations.items.len;
-    rocAllocationHeaderFromUserPtr(user_ptr).* = .{
-        .total_size = total_size,
-        .ledger_index = ledger_index,
-    };
-
-    host.roc_allocations.append(host.gpa.allocator(), .{
-        .ptr = base_ptr,
-        .total_size = total_size,
-        .alignment = align_enum,
-    }) catch std.process.exit(1);
-    host.alloc_count += 1;
-    host.engine.pending_roc_metrics.bump(.allocs_this_event, 1);
-
-    return user_ptr;
+    return allocRocMemory(hostFromRocHost(roc_host), length, alignment);
 }
 
 fn rocDeallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    const host = hostFromRocHost(roc_host);
-    const allocator = host.gpa.allocator();
-    const min_alignment: usize = @max(alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const header_bytes = rocAllocationHeaderBytes(min_alignment);
-    const header = rocAllocationHeaderFromUserPtr(ptr);
-    const total_size = header.total_size;
-    const ledger_index = header.ledger_index;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - header_bytes);
-
-    removeRocAllocationAt(host, ledger_index, base_ptr);
-    host.dealloc_count += 1;
-    host.engine.pending_roc_metrics.bump(.deallocs_this_event, 1);
-
-    allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
+    _ = freeRocAllocation(hostFromRocHost(roc_host), ptr, alignment);
 }
 
-fn rocReallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocReallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
     const host = hostFromRocHost(roc_host);
-    const allocator = host.gpa.allocator();
-    const min_alignment: usize = @max(alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const header_bytes = rocAllocationHeaderBytes(min_alignment);
-    const old_header = rocAllocationHeaderFromUserPtr(ptr);
-    const old_total_size = old_header.total_size;
-    const old_ledger_index = old_header.ledger_index;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - header_bytes);
-    const old_user_data_size = old_total_size - header_bytes;
-    const new_total_size = new_length + header_bytes;
-
-    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse std.process.exit(1);
-    const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_ptr) + header_bytes);
-    const old_user_ptr: [*]const u8 = @ptrCast(ptr);
-    const copy_size = @min(old_user_data_size, new_length);
-    @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
-
-    const new_ledger_index = host.roc_allocations.items.len;
-    rocAllocationHeaderFromUserPtr(new_user_ptr).* = .{
-        .total_size = new_total_size,
-        .ledger_index = new_ledger_index,
+    const old_index = findExactRocAllocationIndex(host, ptr) orelse {
+        if (findRocAllocationIndex(host, ptr) != null) {
+            failHost("roc_realloc received an interior pointer instead of the pointer returned by roc_alloc");
+        }
+        if (findRecentlyFreedRocAllocation(host, ptr)) |freed| {
+            const alignment = rocAlignmentFromAbi(alignment_arg);
+            if (freed.alignment != alignment) {
+                failHost("roc_realloc received an already freed pointer with a different alignment");
+            }
+            failHost("roc_realloc received a pointer that was already freed");
+        }
+        failHost("roc_realloc received an unknown pointer");
     };
-    host.roc_allocations.append(host.gpa.allocator(), .{
-        .ptr = new_ptr,
-        .total_size = new_total_size,
-        .alignment = align_enum,
-    }) catch std.process.exit(1);
+    const old_alloc = host.roc_allocations.items[old_index];
+    const alignment = rocAlignmentFromAbi(alignment_arg);
+    if (old_alloc.alignment != alignment) {
+        failHost("roc_realloc alignment did not match the tracked allocation");
+    }
 
-    removeRocAllocationAt(host, old_ledger_index, old_base_ptr);
-    host.alloc_count += 1;
+    const new_allocation_ptr = allocRocMemory(host, new_length, alignment_arg) orelse return null;
+    const new_user_ptr: [*]u8 = @ptrCast(new_allocation_ptr);
+    const old_user_ptr: [*]const u8 = @ptrCast(ptr);
+    const copy_size = @min(old_alloc.requested_size, new_length);
+    @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
+    const freed = removeRocAllocationAt(host, old_index);
+    recordFreedRocAllocation(host, freed);
     host.dealloc_count += 1;
-    host.engine.pending_roc_metrics.bump(.allocs_this_event, 1);
     host.engine.pending_roc_metrics.bump(.deallocs_this_event, 1);
-
-    allocator.rawFree(old_base_ptr[0..old_total_size], align_enum, @returnAddress());
-
-    return new_user_ptr;
+    host.gpa.allocator().rawFree(freed.user_ptr[0..freed.allocated_size], freed.alignment, @returnAddress());
+    return @ptrCast(new_user_ptr);
 }
 
 fn rocDbgFn(roc_host: *abi.RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
@@ -1624,28 +1663,30 @@ fn hostValueGet(value: HostValue) callconv(.c) abi.RocBox {
     return currentHost().getHostValue(value);
 }
 
-fn hostValueGetTagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
+fn hostValueGetTagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
     const host = currentHost();
-    defer host.releaseOwnedHostValueTypeTag(tag);
-    return host.getTaggedHostValue(value, tag);
+    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
+    defer host.releaseOwnedHostValueTypeTag(normalized_tag);
+    return host.getTaggedHostValue(value, normalized_tag);
 }
 
 fn hostValueStore(box: abi.RocBox) callconv(.c) HostValue {
     return currentHost().storeHostValue(box);
 }
 
-fn hostValueStoreTagged(box: abi.RocBox, tag: HostValueTypeTag) callconv(.c) HostValue {
-    return currentHost().storeTaggedHostValue(box, tag);
+fn hostValueStoreTagged(box: abi.RocBox, tag: abi.__AnonStruct7) callconv(.c) HostValue {
+    return currentHost().storeTaggedHostValue(box, hv.normalizeHostValueTypeTag(tag));
 }
 
 fn hostValueTake(value: HostValue) callconv(.c) abi.RocBox {
     return currentHost().takeHostValue(value);
 }
 
-fn hostValueTakeTagged(value: HostValue, tag: HostValueTypeTag) callconv(.c) abi.RocBox {
+fn hostValueTakeTagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
     const host = currentHost();
-    defer host.releaseOwnedHostValueTypeTag(tag);
-    return host.takeTaggedHostValue(value, tag);
+    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
+    defer host.releaseOwnedHostValueTypeTag(normalized_tag);
+    return host.takeTaggedHostValue(value, normalized_tag);
 }
 
 fn failHost(message: []const u8) noreturn {
@@ -1927,7 +1968,7 @@ fn hostSignalBindingDropCallable(host: *HostEnv, signal: *const HostSignalBindin
 }
 
 fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) bool {
-    return host.engine.updateDirtySignalCache(roc_host, cache_slot, value);
+    return host.engine.updateDirtySignalCache(roc_host, cache_slot, value, testHostValueEqCallable(roc_host), testHostValueDropCallable(roc_host));
 }
 
 fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
@@ -1945,11 +1986,12 @@ fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, 
     }
 
     const payload_value = hostValueStrTagged(host, roc_host, payload_text, task_payload.payload_tag);
-    defer callErasedHostValueToUnit(roc_host, task_payload.payload_drop, payload_value);
+    const payload_take_epoch = host.hostValueTakeEpoch();
     const next = if (failed)
         callErasedHostValueToHostValue(roc_host, task_payload.failed, payload_value)
     else
         callErasedHostValueToHostValue(roc_host, task_payload.done, payload_value);
+    host.assertHostValueTakenAfter(payload_value, payload_take_epoch);
     return host.engine.dispatchEffectSourceValue(host, roc_host, record, next);
 }
 
@@ -2078,6 +2120,7 @@ fn hostValueI64(host: *HostEnv, roc_host: *abi.RocHost, value: i64) HostValue {
 
 const ErasedHostValueUnaryArgs = erased_calls.ErasedHostValueUnaryArgs;
 const ErasedHostValueBinaryArgs = erased_calls.ErasedHostValueBinaryArgs;
+const ErasedRocBoxUnaryArgs = erased_calls.ErasedRocBoxUnaryArgs;
 
 const callErasedHostValueToHostValue = erased_calls.callErasedHostValueToHostValue;
 
@@ -2123,12 +2166,12 @@ fn finishHostMetrics(host: *HostEnv) void {
     host.engine.pending_roc_metrics = zeroRuntimeMetrics();
 }
 
-fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changes: []const HostDirtyStructuralSignal) CommandCounts {
-    return host.engine.applyDirtyStructuralSignalsLocally(host, roc_host, dirty_source_node_ids, changes);
+fn applyDirtyStructuralSignalsLocally(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, dirty_generation: u64, changes: []const HostDirtyStructuralSignal) CommandCounts {
+    return host.engine.applyDirtyStructuralSignalsLocally(host, roc_host, dirty_source_node_ids, dirty_generation, changes);
 }
 
-fn applyDirtyWhenStructuralSignals(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, changes: []const HostDirtyStructuralSignal) CommandCounts {
-    return host.engine.applyDirtyWhenStructuralSignals(host, roc_host, dirty_source_node_ids, changes);
+fn applyDirtyWhenStructuralSignals(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, dirty_generation: u64, changes: []const HostDirtyStructuralSignal) CommandCounts {
+    return host.engine.applyDirtyWhenStructuralSignals(host, roc_host, dirty_source_node_ids, dirty_generation, changes);
 }
 
 fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source_node_ids: []const u64, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
@@ -2207,7 +2250,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
         if (dirty_structural_signals.len != 0) {
             const apply_start_ns = benchmarkNowNs();
             const sink_counts = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
-            const counts = applyDirtyStructuralSignalsLocally(host, roc_host, &dirty_source_node_ids, dirty_structural_signals);
+            const counts = applyDirtyStructuralSignalsLocally(host, roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
             s.dispatch_apply_ns += benchmarkNowNs() - apply_start_ns;
             s.commands.addAll(sink_counts);
             s.commands.addAll(counts);
@@ -2229,7 +2272,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
         defer host.gpa.allocator().free(dirty_structural_signals);
         if (dirty_structural_signals.len != 0) {
             _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
-            _ = applyDirtyStructuralSignalsLocally(host, roc_host, &dirty_source_node_ids, dirty_structural_signals);
+            _ = applyDirtyStructuralSignalsLocally(host, roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
             finishHostMetrics(host);
         } else {
             _ = applyDirtyRenderSinks(host, roc_host, &dirty_source_node_ids, changed_record_ids, dirty_generation);
@@ -3053,7 +3096,7 @@ test "signals host assigns explicit active graph record ids" {
     try std.testing.expectEqual(@as(?u64, null), second_record.active_graph_id);
 }
 
-test "signals host allocation ledger updates moved header indexes" {
+test "signals host allocation ledger tracks exact returned pointers" {
     var host = HostEnv.init();
     var roc_host = makeSignalsRocHost(&host);
     host.engine.roc_host = &roc_host;
@@ -3067,18 +3110,27 @@ test "signals host allocation ledger updates moved header indexes" {
     const last = rocAllocFn(&roc_host, 24, 8) orelse return error.OutOfMemory;
 
     try std.testing.expectEqual(@as(usize, 3), host.roc_allocations.items.len);
-    try std.testing.expectEqual(@as(usize, 2), rocAllocationHeaderFromUserPtr(last).ledger_index);
+    try std.testing.expect(findExactRocAllocationIndex(&host, first) != null);
+    try std.testing.expect(findExactRocAllocationIndex(&host, middle) != null);
+    try std.testing.expect(findExactRocAllocationIndex(&host, last) != null);
 
     rocDeallocFn(&roc_host, middle, 8);
 
     try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.items.len);
-    try std.testing.expectEqual(@as(usize, 1), rocAllocationHeaderFromUserPtr(last).ledger_index);
+    try std.testing.expect(findExactRocAllocationIndex(&host, first) != null);
+    try std.testing.expectEqual(@as(?usize, null), findExactRocAllocationIndex(&host, middle));
+    try std.testing.expect(findExactRocAllocationIndex(&host, last) != null);
+    try std.testing.expect(findRecentlyFreedRocAllocation(&host, middle) != null);
     try std.testing.expectEqual(@as(u64, 3), host.engine.pending_roc_metrics.allocs_this_event);
     try std.testing.expectEqual(@as(u64, 1), host.engine.pending_roc_metrics.deallocs_this_event);
 
     const grown = rocReallocFn(&roc_host, first, 32, 8) orelse return error.OutOfMemory;
 
     try std.testing.expectEqual(@as(usize, 2), host.roc_allocations.items.len);
+    try std.testing.expectEqual(@as(?usize, null), findExactRocAllocationIndex(&host, first));
+    try std.testing.expect(findExactRocAllocationIndex(&host, grown) != null);
+    try std.testing.expect(findExactRocAllocationIndex(&host, last) != null);
+    try std.testing.expect(findRecentlyFreedRocAllocation(&host, first) != null);
     try std.testing.expectEqual(@as(u64, 4), host.alloc_count);
     try std.testing.expectEqual(@as(u64, 2), host.dealloc_count);
     try std.testing.expectEqual(@as(u64, 4), host.engine.pending_roc_metrics.allocs_this_event);
@@ -3104,6 +3156,10 @@ const TestErasedBinderCapture = extern struct {
 
 const TestErasedHostValueCapture = extern struct {
     value: HostValue,
+};
+
+const TestTaskPayloadCapture = extern struct {
+    payload_tag: HostValueTypeTag,
 };
 
 var test_erased_callable_drop_count: u64 = 0;
@@ -3142,23 +3198,34 @@ fn testCurrentRocHost() *abi.RocHost {
     return currentHost().engine.roc_host orelse failHost("test HostValue helper requires an active Roc host");
 }
 
+fn tagTestHostValue(host: *HostEnv, roc_host: *abi.RocHost, value: HostValue) HostValue {
+    const tag = newTestHostValueTypeTag(roc_host);
+    host.setHostValueTypeTag(value, tag);
+    host.releaseOwnedHostValueTypeTag(tag);
+    return value;
+}
+
 fn testHostValueUnit() HostValue {
     const host = currentHost();
-    return hostValueUnit(host, testCurrentRocHost());
+    const roc_host = testCurrentRocHost();
+    return hostValueUnit(host, roc_host);
 }
 
 fn testHostValueStr(roc_host: *abi.RocHost, value: []const u8) HostValue {
-    return hostValueStr(hostFromRocHost(roc_host), roc_host, value);
+    const host = hostFromRocHost(roc_host);
+    return tagTestHostValue(host, roc_host, hostValueStr(host, roc_host, value));
 }
 
 fn testHostValueBool(value: bool) HostValue {
     const host = currentHost();
-    return hostValueBool(host, testCurrentRocHost(), value);
+    const roc_host = testCurrentRocHost();
+    return tagTestHostValue(host, roc_host, hostValueBool(host, roc_host, value));
 }
 
 fn testHostValueI64(value: i64) HostValue {
     const host = currentHost();
-    return hostValueI64(host, testCurrentRocHost(), value);
+    const roc_host = testCurrentRocHost();
+    return tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, value));
 }
 
 fn testReadHostValueI64(roc_host: *abi.RocHost, value: HostValue) i64 {
@@ -3282,7 +3349,8 @@ fn testUnaryHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]con
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
     const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
     const input = testReadHostValueI64(roc_host, call_args.arg0);
-    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, input + capture.amount));
+    const host = hostFromRocHost(roc_host);
+    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, input + capture.amount)));
 }
 
 fn testHostValueHashErasedCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3303,7 +3371,8 @@ fn testBinaryHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]co
     const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
     const left = testReadHostValueI64(roc_host, call_args.arg0);
     const right = testReadHostValueI64(roc_host, call_args.arg1);
-    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, left + right + capture.amount));
+    const host = hostFromRocHost(roc_host);
+    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, left + right + capture.amount)));
 }
 
 fn testUnitIncrementHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3311,7 +3380,8 @@ fn testUnitIncrementHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args:
     const call_args = testErasedArgsAs(ErasedHostValueBinaryArgs, args);
     const current = testReadHostValueI64(roc_host, call_args.arg0);
     if (hostFromRocHost(roc_host).testHostValueKind(call_args.arg1) != .unit) @panic("test unit event callable expected unit payload");
-    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, current + 1));
+    const host = hostFromRocHost(roc_host);
+    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, current + 1)));
 }
 
 fn testInitialHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3410,19 +3480,30 @@ fn testHostValueEqErasedCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]
 fn testStableStrHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     _ = capture_ptr;
-    writeTestErasedResult(HostValue, ret, hostValueStr(hostFromRocHost(roc_host), roc_host, "stable"));
+    const host = hostFromRocHost(roc_host);
+    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueStr(host, roc_host, "stable")));
 }
 
 fn testStableI64HostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
-    writeTestErasedResult(HostValue, ret, hostValueI64(hostFromRocHost(roc_host), roc_host, capture.amount));
+    const host = hostFromRocHost(roc_host);
+    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, capture.amount)));
 }
 
 fn testStableBoolHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     _ = capture_ptr;
-    writeTestErasedResult(HostValue, ret, hostValueBool(hostFromRocHost(roc_host), roc_host, true));
+    const host = hostFromRocHost(roc_host);
+    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueBool(host, roc_host, true)));
+}
+
+fn testBoolIdentityHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    const input = testReadHostValueBool(roc_host, call_args.arg0);
+    const host = hostFromRocHost(roc_host);
+    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueBool(host, roc_host, input)));
 }
 
 fn testAlwaysEqualHostValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3437,6 +3518,16 @@ fn testNeverEqualHostValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const
     writeTestErasedResult(bool, ret, false);
 }
 
+fn testSplitHostValueBoxCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    _ = capture_ptr;
+    const call_args = testErasedArgsAs(ErasedRocBoxUnaryArgs, args);
+    abi.increfBox(call_args.arg0, 1);
+    writeTestErasedResult(erased_calls.RocBoxPair, ret, .{
+        .keep = call_args.arg0,
+        .out = call_args.arg0,
+    });
+}
+
 fn testErasedCallableOnDrop(_: ?[*]u8, _: *abi.RocHost) callconv(.c) void {
     test_erased_callable_drop_count += 1;
 }
@@ -3444,7 +3535,7 @@ fn testErasedCallableOnDrop(_: ?[*]u8, _: *abi.RocHost) callconv(.c) void {
 fn testBinderCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
     test_erased_callable_drop_count += 1;
     const capture = testCapturePtrAs(TestErasedBinderCapture, capture_ptr);
-    abi.decrefBox(@ptrCast(capture.condition_binder), roc_host);
+    hv.releaseU64Box(capture.condition_binder, roc_host);
 }
 
 fn testDropHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3452,6 +3543,16 @@ fn testDropHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]cons
     _ = capture_ptr;
     const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
     testDropHostValue(roc_host, call_args.arg0);
+}
+
+fn testConsumeTaskPayloadStrCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const host = hostFromRocHost(roc_host);
+    const capture = testCapturePtrAs(TestTaskPayloadCapture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    const box = host.takeTaggedHostValue(call_args.arg0, capture.payload_tag);
+    const value = host.storeHostValueWithRetainedTag(box, capture.payload_tag);
+    if (builtin.is_test) host.setTestHostValueKind(value, .str);
+    writeTestErasedResult(HostValue, ret, value);
 }
 
 fn testReadStrHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3478,7 +3579,7 @@ fn testI64ListToHostValuesCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[
     if (source_items.len > 0) {
         const dest = result.elements_ptr orelse unreachable;
         for (source_items, 0..) |item, index| {
-            dest[index] = hostValueI64(host, roc_host, item);
+            dest[index] = tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, item));
         }
     }
     writeTestErasedResult(HostValueList, ret, result);
@@ -3494,6 +3595,55 @@ fn expectHostValueI64(value: HostValue, expected: i64) error{TestExpectedEqual}!
     const roc_host = testCurrentRocHost();
     try std.testing.expectEqual(expected, testReadHostValueI64(roc_host, value));
     testDropHostValue(roc_host, value);
+}
+
+fn expectCachedTaskSourceText(roc_host: *abi.RocHost, record: *HostSignalRecord, expected: []const u8) !void {
+    const task_payload = switch (record.payload) {
+        .task_source => |payload| payload,
+        else => unreachable,
+    };
+    const cached = switch (task_payload.cached_value) {
+        .present => |cell| cell,
+        .absent => return error.TestExpectedEqual,
+    };
+    const text = testReadHostValueStr(roc_host, cached.value);
+    try std.testing.expectEqualStrings(expected, text.asSlice());
+}
+
+fn makeTestConsumingTaskSourceRecord(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8) *HostSignalRecord {
+    const allocator = host.gpa.allocator();
+    const payload_tag: HostValueTypeTag = newTestHostValueTypeTag(roc_host);
+    const capture = TestTaskPayloadCapture{ .payload_tag = payload_tag };
+    return HostSignalRecord.init(allocator, .{ .task_source = .{
+        .token = newTestSignalToken(roc_host),
+        .name = allocator.dupe(u8, name) catch @panic("out of memory"),
+        .payload_tag = payload_tag,
+        .payload_drop = testHostValueDropCallable(roc_host),
+        .initial = writeTestErasedCallable(
+            TestErasedI64Capture,
+            roc_host,
+            &testStableStrHostValueCallable,
+            null,
+            .{ .amount = 0 },
+        ),
+        .done = writeTestErasedCallable(
+            TestTaskPayloadCapture,
+            roc_host,
+            &testConsumeTaskPayloadStrCallable,
+            &testErasedCallableOnDrop,
+            capture,
+        ),
+        .failed = writeTestErasedCallable(
+            TestTaskPayloadCapture,
+            roc_host,
+            &testConsumeTaskPayloadStrCallable,
+            &testErasedCallableOnDrop,
+            capture,
+        ),
+        .eq = testHostValueEqCallable(roc_host),
+        .drop = testHostValueDropCallable(roc_host),
+        .reset_on_start = false,
+    } });
 }
 
 test "signals host invokes erased HostValue thunks with ABI argument layouts" {
@@ -3586,6 +3736,41 @@ test "signals host invokes erased HostValue thunks with ABI argument layouts" {
     }
 
     try std.testing.expectEqual(@as(u64, 4), test_erased_callable_drop_count);
+}
+
+test "signals host task result callbacks consume heap string payloads" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.engine.roc_host = &roc_host;
+
+    const record = makeTestConsumingTaskSourceRecord(&host, &roc_host, "lookup");
+    host.engine.retainActiveSignalRecord(&host, record);
+    defer {
+        host.engine.clearActiveSignalGraph(&host);
+        record.release(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const success_payload = "successful task payload that is intentionally longer than the Roc small string limit";
+    _ = host.engine.appendPendingTask(&host, 0, switch (record.payload) {
+        .task_source => |payload| payload.token,
+        else => unreachable,
+    }, "lookup", "/api/test");
+    _ = resolvePendingTask(&host, &roc_host, "lookup", success_payload, false);
+    try expectCachedTaskSourceText(&roc_host, record, success_payload);
+    try std.testing.expectEqual(@as(usize, 0), host.engine.pending_tasks.items.len);
+
+    const failed_payload = "failed task payload that is intentionally longer than the Roc small string limit";
+    _ = host.engine.appendPendingTask(&host, 0, switch (record.payload) {
+        .task_source => |payload| payload.token,
+        else => unreachable,
+    }, "lookup", "/api/test");
+    _ = resolvePendingTask(&host, &roc_host, "lookup", failed_payload, true);
+    try expectCachedTaskSourceText(&roc_host, record, failed_payload);
+    try std.testing.expectEqual(@as(usize, 0), host.engine.pending_tasks.items.len);
 }
 
 test "signals host interns scopes and node identities from explicit paths" {
@@ -3996,13 +4181,71 @@ test "signals host marks dirty structural sources for structural patching" {
     try std.testing.expectEqual(HostActiveStructuralSignalKind.when, dirty_structural_signals[0].kind);
     try std.testing.expectEqual(HostScopeBranch.false_branch, dirty_structural_signals[0].branch.?);
 
-    const patch_counts = applyDirtyWhenStructuralSignals(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+    const patch_counts = applyDirtyWhenStructuralSignals(&host, &roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.create_element);
     try std.testing.expectEqual(@as(u64, 1), patch_counts.append_child);
     try std.testing.expect(activeTextElementId(&host, "true branch") == null);
     try std.testing.expect(activeTextElementId(&host, "false branch") != null);
+}
+
+test "signals host reuses active signal records while collecting dirty when branch" {
+    test_erased_callable_drop_count = 0;
+
+    var host = HostEnv.init();
+    var roc_host = makeSignalsRocHost(&host);
+    host.engine.roc_host = &roc_host;
+    defer {
+        host.deinit();
+        _ = host.gpa.deinit();
+    }
+
+    const state_token = newTestBinderToken(&roc_host);
+    const ready = testNodeBoolIdentityMapExpr(&roc_host, testNodeRefExpr(state_token));
+    abi.increfNodeSignalExpr(ready, 1);
+    const label = testNodeStableStrMapExpr(&roc_host, ready);
+    const when_elem: abi.Elem = .{
+        .payload = .{
+            .when = .{
+                .condition = boxTestNodeSignalExpr(&roc_host, ready),
+                .read = testReadBoolCallable(&roc_host),
+                .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "loading")),
+                .when_true = boxTestElem(&roc_host, testNodeTextSignal(&roc_host, label)),
+            },
+        },
+        .tag = .When,
+    };
+    const root = testNodeStateWithTokenAndInitial(&roc_host, state_token, testHostValueBool(false), when_elem);
+    defer abi.decrefElem(root, &roc_host);
+
+    var stream: HostNodeDescriptorStream = .{};
+    host.collectActiveElemRootDescriptors(&roc_host, &stream, root, &.{});
+    _ = applyNodeDescriptorStream(&host, &roc_host, &stream);
+    host.engine.active_stream = stream;
+
+    try std.testing.expect(activeTextElementId(&host, "loading") != null);
+    try std.testing.expect(activeTextElementId(&host, "stable") == null);
+
+    const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
+    const state_index = host.engine.stateIndexByNodeId(state_id) orelse unreachable;
+    testDropHostValue(&roc_host, host.engine.states.items[state_index].cell.value);
+    host.engine.states.items[state_index].cell.value = testHostValueBool(true);
+    host.engine.states.items[state_index].version += 1;
+
+    const dirty_source_node_ids = [_]u64{state_id};
+    const dirty_generation = host.nextDirtySignalGeneration();
+    const changed_record_ids = propagateDirtyActiveSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, dirty_generation);
+    defer host.gpa.allocator().free(changed_record_ids);
+    const dirty_structural_signals = collectDirtyStructuralSignals(&host, &roc_host, host.gpa.allocator(), &dirty_source_node_ids, changed_record_ids, dirty_generation);
+    defer host.gpa.allocator().free(dirty_structural_signals);
+    try std.testing.expectEqual(@as(usize, 1), dirty_structural_signals.len);
+    try std.testing.expectEqual(HostActiveStructuralSignalKind.when, dirty_structural_signals[0].kind);
+
+    _ = applyDirtyWhenStructuralSignals(&host, &roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
+
+    try std.testing.expect(activeTextElementId(&host, "loading") == null);
+    try std.testing.expect(activeTextElementId(&host, "stable") != null);
 }
 
 test "signals host prunes structural render when retained condition equality is unchanged" {
@@ -4203,7 +4446,7 @@ test "signals host dirty each append patches only changed row" {
     const patch_start = host.engine.render_metrics.patches_emitted;
     const graph_rebuild_start = host.engine.pending_roc_metrics.active_graph_records_rebuilt;
 
-    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
 
     try std.testing.expectEqual(@as(u64, row_count), host.engine.pending_roc_metrics.rows_reused - rows_reused_start);
     try std.testing.expectEqual(@as(u64, 1), host.engine.pending_roc_metrics.rows_created - rows_created_start);
@@ -4276,7 +4519,7 @@ test "signals host dirty each reorder moves rows without recollecting bodies" {
     const patch_start = host.engine.render_metrics.patches_emitted;
     const graph_rebuild_start = host.engine.pending_roc_metrics.active_graph_records_rebuilt;
 
-    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
 
     try std.testing.expectEqual(@as(u64, 3), host.engine.pending_roc_metrics.rows_reused - rows_reused_start);
     try std.testing.expectEqual(@as(u64, 0), host.engine.pending_roc_metrics.rows_created - rows_created_start);
@@ -4351,7 +4594,7 @@ test "signals host dirty each mixed churn splices changed rows and moves survivo
     const patch_start = host.engine.render_metrics.patches_emitted;
     const graph_rebuild_start = host.engine.pending_roc_metrics.active_graph_records_rebuilt;
 
-    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+    const patch_counts = applyDirtyStructuralSignalsLocally(&host, &roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
 
     try std.testing.expectEqual(@as(u64, 2), host.engine.pending_roc_metrics.rows_reused - rows_reused_start);
     try std.testing.expectEqual(@as(u64, 1), host.engine.pending_roc_metrics.rows_created - rows_created_start);
@@ -4418,7 +4661,7 @@ test "signals host updates nested when without rebuilding unchanged row" {
     try std.testing.expectEqual(HostActiveStructuralSignalKind.when, dirty_structural_signals[0].kind);
 
     const graph_rebuild_start = host.engine.pending_roc_metrics.active_graph_records_rebuilt;
-    _ = applyDirtyWhenStructuralSignals(&host, &roc_host, &dirty_source_node_ids, dirty_structural_signals);
+    _ = applyDirtyWhenStructuralSignals(&host, &roc_host, &dirty_source_node_ids, dirty_generation, dirty_structural_signals);
 
     try std.testing.expectEqual(@as(u64, 0), host.engine.pending_roc_metrics.active_graph_records_rebuilt - graph_rebuild_start);
     try std.testing.expectEqual(@as(u64, 1), test_row_elem_call_count);
@@ -4684,10 +4927,32 @@ fn newTestSignalToken(roc_host: *abi.RocHost) HostSignalToken {
     return token;
 }
 
-fn newTestHostValueTypeTag(roc_host: *abi.RocHost) *u64 {
-    const tag: *u64 = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(u64), @alignOf(u64), false, roc_host)));
-    tag.* = 0;
-    return tag;
+fn newTestHostValueTypeTag(roc_host: *abi.RocHost) HostValueTypeTag {
+    return .{
+        .id = 0,
+        .split = writeTestErasedCallable(
+            TestErasedI64Capture,
+            roc_host,
+            &testSplitHostValueBoxCallable,
+            null,
+            .{ .amount = 0 },
+        ),
+    };
+}
+
+fn newTestBoolHostValueTypeTag(roc_host: *abi.RocHost) abi.__AnonStruct76 {
+    const tag = newTestHostValueTypeTag(roc_host);
+    return .{ .id = tag.id, .split = tag.split };
+}
+
+fn newTestStrHostValueTypeTag(roc_host: *abi.RocHost) abi.__AnonStruct59 {
+    const tag = newTestHostValueTypeTag(roc_host);
+    return .{ .id = tag.id, .split = tag.split };
+}
+
+fn newTestUnitHostValueTypeTag(roc_host: *abi.RocHost) abi.__AnonStruct82 {
+    const tag = newTestHostValueTypeTag(roc_host);
+    return .{ .id = tag.id, .split = tag.split };
 }
 
 fn testNodeConstExpr(roc_host: *abi.RocHost, value: HostValue) abi.NodeSignalExpr {
@@ -4788,6 +5053,30 @@ fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) 
         TestErasedI64Capture,
         roc_host,
         &testStableBoolHostValueCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
+    const eq = testHostValueEqCallable(roc_host);
+    const drop = testHostValueDropCallable(roc_host);
+    return .{
+        .payload = .{
+            .map = .{
+                ._0 = newTestSignalToken(roc_host),
+                ._1 = boxTestNodeSignalExpr(roc_host, input),
+                ._2 = transform,
+                ._3 = eq,
+                ._4 = drop,
+            },
+        },
+        .tag = .Map,
+    };
+}
+
+fn testNodeBoolIdentityMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSignalExpr {
+    const transform = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testBoolIdentityHostValueCallable,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
@@ -4927,12 +5216,12 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
-                    .payload_bool_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_bool_tag = newTestBoolHostValueTypeTag(roc_host),
                     .payload_accessor = @intFromEnum(testPayloadAccessorForKind(payload_kind)),
                     .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(payload_kind),
-                    .payload_str_tag = newTestHostValueTypeTag(roc_host),
-                    .payload_unit_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_str_tag = newTestStrHostValueTypeTag(roc_host),
+                    .payload_unit_tag = newTestUnitHostValueTypeTag(roc_host),
                     .transform = transform,
                 },
             },
@@ -4956,12 +5245,12 @@ fn testNodeUnitIncrementEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind,
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
-                    .payload_bool_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_bool_tag = newTestBoolHostValueTypeTag(roc_host),
                     .payload_accessor = @intFromEnum(EventPayloadAccessor.none),
                     .payload_drop = payload_drop,
                     .payload_kind = @intFromEnum(EventPayloadKind.unit),
-                    .payload_str_tag = newTestHostValueTypeTag(roc_host),
-                    .payload_unit_tag = newTestHostValueTypeTag(roc_host),
+                    .payload_str_tag = newTestStrHostValueTypeTag(roc_host),
+                    .payload_unit_tag = newTestUnitHostValueTypeTag(roc_host),
                     .transform = transform,
                 },
             },
@@ -5051,7 +5340,7 @@ fn testHostValueI64List(roc_host: *abi.RocHost, items: []const HostValue) HostVa
     payload.* = values;
     const host_value = host.storeHostValue(@ptrCast(payload));
     host.setTestHostValueKind(host_value, .i64_list);
-    return host_value;
+    return tagTestHostValue(host, roc_host, host_value);
 }
 
 fn testNodeEachWithSignalAndRow(roc_host: *abi.RocHost, signal: abi.NodeSignalExpr, row_fn: abi.RocErasedCallableFn) abi.Elem {

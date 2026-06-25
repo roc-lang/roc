@@ -1,5 +1,6 @@
 const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
+const erased_calls = @import("erased_calls.zig");
 
 pub const HostValue = u64;
 
@@ -7,6 +8,7 @@ pub const Error = error{
     OutOfMemory,
     InvalidHandle,
     ReleasedHandle,
+    UnconsumedHandle,
     MissingTag,
     TagMismatch,
     ConflictingTag,
@@ -16,12 +18,14 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
     const Cell = if (tags_enabled) struct {
         box: abi.RocBox,
         tag: ?TypeTag,
+        last_taken_epoch: u64,
     } else struct {
         box: abi.RocBox,
+        last_taken_epoch: u64,
     };
 
     const Slot = union(enum) {
-        vacant,
+        vacant: u64,
         occupied: Cell,
     };
 
@@ -29,6 +33,7 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
         const Self = @This();
 
         slots: std.ArrayListUnmanaged(Slot) = .empty,
+        take_epoch: u64 = 0,
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.slots.deinit(allocator);
@@ -55,11 +60,11 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             return count;
         }
 
-        fn cell(box: abi.RocBox, owned_tag: ?TypeTag) Cell {
+        fn cell(box: abi.RocBox, owned_tag: ?TypeTag, last_taken_epoch: u64) Cell {
             if (comptime tags_enabled) {
-                return .{ .box = box, .tag = owned_tag };
+                return .{ .box = box, .tag = owned_tag, .last_taken_epoch = last_taken_epoch };
             } else {
-                return .{ .box = box };
+                return .{ .box = box, .last_taken_epoch = last_taken_epoch };
             }
         }
 
@@ -95,15 +100,20 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
 
             for (self.slots.items, 0..) |*entry, index| {
                 switch (entry.*) {
-                    .vacant => {
-                        entry.* = .{ .occupied = cell(box, registry_tag) };
+                    .vacant => |last_taken_epoch| {
+                        entry.* = .{ .occupied = cell(box, registry_tag, last_taken_epoch) };
                         return @intCast(index + 1);
                     },
                     .occupied => {},
                 }
             }
 
-            self.slots.append(allocator, .{ .occupied = cell(box, registry_tag) }) catch return Error.OutOfMemory;
+            self.slots.append(allocator, .{ .occupied = cell(box, registry_tag, 0) }) catch {
+                if (comptime tags_enabled) {
+                    if (registry_tag) |tag_value| ops.releaseTag(tag_value);
+                }
+                return Error.OutOfMemory;
+            };
             return @intCast(self.slots.items.len);
         }
 
@@ -117,10 +127,33 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             }
         }
 
+        fn vacantSlotAvailable(self: *const Self) bool {
+            for (self.slots.items) |entry| {
+                switch (entry) {
+                    .vacant => return true,
+                    .occupied => {},
+                }
+            }
+            return false;
+        }
+
+        fn ensureStoreCapacity(self: *Self, allocator: std.mem.Allocator) Error!void {
+            if (self.vacantSlotAvailable()) return;
+            self.slots.ensureUnusedCapacity(allocator, 1) catch return Error.OutOfMemory;
+        }
+
         pub fn get(self: *Self, value: HostValue, ops: anytype) Error!abi.RocBox {
-            const occupied = try self.occupiedCell(value);
-            ops.retainBox(occupied.box);
-            return occupied.box;
+            if (comptime !tags_enabled) return Error.MissingTag;
+            const entry = try self.slot(value);
+            return switch (entry.*) {
+                .vacant => Error.ReleasedHandle,
+                .occupied => |*occupied| blk: {
+                    const tag_value = occupied.tag orelse return Error.MissingTag;
+                    const split = ops.splitBox(occupied.box, tag_value);
+                    occupied.box = split.@"keep";
+                    break :blk split.@"out";
+                },
+            };
         }
 
         pub fn getTagged(self: *Self, value: HostValue, expected_tag: TypeTag, ops: anytype) Error!abi.RocBox {
@@ -133,7 +166,8 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             return switch (entry.*) {
                 .vacant => Error.ReleasedHandle,
                 .occupied => |occupied| blk: {
-                    entry.* = .vacant;
+                    self.take_epoch +%= 1;
+                    entry.* = .{ .vacant = self.take_epoch };
                     if (comptime tags_enabled) {
                         if (occupied.tag) |tag_value| ops.releaseTag(tag_value);
                     }
@@ -147,20 +181,41 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             return try self.take(value, ops);
         }
 
+        pub fn assertReleased(self: *Self, value: HostValue) Error!void {
+            const entry = try self.slot(value);
+            return switch (entry.*) {
+                .vacant => {},
+                .occupied => Error.UnconsumedHandle,
+            };
+        }
+
+        pub fn takeEpoch(self: *const Self) u64 {
+            return self.take_epoch;
+        }
+
+        pub fn assertTakenAfter(self: *Self, value: HostValue, epoch: u64) Error!void {
+            const entry = try self.slot(value);
+            const last_taken_epoch = switch (entry.*) {
+                .vacant => |last| last,
+                .occupied => |occupied| occupied.last_taken_epoch,
+            };
+            if (last_taken_epoch <= epoch) return Error.UnconsumedHandle;
+        }
+
         pub fn clone(self: *Self, allocator: std.mem.Allocator, value: HostValue, ops: anytype) Error!HostValue {
-            const occupied = try self.occupiedCell(value);
-            ops.retainBox(occupied.box);
-            errdefer ops.releaseBox(occupied.box);
-
-            if (comptime tags_enabled) {
-                if (occupied.tag) |tag_value| {
+            if (comptime !tags_enabled) return Error.MissingTag;
+            try self.ensureStoreCapacity(allocator);
+            const entry = try self.slot(value);
+            return switch (entry.*) {
+                .vacant => Error.ReleasedHandle,
+                .occupied => |*occupied| blk: {
+                    const tag_value = occupied.tag orelse return Error.MissingTag;
+                    const split = ops.splitBox(occupied.box, tag_value);
+                    occupied.box = split.@"keep";
                     ops.retainTag(tag_value);
-                    errdefer ops.releaseTag(tag_value);
-                    return try self.storeOwnedTag(allocator, occupied.box, tag_value, ops);
-                }
-            }
-
-            return try self.storeOwnedTag(allocator, occupied.box, null, ops);
+                    break :blk try self.storeOwnedTag(allocator, split.@"out", tag_value, ops);
+                },
+            };
         }
 
         pub fn setTag(self: *Self, value: HostValue, borrowed_tag: TypeTag, ops: anytype) Error!void {
@@ -190,26 +245,15 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
 }
 
 pub fn tagsMatch(comptime TypeTag: type, actual_tag: TypeTag, expected_tag: TypeTag, ops: anytype) bool {
-    if (actual_tag == expected_tag) return true;
-    const actual_id = ops.tagId(actual_tag);
-    return actual_id != 0 and actual_id == ops.tagId(expected_tag);
+    return ops.tagsMatch(actual_tag, expected_tag);
 }
 
 const TestTag = *u64;
 
 const TestOps = struct {
-    retained_boxes: *u64,
-    released_boxes: *u64,
     retained_tags: *u64,
     released_tags: *u64,
-
-    pub fn retainBox(self: TestOps, _: abi.RocBox) void {
-        self.retained_boxes.* += 1;
-    }
-
-    pub fn releaseBox(self: TestOps, _: abi.RocBox) void {
-        self.released_boxes.* += 1;
-    }
+    split_boxes: *u64,
 
     pub fn retainTag(self: TestOps, _: TestTag) void {
         self.retained_tags.* += 1;
@@ -222,21 +266,33 @@ const TestOps = struct {
     pub fn tagId(_: TestOps, tag_value: TestTag) u64 {
         return tag_value.*;
     }
+
+    pub fn tagsMatch(self: TestOps, actual_tag: TestTag, expected_tag: TestTag) bool {
+        const actual_id = self.tagId(actual_tag);
+        return actual_id != 0 and actual_id == self.tagId(expected_tag);
+    }
+
+    pub fn splitBox(self: TestOps, box: abi.RocBox, _: TestTag) erased_calls.RocBoxPair {
+        self.split_boxes.* += 1;
+        const addr = @intFromPtr(box orelse unreachable);
+        return .{
+            .keep = @ptrFromInt(addr + 0x1000),
+            .out = @ptrFromInt(addr + 0x2000),
+        };
+    }
 };
 
 test "host value registry uses one-based handles and reuses vacant slots" {
     var registry: Registry(TestTag, true) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_boxes: u64 = 0;
-    var released_boxes: u64 = 0;
     var retained_tags: u64 = 0;
     var released_tags: u64 = 0;
+    var split_boxes: u64 = 0;
     const ops = TestOps{
-        .retained_boxes = &retained_boxes,
-        .released_boxes = &released_boxes,
         .retained_tags = &retained_tags,
         .released_tags = &released_tags,
+        .split_boxes = &split_boxes,
     };
 
     var tag_a: u64 = 1;
@@ -258,15 +314,13 @@ test "host value registry reports live count and reaches zero when drained" {
     var registry: Registry(TestTag, false) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_boxes: u64 = 0;
-    var released_boxes: u64 = 0;
     var retained_tags: u64 = 0;
     var released_tags: u64 = 0;
+    var split_boxes: u64 = 0;
     const ops = TestOps{
-        .retained_boxes = &retained_boxes,
-        .released_boxes = &released_boxes,
         .retained_tags = &retained_tags,
         .released_tags = &released_tags,
+        .split_boxes = &split_boxes,
     };
 
     try std.testing.expectEqual(@as(usize, 0), registry.liveCount());
@@ -285,19 +339,38 @@ test "host value registry reports live count and reaches zero when drained" {
     try std.testing.expect(!registry.hasLiveValues());
 }
 
-test "host value registry clones retained boxes and tags" {
+test "host value registry asserts consuming callbacks released their handle" {
+    var registry: Registry(TestTag, false) = .{};
+    defer registry.deinit(std.testing.allocator);
+
+    var retained_tags: u64 = 0;
+    var released_tags: u64 = 0;
+    var split_boxes: u64 = 0;
+    const ops = TestOps{
+        .retained_tags = &retained_tags,
+        .released_tags = &released_tags,
+        .split_boxes = &split_boxes,
+    };
+
+    const value = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x70), null, ops);
+    try std.testing.expectError(Error.UnconsumedHandle, registry.assertReleased(value));
+
+    _ = try registry.take(value, ops);
+    try registry.assertReleased(value);
+    try std.testing.expectError(Error.ReleasedHandle, registry.take(value, ops));
+}
+
+test "host value registry clones by splitting retained boxes and tags" {
     var registry: Registry(TestTag, true) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_boxes: u64 = 0;
-    var released_boxes: u64 = 0;
     var retained_tags: u64 = 0;
     var released_tags: u64 = 0;
+    var split_boxes: u64 = 0;
     const ops = TestOps{
-        .retained_boxes = &retained_boxes,
-        .released_boxes = &released_boxes,
         .retained_tags = &retained_tags,
         .released_tags = &released_tags,
+        .split_boxes = &split_boxes,
     };
 
     var tag_a: u64 = 1;
@@ -305,25 +378,23 @@ test "host value registry clones retained boxes and tags" {
     const cloned = try registry.clone(std.testing.allocator, original, ops);
 
     try std.testing.expect(cloned != original);
-    try std.testing.expectEqual(@as(u64, 1), retained_boxes);
+    try std.testing.expectEqual(@as(u64, 1), split_boxes);
     try std.testing.expectEqual(@as(u64, 1), retained_tags);
-    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x40)), try registry.getTagged(cloned, &tag_a, ops));
-    try std.testing.expectEqual(@as(u64, 2), retained_boxes);
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x4040)), try registry.getTagged(cloned, &tag_a, ops));
+    try std.testing.expectEqual(@as(u64, 2), split_boxes);
 }
 
 test "host value registry compares tags by nonzero type id" {
     var registry: Registry(TestTag, true) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_boxes: u64 = 0;
-    var released_boxes: u64 = 0;
     var retained_tags: u64 = 0;
     var released_tags: u64 = 0;
+    var split_boxes: u64 = 0;
     const ops = TestOps{
-        .retained_boxes = &retained_boxes,
-        .released_boxes = &released_boxes,
         .retained_tags = &retained_tags,
         .released_tags = &released_tags,
+        .split_boxes = &split_boxes,
     };
 
     var tag_a: u64 = 9;
@@ -339,15 +410,13 @@ test "host value registry can compile without stored tags" {
     var registry: Registry(TestTag, false) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_boxes: u64 = 0;
-    var released_boxes: u64 = 0;
     var retained_tags: u64 = 0;
     var released_tags: u64 = 0;
+    var split_boxes: u64 = 0;
     const ops = TestOps{
-        .retained_boxes = &retained_boxes,
-        .released_boxes = &released_boxes,
         .retained_tags = &retained_tags,
         .released_tags = &released_tags,
+        .split_boxes = &split_boxes,
     };
 
     var tag_a: u64 = 1;

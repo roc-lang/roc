@@ -3,6 +3,8 @@
 expect_visible role:heading name:"Async effects"
 expect_visible role:region name:"Async panel"
 expect_text text:"Status: loading" "Status: loading"
+expect_text text:"Waiting for task result" "Waiting for task result"
+expect_text text:"No task failure" "No task failure"
 expect_text text:"Ticks: 0" "Ticks: 0"
 expect_pending_task "lookup" 0
 expect_cleanup "async panel cleanup" 0
@@ -15,17 +17,19 @@ fill label:"Search" "roc"
 expect_pending_task "lookup" 1
 expect_text text:"Status: loading" "Status: loading"
 
-resolve_task "lookup" "Roc result"
+resolve_task "lookup" "Roc result payload that is intentionally longer than the Roc small string limit"
 expect_pending_task "lookup" 0
-expect_text text:"Status: done Roc result" "Status: done Roc result"
+expect_text text:"Status: done Roc result payload that is intentionally longer than the Roc small string limit" "Status: done Roc result payload that is intentionally longer than the Roc small string limit"
+expect_text text:"Ready payload: Roc result payload that is intentionally longer than the Roc small string limit" "Ready payload: Roc result payload that is intentionally longer than the Roc small string limit"
 
 fill label:"Search" "zig"
 expect_pending_task "lookup" 1
 expect_text text:"Status: loading" "Status: loading"
 
-reject_task "lookup" "offline"
+reject_task "lookup" "offline payload that is intentionally longer than the Roc small string limit"
 expect_pending_task "lookup" 0
-expect_text text:"Status: failed offline" "Status: failed offline"
+expect_text text:"Status: failed offline payload that is intentionally longer than the Roc small string limit" "Status: failed offline payload that is intentionally longer than the Roc small string limit"
+expect_text text:"Failed payload: offline payload that is intentionally longer than the Roc small string limit" "Failed payload: offline payload that is intentionally longer than the Roc small string limit"
 
 tick_interval 1000
 expect_text text:"Ticks: 2" "Ticks: 2"
@@ -40,11 +44,13 @@ expect_visible role:region name:"Panel closed"
 expect_pending_task "lookup" 0
 expect_cleanup "async panel cleanup" 1
 expect_interval 1000 0
-expect_metric_delta retained_alloc_delta -4
+expect_metric_delta retained_alloc_delta -7
 
 click role:button name:"Toggle panel"
 expect_visible role:region name:"Async panel"
 expect_text text:"Status: loading" "Status: loading"
+expect_text text:"Waiting for task result" "Waiting for task result"
+expect_text text:"No task failure" "No task failure"
 expect_text text:"Ticks: 0" "Ticks: 0"
 expect_cleanup "async panel cleanup" 1
 expect_interval 1000 1

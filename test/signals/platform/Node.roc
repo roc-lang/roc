@@ -23,9 +23,9 @@ Node := [].{
 	## marshal the typed payload before calling the transform.
 	Msg : {
 		binder : BinderRef,
-		payload_bool_tag : Box(HostValue.TypeTag(Bool)),
-		payload_str_tag : Box(HostValue.TypeTag(Str)),
-		payload_unit_tag : Box(HostValue.TypeTag({})),
+		payload_bool_tag : HostValue.TypeTag(Bool),
+		payload_str_tag : HostValue.TypeTag(Str),
+		payload_unit_tag : HostValue.TypeTag({}),
 		payload_accessor : U64,
 		payload_kind : U64,
 		payload_drop : Box((HostValue -> {})),
@@ -43,7 +43,7 @@ Node := [].{
 	TaskSource : {
 		token : Box(U64),
 		name : Str,
-		payload_tag : Box(HostValue.TypeTag(Str)),
+		payload_tag : HostValue.TypeTag(Str),
 		payload_drop : Box((HostValue -> {})),
 		initial : Box(({} -> HostValue)),
 		done : Box((HostValue -> HostValue)),

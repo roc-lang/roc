@@ -41,8 +41,13 @@ export function createMemoryViewCache(memory) {
       return this.refresh();
     },
     callHost(fn, ...args) {
-      const result = fn(...args);
-      const grew = this.afterHostCall();
+      let result;
+      let grew = false;
+      try {
+        result = fn(...args);
+      } finally {
+        grew = this.afterHostCall();
+      }
       return { result, grew };
     },
   };

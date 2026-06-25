@@ -3,20 +3,20 @@ import Node
 
 TaskStatus(a, err) := [Loading, Done(a), Failed(err)]
 
-Task(a, err) := { source : Node.TaskSource, tag : Box(HostValue.TypeTag(TaskStatus(a, err))) }
+Task(a, err) := { source : Node.TaskSource, tag : HostValue.TypeTag(TaskStatus(a, err)) }
 
 ## Opaque, typed signal. Wraps a boxed pure `Node.SignalExpr` descriptor
 ## referencing state/source binders. The `a` lives only in Roc's type system.
 ## Runtime values are opaque host-owned cells; each edge carries the exact typed
 ## thunks that can read, compare, transform, and release that cell.
-Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
+Signal(a) := { expr : Box(Node.SignalExpr), tag : HostValue.TypeTag(a) }.{
 	clone_expr : Box(Node.SignalExpr) -> Box(Node.SignalExpr)
 	clone_expr = |expr| expr
 
 	to_expr : Signal(a) -> Box(Node.SignalExpr)
 	to_expr = |signal| signal.expr
 
-	from_expr : Node.SignalExpr, Box(HostValue.TypeTag(a)) -> Signal(a)
+	from_expr : Node.SignalExpr, HostValue.TypeTag(a) -> Signal(a)
 	from_expr = |expr, tag| { expr: Box.box(expr), tag }
 
 	from_task : Task(a, err) -> Signal(TaskStatus(a, err))
@@ -70,7 +70,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		done : HostValue -> HostValue
 		done = |payload_hv| {
 			payload : Str
-			payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_tag))
+			payload = Box.unbox(HostValue.take_tagged(payload_hv, payload_tag))
 			status : TaskStatus(a, err)
 			status = TaskStatus.Done(to_done(payload))
 			HostValue.store_tagged(Box.box(status), status_tag)
@@ -79,7 +79,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), tag : Box(HostValue.TypeTag(a)) }.{
 		failed : HostValue -> HostValue
 		failed = |payload_hv| {
 			payload : Str
-			payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_tag))
+			payload = Box.unbox(HostValue.take_tagged(payload_hv, payload_tag))
 			status : TaskStatus(a, err)
 			status = TaskStatus.Failed(to_failed(payload))
 			HostValue.store_tagged(Box.box(status), status_tag)

@@ -33,20 +33,21 @@ SUITE_STEMS = tuple(app.stem for app in APP_SUITE)
 
 # API contract for the ops dashboard.
 #
-# `/api/ops/dashboard` is the typed app contract. It returns a fixed-order
-# UTF-8 line protocol:
+# `/api/ops/dashboard` is the typed app contract. It returns a schema-versioned
+# UTF-8 name/value line protocol:
 #
 #   key=value\n
 #
-# Values do not contain newlines. The Roc app decodes this explicit contract
-# into a concrete `Dashboard` record before rendering.
+# Values do not contain newlines. Field order is not meaningful. The Roc app
+# decodes this explicit contract into a concrete `Dashboard` record before
+# rendering.
 #
 # The section endpoints remain UTF-8 text diagnostics for manual QA. Every
 # response is deterministic simulated data derived from the current time. The
 # version advances every two seconds so the dashboard can exercise async refresh
 # behavior without external dependencies:
 #
-#   /api/ops/dashboard fixed-order dashboard line protocol
+#   /api/ops/dashboard name-keyed dashboard line protocol
 #   /api/ops/summary   status lines with updated/version/rollup values
 #   /api/ops/traffic   metric trend rows with an ASCII bar
 #   /api/ops/jobs      active job rows with id/state/progress/owner/age
@@ -79,6 +80,14 @@ def parse_args():
         help=(
             "Roc app to build. Defaults to the maintained six-app suite; pass "
             "one app path for targeted QA."
+        ),
+    )
+    parser.add_argument(
+        "--example",
+        choices=SUITE_STEMS,
+        help=(
+            "Build and serve one maintained example by stem, for example "
+            "ops_dashboard. Defaults to the full suite."
         ),
     )
     parser.add_argument(
@@ -120,7 +129,10 @@ def parse_args():
         default=os.environ.get("NO_SERVER") == "1",
         help="Build only; do not start the server.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.app and args.example:
+        parser.error("pass either --example or an app path, not both")
+    return args
 
 
 def repo_path(value):
@@ -295,7 +307,9 @@ def ops_api_snapshot(now=None):
         "error_bar_code": bar_code(error_permille, 80),
         "budget_bar_code": bar_code(1000 - budget_remaining_permille, 200),
         "webhook_rpm": webhook_rpm,
+        "webhook_bar_code": bar_code(max(0, webhook_rpm - 780), 480),
         "db_write_rpm": db_write_rpm,
+        "db_write_bar_code": bar_code(max(0, db_write_rpm - 520), 360),
         "queue_depth": queue_depth,
         "queue_trend_code": 2 if incident_active else 0 if recovery else 1,
         "queue_capacity": 120,
@@ -427,14 +441,12 @@ def ops_dashboard_fields(now=None):
     snap = ops_api_snapshot(source_now)
 
     return {
+        "schema": 1,
         "updated_version": snap["version"],
         "updated_hour": snap["updated_hour"],
         "updated_minute": snap["updated_minute"],
         "updated_second": snap["updated_second"],
-        "overall_code": snap["overall_code"],
-        "tone_code": snap["tone_code"],
         "phase_code": snap["phase_code"],
-        "incidents": snap["incidents"],
         "requests_per_minute": snap["requests_per_minute"],
         "traffic_delta_percent": snap["traffic_delta_percent"],
         "error_permille": snap["error_permille"],
@@ -443,7 +455,9 @@ def ops_dashboard_fields(now=None):
         "latency_ms": snap["latency_ms"],
         "latency_target_ms": snap["latency_target_ms"],
         "webhook_rpm": snap["webhook_rpm"],
+        "webhook_bar_code": snap["webhook_bar_code"],
         "db_write_rpm": snap["db_write_rpm"],
+        "db_write_bar_code": snap["db_write_bar_code"],
         "ingress_bar_code": snap["ingress_bar_code"],
         "latency_bar_code": snap["latency_bar_code"],
         "error_bar_code": snap["error_bar_code"],
@@ -476,8 +490,6 @@ def ops_dashboard_fields(now=None):
         "alert_b_age_min": snap["alert_b_age_min"],
         "alert_c_code": snap["alert_c_code"],
         "alert_c_age_min": snap["alert_c_age_min"],
-        "healthy_services": snap["healthy_services"],
-        "total_services": snap["total_services"],
         "edge_state_code": snap["edge_state_code"],
         "edge_latency_ms": snap["edge_latency_ms"],
         "api_state_code": snap["api_state_code"],
@@ -591,6 +603,24 @@ def default_apps():
     return APP_SUITE
 
 
+def suite_app(stem):
+    for app in APP_SUITE:
+        if app.stem == stem:
+            return app
+
+    raise SystemExit(f"unknown Signals example: {stem}")
+
+
+def selected_apps(args):
+    if args.example:
+        return [suite_app(args.example)]
+
+    if args.app:
+        return [repo_path(args.app)]
+
+    return list(default_apps())
+
+
 def app_title(app):
     return app.stem.replace("_", " ").title()
 
@@ -654,7 +684,7 @@ def serve(port, pages):
 def main():
     args = parse_args()
 
-    apps = [repo_path(args.app)] if args.app else list(default_apps())
+    apps = selected_apps(args)
     for app in apps:
         if not app.is_file():
             raise SystemExit(f"missing app: {repo_display(app)}")

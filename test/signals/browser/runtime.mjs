@@ -94,9 +94,9 @@ export async function instantiateSignalsWasm(url) {
   return instance;
 }
 
-export async function mountSignalsApp({ wasmUrl, root, taskHandler }) {
+export async function mountSignalsApp({ wasmUrl, root, taskHandler, onError }) {
   const instance = await instantiateSignalsWasm(wasmUrl);
-  const runtime = new SignalsRuntime(instance.exports, root, { taskHandler });
+  const runtime = new SignalsRuntime(instance.exports, root, { taskHandler, onError });
   runtime.mount();
   return runtime;
 }
@@ -111,6 +111,11 @@ export class SignalsRuntime {
     this.intervals = new Map();
     this.tasks = new Map();
     this.taskHandler = options.taskHandler ?? null;
+    this.onError = options.onError ?? ((err) => {
+      setTimeout(() => {
+        throw err;
+      }, 0);
+    });
     // The patch stream is inspectable: `lastCommands` holds the records drained
     // by the most recent host call so guards can assert the per-event patch
     // budget (mirrors the native host's `patches_emitted` discipline).
@@ -168,11 +173,41 @@ export class SignalsRuntime {
   resolveTask(requestId, value, failed = false) {
     const bytes = textEncoder.encode(value);
     const ptr = this.views.callHost(this.exports.roc_alloc, bytes.length, 1).result;
-    this.views.u8.set(bytes, ptr);
-    this.views.callHost(this.exports.roc_ui_resolve, requestId, ptr, bytes.length, failed ? 1 : 0);
-    this.views.callHost(this.exports.roc_dealloc, ptr, 1);
+    try {
+      this.views.u8.set(bytes, ptr);
+      this.views.callHost(this.exports.roc_ui_resolve, requestId, ptr, bytes.length, failed ? 1 : 0);
+    } catch (err) {
+      throw this.runtimeError(err);
+    } finally {
+      this.views.callHost(this.exports.roc_dealloc, ptr, 1);
+    }
     this.tasks.delete(requestId);
     this.applyPendingCommands();
+  }
+
+  runtimeError(err) {
+    const hostMessage = this.lastHostError();
+    if (hostMessage === "") {
+      return err;
+    }
+    const message = err?.message ? `${hostMessage}: ${err.message}` : hostMessage;
+    const wrapped = new Error(message);
+    wrapped.cause = err;
+    return wrapped;
+  }
+
+  lastHostError() {
+    const ptr = this.exports.roc_ui_last_error_ptr?.() ?? 0;
+    const len = this.exports.roc_ui_last_error_len?.() ?? 0;
+    if (ptr === 0 || len === 0) {
+      return "";
+    }
+    this.views.afterHostCall();
+    return textDecoder.decode(this.views.u8.subarray(ptr, ptr + len));
+  }
+
+  reportError(err) {
+    this.onError(err);
   }
 
   readPendingCommands() {
@@ -422,17 +457,26 @@ export class SignalsRuntime {
       return;
     }
 
-    Promise.resolve(handled)
-      .then((value) => {
+    Promise.resolve(handled).then(
+      (value) => {
         if (!controller.signal.aborted && this.tasks.has(requestId)) {
-          this.resolveTask(requestId, String(value), false);
+          try {
+            this.resolveTask(requestId, String(value), false);
+          } catch (err) {
+            this.reportError(err);
+          }
         }
-      })
-      .catch((err) => {
+      },
+      (err) => {
         if (!controller.signal.aborted && this.tasks.has(requestId)) {
-          this.resolveTask(requestId, String(err?.message ?? err), true);
+          try {
+            this.resolveTask(requestId, String(err?.message ?? err), true);
+          } catch (resolveErr) {
+            this.reportError(resolveErr);
+          }
         }
-      });
+      },
+    );
   }
 
   cancelTask(requestId) {

@@ -11,38 +11,77 @@
 const abi = @import("roc_platform_abi.zig");
 
 pub const HostValue = u64;
+pub const HostValueTypeTag = abi.__AnonStruct19;
 
 /// Carrier-type category recorded for a freshly boxed value. The native host
 /// uses it for debug type-tag assertions; the browser host ignores it.
 pub const ValueKind = enum { unit, str, bool, i64 };
 
+/// Signals represents signal tokens and binder tokens as boxed `U64` payloads
+/// in Roc. On wasm32 their payload alignment is 8 while pointer width is 4, so
+/// releasing them must not use the pointer-aligned `decrefBox` convenience
+/// helper.
+pub fn releaseU64Box(box: anytype, roc_host: *abi.RocHost) void {
+    abi.decrefBoxWith(@ptrCast(box), @alignOf(u64), null, roc_host);
+}
+
+pub fn normalizeHostValueTypeTag(tag: anytype) HostValueTypeTag {
+    return .{
+        .id = tag.@"id",
+        .split = tag.@"split",
+    };
+}
+
+pub fn retainHostValueTypeTag(tag: HostValueTypeTag) HostValueTypeTag {
+    abi.incref__AnonStruct19(tag, 1);
+    return tag;
+}
+
+pub fn releaseHostValueTypeTag(tag: HostValueTypeTag, roc_host: *abi.RocHost) void {
+    abi.decref__AnonStruct19(tag, roc_host);
+}
+
+pub fn hostValueTypeTagId(tag: HostValueTypeTag) u64 {
+    return tag.@"id";
+}
+
+pub fn hostValueTypeTagSplit(tag: HostValueTypeTag) abi.RocErasedCallable {
+    return tag.@"split";
+}
+
+pub fn hostValueTypeTagSplitFn(tag: HostValueTypeTag) ?abi.RocErasedCallableFn {
+    const split = hostValueTypeTagSplit(tag) orelse return null;
+    return abi.rocErasedCallablePayloadPtr(split).callable_fn_ptr;
+}
+
 /// Registry-ops adapter passed to `host_value_registry.Registry` calls. It
-/// refcounts boxes and tags through one `roc_host`. The two hosts use different
-/// `TypeTag` representations (`*anyopaque` vs `*u64`), so the tag type is an
-/// explicit parameter of the adapter.
+/// refcounts boxes and tags through one `roc_host`.
 pub fn RegistryOps(comptime TypeTag: type) type {
     return struct {
         roc_host: *abi.RocHost,
 
-        pub fn retainBox(_: @This(), box: abi.RocBox) void {
-            abi.increfBox(box, 1);
-        }
-
-        pub fn releaseBox(self: @This(), box: abi.RocBox) void {
-            abi.decrefBox(box, self.roc_host);
-        }
-
         pub fn retainTag(_: @This(), tag: TypeTag) void {
-            abi.increfBox(@ptrCast(tag), 1);
+            abi.incref__AnonStruct19(tag, 1);
         }
 
         pub fn releaseTag(self: @This(), tag: TypeTag) void {
-            abi.decrefBox(@ptrCast(tag), self.roc_host);
+            releaseHostValueTypeTag(tag, self.roc_host);
         }
 
         pub fn tagId(_: @This(), tag: TypeTag) u64 {
-            const payload: *const u64 = @ptrCast(@alignCast(tag));
-            return payload.*;
+            return hostValueTypeTagId(tag);
+        }
+
+        pub fn tagsMatch(_: @This(), actual_tag: TypeTag, expected_tag: TypeTag) bool {
+            const actual_id = hostValueTypeTagId(actual_tag);
+            if (actual_id != 0 and actual_id == hostValueTypeTagId(expected_tag)) return true;
+            const actual_split = hostValueTypeTagSplitFn(actual_tag) orelse return false;
+            const expected_split = hostValueTypeTagSplitFn(expected_tag) orelse return false;
+            return actual_split == expected_split;
+        }
+
+        pub fn splitBox(self: @This(), box: abi.RocBox, tag: TypeTag) @import("erased_calls.zig").RocBoxPair {
+            return @import("erased_calls.zig").callErasedRocBoxToRocBoxPair(self.roc_host, hostValueTypeTagSplit(tag), box);
         }
     };
 }
