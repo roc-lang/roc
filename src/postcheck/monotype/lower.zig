@@ -13967,6 +13967,11 @@ const BodyContext = struct {
         expr: checked.CheckedExprId,
         list_ty: Type.TypeId,
         item_ty: Type.TypeId,
+        append_items: []const checked.CheckedExprId = &.{},
+
+        fn deinit(self: ListIteratorSource, allocator: Allocator) void {
+            if (self.append_items.len != 0) allocator.free(self.append_items);
+        }
     };
 
     fn lowerIteratorFor(
@@ -13979,6 +13984,7 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
 
         if (try self.listIteratorSourceFromPlan(plan)) |source| {
+            defer source.deinit(self.allocator);
             return try self.lowerListIteratorFor(for_, result_ty, carries, source);
         }
 
@@ -14107,14 +14113,32 @@ const BodyContext = struct {
             else => return null,
         };
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "iter")) return null;
 
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (plan_args.len == 0) Common.invariant("checked .iter dispatch plan had no receiver argument");
         const receiver_expr = switch (plan_args[0]) {
             .checked_expr => |receiver| receiver,
-            else => Common.invariant("checked .iter dispatch receiver was not a checked expression"),
+            else => Common.invariant("checked iterator producer dispatch receiver was not a checked expression"),
         };
+
+        if (std.mem.eql(u8, self.view.names.methodNameText(plan.method), "append")) {
+            if (plan_args.len != 2) Common.invariant("checked Iter.append dispatch plan had an unexpected arity");
+            const appended_expr = switch (plan_args[1]) {
+                .checked_expr => |arg| arg,
+                else => Common.invariant("checked Iter.append item argument was not a checked expression"),
+            };
+            var source = (try self.listIteratorSourceFromExpr(receiver_expr)) orelse return null;
+            errdefer source.deinit(self.allocator);
+            const append_items = try self.allocator.alloc(checked.CheckedExprId, source.append_items.len + 1);
+            @memcpy(append_items[0..source.append_items.len], source.append_items);
+            append_items[source.append_items.len] = appended_expr;
+            source.deinit(self.allocator);
+            source.append_items = append_items;
+            try self.constrainTypeToMono(expr.ty, try self.lowerType(plan.dispatcher_ty));
+            return source;
+        }
+
+        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "iter")) return null;
 
         const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list)) {
@@ -14147,6 +14171,18 @@ const BodyContext = struct {
         const list_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source.list_ty);
         const list_expr = try self.builder.localExpr(list_local, source.list_ty);
 
+        const append_values = try self.allocator.alloc(Ast.ExprId, source.append_items.len);
+        defer self.allocator.free(append_values);
+        const append_locals = try self.allocator.alloc(Ast.LocalId, source.append_items.len);
+        defer self.allocator.free(append_locals);
+        const append_exprs = try self.allocator.alloc(Ast.ExprId, source.append_items.len);
+        defer self.allocator.free(append_exprs);
+        for (source.append_items, 0..) |item, index| {
+            append_values[index] = try self.lowerExprAtType(item, source.item_ty);
+            append_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), source.item_ty);
+            append_exprs[index] = try self.builder.localExpr(append_locals[index], source.item_ty);
+        }
+
         const len_value = try self.builder.lowLevelExpr(.list_len, &.{list_expr}, u64_ty);
         const len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
         const len_expr = try self.builder.localExpr(len_local, u64_ty);
@@ -14155,6 +14191,16 @@ const BodyContext = struct {
         const index_expr = try self.builder.localExpr(index_local, u64_ty);
         const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
         const next_index = try self.builder.lowLevelExpr(.num_plus, &.{ index_expr, one_expr }, u64_ty);
+        const limit_value = if (source.append_items.len == 0)
+            len_expr
+        else
+            try self.builder.lowLevelExpr(
+                .num_plus,
+                &.{ len_expr, try self.builder.intLiteralExpr(source.append_items.len, u64_ty) },
+                u64_ty,
+            );
+        const limit_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const limit_expr = try self.builder.localExpr(limit_local, u64_ty);
 
         _ = try self.builder.program.addIterPlan(.{
             .item_ty = source.item_ty,
@@ -14179,10 +14225,9 @@ const BodyContext = struct {
         try self.pushLoopContext(result_ty, carries);
         defer self.popLoopContext();
 
-        const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, len_expr }, bool_ty);
+        const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, limit_expr }, bool_ty);
         const done_body = try self.breakCurrentLoopExpr();
-        const item_expr = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ list_expr, index_expr }, source.item_ty);
-        const continue_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, item_expr, source.item_ty, next_index, carries);
+        const continue_body = try self.lowerListIteratorContinue(for_, result_ty, list_expr, len_expr, index_expr, source.item_ty, append_exprs, next_index, carries);
         const body = try self.builder.ifExpr(done_cond, done_body, continue_body, result_ty);
 
         const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
@@ -14202,13 +14247,71 @@ const BodyContext = struct {
             .initial_values = try self.builder.program.addExprSpan(initial_values),
             .body = body,
         } } });
-        const len_let = try self.wrapLet(len_local, u64_ty, len_value, loop_expr, result_ty);
+        var rest = loop_expr;
+        var append_index = append_locals.len;
+        while (append_index > 0) {
+            append_index -= 1;
+            rest = try self.wrapLet(append_locals[append_index], source.item_ty, append_values[append_index], rest, result_ty);
+        }
+        const limit_let = try self.wrapLet(limit_local, u64_ty, limit_value, rest, result_ty);
+        const len_let = try self.wrapLet(len_local, u64_ty, len_value, limit_let, result_ty);
 
         return .{ .let_ = .{
             .bind = try self.builder.bindPat(list_local, source.list_ty),
             .value = list_value,
             .rest = len_let,
         } };
+    }
+
+    fn lowerListIteratorContinue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        list_expr: Ast.ExprId,
+        len_expr: Ast.ExprId,
+        index_expr: Ast.ExprId,
+        item_ty: Type.TypeId,
+        append_exprs: []const Ast.ExprId,
+        next_index: Ast.ExprId,
+        carries: []const LoopCarry,
+    ) Allocator.Error!Ast.ExprId {
+        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ list_expr, index_expr }, item_ty);
+        const list_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, list_item, item_ty, next_index, carries);
+        if (append_exprs.len == 0) return list_body;
+
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const in_list = try self.builder.lowLevelExpr(.num_is_lt, &.{ index_expr, len_expr }, bool_ty);
+        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, item_ty, append_exprs);
+        const tail_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, tail_item, item_ty, next_index, carries);
+        return try self.builder.ifExpr(in_list, list_body, tail_body, result_ty);
+    }
+
+    fn listIteratorTailItemExpr(
+        self: *BodyContext,
+        len_expr: Ast.ExprId,
+        index_expr: Ast.ExprId,
+        item_ty: Type.TypeId,
+        append_exprs: []const Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        if (append_exprs.len == 0) Common.invariant("list iterator tail item requested without appended items");
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const tail_index = try self.builder.lowLevelExpr(.num_minus, &.{ index_expr, len_expr }, u64_ty);
+        var tail_item = append_exprs[append_exprs.len - 1];
+        if (append_exprs.len > 1) {
+            var reverse_index = append_exprs.len - 1;
+            while (reverse_index > 0) {
+                reverse_index -= 1;
+                const cond = try self.builder.lowLevelExpr(
+                    .num_is_eq,
+                    &.{ tail_index, try self.builder.intLiteralExpr(reverse_index, u64_ty) },
+                    bool_ty,
+                );
+                tail_item = try self.builder.ifExpr(cond, append_exprs[reverse_index], tail_item, item_ty);
+            }
+        }
+        return tail_item;
     }
 
     fn lowerListIteratorBodyThenContinue(
@@ -14488,7 +14591,7 @@ const BodyContext = struct {
 
         const before_expr = try self.builder.localExpr(before_local, iterator_ty);
         const after_expr = try self.builder.localExpr(after_local, item_ty);
-        const rest_expr = try self.iterAppendExpr(iterator_ty, item_ty, before_expr, after_expr);
+        const rest_expr = try self.iterAppendRestExpr(iterator_ty, item_ty, before_expr, after_expr);
 
         return .{
             .pat = tag_pat,
@@ -14609,30 +14712,67 @@ const BodyContext = struct {
         };
     }
 
-    fn iterAppendExpr(
+    fn iterAppendRestExpr(
         self: *BodyContext,
         iterator_ty: Type.TypeId,
         item_ty: Type.TypeId,
         first_expr: Ast.ExprId,
         after_expr: Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
+        const single_after = try self.iterSingleExpr(iterator_ty, item_ty, after_expr);
+        return try self.iterConcatExpr(iterator_ty, first_expr, single_after);
+    }
+
+    fn iterSingleExpr(
+        self: *BodyContext,
+        iterator_ty: Type.TypeId,
+        item_ty: Type.TypeId,
+        item_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
         const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse
-            Common.invariant("iterator Append lowering could not find Iter method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, "append") orelse
-            Common.invariant("checked method registry is missing Iter.append");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexIsolated(lookup, 0, iterator_ty);
-        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.append target had a non-function type");
+            Common.invariant("iterator Single lowering could not find Iter method owner");
+        const lookup = self.builder.lookupMethodTargetByName(owner, "single") orelse
+            Common.invariant("checked method registry is missing Iter.single");
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(lookup, 0, item_ty, iterator_ty);
+        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.single target had a non-function type");
         const arg_tys = self.builder.program.types.span(fn_data.args);
-        if (arg_tys.len != 2) Common.invariant("Iter.append target arity changed");
-        if (!self.sameType(arg_tys[0], iterator_ty)) Common.invariant("Iter.append first argument type differed from iterator type");
-        if (!self.sameType(arg_tys[1], item_ty)) Common.invariant("Iter.append second argument type differed from iterator item type");
-        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.append return type differed from iterator type");
+        if (arg_tys.len != 1) Common.invariant("Iter.single target arity changed");
+        if (!self.sameType(arg_tys[0], item_ty)) Common.invariant("Iter.single argument type differed from iterator item type");
+        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.single return type differed from iterator type");
 
         return try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
                 .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ first_expr, after_expr }),
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{item_expr}),
+            } },
+        });
+    }
+
+    fn iterConcatExpr(
+        self: *BodyContext,
+        iterator_ty: Type.TypeId,
+        first_expr: Ast.ExprId,
+        second_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse
+            Common.invariant("iterator Concat lowering could not find Iter method owner");
+        const lookup = self.builder.lookupMethodTargetByName(owner, "concat") orelse
+            Common.invariant("checked method registry is missing Iter.concat");
+        const arg_tys_wanted = [_]Type.TypeId{ iterator_ty, iterator_ty };
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys_wanted, iterator_ty);
+        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.concat target had a non-function type");
+        const arg_tys = self.builder.program.types.span(fn_data.args);
+        if (arg_tys.len != 2) Common.invariant("Iter.concat target arity changed");
+        if (!self.sameType(arg_tys[0], iterator_ty)) Common.invariant("Iter.concat first argument type differed from iterator type");
+        if (!self.sameType(arg_tys[1], iterator_ty)) Common.invariant("Iter.concat second argument type differed from iterator type");
+        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.concat return type differed from iterator type");
+
+        return try self.builder.program.addExpr(.{
+            .ty = fn_data.ret,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ first_expr, second_expr }),
             } },
         });
     }

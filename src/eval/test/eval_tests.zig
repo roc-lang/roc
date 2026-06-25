@@ -3683,6 +3683,19 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "10" },
     },
     .{
+        .name = "for loop over inline appended iterator",
+        .source =
+        \\{
+        \\    var $sum = 0.I64
+        \\    for item in [1.I64, 2].iter().append(3).append(4) {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =
         \\match Iter.next(Iter.keep_if([1.I64, 2].iter(), |item| item > 1)) {
