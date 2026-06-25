@@ -2288,6 +2288,44 @@ test "public Iter.next materializes iterator plan before Lambda" {
     try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
+test "public Iter.next materializes non-list iterator plans with public behavior" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\step_code : Iter(I64) -> I64
+        \\step_code = |iter|
+        \\    match Iter.next(iter) {
+        \\        Append({ after, .. }) => after
+        \\        One({ item, .. }) => item
+        \\        Skip(_) => -2
+        \\        _ => -1
+        \\    }
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 3 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg step_code(Iter.single(42.I64))
+        \\    dbg step_code(1.I64..<3.I64)
+        \\    dbg step_code(1.I64..=3.I64)
+        \\    dbg step_code(Iter.custom(0.I64, Unknown, advance))
+        \\    dbg step_code([10.I64, 20.I64].iter().append(30.I64))
+        \\    dbg step_code([10.I64, 20.I64].iter().prepended(5.I64))
+        \\    dbg step_code([10.I64].iter().concat([20.I64].iter()))
+        \\    dbg step_code([10.I64].iter().map(|n| n + 1))
+        \\    dbg step_code([10.I64, 20.I64].iter().keep_if(|n| n > 10))
+        \\    dbg step_code([10.I64, 20.I64].iter().drop_if(|n| n < 20))
+        \\    {}
+        \\}
+    , &.{ "42", "1", "1", "0", "30", "5", "10", "11", "-2", "-2" });
+}
+
 test "public aggregate storage materializes iterator plan before Lambda" {
     const allocator = std.testing.allocator;
     var lifted_source = try solveModuleWithIteratorPlans(allocator,

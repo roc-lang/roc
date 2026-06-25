@@ -600,10 +600,15 @@ Tasks:
     `Append(ListIter, item...)` plans lowers each selected branch to a private
     cursor loop while preserving scrutinee and producer operand order.
 - [ ] Materialization is implemented for every plan.
+  - [x] Recognized non-list producer plans (`Single`, finite `Range`,
+    `Custom`, `Append`, `Concat`, `Map`, and `Filter`) materialize to public
+    `Iter.next` behavior at unspecialized public boundaries.
 - [ ] Public `.step` access materializes.
 - [ ] Public `Iter.next` materializes when not specialized.
   - [x] Direct `Iter.next(List.iter(...))` materializes before Lambda and
     preserves public iterator behavior.
+  - [x] Public `Iter.next` through an unspecialized iterator argument preserves
+    public step variants for recognized non-list producer plans.
 - [ ] Public aggregate storage materializes.
   - [x] Tuple storage containing `List.iter(...)` materializes before Lambda.
 - [ ] Unspecialized function return materializes.
