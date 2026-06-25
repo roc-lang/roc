@@ -553,6 +553,130 @@ tag_union_struct_name = |duplicate_names, type_id, tu| {
 	}
 }
 
+hosted_module_name_to_struct_name = |name| {
+	match List.first(Str.split_on(name, ".")) {
+		Ok(module_name) => name_to_struct_name(module_name)
+		Err(_) => name_to_struct_name(name)
+	}
+}
+
+## RustGlue must keep distinct concrete structs for generic Roc types such as
+## `Try` because different hosted functions can use different payload layouts.
+## These aliases give platform authors stable API-level names while leaving the
+## concrete layout names available for low-level generated code.
+add_type_alias_rust = |state, alias, target| {
+	if alias == target or List.contains(state.seen, alias) {
+		state
+	} else {
+		{
+			content: Str.concat(state.content, "pub type ${alias} = ${target};\n"),
+			seen: state.seen.append(alias),
+		}
+	}
+}
+
+tag_union_has_payload_rust = |tu| !(List.all(tu.tags, |tag| List.is_empty(tag.payload)))
+
+add_tag_union_aliases_rust = |state, alias, target, tu| {
+	with_main_alias = add_type_alias_rust(state, alias, target)
+
+	if tag_union_has_payload_rust(tu) {
+		with_payload_alias = add_type_alias_rust(with_main_alias, "${alias}Payload", "${target}Payload")
+		add_type_alias_rust(with_payload_alias, "${alias}Tag", "${target}Tag")
+	} else {
+		with_main_alias
+	}
+}
+
+collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_names, type_id, alias_base, module_base| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) =>
+			match type_repr {
+				RocRecord(rec) =>
+					if rec.name != "" and rec.anonymous {
+						add_type_alias_rust(state, alias_base, type_id_to_rust(type_table, duplicate_names, type_id))
+					} else {
+						state
+					}
+				RocTagUnion(tu) =>
+					if List.len(tu.tags) == 1 {
+						match List.first(tu.tags) {
+							Ok(tag) => {
+								var $next = state
+								for payload_id in tag.payload {
+									$next = collect_semantic_type_aliases_for_type_id_rust(
+										$next,
+										type_table,
+										duplicate_names,
+										payload_id,
+										alias_base,
+										module_base,
+									)
+								}
+								$next
+							}
+							_ => state
+						}
+					} else if tu.name != "" {
+						target = type_id_to_rust(type_table, duplicate_names, type_id)
+						with_union_alias =
+							if tu.name == "Try" {
+								add_tag_union_aliases_rust(state, "${alias_base}Result", target, tu)
+							} else if tu.name == "IOErr" {
+								add_tag_union_aliases_rust(state, "${module_base}IOErr", target, tu)
+							} else {
+								state
+							}
+
+						var $next = with_union_alias
+						for tag in tu.tags {
+							child_base = "${alias_base}${capitalize_first(tag.name)}"
+							for payload_id in tag.payload {
+								$next = collect_semantic_type_aliases_for_type_id_rust(
+									$next,
+									type_table,
+									duplicate_names,
+									payload_id,
+									child_base,
+									module_base,
+								)
+							}
+						}
+						$next
+					} else {
+						state
+					}
+				RocList(elem_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, elem_id, alias_base, module_base)
+				RocBox(inner_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, inner_id, alias_base, module_base)
+				_ => state
+			}
+		Err(_) => state
+	}
+}
+
+generate_semantic_type_aliases_rust = |hosted_functions, type_table, duplicate_names| {
+	var $state = { content: "", seen: [] }
+
+	for func in hosted_functions {
+		alias_base = name_to_struct_name(func.name)
+		module_base = hosted_module_name_to_struct_name(func.name)
+		$state = collect_semantic_type_aliases_for_type_id_rust(
+			$state,
+			type_table,
+			duplicate_names,
+			func.ret_type_id,
+			alias_base,
+			module_base,
+		)
+	}
+
+	if $state.content == "" {
+		""
+	} else {
+		"// =============================================================================\n// Semantic Type Aliases\n// =============================================================================\n\n${$state.content}\n"
+	}
+}
+
 ## Convert function name to snake_case (e.g., "Stdout.line!" -> "stdout_line")
 name_to_snake : Str -> Str
 name_to_snake = |name| {
@@ -760,6 +884,7 @@ generate_rust_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_tag_union_structs_rust(type_table, duplicate_names))
 		.concat(generate_all_record_structs_rust(hosted_functions, type_table, duplicate_names))
 		.concat(generate_all_args_structs_rust(hosted_functions, type_table, duplicate_names))
+		.concat(generate_semantic_type_aliases_rust(hosted_functions, type_table, duplicate_names))
 		.concat(generate_refcount_helpers_rust(type_table, duplicate_names))
 		.concat("\n")
 		.concat(generate_runtime_symbol_externs_rust)
