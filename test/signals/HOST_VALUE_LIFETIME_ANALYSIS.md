@@ -12,9 +12,9 @@ the callback.
 
 That is not the whole bug.
 
-After the payload handoff is fixed, the ops dashboard still double-frees the
+After the payload handoff was fixed, the ops dashboard still double-freed the
 heap backing for the real `/api/ops/dashboard` response. Refined wasm phase
-diagnostics show this shape:
+diagnostics showed this shape:
 
 ```text
 roc_dealloc received a pointer that was already freed
@@ -30,15 +30,30 @@ evaluated, the first release is consistent with dropping the temporary
 `TaskStatus.Done(Str)` input after the derived `fold_task` result has been
 cached. The later release happens when the host clones/reads cached state.
 
-The critical conclusion is:
+The reduced wasm repros proved the missing retain was in wasm `Str.to_utf8` for
+non-small strings. Native/dev `Str.to_utf8` documents and implements that the
+returned `List(U8)` is a seamless slice sharing the string allocation, so heap
+strings must be incref'd before returning the list:
+[str.zig](/Users/luke/Documents/GitHub/roc/src/builtins/str.zig:1402).
+The wasm implementation copied the heap `RocStr` fields into a `RocList`
+without that retain:
+[WasmCodeGen.zig](/Users/luke/Documents/GitHub/roc/src/backend/wasm/WasmCodeGen.zig:13852).
+Dropping the derived `List(U8)` could therefore release the task response
+backing while the task-source cache still retained `TaskStatus.Done(Str)`.
+Later cleanup released the cached task body again.
+
+The architectural conclusion is narrower:
 
 > A host-owned erased registry is only sound if every retained `HostValue` has a
 > complete, coherent, monomorphized ownership capability. The current
-> source-level `TypeTag.split : Box(a) -> { keep, out }` is not proven sufficient
-> for nested refcounted values across the erased host boundary.
+> `TypeTag.split : Box(a) -> { keep, out }` is generated at app compile time, but
+> split/eq/drop/read are still scattered across descriptor fields instead of
+> bundled as one coherent per-edge capability.
 
-This does not yet prove "the host-owned graph architecture is wrong." It does
-prove that the current capability model is incomplete or too fragile.
+The immediate dashboard trap is not proof that the host-owned graph architecture
+is wrong. The reduced `HostValue` split repros now pass, and the dashboard fix
+belongs to wasm builtin lowering parity for `Str.to_utf8`. The capability
+coherence issue remains a design risk and audit target.
 
 ## Design Constraints
 
@@ -179,8 +194,8 @@ const payload_take_epoch = hostValueTakeEpoch();
 assertHostValueTakenAfter(payload, payload_take_epoch);
 ```
 
-The remaining double-free happens after this, during source dispatch, so the
-payload callback is no longer the whole explanation.
+The later double-free happened after this, during source dispatch, so the
+payload callback was no longer the whole explanation.
 
 ### 2. The first free is on the derived map dirty-eval path
 
@@ -235,7 +250,75 @@ copying. The ops dashboard still failed with the same `421 -> 409` double-free
 shape in that run; the final current-tree run refined the location to
 `455 -> 409`. So merely retaining/sharing the outer box is not sufficient.
 
-### 5. Making derived transforms consume their temporary inputs did not fix it
+### 5. A task-status-only monomorphic split did not fix it
+
+I tested two stronger split paths specifically for `TaskStatus(Str, Str)`:
+
+1. a direct Roc platform entrypoint:
+
+   ```roc
+   split_task_status_str :
+       Box(TaskStatus(Str, Str))
+       -> { keep : Box(TaskStatus(Str, Str)), out : Box(TaskStatus(Str, Str)) }
+   ```
+
+2. a Zig prototype that used the generated ABI `TaskStatus` layout plus the
+   generated recursive `increfTaskStatus` helper from the temporary glue output.
+
+Both experiments were wired through a dedicated tag id and instrumented so the
+host trapped if that branch was reached. The branch was reached, which proves
+the dashboard's task-status source split was using the monomorphic path. The
+ops dashboard still failed with:
+
+```text
+freed_phase=455 current_phase=409
+```
+
+That result is important but narrow:
+
+- it does not prove generated/monomorphized capabilities are unsound;
+- it proves that generating a capability for only `TaskStatus(Str, Str)` is
+  insufficient;
+- the failing value is still alive through downstream cached graph state after
+  `fold_task`, decode, and ready-branch evaluation.
+
+The dashboard creates app-level values derived from the same response backing:
+decoded dashboard state, branch state, derived text, and repeated render inputs.
+Those values are not platform ABI-visible types, so they cannot have helpers
+baked into the prebuilt host or ahead-of-time platform ABI. They can still have
+typed capabilities, because platform Roc modules are compiled into the app
+artifact and monomorphized against app types. The mechanism is already visible
+in `Signal.map`: `wrapped`, `eq`, `drop`, and `HostValue.new_tag({})`'s `split`
+are boxed as `RocErasedCallable` values after instantiation at concrete app
+types.
+
+`DebugGlue` being platform-shaped is expected. It confirms only that
+`roc_platform_abi.zig` is not the app-type capability generator. It does not
+prove that app-level capabilities are impossible.
+
+So the proof moved from:
+
+```text
+maybe TaskStatus(Str, Str) split is wrong
+```
+
+to:
+
+```text
+the host-owned graph needs complete typed capabilities for every cached
+HostValue type, not only the task-result type
+```
+
+That also lines up with the Signals design note that erasure must be confined to
+"one generated set of thunks per edge," pinned to monomorphized types:
+[DESIGN.md](/Users/luke/Documents/GitHub/roc/test/signals/DESIGN.md:195). The
+current implementation has `HostValue.new_tag({})` returning `id = 0` plus a
+source-level split closure for generic app-level cells:
+[HostValue.roc](/Users/luke/Documents/GitHub/roc/test/signals/platform/HostValue.roc:17).
+That closure is monomorphized by the app build, but it is still only one
+operation in a scattered edge contract, not a complete ownership dictionary.
+
+### 6. Making derived transforms consume their temporary inputs did not fix it
 
 I tested changing `Signal.map`/`map2`/`combine` transform callbacks to use
 `take_tagged` and changed the engine to stop dropping inputs after transform
@@ -245,39 +328,110 @@ shape. That experiment was reverted.
 This means the problem is deeper than "the map transform should consume the
 temporary HostValue."
 
-### 6. A reduced HostValue app reproduces a related boundary failure
+### 7. A reduced HostValue app exposed a generated box-alignment bug
 
 `tmp_signal_str_to_utf8_repro.roc` stores a heap-backed `Str` in
 `Signal.const`, maps it through `Str.to_utf8`, then renders the original signal.
 It renders but traps on unmount under the strict allocator ledger with an
-interior-pointer dealloc. That is a separate allocator/backend invariant, not
-the same exact double-free shape, but it confirms that `Signal.map` over a
-heap-backed `Str` at the HostValue boundary is enough to expose ownership
-problems without HTTP or dashboard parsing.
+interior-pointer dealloc.
+
+A smaller `Status.Done(Str)` HostValue repro also rendered successfully but
+trapped on unmount. The improved ledger showed:
+
+```text
+roc_dealloc received an interior pointer
+offset=4 requested_size=16 allocated_size=16 tracked_align=8
+```
+
+That was not the 1144-byte dashboard double-free. It was a generated Zig glue
+bug for boxed payload alignment: known non-refcounted boxed payloads such as
+`Box(U64)` were released through pointer-aligned `decrefBox`, which is invalid
+on wasm32 when the payload alignment is 8. `ZigGlue.roc` now emits
+`decrefBoxWith(..., @alignOf(payload), null, ...)` for known non-refcounted box
+payloads, and `roc_platform_abi.zig` was regenerated with `roc glue`.
+
+After that fix, both reduced HostValue cleanup repros mounted and unmounted
+cleanly. This is evidence that the monomorphized `HostValue.new_tag` split
+closure can satisfy the split law in the reduced `Status.Done(Str)` case. At
+that point the ops dashboard still failed with the original 1144-byte
+double-free, which led to the `Str.to_utf8` reductions below.
+
+### 8. Decode-only localized the remaining double-free to `Str.to_utf8`
+
+`tmp_repro_decode_only.roc` keeps the HTTP task, `Signal.fold_task`, and
+`Dashboard.decode`, but renders only `"ready <version>"`. It does not build the
+full dashboard view. With the real deterministic payload it:
+
+- resolves and renders successfully when the harness skips unmount;
+- used to double-free the same 1144-byte response allocation on unmount.
+
+So the successful async update can complete in a minimal decode-only graph. The
+remaining double-free was tied to cleanup of retained state after a successful
+decode.
+
+Two smaller reductions separated `Str.to_utf8` from the list-slice parser:
+
+| Repro | Body operation | Before wasm fix | After wasm fix |
+|---|---|---|---|
+| `tmp_repro_decode_no_utf8.roc` | `Str.count_utf8_bytes(body)` | pass | pass |
+| `tmp_repro_decode_to_utf8_only.roc` | `List.len(Str.to_utf8(body))` | double-free on unmount | pass |
+
+This proves `List.drop_first`, parser records, and dashboard view construction
+are not required. The minimal trigger was:
+
+```text
+source cache retains TaskStatus.Done(Str)
+fold_task split provides a cloned input Str to a decode map
+decode calls Str.to_utf8(body)
+the returned List(U8) aliases the same heap backing without an incref
+dropping the List(U8) frees the body backing
+later source/cache cleanup drops TaskStatus.Done(Str) and frees it again
+```
+
+The compiler model already said this builtin can retain or release sharing
+arguments:
+[LowLevel.zig](/Users/luke/Documents/GitHub/roc/src/base/LowLevel.zig:653).
+The native builtin already retained the heap string. The wasm backend was the
+outlier.
+
+The fix is in the wasm non-SSO branch:
+[WasmCodeGen.zig](/Users/luke/Documents/GitHub/roc/src/backend/wasm/WasmCodeGen.zig:13938).
+It now increfs the shared data pointer before constructing the `RocList`.
 
 ## Current Root-Cause Assessment
 
-The immediate root cause is not the HTTP task response transport. The response
-enters Roc, is stored as `TaskStatus.Done(Str)`, and then the successful derived
-path releases the response backing while cleaning up a temporary map input. A
-later cached clone tries to release the same backing again.
+The immediate root cause was not the HTTP task response transport and not a
+server/backend issue. The response entered Roc, was stored as
+`TaskStatus.Done(Str)`, and then the successful derived path called
+`Str.to_utf8` while decoding the body. The wasm implementation returned a
+`List(U8)` alias to the body backing without retaining that backing. A later
+temporary cleanup released the list, which released the body allocation while
+the source cache still owned the same body through `TaskStatus.Done(Str)`.
+Source/cache cleanup then released the body again.
 
-The likely ownership failure is:
+The fixed ownership flow is:
 
 ```text
 HostValue cache owns Box(TaskStatus.Done(Str))
 dirty eval clones/gets a HostValue for Signal.map
 Signal.map reads it through HostValue.get_tagged
 Dashboard.decode consumes the Str via Str.to_utf8/parse
-the map input cleanup releases the response backing
-the source/cache path still contains a value pointing at that same backing
-later cached clone/drop releases the backing again
+Str.to_utf8 returns List(U8) sharing the Str allocation and increfs the backing
+parse/list cleanup decrefs the List(U8) owner
+source/cache cleanup later decrefs the TaskStatus.Done(Str) owner
+the final owner releases the allocation exactly once
 ```
 
-The host does not know enough to fix this. It cannot increment the nested `Str`
-refcount without violating the design constraints. The typed split capability
-was supposed to provide that ownership, but the actual erased boundary path has
-not satisfied the split law.
+The host still does not know enough to fix this by incrementing nested `Str`
+refcounts itself; that would violate the design constraints. The correct layer
+was the typed builtin/codegen implementation that creates the aliased
+`List(U8)`.
+
+The reduced repro now suggests the generic monomorphized split body is not
+automatically unsound. The remaining design risk is coherence and sequencing of
+the scattered capabilities on successful async paths: split, transform,
+equality, drop, render reads, and cache replacement are owned by separate
+descriptor fields and host steps.
 
 ## Architecture Assessment
 
@@ -306,13 +460,39 @@ The current design is fragile because those capabilities are fragmented:
 That is not automatically unsound, but it makes the host-owned erased registry
 lifetime-critical in too many places.
 
+## Proof Conclusion
+
+The prebuilt host constraint is real: the Zig host and `roc_platform_abi.zig`
+cannot know app-defined types. That does not block generated capabilities,
+because platform Roc code is compiled into the app artifact and monomorphized at
+app compile time. `RocErasedCallable` is already the stable ABI for passing
+those app-generated capabilities to the type-blind host.
+
+The reduced HostValue split repro now passes, so a compiler ARC bug in the
+generic `split = Box.unbox; Box.box; Box.box` body is not the leading conclusion.
+The `decode_no_utf8` / `decode_to_utf8_only` pair proved the immediate
+1144-byte bug was wasm `Str.to_utf8` lowering, not `TaskStatus` splitting,
+`List.drop_first`, or dashboard-specific record construction.
+
+The generated/monomorphized capability design remains sound if it is coherent:
+each retained HostValue edge should carry the exact typed ownership operations
+for that edge's concrete value type, generated by monomorphized platform Roc
+closures rather than host-side layout knowledge.
+
+The next sound implementation step is not "add a TaskStatus helper" and not
+"increment Str in the host." For the immediate bug, the right fix is the wasm
+`Str.to_utf8` retain. For the broader design, bundle the per-edge operations
+that already exist as app-compiled closures into a coherent capability object,
+then audit host sequencing against that object. If that remains unmanageable,
+move more typed cache/state transitions into Roc platform code.
+
 ## Sound Solution Directions
 
-### Direction 1: Generated typed HostValue capabilities
+### Direction 1: Complete app-compiled HostValue capabilities
 
-Keep the host-owned graph, but replace source-level generic `split` as the
-ownership foundation with generated, monomorphized capabilities. A complete
-capability should likely be closer to:
+Keep the host-owned graph, but bundle the monomorphized platform Roc closures
+that already exist into one per-edge capability. A complete capability should
+likely be closer to:
 
 ```roc
 HostValueOps(a) := {
@@ -327,14 +507,19 @@ HostValueOps(a) := {
 The exact shape may differ. The key is that a retained erased value must carry
 one coherent ownership dictionary, not scattered partial thunks.
 
-If generated glue can produce a real box clone/split helper from layout metadata,
-this is the strongest medium-term continuation of the current architecture. It
+This is the strongest medium-term continuation of the current architecture. It
 preserves:
 
 - host-owned graph;
 - pure descriptor style;
-- explicit typed operations;
+- explicit typed operations generated at app compile time;
 - no host-side layout inference.
+
+The task-status-only experiment shows the required scope. The capability set
+must cover every host-retained cached value type in the graph, including
+app-level types, not just task-result types. The app-compile-time platform Roc
+path can express those capabilities; the missing piece is bundling and using
+them coherently.
 
 ### Direction 2: Move typed cache/state transitions into Roc platform runtime
 
@@ -386,33 +571,85 @@ invariant to investigate, not a host fallback case to accept.
 
 1. Keep the task payload `take_tagged` fix and host consume assertion.
 2. Treat `HostValue.get/get_tagged` as split-and-replace clone, never as borrow.
-3. Stop relying on source-level generic `TypeTag.split` as a proven capability
-   for nested refcounted erased values.
-4. Prototype or design generated typed HostValue capabilities from glue/layout
-   metadata.
-5. If generated capabilities are not enough or become unmanageable, move typed
+3. Keep the strict allocator ledger; it exposed the generated boxed-payload
+   alignment bug without accepting interior dealloc pointers.
+4. Bundle the app-compiled per-edge closures (`split`, `drop`, `eq`, reads,
+   transforms) into one coherent HostValue capability object.
+5. Keep the wasm `Str.to_utf8` implementation aligned with the native builtin:
+   heap strings return an aliased list and must retain the shared backing.
+6. Audit the dirty async success path against a coherent capability object,
+   especially cache replacement and post-transform cleanup ordering.
+7. If bundled capabilities are not enough or become unmanageable, move typed
    cache/state transitions into Roc platform entrypoints and leave the host as
    scheduler/effect/DOM executor.
 
 ## Validation Snapshot
 
-Current checks run after the failed transform experiment was reverted:
+Current checks run after reverting the temporary TaskStatus entrypoint,
+regenerating `roc_platform_abi.zig` with `roc glue`, fixing generated
+boxed-payload alignment, and fixing wasm `Str.to_utf8` heap-string retain:
 
 ```text
 ./zig-out/bin/roc check test/signals/apps/ops_dashboard.roc
 zig test test/signals/src/native_host.zig
+node --test test/signals/browser/runtime_contract.test.mjs
+python3 test/signals/serve.py test/signals/apps/tmp_hostvalue_split_status_get_repro.roc --output /private/tmp/tmp_hostvalue_split_status_get_repro.wasm --no-server --skip-tailwind
+node /private/tmp/signals_mount_harness.mjs /private/tmp/tmp_hostvalue_split_status_get_repro.wasm "len"
+python3 test/signals/serve.py test/signals/apps/tmp_signal_str_to_utf8_repro.roc --output /private/tmp/tmp_signal_str_to_utf8_repro.wasm --no-server --skip-tailwind
+node /private/tmp/signals_mount_harness.mjs /private/tmp/tmp_signal_str_to_utf8_repro.wasm "len"
 python3 test/signals/serve.py --example ops_dashboard --no-server --skip-tailwind
 node /private/tmp/signals_ops_dashboard_harness.mjs
+python3 test/signals/serve.py test/signals/apps/tmp_repro_decode_only.roc --output /private/tmp/tmp_repro_decode_only.wasm --no-server --skip-tailwind
+node /private/tmp/signals_task_harness.mjs /private/tmp/tmp_repro_decode_only.wasm "ready" --no-unmount
+node /private/tmp/signals_task_harness.mjs /private/tmp/tmp_repro_decode_only.wasm "ready"
+python3 test/signals/serve.py test/signals/apps/tmp_repro_decode_no_utf8.roc --output /private/tmp/tmp_repro_decode_no_utf8.wasm --no-server --skip-tailwind
+node /private/tmp/signals_task_harness.mjs /private/tmp/tmp_repro_decode_no_utf8.wasm "bytes"
+python3 test/signals/serve.py test/signals/apps/tmp_repro_decode_to_utf8_only.roc --output /private/tmp/tmp_repro_decode_to_utf8_only.wasm --no-server --skip-tailwind
+node /private/tmp/signals_task_harness.mjs /private/tmp/tmp_repro_decode_to_utf8_only.wasm "bytes"
+./zig-out/bin/roc check test/signals/apps/task_to_utf8_lifetime.roc
+python3 test/signals/serve.py test/signals/apps/task_to_utf8_lifetime.roc --output /private/tmp/task_to_utf8_lifetime.wasm --no-server --skip-tailwind
+node test/signals/browser/task_lifetime_harness.mjs /private/tmp/task_to_utf8_lifetime.wasm success
+node test/signals/browser/task_lifetime_harness.mjs /private/tmp/task_to_utf8_lifetime.wasm failure
+zig build roc
+zig build run-test-zig -- --test-filter "signals host task result callbacks consume heap string payloads"
+zig build run-test-zig -- --test-filter "render command"
+zig build run-test-signals
+zig build run-test-cli -- --suite glue --filter "ZigGlue"
 ```
 
 Results:
 
 - Roc check: passed.
-- Native host tests: passed.
+- Native host tests: passed, including the heap string task-payload consume
+  regression, through `zig build run-test-zig`.
+- Render command tests: passed through `zig build run-test-zig`.
+- Runtime contract tests: passed, including async resolve trap reporting.
+- Reduced `Status.Done(Str)` repeated HostValue split/read/unmount repro:
+  passed after the generated boxed-payload alignment fix.
+- Reduced `Signal.const(Str) -> Str.to_utf8` HostValue repro: passed after the
+  generated boxed-payload alignment fix.
+- Decode no-utf8 task repro: passed before and after the wasm fix.
+- Decode to-utf8-only task repro: failed before the wasm fix and passes after
+  the wasm fix.
+- Decode-only task repro: passes async resolve and unmount after the wasm fix.
+- Checked-in task-to-UTF-8 wasm regression: passed for both `Done(Str)` and
+  `Failed(Str)` task results. The harness asserts ready/failed text appears
+  while mounted and all HostValues are released after unmount.
 - Ops wasm build: passed.
-- Ops harness: still fails with the `1144` byte double-free, now localized to
-  `freed_phase=455 current_phase=409`.
+- Deterministic ops wasm harness: passed after removing the stale pre-unmount
+  zero-live-HostValues assertion; it now checks render text while mounted and
+  zero live HostValues after unmount.
+- `zig build roc`: passed.
+- `zig build run-test-signals`: initially exposed a stale
+  `async_effects.txt` metric expectation. Closing the async panel now releases
+  six more retained allocations, so the expected `retained_alloc_delta` changed
+  from `-7` to `-13`; after that fixture update, the full Signals suite passed.
+- Filtered ZigGlue CLI integration: 3 of 4 filtered cases passed; the `fx`
+  ZigGlue case failed on an unrelated generated `Padded` struct layout assertion
+  before exercising this boxed-payload change.
 
-This is a useful failure: it proves the remaining bug is a HostValue split/clone
-capability problem on the successful derived path, not a backend/server problem
-and not just the task payload callback ownership bug.
+The latest ops wasm harness no longer traps in `roc_ui_resolve` or on unmount.
+The old harness still had a stale pre-unmount assertion that expected
+`runtime.liveHostValues() == 0` while the app was mounted; after successful
+render that value is non-zero by design. The meaningful cleanup assertion is
+after `runtime.unmount()`.

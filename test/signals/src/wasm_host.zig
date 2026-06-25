@@ -726,8 +726,11 @@ fn freeRocAllocation(ptr: *anyopaque, alignment_arg: usize) RocAllocation {
     const min_alignment = @max(alignment_arg, @sizeOf(usize));
     const alignment = alignmentFromBytes(min_alignment);
     const index = findExactRocAllocationIndex(ptr) orelse {
-        if (findRocAllocationIndex(ptr) != null) {
-            failHostWithFmt("roc_dealloc received an interior pointer ptr=0x{x} align={} instead of the pointer returned by roc_alloc", .{ @intFromPtr(ptr), alignment_arg });
+        if (findRocAllocationIndex(ptr)) |interior_index| {
+            const alloc = roc_allocations.items[interior_index];
+            const base = @intFromPtr(alloc.user_ptr);
+            const ptr_addr = @intFromPtr(ptr);
+            failHostWithFmt("roc_dealloc received an interior pointer ptr=0x{x} align={} base=0x{x} offset={} requested_size={} allocated_size={} tracked_align={} current_phase={}", .{ ptr_addr, alignment_arg, base, ptr_addr - base, alloc.requested_size, alloc.allocated_size, alloc.alignment.toByteUnits(), roc_allocation_phase });
         }
         if (findRecentlyFreedRocAllocation(ptr)) |freed| {
             if (freed.alignment != alignment) {
@@ -756,8 +759,11 @@ export fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
 
 export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
     const old_index = findExactRocAllocationIndex(ptr) orelse {
-        if (findRocAllocationIndex(ptr) != null) {
-            failHostWithFmt("roc_realloc received an interior pointer ptr=0x{x} align={} instead of the pointer returned by roc_alloc", .{ @intFromPtr(ptr), alignment_arg });
+        if (findRocAllocationIndex(ptr)) |interior_index| {
+            const alloc = roc_allocations.items[interior_index];
+            const base = @intFromPtr(alloc.user_ptr);
+            const ptr_addr = @intFromPtr(ptr);
+            failHostWithFmt("roc_realloc received an interior pointer ptr=0x{x} align={} base=0x{x} offset={} requested_size={} allocated_size={} tracked_align={} current_phase={}", .{ ptr_addr, alignment_arg, base, ptr_addr - base, alloc.requested_size, alloc.allocated_size, alloc.alignment.toByteUnits(), roc_allocation_phase });
         }
         if (findRecentlyFreedRocAllocation(ptr)) |freed| {
             const min_alignment = @max(alignment_arg, @sizeOf(usize));

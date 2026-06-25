@@ -44,7 +44,7 @@ expect_visible role:region name:"Panel closed"
 expect_pending_task "lookup" 0
 expect_cleanup "async panel cleanup" 1
 expect_interval 1000 0
-expect_metric_delta retained_alloc_delta -7
+expect_metric_delta retained_alloc_delta -13
 
 click role:button name:"Toggle panel"
 expect_visible role:region name:"Async panel"

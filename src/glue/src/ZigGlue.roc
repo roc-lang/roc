@@ -1047,7 +1047,7 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 					} else if is_type_refcounted(type_table, inner_id) {
 						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), &${box_payload_decref_name(inner_id)}, roc_host);\n"
 					} else {
-						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
+						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), null, roc_host);\n"
 					}
 				}
 				Err(_) => missing_type_compile_error(inner_id, "boxed-payload decref")

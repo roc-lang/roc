@@ -13935,6 +13935,11 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         try self.emitLoadOp(.i32, 4);
         try self.emitLocalSet(str_cap);
 
+        // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
+        // Retain the shared backing so dropping the list does not invalidate the
+        // input Str that ARC still owns.
+        try self.emitDataPtrIncref(str_data, 1);
+
         try self.emitLocalGet(result_ptr);
         try self.emitLocalGet(str_data);
         try self.emitStoreOp(.i32, 0);

@@ -1732,7 +1732,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
     switch (value.tag) {
         .Combine => {
         const payload = value.payload_combine();
-        decrefBox(@ptrCast(payload._0), roc_host);
+        decrefBoxWith(@ptrCast(payload._0), @alignOf(u64), null, roc_host);
         {
             const list = payload._1;
             if (list.hasOneRef()) {
@@ -1748,7 +1748,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
         },
         .ConstValue => {
         const payload = value.payload_const_value();
-        decrefBox(@ptrCast(payload._0), roc_host);
+        decrefBoxWith(@ptrCast(payload._0), @alignOf(u64), null, roc_host);
         decrefErasedCallable(payload._1, roc_host);
         decrefErasedCallable(payload._2, roc_host);
         decrefErasedCallable(payload._3, roc_host);
@@ -1758,7 +1758,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
         },
         .Map => {
         const payload = value.payload_map();
-        decrefBox(@ptrCast(payload._0), roc_host);
+        decrefBoxWith(@ptrCast(payload._0), @alignOf(u64), null, roc_host);
         decrefBoxWith(@ptrCast(payload._1), @alignOf(NodeSignalExpr), &decrefBoxPayloadType43, roc_host);
         decrefErasedCallable(payload._2, roc_host);
         decrefErasedCallable(payload._3, roc_host);
@@ -1766,7 +1766,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
         },
         .Map2 => {
         const payload = value.payload_map2();
-        decrefBox(@ptrCast(payload._0), roc_host);
+        decrefBoxWith(@ptrCast(payload._0), @alignOf(u64), null, roc_host);
         decrefBoxWith(@ptrCast(payload._1), @alignOf(NodeSignalExpr), &decrefBoxPayloadType43, roc_host);
         decrefBoxWith(@ptrCast(payload._2), @alignOf(NodeSignalExpr), &decrefBoxPayloadType43, roc_host);
         decrefErasedCallable(payload._3, roc_host);
@@ -1774,7 +1774,7 @@ pub fn decrefNodeSignalExpr(value: NodeSignalExpr, roc_host: *RocHost) void {
         decrefErasedCallable(payload._5, roc_host);
         },
         .Ref => {
-        decrefBox(@ptrCast(value.payload_ref()), roc_host);
+        decrefBoxWith(@ptrCast(value.payload_ref()), @alignOf(u64), null, roc_host);
         },
         .TaskSource => {
         decref__AnonStruct57(value.payload_task_source(), roc_host);
@@ -1835,7 +1835,7 @@ pub fn decref__AnonStruct51(value: __AnonStruct51, roc_host: *RocHost) void {
     decrefErasedCallable(value.@"eq", roc_host);
     decrefErasedCallable(value.@"initial", roc_host);
     decrefErasedCallable(value.@"tick", roc_host);
-    decrefBox(@ptrCast(value.@"token"), roc_host);
+    decrefBoxWith(@ptrCast(value.@"token"), @alignOf(u64), null, roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct51.
@@ -1857,7 +1857,7 @@ pub fn decref__AnonStruct57(value: __AnonStruct57, roc_host: *RocHost) void {
     value.@"name".decref(roc_host);
     decrefErasedCallable(value.@"payload_drop", roc_host);
     decref__AnonStruct59(value.@"payload_tag", roc_host);
-    decrefBox(@ptrCast(value.@"token"), roc_host);
+    decrefBoxWith(@ptrCast(value.@"token"), @alignOf(u64), null, roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct57.
@@ -1975,7 +1975,7 @@ pub fn incref__AnonStruct73(value: __AnonStruct73, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct74.
 pub fn decref__AnonStruct74(value: __AnonStruct74, roc_host: *RocHost) void {
-    decrefBox(@ptrCast(value.@"binder"), roc_host);
+    decrefBoxWith(@ptrCast(value.@"binder"), @alignOf(u64), null, roc_host);
     decref__AnonStruct76(value.@"payload_bool_tag", roc_host);
     decrefErasedCallable(value.@"payload_drop", roc_host);
     decref__AnonStruct59(value.@"payload_str_tag", roc_host);
@@ -2005,8 +2005,8 @@ pub fn incref__AnonStruct76(value: __AnonStruct76, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct80.
 pub fn decref__AnonStruct80(value: __AnonStruct80, roc_host: *RocHost) void {
-    decrefBox(@ptrCast(value.@"keep"), roc_host);
-    decrefBox(@ptrCast(value.@"out"), roc_host);
+    decrefBoxWith(@ptrCast(value.@"keep"), @alignOf(bool), null, roc_host);
+    decrefBoxWith(@ptrCast(value.@"out"), @alignOf(bool), null, roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct80.
@@ -2027,8 +2027,8 @@ pub fn incref__AnonStruct82(value: __AnonStruct82, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct86.
 pub fn decref__AnonStruct86(value: __AnonStruct86, roc_host: *RocHost) void {
-    decrefBox(@ptrCast(value.@"keep"), roc_host);
-    decrefBox(@ptrCast(value.@"out"), roc_host);
+    decrefBoxWith(@ptrCast(value.@"keep"), @alignOf(void), null, roc_host);
+    decrefBoxWith(@ptrCast(value.@"out"), @alignOf(void), null, roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct86.
@@ -2089,7 +2089,7 @@ pub fn decref__AnonStruct100(value: __AnonStruct100, roc_host: *RocHost) void {
     decrefErasedCallable(value.@"request_init", roc_host);
     decrefErasedCallable(value.@"request_read", roc_host);
     value.@"task_name".decref(roc_host);
-    decrefBox(@ptrCast(value.@"task_token"), roc_host);
+    decrefBoxWith(@ptrCast(value.@"task_token"), @alignOf(u64), null, roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct100.
@@ -2113,7 +2113,7 @@ pub fn incref__AnonStruct101(value: __AnonStruct101, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct104.
 pub fn decref__AnonStruct104(value: __AnonStruct104, roc_host: *RocHost) void {
-    decrefBox(@ptrCast(value.@"binder"), roc_host);
+    decrefBoxWith(@ptrCast(value.@"binder"), @alignOf(u64), null, roc_host);
     decrefBoxWith(@ptrCast(value.@"child"), @alignOf(Elem), &decrefBoxPayloadType28, roc_host);
     decrefErasedCallable(value.@"drop", roc_host);
     decrefErasedCallable(value.@"eq", roc_host);
