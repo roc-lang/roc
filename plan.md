@@ -596,6 +596,9 @@ Tasks:
     whose result is consumed privately.
 - [ ] Private plan state can cross `if`.
 - [ ] Private plan state can cross `match`.
+  - [x] Direct `for` over a `match` whose branches are known `ListIter` /
+    `Append(ListIter, item...)` plans lowers each selected branch to a private
+    cursor loop while preserving scrutinee and producer operand order.
 - [ ] Materialization is implemented for every plan.
 - [ ] Public `.step` access materializes.
 - [ ] Public `Iter.next` materializes when not specialized.
@@ -622,6 +625,8 @@ Tasks:
     `Append(ListIter, item...)` plans lowers to branch-local private cursor
     loops instead of public iterator steps.
 - [ ] Optimized `for` through `match` avoids public step values.
+  - [x] Direct `for` over a `match` whose branches are known `ListIter` /
+    `Append(ListIter, item...)` plans avoids public iterator step tags.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
 - [x] Optimized `for` over direct `Single` consumes the plan value.
 - [x] Optimized `for` over direct `Append(ListIter, item...)` consumes plan

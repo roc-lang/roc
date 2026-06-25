@@ -15525,6 +15525,10 @@ const BodyContext = struct {
             return if_for;
         }
 
+        if (try self.matchIteratorFor(for_, result_ty, carries, plan)) |match_for| {
+            return match_for;
+        }
+
         if (try self.localIteratorPlanFor(for_, result_ty, carries, plan)) |local_for| {
             return local_for;
         }
@@ -15702,6 +15706,7 @@ const BodyContext = struct {
     ) Allocator.Error!?Ast.ExprData {
         if (try self.blockIteratorFor(for_, result_ty, carries, for_plan)) |block_for| return block_for;
         if (try self.ifIteratorFor(for_, result_ty, carries, for_plan)) |if_for| return if_for;
+        if (try self.matchIteratorFor(for_, result_ty, carries, for_plan)) |match_for| return match_for;
         if (try self.localIteratorPlanFor(for_, result_ty, carries, for_plan)) |local_for| return local_for;
         if (try self.iteratorPlanExprFor(for_, result_ty, carries, for_plan)) |plan_for| return plan_for;
         if (try self.customIteratorForPlan(for_, result_ty, carries, for_plan)) |custom_for| return custom_for;
@@ -15748,6 +15753,70 @@ const BodyContext = struct {
         return .{ .block = .{
             .statements = try self.builder.program.addStmtSpan(stmts.items[0..stmts.len]),
             .final_expr = final_expr,
+        } };
+    }
+
+    fn matchIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        for_plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.iteratorProducerPlansEnabled()) return null;
+
+        const expr = self.view.bodies.expr(for_.expr);
+        const match = switch (expr.data) {
+            .match_ => |match| match,
+            else => return null,
+        };
+
+        const scrutinee_ty = try self.matchScrutineeType(match);
+        const scrutinee = try self.lowerExprAtType(match.cond, scrutinee_ty);
+        const comptime_site = try self.matchComptimeSite(for_.expr, match);
+        const branches = try self.allocator.alloc(Ast.Branch, branchCount(match.branches));
+        defer self.allocator.free(branches);
+
+        var index: usize = 0;
+        for (match.branches) |branch| {
+            for (branch.patternsSlice(self.view.bodies)) |pattern| {
+                var branch_ctx = try self.childContext(self.current_fn_key);
+                defer branch_ctx.deinit();
+                var saved = std.ArrayList(BinderRestore).empty;
+                defer saved.deinit(self.allocator);
+                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
+                defer branch_ctx.restoreBinders(saved.items);
+
+                const pat = try branch_ctx.lowerPatternAtType(pattern.pattern, scrutinee_ty);
+                try branch_ctx.applyAlternativeBinderRemaps(pattern.binderRemapsSlice(self.view.bodies));
+                const user_guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const guard = try branch_ctx.conjoinPatternLiteralGuards(user_guard);
+
+                const branch_for = .{
+                    .expr = branch.value,
+                    .pattern = for_.pattern,
+                    .body = for_.body,
+                    .plan = for_.plan,
+                };
+                const body_data = (try branch_ctx.lowerKnownPlanIteratorFor(branch_for, result_ty, carries, for_plan)) orelse return null;
+                const body = try branch_ctx.builder.program.addExpr(.{
+                    .ty = result_ty,
+                    .data = body_data,
+                });
+
+                branches[index] = .{
+                    .pat = pat,
+                    .guard = guard,
+                    .body = try branch_ctx.wrapComptimeBranch(comptime_site, index, body),
+                };
+                index += 1;
+            }
+        }
+
+        return .{ .match_ = .{
+            .scrutinee = scrutinee,
+            .branches = try self.builder.program.addBranchSpan(branches),
+            .comptime_site = comptime_site,
         } };
     }
 

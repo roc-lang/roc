@@ -1680,6 +1680,49 @@ test "optimized for over if-selected list iter append uses private iterator curs
     try std.testing.expectEqual(@as(usize, 2), shape.list_get_unsafe_count);
 }
 
+test "optimized for over match-selected list iter append uses private iterator cursors" {
+    const source =
+        \\module [main]
+        \\
+        \\choose : () -> I64
+        \\choose = || {
+        \\    dbg "scrutinee"
+        \\    1.I64
+        \\}
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in match choose() {
+        \\        0 => [tap(4.I64), tap(5.I64)].iter()
+        \\        _ => [tap(1.I64), tap(2.I64)].iter().append(tap(3.I64))
+        \\    } {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "\"scrutinee\"", "1", "2", "3", "6" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 2), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 2), shape.list_get_unsafe_count);
+}
+
 test "optimized List.from_iter over direct list append consumes iterator plan" {
     try expectOptimizedDbgEvents(
         \\module [main]
