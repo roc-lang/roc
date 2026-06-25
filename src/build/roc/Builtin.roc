@@ -1145,20 +1145,20 @@ Builtin :: [].{
 		release_excess_capacity = |list| list_release_excess_capacity(list)
 
 		## Sort a list using a custom comparison function. The comparator receives two
-		## elements and returns `LT`, `EQ`, or `GT` to indicate their relative order.
+		## elements and returns `FirstBeforeSecond`, `Equivalent`, `SecondBeforeFirst` to indicate their relative order.
 		## ```roc
-		## expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
+		## expect [3, 1, 2].sort(|a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent) == [1, 2, 3]
 		##
-		## # Sort in descending order by swapping the LT and GT
-		## expect [3, 1, 2].sort_with(|a, b| if a > b LT else if a < b GT else EQ) == [3, 2, 1]
+		## # Sort in descending order by swapping the tags
+		## expect [3, 1, 2].sort(|a, b| if a < b SecondBeforeFirst else if a > b SecondBeforeFirst else Equivalent) == [3, 2, 1]
 		## ```
-		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
-		sort_with = |list, order| {
+		sort : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
+		sort = |list, order| {
             is_leq = |a, b| {
                 match order(a, b) {
-                    LT => True
-                    EQ => True
-                    GT => False
+                    FirstBeforeSecond => True
+                    Equivalent => True
+                    SecondBeforeFirst => False
                 }
             }
             sort_impl(list, is_leq)
