@@ -3651,9 +3651,9 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(entries_dir);
 
-        // Reconstruct the parser's discovered-import scheduling lists from the
+        // Derive the parser's discovered-import scheduling lists from the
         // module's recorded imports so a cache hit schedules dependencies exactly
-        // as the cold parse did. Local imports recover name+path from the child
+        // as the cold parse did. Local imports read name+path from the child
         // module; external imports were duped onto the module verbatim.
         var locals: std.ArrayList(cir_cache.TailLocalImport) = .empty;
         defer locals.deinit(manager.allocator);
@@ -5072,7 +5072,7 @@ pub const Coordinator = struct {
         check.TypedCIR.prepareRuntimeEnv(module_alloc, cached_env) catch return error.CirMiss;
         cached_env.module_role = task.module_role;
 
-        // Recover the parser's discovered-import scheduling lists from the tail,
+        // Read the parser's discovered-import scheduling lists from the tail,
         // copied into the result allocator (the lists outlive this task).
         const worker_alloc = task_allocs.result;
         var decoded = (cir_cache.decodeTail(worker_alloc, bodies.tail_body) catch |e| return e) orelse return error.CirMiss;

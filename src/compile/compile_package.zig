@@ -1744,7 +1744,7 @@ pub const PackageEnv = struct {
         // now-available imports. Imports were already resolved
         // (`setResolvedModule`) by the coordinator before this call. This pass
         // only emits the dependency-dependent diagnostics (kept out of the
-        // source-pure CIR); consumers recover the imported node index on demand.
+        // source-pure CIR); consumers resolve the imported node index on demand.
         // Ownership of the diagnostics transfers to the returned output so the
         // caller can render them into the module's reports.
         var resolve_diagnostics: can.ResolveExternalDiagnostics = .empty;

@@ -34,7 +34,7 @@ pub const Diagnostics = std.ArrayList(Diagnostic);
 /// that cannot be resolved. Returns the number of unresolved references so the
 /// caller can block artifact publication.
 ///
-/// Consumers (the checker, artifact publication, hoisting analysis) recover the
+/// Consumers (the checker, artifact publication, hoisting analysis) resolve the
 /// imported node index on the fly from the same exposed-items lookup, so no
 /// resolution table is stored; this pass exists solely to emit the
 /// dependency-dependent diagnostics exactly once per module.
@@ -212,7 +212,7 @@ pub fn lookupExposedNode(
     }
 
     // Strategy 2: exposed-target lookup with the type-module qualification
-    // fallback, matching canon's `lookupImportedExposed{Value,Type}Node`.
+    // path, matching canon's `lookupImportedExposed{Value,Type}Node`.
     var scratch: std.ArrayList(u8) = .empty;
     defer scratch.deinit(gpa);
     switch (kind) {

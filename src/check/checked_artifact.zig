@@ -11602,7 +11602,7 @@ fn categorizeValueRef(
             checked_bodies,
         ),
         .e_lookup_external => |external| blk: {
-            // Recover the imported node index on the fly from the symbolic
+            // Resolve the imported node index on the fly from the symbolic
             // reference (CIR stores only the import index + name, keeping it a
             // pure function of source).
             const owner_env = module.moduleEnvConst();
