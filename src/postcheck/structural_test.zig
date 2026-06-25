@@ -58,6 +58,23 @@ test "Monotype has direct calls and no checked-only expression forms" {
     try std.testing.expect(!@hasField(Mono.ExprData, "for_"));
 }
 
+test "Monotype owns explicit builtin iterator plan storage" {
+    try std.testing.expect(@hasField(Mono.Program, "iter_plans"));
+    try std.testing.expect(@hasDecl(Mono.Program, "addIterPlan"));
+    try std.testing.expect(@hasDecl(Mono.Program, "iterPlan"));
+    try std.testing.expect(Mono.IterPlanId == @import("iter_plan.zig").IterPlanId);
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "list"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "range"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "unbounded_range"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "single"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "append"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "concat"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "map"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "filter"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "custom"));
+    try std.testing.expect(@hasField(Mono.IterPlan.Data, "public"));
+}
+
 test "Monotype types are closed checked types without row tails" {
     try std.testing.expect(@hasField(MonoType.Content, "record"));
     try std.testing.expect(@hasField(MonoType.Content, "tag_union"));

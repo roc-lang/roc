@@ -4,6 +4,8 @@ const std = @import("std");
 
 /// Shared ids, inputs, and invariants for post-check stages.
 pub const Common = @import("common.zig");
+/// Compiler-internal builtin iterator plan data.
+pub const IterPlan = @import("iter_plan.zig");
 /// Closed source-shape IR after checking has removed dispatch syntax.
 pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");

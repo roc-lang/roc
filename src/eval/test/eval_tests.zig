@@ -3607,6 +3607,68 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[3, 1, 2]" },
     },
     .{
+        .name = "inspect: Iter.next reuses public iterator values",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter()
+        \\
+        \\    first = match Iter.next(iter) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    second = match Iter.next(iter) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    (first, second)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1, 1)" },
+    },
+    .{
+        .name = "inspect: for loop does not mutate aliased public iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter()
+        \\    saved = iter
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\
+        \\    saved_first = match Iter.next(saved) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    ($sum, saved_first)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 1)" },
+    },
+    .{
+        .name = "inspect: escaped Iter.next rest keeps public meaning",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter()
+        \\
+        \\    rest = match Iter.next(iter) {
+        \\        One({ rest, .. }) => rest
+        \\        _ => iter
+        \\    }
+        \\
+        \\    match Iter.next(rest) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
         .name = "for loop over appended iterator",
         .source =
         \\{

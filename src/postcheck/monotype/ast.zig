@@ -9,6 +9,7 @@ const can = @import("can");
 const builtins = @import("builtins");
 
 const Common = @import("../common.zig");
+const iter_plan = @import("../iter_plan.zig");
 const Type = @import("type.zig");
 
 const checked = check.CheckedModule;
@@ -28,12 +29,16 @@ pub const NestedDefId = enum(u32) { _ };
 pub const FnId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
+/// Identifier for a compiler-internal iterator plan in Monotype IR.
+pub const IterPlanId = iter_plan.IterPlanId;
 /// Identifier assigned by Monotype lifting when this storage is consumed.
 pub const LiftedFnId = enum(u32) { _ };
 /// Identifier for an owned string literal.
 pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
+
+pub const IterPlan = iter_plan.IterPlan(ExprId, LocalId, FnId, Type.TypeId);
 
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {
@@ -602,6 +607,7 @@ pub const Program = struct {
     next_symbol: u32,
     types: Type.Store,
     fns: std.ArrayList(Fn),
+    iter_plans: std.ArrayList(IterPlan),
     defs: std.ArrayList(Def),
     nested_defs: std.ArrayList(NestedDef),
     exprs: std.ArrayList(Expr),
@@ -653,6 +659,7 @@ pub const Program = struct {
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .fns = .empty,
+            .iter_plans = .empty,
             .defs = .empty,
             .nested_defs = .empty,
             .exprs = .empty,
@@ -725,6 +732,7 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.nested_defs.deinit(self.allocator);
         self.defs.deinit(self.allocator);
+        self.iter_plans.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -734,6 +742,18 @@ pub const Program = struct {
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         try self.fns.append(self.allocator, .{ .source = source });
         return id;
+    }
+
+    pub fn addIterPlan(self: *Program, plan: IterPlan) std.mem.Allocator.Error!IterPlanId {
+        const id: IterPlanId = @enumFromInt(@as(u32, @intCast(self.iter_plans.items.len)));
+        try self.iter_plans.append(self.allocator, plan);
+        return id;
+    }
+
+    pub fn iterPlan(self: *const Program, id: IterPlanId) IterPlan {
+        const raw = @intFromEnum(id);
+        if (raw >= self.iter_plans.items.len) Common.invariant("Monotype iterator plan id referenced a missing plan");
+        return self.iter_plans.items[raw];
     }
 
     pub fn addLocalProcContextSpan(self: *Program, contexts: []const LocalProcContext) std.mem.Allocator.Error!Span(LocalProcContext) {
