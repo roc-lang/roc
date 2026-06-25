@@ -7516,6 +7516,7 @@ fn rocBuildWasmSurgical(
     defer codegen.deinit();
     loaded_module = false;
     codegen.configureBuiltinRelocs(builtin_symbols);
+    codegen.configureStaticDataAddressTracking();
 
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
