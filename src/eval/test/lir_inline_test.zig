@@ -1354,6 +1354,55 @@ test "optimized for over list.iter append chain uses private iterator cursor" {
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
+test "optimized for over Iter.single uses private iterator cursor" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in Iter.single(42.I64) {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_get_unsafe_count);
+}
+
+test "user single method is not recognized as builtin single iterator" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\Boxed := [Boxed].{
+        \\    single : I64 -> Iter(I64)
+        \\    single = |item| Iter.single(item)
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in Boxed.single(42.I64) {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expect(shape.direct_call_count > 0 or shape.tag_assign_count > 0 or shape.store_tag_count > 0);
+}
+
 test "user iter method is not recognized as builtin list cursor" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,

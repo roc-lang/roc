@@ -13974,6 +13974,12 @@ const BodyContext = struct {
         }
     };
 
+    const SingleIteratorSource = struct {
+        item: checked.CheckedExprId,
+        item_ty: Type.TypeId,
+        iterator_ty: Type.TypeId,
+    };
+
     fn lowerIteratorFor(
         self: *BodyContext,
         for_: anytype,
@@ -13986,6 +13992,10 @@ const BodyContext = struct {
         if (try self.listIteratorSourceFromPlan(plan)) |source| {
             defer source.deinit(self.allocator);
             return try self.lowerListIteratorFor(for_, result_ty, carries, source);
+        }
+
+        if (try self.singleIteratorSourceFromPlan(plan)) |source| {
+            return try self.lowerSingleIteratorFor(for_, result_ty, carries, source);
         }
 
         const step = try self.iteratorStepShape(plan.step_ty);
@@ -14108,11 +14118,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
     ) Allocator.Error!?ListIteratorSource {
         const expr = self.view.bodies.expr(expr_id);
-        const plan_id = switch (expr.data) {
-            .dispatch_call => |maybe_plan| maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan"),
-            else => return null,
-        };
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
 
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (plan_args.len == 0) Common.invariant("checked .iter dispatch plan had no receiver argument");
@@ -14157,6 +14163,171 @@ const BodyContext = struct {
         };
     }
 
+    fn singleIteratorSourceFromPlan(
+        self: *BodyContext,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?SingleIteratorSource {
+        if (!self.builder.iterator_plans) return null;
+
+        if (!self.methodNameIs(plan.iter.method, "iter")) {
+            Common.invariant("checked iterator for plan did not call .iter");
+        }
+        if (!self.methodNameIs(plan.next.method, "next")) {
+            Common.invariant("checked iterator for plan did not call .next");
+        }
+
+        const iter_args = plan.iter.argsSlice(self.view.static_dispatch_plans);
+        if (iter_args.len != 1 or plan.iter.dispatcher_arg_index != 0) {
+            Common.invariant("checked iterator .iter plan had an unexpected argument shape");
+        }
+
+        const iterable_expr = switch (iter_args[0]) {
+            .checked_expr => |expr| expr,
+            .loop_iterator_state => Common.invariant("iterator .iter dispatch used loop iterator state"),
+        };
+        if (iterable_expr != plan.iterable) {
+            Common.invariant("iterator .iter dispatch argument differed from iterator-for iterable");
+        }
+
+        const source = (try self.singleIteratorSourceFromExpr(iterable_expr)) orelse return null;
+        try self.constrainTypeToMono(plan.item_ty, source.item_ty);
+        try self.constrainTypeToMono(plan.iterator_ty, source.iterator_ty);
+        return source;
+    }
+
+    fn singleIteratorSourceFromExpr(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+    ) Allocator.Error!?SingleIteratorSource {
+        const expr = self.view.bodies.expr(expr_id);
+        const iterator_ty = try self.lowerType(expr.ty);
+
+        const item = switch (expr.data) {
+            .call => |call| blk: {
+                const direct_target = call.direct_target orelse return null;
+                if (!self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "single")) return null;
+                if (call.args.len != 1) Common.invariant("checked Iter.single direct call had an unexpected arity");
+                break :blk call.args[0];
+            },
+            else => blk: {
+                const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+                if (!self.methodNameIs(plan.method, "single")) return null;
+                if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+                const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+                if (plan_args.len != 1) Common.invariant("checked Iter.single dispatch plan had an unexpected arity");
+                break :blk switch (plan_args[0]) {
+                    .checked_expr => |arg| arg,
+                    else => Common.invariant("checked Iter.single item argument was not a checked expression"),
+                };
+            },
+        };
+
+        return .{
+            .item = item,
+            .item_ty = try self.lowerType(self.view.bodies.expr(item).ty),
+            .iterator_ty = iterator_ty,
+        };
+    }
+
+    fn directTargetMatchesIteratorMethod(
+        self: *BodyContext,
+        direct_target: checked.ResolvedValueId,
+        iterator_ty: Type.TypeId,
+        comptime method_name: []const u8,
+    ) bool {
+        const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse return false;
+        const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse return false;
+        const expected = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure,
+            .local_proc => return false,
+        };
+        return self.resolvedValueMatchesProcedureMethodTarget(direct_target, expected);
+    }
+
+    fn resolvedValueMatchesProcedureMethodTarget(
+        self: *BodyContext,
+        ref_id: checked.ResolvedValueId,
+        expected: static_dispatch.ProcedureMethodTarget,
+    ) bool {
+        const raw = @intFromEnum(ref_id);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target referenced a missing resolved value");
+        }
+        return switch (self.view.resolved_refs.records[raw].ref) {
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |procedure| self.procedureUseMatchesProcedureMethodTarget(procedure, expected),
+            .platform_required_proc => |required| self.procedureUseMatchesProcedureMethodTarget(required.procedure, expected),
+            .local_proc,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .platform_required_declaration,
+            .platform_required_const,
+            => false,
+        };
+    }
+
+    fn procedureUseMatchesProcedureMethodTarget(
+        self: *BodyContext,
+        procedure: checked.ProcedureUseTemplate,
+        expected: static_dispatch.ProcedureMethodTarget,
+    ) bool {
+        return switch (procedure.binding) {
+            .top_level => |top_level| blk: {
+                const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
+                const binding = view.top_level_procedure_bindings.get(top_level.binding);
+                break :blk procedureBindingBodyMatchesProcedureMethodTarget(binding.body, expected);
+            },
+            .imported => |imported| blk: {
+                const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
+                for (view.exported_procedure_bindings.bindings) |binding| {
+                    if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
+                        break :blk importedProcedureBindingBodyMatchesProcedureMethodTarget(binding.body, expected);
+                    }
+                }
+                Common.invariant("imported direct-call target was not exported by its checked module");
+            },
+            .hosted => |hosted| names.procedureValueRefEql(hosted.proc, expected.proc) and
+                names.procedureTemplateRefEql(hosted.template, expected.template),
+            .platform_required => |required| blk: {
+                const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
+                const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
+                break :blk procedureBindingBodyMatchesProcedureMethodTarget(binding.body, expected);
+            },
+        };
+    }
+
+    fn dispatchPlanForIteratorProducerExpr(
+        self: *BodyContext,
+        expr: checked.CheckedExpr,
+    ) ?static_dispatch.StaticDispatchCallPlan {
+        const plan_id = switch (expr.data) {
+            .dispatch_call => |maybe_plan| maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan"),
+            .type_dispatch_call => |maybe_plan| maybe_plan orelse Common.invariant("checked type-dispatch expression reached Monotype without a dispatch plan"),
+            else => return null,
+        };
+        return self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+    }
+
+    fn dispatchPlanOwnerMatchesResult(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
+        const dispatcher_owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse return false;
+        const result_owner = methodOwnerFromType(&self.builder.program.types, result_ty) orelse return false;
+        return methodOwnerOrder(dispatcher_owner, result_owner) == .eq;
+    }
+
     fn methodNameIs(
         self: *BodyContext,
         method: names.MethodNameId,
@@ -14166,6 +14337,75 @@ const BodyContext = struct {
             method == wanted_id
         else
             false;
+    }
+
+    fn lowerSingleIteratorFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        source: SingleIteratorSource,
+    ) Allocator.Error!Ast.ExprData {
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const u64_ty = try self.builder.primitiveType(.u64);
+
+        const item_value = try self.lowerExprAtType(source.item, source.item_ty);
+        const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source.item_ty);
+        const item_expr = try self.builder.localExpr(item_local, source.item_ty);
+
+        const emitted_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), bool_ty);
+        const emitted_expr = try self.builder.localExpr(emitted_local, bool_ty);
+        const next_emitted = try self.boolLiteral(true, bool_ty);
+
+        _ = try self.builder.program.addIterPlan(.{
+            .item_ty = source.item_ty,
+            .length = .{ .known = try self.builder.intLiteralExpr(1, u64_ty) },
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .data = .{ .single = .{
+                .item = item_expr,
+                .emitted = emitted_local,
+            } },
+        });
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (carries) |carry| {
+            try self.saveBinder(carry.binder, &saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        defer self.restoreBinders(saved.items);
+
+        try self.pushLoopContext(result_ty, carries);
+        defer self.popLoopContext();
+
+        const done_body = try self.breakCurrentLoopExpr();
+        const continue_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, item_expr, source.item_ty, next_emitted, carries);
+        const body = try self.builder.ifExpr(emitted_expr, done_body, continue_body, result_ty);
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = emitted_local, .ty = bool_ty };
+        for (carries, 0..) |carry, i| params[i + 1] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(Ast.ExprId, 1 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = try self.boolLiteral(false, bool_ty);
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 1] = try self.builder.localExpr(carry.initial_local, carry.ty);
+        }
+
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(params),
+            .initial_values = try self.builder.program.addExprSpan(initial_values),
+            .body = body,
+        } } });
+
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(item_local, source.item_ty),
+            .value = item_value,
+            .rest = loop_expr,
+        } };
     }
 
     fn lowerListIteratorFor(
@@ -16614,6 +16854,38 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
                 .module_name = def.module_name,
                 .type_name = def.type_name,
             } },
+    };
+}
+
+fn procedureBindingBodyMatchesProcedureMethodTarget(
+    body: checked.ProcedureBindingBody,
+    expected: static_dispatch.ProcedureMethodTarget,
+) bool {
+    return switch (body) {
+        .direct_template => |direct| directProcedureBindingMatchesProcedureMethodTarget(direct, expected),
+        .callable_eval_template => false,
+    };
+}
+
+fn importedProcedureBindingBodyMatchesProcedureMethodTarget(
+    body: checked.ImportedProcedureBindingBody,
+    expected: static_dispatch.ProcedureMethodTarget,
+) bool {
+    return switch (body) {
+        .direct_template => |direct| directProcedureBindingMatchesProcedureMethodTarget(direct, expected),
+        .callable_eval_template => false,
+    };
+}
+
+fn directProcedureBindingMatchesProcedureMethodTarget(
+    direct: checked.DirectProcedureBinding,
+    expected: static_dispatch.ProcedureMethodTarget,
+) bool {
+    if (!names.procedureValueRefEql(direct.proc_value, expected.proc)) return false;
+    return switch (direct.template) {
+        .checked => |template| names.procedureTemplateRefEql(template, expected.template),
+        .synthetic => |synthetic| names.procedureTemplateRefEql(synthetic.template, expected.template),
+        .lifted => false,
     };
 }
 

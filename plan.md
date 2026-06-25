@@ -726,7 +726,7 @@ Tests:
       generated code shape.
 - [x] `List.iter` produces a `ListIter` plan for optimized consumers.
 - [ ] Numeric ranges produce finite or unbounded range plans.
-- [ ] `Iter.single` produces a `Single` plan.
+- [x] `Iter.single` produces a `Single` plan.
 - [ ] `Iter.append` produces an `Append` plan.
 - [ ] `Iter.concat` produces a `Concat` plan.
 - [ ] `Iter.map` produces a `Map` plan.
