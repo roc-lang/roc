@@ -16382,12 +16382,12 @@ const BodyContext = struct {
     ) Allocator.Error!?Ast.ExprId {
         if (try self.listAppendIteratorPlanFromPlan(plan_id)) |append_plan| {
             defer append_plan.deinit(self.allocator);
-            return try self.lowerListAppendIteratorPlanToList(append_plan, list_ty);
+            return try self.lowerListAppendIteratorPlanToList(append_plan, list_ty, .none);
         }
 
         const plan = self.builder.program.iterPlan(plan_id);
         switch (plan.data) {
-            .single => |single| return try self.lowerSingleIteratorPlanToList(single, plan.item_ty, list_ty),
+            .single => |single| return try self.lowerSingleIteratorPlanToList(single, plan.item_ty, list_ty, .none),
             .range => |range| return try self.lowerRangeIteratorPlanToList(range, plan.item_ty, list_ty, plan.length, .none),
             .map => |map| return try self.lowerMapIteratorPlanToList(map, plan.item_ty, list_ty),
             else => return null,
@@ -16399,15 +16399,13 @@ const BodyContext = struct {
         single: Ast.IterPlan.SingleIter,
         item_ty: Type.TypeId,
         list_ty: Type.TypeId,
+        adapter: CollectItemAdapter,
     ) Allocator.Error!Ast.ExprId {
         const u64_ty = try self.builder.primitiveType(.u64);
         const list_item_ty = switch (self.builder.shapeContent(list_ty)) {
             .list => |elem_ty| elem_ty,
             else => Common.invariant("iterator list consumer result type was not a list"),
         };
-        if (!self.sameType(item_ty, list_item_ty)) {
-            Common.invariant("single iterator collection item type differed from result list element type");
-        }
 
         const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
         const item_expr = try self.builder.localExpr(item_local, item_ty);
@@ -16417,7 +16415,8 @@ const BodyContext = struct {
             &.{try self.builder.intLiteralExpr(1, u64_ty)},
             list_ty,
         );
-        const with_item = try self.builder.lowLevelExpr(.list_append_unsafe, &.{ one_list, item_expr }, list_ty);
+        const collected_item = try self.collectAdaptItem(item_expr, item_ty, list_item_ty, adapter);
+        const with_item = try self.builder.lowLevelExpr(.list_append_unsafe, &.{ one_list, collected_item }, list_ty);
         return try self.wrapLet(item_local, item_ty, single.item, with_item, list_ty);
     }
 
@@ -16425,6 +16424,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: ListAppendIteratorPlan,
         list_ty: Type.TypeId,
+        adapter: CollectItemAdapter,
     ) Allocator.Error!Ast.ExprId {
         const u64_ty = try self.builder.primitiveType(.u64);
         const bool_ty = try self.builder.primitiveType(.bool);
@@ -16433,9 +16433,6 @@ const BodyContext = struct {
             .list => |elem_ty| elem_ty,
             else => Common.invariant("iterator list consumer result type was not a list"),
         };
-        if (!self.sameType(plan.item_ty, list_item_ty)) {
-            Common.invariant("iterator list consumer plan item type differed from result list element type");
-        }
 
         const source_list_ty = self.builder.program.exprs.items[@intFromEnum(plan.list.list)].ty;
         const source_list_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_list_ty);
@@ -16488,6 +16485,8 @@ const BodyContext = struct {
             next_index,
             out_expr,
             plan.item_ty,
+            list_item_ty,
+            adapter,
             append_exprs,
         );
         const body = try self.builder.ifExpr(done_cond, done_body, continue_body, list_ty);
@@ -16946,17 +16945,21 @@ const BodyContext = struct {
         index_expr: Ast.ExprId,
         next_index: Ast.ExprId,
         out_expr: Ast.ExprId,
-        item_ty: Type.TypeId,
+        source_item_ty: Type.TypeId,
+        result_item_ty: Type.TypeId,
+        adapter: CollectItemAdapter,
         append_exprs: []const Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
-        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ source_list_expr, index_expr }, item_ty);
-        const list_continue = try self.listCollectContinue(list_ty, out_expr, list_item, next_index);
+        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ source_list_expr, index_expr }, source_item_ty);
+        const collected_list_item = try self.collectAdaptItem(list_item, source_item_ty, result_item_ty, adapter);
+        const list_continue = try self.listCollectContinue(list_ty, out_expr, collected_list_item, next_index);
         if (append_exprs.len == 0) return list_continue;
 
         const bool_ty = try self.builder.primitiveType(.bool);
         const in_list = try self.builder.lowLevelExpr(.num_is_lt, &.{ index_expr, len_expr }, bool_ty);
-        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, item_ty, append_exprs);
-        const tail_continue = try self.listCollectContinue(list_ty, out_expr, tail_item, next_index);
+        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, source_item_ty, append_exprs);
+        const collected_tail_item = try self.collectAdaptItem(tail_item, source_item_ty, result_item_ty, adapter);
+        const tail_continue = try self.listCollectContinue(list_ty, out_expr, collected_tail_item, next_index);
         return try self.builder.ifExpr(in_list, list_continue, tail_continue, list_ty);
     }
 
@@ -17030,7 +17033,13 @@ const BodyContext = struct {
             Common.invariant("mapped iterator collection result item type differed from list element type");
         }
 
+        if (try self.listAppendIteratorPlanFromPlan(source_plan)) |append_plan| {
+            defer append_plan.deinit(self.allocator);
+            return try self.lowerListAppendIteratorPlanToList(append_plan, list_ty, adapter);
+        }
+
         switch (source.data) {
+            .single => |single| return try self.lowerSingleIteratorPlanToList(single, source.item_ty, list_ty, adapter),
             .range => |range| return try self.lowerRangeIteratorPlanToList(range, source.item_ty, list_ty, source.length, adapter),
             else => return null,
         }
