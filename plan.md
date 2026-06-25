@@ -131,6 +131,9 @@ Current branch status:
 - direct `List.iter` and direct `Iter.single` source `for` loops consume
   already-lowered `ListIter` and `Single` plan values instead of replaying the
   checked producer expression.
+- direct `Append(ListIter, item...)` source `for` loops consume already-lowered
+  `Append` plan trees and append item expressions instead of replaying the
+  checked producer expression.
 - direct finite numeric ranges are consumed by optimized `for` as private
   numeric cursor state, including inclusive end values at numeric maxima.
 - direct `Iter.custom` is consumed by optimized `for` as private custom state
@@ -590,6 +593,8 @@ Tasks:
 - [ ] Optimized `for` through `match` avoids public step values.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
 - [x] Optimized `for` over direct `Single` consumes the plan value.
+- [x] Optimized `for` over direct `Append(ListIter, item...)` consumes plan
+  values.
 - [ ] Optimized `for` over `Append` and `Concat` uses explicit phase state.
 - [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
 - [x] Optimized `for` over ranges uses direct numeric state.

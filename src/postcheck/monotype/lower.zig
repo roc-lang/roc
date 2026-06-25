@@ -14029,6 +14029,16 @@ const BodyContext = struct {
         iterator_ty: Type.TypeId,
     };
 
+    const ListAppendIteratorPlan = struct {
+        list: Ast.IterPlan.ListIter,
+        item_ty: Type.TypeId,
+        append_items: []const Ast.ExprId = &.{},
+
+        fn deinit(self: ListAppendIteratorPlan, allocator: Allocator) void {
+            if (self.append_items.len != 0) allocator.free(self.append_items);
+        }
+    };
+
     fn lowerIteratorProducerPlanExpr(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -14735,6 +14745,10 @@ const BodyContext = struct {
             return single_for;
         }
 
+        if (try self.appendListIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |append_for| {
+            return append_for;
+        }
+
         if (try self.listIteratorSourceFromPlan(plan)) |source| {
             defer source.deinit(self.allocator);
             return try self.lowerListIteratorFor(for_, result_ty, carries, source);
@@ -15166,7 +15180,7 @@ const BodyContext = struct {
             else => Common.invariant("checked List.iter expression lowered to a non-list iterator plan"),
         };
 
-        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, list, iter_plan_value.item_ty);
+        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, list, iter_plan_value.item_ty, &.{});
     }
 
     fn checkedExprCanProduceListIterPlan(
@@ -15191,6 +15205,7 @@ const BodyContext = struct {
         carries: []const LoopCarry,
         list: Ast.IterPlan.ListIter,
         item_ty: Type.TypeId,
+        append_items: []const Ast.ExprId,
     ) Allocator.Error!Ast.ExprData {
         const u64_ty = try self.builder.primitiveType(.u64);
         const bool_ty = try self.builder.primitiveType(.bool);
@@ -15203,10 +15218,29 @@ const BodyContext = struct {
         const len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
         const len_expr = try self.builder.localExpr(len_local, u64_ty);
 
+        const append_locals = try self.allocator.alloc(Ast.LocalId, append_items.len);
+        defer self.allocator.free(append_locals);
+        const append_exprs = try self.allocator.alloc(Ast.ExprId, append_items.len);
+        defer self.allocator.free(append_exprs);
+        for (append_items, 0..) |_, index| {
+            append_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+            append_exprs[index] = try self.builder.localExpr(append_locals[index], item_ty);
+        }
+
         const index_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
         const index_expr = try self.builder.localExpr(index_local, u64_ty);
         const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
         const next_index = try self.builder.lowLevelExpr(.num_plus, &.{ index_expr, one_expr }, u64_ty);
+        const limit_value = if (append_items.len == 0)
+            len_expr
+        else
+            try self.builder.lowLevelExpr(
+                .num_plus,
+                &.{ len_expr, try self.builder.intLiteralExpr(append_items.len, u64_ty) },
+                u64_ty,
+            );
+        const limit_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const limit_expr = try self.builder.localExpr(limit_local, u64_ty);
 
         var saved = std.ArrayList(BinderRestore).empty;
         defer saved.deinit(self.allocator);
@@ -15219,9 +15253,9 @@ const BodyContext = struct {
         try self.pushLoopContext(result_ty, carries);
         defer self.popLoopContext();
 
-        const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, len_expr }, bool_ty);
+        const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, limit_expr }, bool_ty);
         const done_body = try self.breakCurrentLoopExpr();
-        const continue_body = try self.lowerListIteratorContinue(for_, result_ty, list_expr, len_expr, index_expr, item_ty, &.{}, next_index, carries);
+        const continue_body = try self.lowerListIteratorContinue(for_, result_ty, list_expr, len_expr, index_expr, item_ty, append_exprs, next_index, carries);
         const body = try self.builder.ifExpr(done_cond, done_body, continue_body, result_ty);
 
         const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
@@ -15241,12 +15275,80 @@ const BodyContext = struct {
             .initial_values = try self.builder.program.addExprSpan(initial_values),
             .body = body,
         } } });
-        const len_let = try self.wrapLet(len_local, u64_ty, len_value, loop_expr, result_ty);
+        var rest = loop_expr;
+        var append_index = append_locals.len;
+        while (append_index > 0) {
+            append_index -= 1;
+            rest = try self.wrapLet(append_locals[append_index], item_ty, append_items[append_index], rest, result_ty);
+        }
+        const limit_let = try self.wrapLet(limit_local, u64_ty, limit_value, rest, result_ty);
+        const len_let = try self.wrapLet(len_local, u64_ty, len_value, limit_let, result_ty);
         return .{ .let_ = .{
             .bind = try self.builder.bindPat(list_local, list_ty),
             .value = list.list,
             .rest = len_let,
         } };
+    }
+
+    fn appendListIteratorPlanForPlanValue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.builder.iterator_producer_plans) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceAppendPlan(for_.expr, iterator_ty)) return null;
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked Iter.append expression did not lower to an iterator plan"),
+        };
+        const append_plan = (try self.listAppendIteratorPlanFromPlan(plan_id)) orelse return null;
+        defer append_plan.deinit(self.allocator);
+
+        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, append_plan.list, append_plan.item_ty, append_plan.append_items);
+    }
+
+    fn checkedExprCanProduceAppendPlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        const expr_ty = try self.lowerType(expr.ty);
+        if (!self.sameType(expr_ty, iterator_ty)) return false;
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, "append")) return false;
+        return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
+    }
+
+    fn listAppendIteratorPlanFromPlan(
+        self: *BodyContext,
+        plan_id: Ast.IterPlanId,
+    ) Allocator.Error!?ListAppendIteratorPlan {
+        const plan = self.builder.program.iterPlan(plan_id);
+        switch (plan.data) {
+            .list => |list| return .{
+                .list = list,
+                .item_ty = plan.item_ty,
+            },
+            .append => |append| {
+                var before = (try self.listAppendIteratorPlanFromPlan(append.before)) orelse return null;
+                errdefer before.deinit(self.allocator);
+                const append_items = try self.allocator.alloc(Ast.ExprId, before.append_items.len + 1);
+                @memcpy(append_items[0..before.append_items.len], before.append_items);
+                append_items[before.append_items.len] = append.after;
+                before.deinit(self.allocator);
+                before.append_items = append_items;
+                return before;
+            },
+            else => return null,
+        }
     }
 
     fn singleIteratorPlanForPlanValue(
