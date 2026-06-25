@@ -1063,13 +1063,8 @@ const Pass = struct {
         out: *std.ArrayList(Ast.ExprId),
     ) Allocator.Error!bool {
         if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
-        var cloner = Cloner.initForRewrite(self);
-        defer cloner.deinit();
-
         for (pattern.args, args) |shape, arg| {
-            const value = try cloner.cloneExprValue(arg);
-            if (!shapeMatchesValue(self.program, shape, value)) return false;
-            try cloner.appendExprsFromValue(shape, value, out);
+            if (!try self.appendExistingExprsForShape(shape, arg, out)) return false;
         }
         return true;
     }
@@ -1286,6 +1281,7 @@ const Cloner = struct {
     loop_stack: std.ArrayList(LoopPattern),
     inline_direct_calls: bool,
     inline_direct_requires_known_arg: bool,
+    reserve_call_patterns: bool,
     current_loc: SourceLoc,
     current_region: Region,
 
@@ -1302,6 +1298,7 @@ const Cloner = struct {
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = true,
+            .reserve_call_patterns = true,
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
         };
@@ -1320,6 +1317,7 @@ const Cloner = struct {
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = false,
+            .reserve_call_patterns = false,
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
         };
@@ -2105,15 +2103,23 @@ const Cloner = struct {
             for (args, 0..) |arg, index| {
                 values[index] = try self.cloneExprValue(arg);
             }
-            try self.pass.ensureCallPatternForValues(callee, values);
+            if (self.reserve_call_patterns) {
+                try self.pass.ensureCallPatternForValues(callee, values);
+            }
 
             for (self.pass.plans[raw].specs.items) |spec| {
+                const spec_fn_id = spec.fn_id orelse {
+                    if (self.reserve_call_patterns) {
+                        Common.invariant("call-pattern specialization id was not assigned before cloning calls");
+                    }
+                    continue;
+                };
                 var rewritten_args = std.ArrayList(Ast.ExprId).empty;
                 defer rewritten_args.deinit(self.pass.allocator);
 
                 if (try self.appendClonedCallArgs(spec.pattern, args, &rewritten_args)) {
                     return .{ .call_proc = .{
-                        .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
+                        .callee = .{ .lifted = spec_fn_id },
                         .args = try self.pass.program.addExprSpan(rewritten_args.items),
                         .is_cold = call.is_cold,
                     } };
