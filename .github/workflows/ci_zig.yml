@@ -7,6 +7,14 @@ name: CI New Compiler
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
 
+# Keep fetched dependency packages in their own cache directory, separate from
+# build artifacts, so they can be cached under a stable key (the build.zig.zon
+# hash). A cold artifact cache then no longer forces re-downloading deps from
+# GitHub, which is the source of the transient HttpConnectionClosing fetch
+# failures CI hit on cache misses.
+env:
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
+
 jobs:
   # Checks that don't need to run on every OS
   check-once:
@@ -30,10 +38,26 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          use-cache: true
+          # We manage the dependency-package cache ourselves below (stable key);
+          # mlugg's combined global+local cache uses a per-run key that churns
+          # and evicts under the repo cache quota, which is what left cold caches
+          # re-fetching deps and hitting HttpConnectionClosing.
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.zig-global-cache
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: zig lints
-        run: zig build run-check-zig-lints
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build run-check-zig-lints
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
       - name: code tidiness
         run: zig build run-check-tidy
@@ -180,7 +204,19 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          use-cache: true
+          # We manage the dependency-package cache ourselves below (stable key);
+          # mlugg's combined global+local cache uses a per-run key that churns
+          # and evicts under the repo cache quota, which is what left cold caches
+          # re-fetching deps and hitting HttpConnectionClosing.
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.zig-global-cache
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
       # linker locates the Windows SDK/MSVC libpaths at runtime.
@@ -192,7 +228,11 @@ jobs:
 
       - name: Run eval tests with LLVM backend
         if: runner.os != 'Windows'
-        run: zig build run-test-eval -- --llvm
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build run-test-eval -- --llvm
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
       # test that compiles the whole program (front-end + LIR lowering) before
@@ -204,7 +244,11 @@ jobs:
       # runners where 30s is plenty. Give Windows a larger hang budget.
       - name: Run eval tests with LLVM backend (Windows)
         if: runner.os == 'Windows'
-        run: zig build run-test-eval -- --llvm --timeout 120000
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build run-test-eval -- --llvm --timeout 120000
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
         if: runner.os != 'Windows'
@@ -259,7 +303,19 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          use-cache: true
+          # We manage the dependency-package cache ourselves below (stable key);
+          # mlugg's combined global+local cache uses a per-run key that churns
+          # and evicts under the repo cache quota, which is what left cold caches
+          # re-fetching deps and hitting HttpConnectionClosing.
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.zig-global-cache
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
       - name: delete llvm-config
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
@@ -267,7 +323,11 @@ jobs:
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
       - name: build roc + repro executables
-        run: zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
@@ -373,10 +433,26 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          use-cache: true
+          # We manage the dependency-package cache ourselves below (stable key);
+          # mlugg's combined global+local cache uses a per-run key that churns
+          # and evicts under the repo cache quota, which is what left cold caches
+          # re-fetching deps and hitting HttpConnectionClosing.
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.zig-global-cache
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: build roc + repro executables for valgrind
-        run: git clean -fdx && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: git clean -fdx -e .zig-global-cache && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
       - name: install valgrind
         run: |
@@ -414,10 +490,26 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
-          use-cache: true
+          # We manage the dependency-package cache ourselves below (stable key);
+          # mlugg's combined global+local cache uses a per-run key that churns
+          # and evicts under the repo cache quota, which is what left cold caches
+          # re-fetching deps and hitting HttpConnectionClosing.
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.zig-global-cache
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: cross compile with llvm
-        run: zig build -Dtarget=${{ matrix.target }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build -Dtarget=${{ matrix.target }}
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:

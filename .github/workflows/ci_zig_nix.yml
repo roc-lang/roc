@@ -39,10 +39,18 @@ jobs:
               # When free space drops below min-free (1 GB), nix GCs until max-free (5 GB) is available. This avoids "No space left on device" on CI.
 
       - name: Build inside a nix dev shell
-        run: nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}'
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
       - name: Build Nix package
         if: ${{ runner.os == 'Linux'  }}
-        run: |
-          nix build ./src#roc
-          result/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: |
+            nix build ./src#roc
+            result/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3

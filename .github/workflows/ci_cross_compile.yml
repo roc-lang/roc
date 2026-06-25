@@ -6,6 +6,12 @@ name: Cross Compilation Test
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
 
+# Cache fetched dependency packages under a stable key (the build.zig.zon hash)
+# in their own directory, so a cold runner doesn't re-download deps from GitHub
+# and hit transient HttpConnectionClosing fetch failures.
+env:
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
+
 jobs:
   # Cross-compile all fx platform tests from all host platforms
   roc-cross-compile:
@@ -32,6 +38,14 @@ jobs:
           version: 0.16.0
           use-cache: false
 
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.zig-global-cache
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # ratchet:ilammy/msvc-dev-cmd@v1.13.0
@@ -39,7 +53,11 @@ jobs:
           arch: x64
 
       - name: Build roc compiler and test_runner
-        run: zig build
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build
+          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          retry_count: 3
 
       - name: Run fx platform cross-compilation tests (Unix)
         if: runner.os != 'Windows'
