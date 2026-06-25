@@ -722,6 +722,8 @@ const ProcShape = struct {
     low_level_count: usize = 0,
     list_len_count: usize = 0,
     list_get_unsafe_count: usize = 0,
+    list_with_capacity_count: usize = 0,
+    list_append_unsafe_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
     str_concat_count: usize = 0,
     box_box_count: usize = 0,
@@ -787,6 +789,8 @@ fn collectProcShape(
                 switch (stmt.op) {
                     .list_len => shape.list_len_count += 1,
                     .list_get_unsafe => shape.list_get_unsafe_count += 1,
+                    .list_with_capacity => shape.list_with_capacity_count += 1,
+                    .list_append_unsafe => shape.list_append_unsafe_count += 1,
                     .str_count_utf8_bytes => shape.str_count_utf8_bytes_count += 1,
                     .str_concat => shape.str_concat_count += 1,
                     .box_box => shape.box_box_count += 1,
@@ -1629,6 +1633,48 @@ test "optimized for over local append from local list.iter uses private iterator
     try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
     try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
+test "optimized List.from_iter over direct list append consumes iterator plan" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg List.from_iter([1.I64, 2.I64].iter().append(3.I64))
+        \\    {}
+        \\}
+    , &.{"[1, 2, 3]"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : List(I64)
+        \\main = List.from_iter([1.I64, 2.I64].iter().append(3.I64))
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_append_unsafe_count"));
+}
+
+test "optimized Iter.collect to List over direct list append consumes iterator plan" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : List(I64)
+        \\main = Iter.collect([1.I64, 2.I64].iter().append(3.I64))
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_append_unsafe_count"));
 }
 
 test "local list.iter with public alias keeps public iterator semantics" {

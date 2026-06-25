@@ -627,6 +627,9 @@ Tasks:
 - [x] Optimized `for` over direct `Iter.custom` uses private custom state.
 - [ ] Optimized `Iter.fold` consumes plan values directly.
 - [ ] Optimized `List.from_iter` consumes plan values directly.
+  - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
+    `List.from_iter` and list-result `Iter.collect` as exact-capacity list
+    loops using list low-level operations.
 - [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public
   behavior.
   - [x] Local `List.iter` with a public alias preserves public iterator behavior.
