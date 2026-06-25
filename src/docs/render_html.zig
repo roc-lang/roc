@@ -2382,3 +2382,36 @@ test "writeDocRefHref reports broken shorthand refs" {
     try testing.expectEqualStrings("div_by", bl.label);
     try testing.expectEqualStrings("Builtin.div_by", bl.resolved_anchor);
 }
+
+test "builtin_nested_type_owners lists every numeric type under Num" {
+    // External references to builtin numeric types (e.g. `U8` in another
+    // package's signature) link to `…/Num#U8` via `builtin_nested_type_owners`.
+    // The type system's precision enums are the source of truth for which
+    // numeric types exist, so if a new one is added there it must also be added
+    // to the table — otherwise its external links would 404 at `…/U8`.
+    const tt = @import("types").types;
+    inline for (.{ tt.Int.Precision, tt.Frac.Precision }) |Precision| {
+        inline for (@typeInfo(Precision).@"enum".fields) |field| {
+            var owner: ?[]const u8 = null;
+            for (builtin_nested_type_owners) |nested| {
+                // Enum fields are lower-case (`u8`, `dec`); the docs names are
+                // capitalized (`U8`, `Dec`).
+                if (std.ascii.eqlIgnoreCase(nested.name, field.name)) {
+                    owner = nested.owner;
+                    break;
+                }
+            }
+            if (owner) |o| {
+                try std.testing.expectEqualStrings("Num", o);
+            } else {
+                std.debug.print(
+                    "numeric type '{s}' is missing from builtin_nested_type_owners " ++
+                        "in render_html.zig; add it (owner \"Num\") so external doc " ++
+                        "links resolve to the right page.\n",
+                    .{field.name},
+                );
+                return error.NumericTypeMissingFromTable;
+            }
+        }
+    }
+}
