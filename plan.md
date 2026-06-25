@@ -108,6 +108,7 @@ Current branch status:
 - `Iter.iter` forwards known iterator plans and wraps unknown iterator operands
   as `Public`.
 - `Iter.concat` can emit a `Concat` plan behind the producer-plan flag.
+- `Iter.map` can emit a `Map` plan behind the producer-plan flag.
 - LIR lowering rejects raw plan expressions as an invariant.
 - direct `List.iter`, visible append chains, and direct `Iter.single` have
   optimized `for` shape tests.
@@ -356,14 +357,18 @@ Tests:
 
 ### Phase 3: Iterator Normalization Boundary
 
-Extend the iterator-aware post-check rewrite before Lambda-to-LIR lowering so
-it removes all raw plan expressions. This boundary owns iterator semantics.
-General post-check passes stay plan-opaque until this rewrite has produced
-ordinary IR.
+Extend the existing post-check lowering boundary that feeds Lambda-to-LIR so it
+removes all raw plan expressions as part of the body traversal it already has to
+perform. This is not a separate whole-program cleanup pass. The boundary owns
+iterator semantics: when ordinary lowering reaches a plan value, it must either
+consume that plan through a recognized optimized consumer or materialize it to
+ordinary public `Iter` IR before continuing. General post-check passes stay
+plan-opaque until this boundary has produced ordinary IR.
 
 Tasks:
 
-- traverse definitions, nested definitions, statements, and expressions
+- handle definitions, nested definitions, statements, and expressions in the
+  existing lowering traversal
 - treat general call-pattern specialization and unrelated post-check passes as
   plan-opaque until plans have been rewritten into ordinary IR
 - maintain a body-local environment from locals to plan/private-state values
@@ -530,7 +535,7 @@ Tasks:
 - [ ] `Iter.prepended` produces the correct plan shape.
 - [x] `Iter.append` produces `Append`.
 - [x] `Iter.concat` produces `Concat`.
-- [ ] `Iter.map` produces `Map`.
+- [x] `Iter.map` produces `Map`.
 - [ ] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [ ] `Iter.custom` produces `Custom`.
 - [x] `Public(iter_value)` exists for unknown iterator values.

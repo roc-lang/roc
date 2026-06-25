@@ -14040,6 +14040,12 @@ const BodyContext = struct {
             return try self.lowerConcatIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
         }
 
+        if (self.methodNameIs(plan.method, "map") and
+            self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "map"))
+        {
+            return try self.lowerMapIteratorProducerPlanExpr(plan, dispatcher_ty, lowered_call, materialized);
+        }
+
         if (!self.methodNameIs(plan.method, "iter")) return null;
         if (!self.typeHasBuiltinOwner(dispatcher_ty, .list) and
             self.resolvedDispatchMatchesTypeMethod(resolved, dispatcher_ty, "iter"))
@@ -14116,6 +14122,51 @@ const BodyContext = struct {
         const receiver_expr = self.builder.program.exprs.items[@intFromEnum(lowered_args[receiver_index])];
         return try self.builder.program.addExpr(.{
             .ty = receiver_expr.ty,
+            .data = .{ .iter_plan = plan_id },
+        });
+    }
+
+    fn lowerMapIteratorProducerPlanExpr(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: Type.TypeId,
+        lowered_call: LoweredResolvedDispatchCall,
+        materialized: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.map dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.map dispatch plan had an unexpected argument shape");
+        }
+        const mapping_index: usize = if (receiver_index == 0) 1 else 0;
+
+        const lowered_args = self.builder.program.exprSpan(lowered_call.args);
+        if (lowered_args.len != plan_args.len) {
+            Common.invariant("lowered Iter.map call argument count differed from its dispatch plan");
+        }
+
+        const source_plan = try self.iteratorPlanForLoweredPublicExpr(lowered_args[receiver_index], dispatcher_ty);
+        const source = self.builder.program.iterPlan(source_plan);
+        const mapping_fn = lowered_args[mapping_index];
+        const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
+
+        const plan_id = try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(materialized_expr.ty),
+            .length = source.length,
+            .steps = source.steps,
+            .done = source.done,
+            .materialized = materialized,
+            .data = .{ .map = .{
+                .source = source_plan,
+                .mapping_fn = mapping_fn,
+            } },
+        });
+
+        return try self.builder.program.addExpr(.{
+            .ty = materialized_expr.ty,
             .data = .{ .iter_plan = plan_id },
         });
     }

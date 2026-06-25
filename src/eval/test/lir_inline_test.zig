@@ -1810,6 +1810,43 @@ test "Iter.concat producer lowers to a materialized concat plan" {
     try std.testing.expect(found);
 }
 
+test "Iter.map producer lowers to a materialized map plan" {
+    const allocator = std.testing.allocator;
+    var mono_source = try lowerMonotypeModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().map(|n| n + 1)
+    );
+    defer mono_source.deinit(allocator);
+
+    var found = false;
+    for (mono_source.mono.exprs.items) |expr| {
+        const plan_id = switch (expr.data) {
+            .iter_plan => |plan_id| plan_id,
+            else => continue,
+        };
+        const plan = mono_source.mono.iterPlan(plan_id);
+        switch (plan.data) {
+            .map => |map| {
+                found = true;
+                const materialized = plan.materialized orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(expr.ty, mono_source.mono.exprs.items[@intFromEnum(materialized)].ty);
+                switch (mono_source.mono.iterPlan(map.source).data) {
+                    .list => {},
+                    else => return error.TestUnexpectedResult,
+                }
+                switch (mono_source.mono.exprs.items[@intFromEnum(map.mapping_fn)].data) {
+                    .fn_def, .lambda => {},
+                    else => return error.TestUnexpectedResult,
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+}
+
 test "List.iter producer materializes before Lambda when returned publicly" {
     const allocator = std.testing.allocator;
     var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
@@ -1869,6 +1906,19 @@ test "Iter.concat producer materializes before Lambda when returned publicly" {
         \\
         \\main : Iter(I64)
         \\main = [10.I64, 20.I64].iter().concat([30.I64, 40.I64].iter())
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.lifted);
+}
+
+test "Iter.map producer materializes before Lambda when returned publicly" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try liftModuleWithIteratorPlansAfterElimination(allocator,
+        \\module [main]
+        \\
+        \\main : Iter(I64)
+        \\main = [10.I64, 20.I64].iter().map(|n| n + 1)
     );
     defer lifted_source.deinit(allocator);
 
