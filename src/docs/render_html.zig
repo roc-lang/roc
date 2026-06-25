@@ -61,10 +61,40 @@ const SidebarNode = struct {
     }
 };
 
-/// URL prefix for the published Builtin module documentation, used when the
-/// docs being generated reference builtin types but the Builtin module is not
-/// part of the package being documented.
-const builtins_docs_url_prefix = "https://roc-lang.org/builtins/main/#Builtin.";
+/// Base URL of the published builtin documentation, used when the docs being
+/// generated reference builtin types but the builtins are not part of the
+/// package being documented. Each builtin type is a top-level page here (e.g.
+/// `…/Str`), matching how `reshapeBuiltin` lays the site out.
+const builtins_docs_base_url = "https://roc-lang.org/builtins/main/";
+
+/// Builtin types documented as nested types on another type's page rather than
+/// on their own top-level page, mapped to the owning page. Mirrors the builtins'
+/// structure (the numeric types live under `Num`); an external reference to one
+/// of these resolves to `…/Num#U8`. Types not listed here are assumed to have
+/// their own page. Keep in sync with the builtins.
+const builtin_nested_type_owners = [_]struct { name: []const u8, owner: []const u8 }{
+    .{ .name = "U8", .owner = "Num" },    .{ .name = "U16", .owner = "Num" },
+    .{ .name = "U32", .owner = "Num" },   .{ .name = "U64", .owner = "Num" },
+    .{ .name = "U128", .owner = "Num" },  .{ .name = "I8", .owner = "Num" },
+    .{ .name = "I16", .owner = "Num" },   .{ .name = "I32", .owner = "Num" },
+    .{ .name = "I64", .owner = "Num" },   .{ .name = "I128", .owner = "Num" },
+    .{ .name = "F32", .owner = "Num" },   .{ .name = "F64", .owner = "Num" },
+    .{ .name = "Dec", .owner = "Num" },   .{ .name = "Numeral", .owner = "Num" },
+};
+
+/// Writes the published URL for a builtin type referenced from another package's
+/// docs: `…/Num#U8` for a nested type, `…/Str` for a top-level one.
+fn writeBuiltinTypeUrl(w: Writer, type_name: []const u8) (Allocator.Error || error{WriteFailed})!void {
+    try w.writeAll(builtins_docs_base_url);
+    for (builtin_nested_type_owners) |nested| {
+        if (std.mem.eql(u8, nested.name, type_name)) {
+            try writeHtmlEscaped(w, nested.owner);
+            try w.writeAll("#");
+            break;
+        }
+    }
+    try writeHtmlEscaped(w, type_name);
+}
 
 /// A `[Name]` shorthand reference that resolved to an HTML anchor that does
 /// not correspond to any `id="…"` in the rendered docs site.
@@ -2132,11 +2162,10 @@ fn writeTypeLink(
     type_name: []const u8,
 ) (Allocator.Error || error{WriteFailed})!void {
     // An empty module_path comes from `resolveModulePathFromBase` for `.builtin`
-    // references (Str, List, Bool, etc). When we are not documenting Builtin
-    // itself, point at the published Builtin docs instead of a same-page anchor.
+    // references (Str, List, Bool, etc). When we are not documenting the builtins
+    // ourselves, point at their published docs instead of a same-page anchor.
     if (module_path.len == 0 and !ctx.documenting_builtin) {
-        try w.writeAll(builtins_docs_url_prefix);
-        try writeHtmlEscaped(w, type_name);
+        try writeBuiltinTypeUrl(w, type_name);
         return;
     }
 
