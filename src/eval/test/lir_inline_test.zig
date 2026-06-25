@@ -741,14 +741,11 @@ const IterCollectShape = enum {
 
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
     // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range.
-    // `from_iter` branches on the iterator's length: a Known length reserves the
-    // whole allocation up front and writes each item with the unchecked append,
-    // while an Unknown length grows with the reserving append. That per-element
-    // branch (the inner `match length`) is the extra switch/join/jump over the
-    // earlier single-append loop. Spec constr specializes the worker for the
-    // concrete element type, and because ranges carry a Known length (via each
-    // numeric type's `steps_between`) the specialized worker threads that count
-    // as a third arg (`with_capacity` preallocation).
+    // `from_iter` uses the iterator's length only to pre-size the allocation,
+    // then writes each item through the reserving append. Spec constr specializes
+    // the worker for the concrete element type, and because ranges carry a Known
+    // length (via each numeric type's `steps_between`) the specialized worker
+    // threads that count as a third arg (`with_capacity` preallocation).
     return switch (wanted) {
         .specialized => shape.arg_count == 3 and
             shape.direct_call_count >= 5 and
@@ -756,10 +753,10 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
             shape.join_count >= 16 and
             shape.jump_count >= 20,
         .generic => shape.arg_count == 1 and
-            shape.direct_call_count == 4 and
-            shape.switch_count == 8 and
-            shape.join_count == 12 and
-            shape.jump_count == 15 and
+            shape.direct_call_count == 3 and
+            shape.switch_count == 6 and
+            shape.join_count == 9 and
+            shape.jump_count == 11 and
             shape.struct_assign_count >= 8,
     };
 }

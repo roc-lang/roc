@@ -1016,10 +1016,10 @@ Builtin :: [].{
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |stream| {
-			# `Known(n)` guarantees exactly n items (count-changing combinators
-			# report `Unknown`), so reserve up front and use the unchecked append.
-			# When the length is unknown, start empty and grow with the reserving
-			# append — the unchecked append would corrupt a zero-capacity list.
+			# `len_if_known` is a size hint exposed through public iterator
+			# constructors. Reserve from it when present, but use the reserving
+			# append so an over-producing custom iterator cannot write past the
+			# hinted capacity.
 			length = Stream.size_hint(stream)
 			cap = match length {
 				Known(n) => n
@@ -1036,10 +1036,7 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = match length {
-							Known(_) => list_append_unsafe($list, item)
-							Unknown => List.append($list, item)
-						}
+						$list = List.append($list, item)
 						$rest = rest
 					}
 				}
@@ -1090,11 +1087,10 @@ Builtin :: [].{
 		## that [Iter.collect] dispatches to.
 		from_iter : Iter(item) -> List(item)
 		from_iter = |iterator| {
-			# `Known(n)` guarantees the iterator yields exactly n items: every
-			# combinator that can change the count (e.g. keep_if) reports `Unknown`.
-			# So when the length is known we reserve the whole allocation up front
-			# and write each item with the unchecked append; when it is unknown we
-			# start empty and grow with the reserving append instead.
+			# `len_if_known` is a size hint exposed through public iterator
+			# constructors. Reserve from it when present, but use the reserving
+			# append so an over-producing custom iterator cannot write past the
+			# hinted capacity.
 			length = iterator.len_if_known
 			cap = match length {
 				Known(n) => n
@@ -1113,10 +1109,7 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = match length {
-							Known(_) => list_append_unsafe($list, item)
-							Unknown => List.append($list, item)
-						}
+						$list = List.append($list, item)
 						$rest = rest
 					}
 				}
