@@ -5479,7 +5479,7 @@ fn checkPublicTypeSurfaceBase(
 ) std.mem.Allocator.Error!void {
     const local = switch (type_base) {
         .local => |local| local,
-        .builtin, .external, .pending => return,
+        .builtin, .external => return,
     };
 
     const stmt = self.env.store.getStatement(local.decl_idx);

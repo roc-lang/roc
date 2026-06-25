@@ -1876,10 +1876,6 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                     .module_idx = @enumFromInt(apply_data.value1),
                     .external_ref = @enumFromInt(apply_data.value2),
                 } },
-                .pending => .{ .pending = .{
-                    .module_idx = @enumFromInt(apply_data.value1),
-                    .type_name = @bitCast(apply_data.value2),
-                } },
             };
 
             return CIR.TypeAnno{ .apply = .{
@@ -1911,10 +1907,6 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                 .external => .{ .external = .{
                     .module_idx = @enumFromInt(base_data.start),
                     .external_ref = @enumFromInt(base_data.len),
-                } },
-                .pending => .{ .pending = .{
-                    .module_idx = @enumFromInt(base_data.start),
-                    .type_name = @bitCast(base_data.len),
                 } },
             };
 
@@ -3121,12 +3113,6 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                     .value1 = @intFromEnum(ext.module_idx),
                     .value2 = @intFromEnum(ext.external_ref),
                 },
-                .pending => |pend| .{
-                    .args_len = a.args.span.len,
-                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.pending),
-                    .value1 = @intFromEnum(pend.module_idx),
-                    .value2 = @bitCast(pend.type_name),
-                },
             };
             _ = try store.type_apply_data.append(store.gpa, apply_data);
             node.setPayload(.{ .ty_apply = .{
@@ -3165,10 +3151,6 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                 .external => |ext| .{
                     .start = @intFromEnum(ext.module_idx),
                     .len = @intFromEnum(ext.external_ref),
-                },
-                .pending => |pend| .{
-                    .start = @intFromEnum(pend.module_idx),
-                    .len = @bitCast(pend.type_name),
                 },
             };
             _ = try store.span2_data.append(store.gpa, base_data);

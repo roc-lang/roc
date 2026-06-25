@@ -7904,11 +7904,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         try self.unifyWith(anno_var, .err, env);
                     }
                 },
-                .pending => {
-                    // If an import references a non-existent module (e.g., missing from
-                    // platform bundle), the pending lookup can't be resolved. Treat as error.
-                    try self.unifyWith(anno_var, .err, env);
-                },
             }
         },
         .apply => |a| {
@@ -8122,11 +8117,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         // an error. So we set to error and continue
                         try self.unifyWith(anno_var, .err, env);
                     }
-                },
-                .pending => {
-                    // If an import references a non-existent module (e.g., missing from
-                    // platform bundle), the pending lookup can't be resolved. Treat as error.
-                    try self.unifyWith(anno_var, .err, env);
                 },
             }
         },
