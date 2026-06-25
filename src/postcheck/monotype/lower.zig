@@ -14039,6 +14039,28 @@ const BodyContext = struct {
         }
     };
 
+    const ListIteratorMapFn = union(enum) {
+        direct: Ast.FnId,
+        value: Ast.ExprId,
+    };
+
+    const ListIteratorItemAdapter = union(enum) {
+        none,
+        map: struct {
+            mapping_fn: ListIteratorMapFn,
+            mapping_fn_ty: Type.TypeId,
+            result_ty: Type.TypeId,
+        },
+        filter: struct {
+            predicate_fn: Ast.ExprId,
+            kind: Ast.IterPlan.FilterKind,
+        },
+    };
+
+    fn iteratorProducerPlansEnabled(self: *BodyContext) bool {
+        return self.builder.iterator_producer_plans and self.view.module_env.module_role != .builtin;
+    }
+
     fn lowerIteratorProducerPlanExpr(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -14047,7 +14069,7 @@ const BodyContext = struct {
         lowered_call: LoweredResolvedDispatchCall,
         materialized: Ast.ExprId,
     ) Allocator.Error!?Ast.ExprId {
-        if (!self.builder.iterator_producer_plans) return null;
+        if (!self.iteratorProducerPlansEnabled()) return null;
         switch (plan.result_mode) {
             .value => {},
             else => return null,
@@ -14631,7 +14653,7 @@ const BodyContext = struct {
         lowered: LoweredCall,
         materialized: Ast.ExprId,
     ) Allocator.Error!?Ast.ExprId {
-        if (!self.builder.iterator_producer_plans) return null;
+        if (!self.iteratorProducerPlansEnabled()) return null;
         const direct_target = call.direct_target orelse return null;
 
         const materialized_expr = self.builder.program.exprs.items[@intFromEnum(materialized)];
@@ -14747,6 +14769,14 @@ const BodyContext = struct {
 
         if (try self.appendListIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |append_for| {
             return append_for;
+        }
+
+        if (try self.mapListIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |map_for| {
+            return map_for;
+        }
+
+        if (try self.filterListIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |filter_for| {
+            return filter_for;
         }
 
         if (try self.listIteratorSourceFromPlan(plan)) |source| {
@@ -15164,7 +15194,7 @@ const BodyContext = struct {
         carries: []const LoopCarry,
         plan: static_dispatch.IteratorForPlan,
     ) Allocator.Error!?Ast.ExprData {
-        if (!self.builder.iterator_producer_plans) return null;
+        if (!self.iteratorProducerPlansEnabled()) return null;
 
         const iterator_ty = try self.lowerType(plan.iterator_ty);
         if (!try self.checkedExprCanProduceListIterPlan(for_.expr, iterator_ty)) return null;
@@ -15180,7 +15210,7 @@ const BodyContext = struct {
             else => Common.invariant("checked List.iter expression lowered to a non-list iterator plan"),
         };
 
-        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, list, iter_plan_value.item_ty, &.{});
+        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, list, iter_plan_value.item_ty, iter_plan_value.item_ty, &.{}, .none);
     }
 
     fn checkedExprCanProduceListIterPlan(
@@ -15204,8 +15234,10 @@ const BodyContext = struct {
         result_ty: Type.TypeId,
         carries: []const LoopCarry,
         list: Ast.IterPlan.ListIter,
-        item_ty: Type.TypeId,
+        source_item_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
         append_items: []const Ast.ExprId,
+        adapter: ListIteratorItemAdapter,
     ) Allocator.Error!Ast.ExprData {
         const u64_ty = try self.builder.primitiveType(.u64);
         const bool_ty = try self.builder.primitiveType(.bool);
@@ -15223,8 +15255,8 @@ const BodyContext = struct {
         const append_exprs = try self.allocator.alloc(Ast.ExprId, append_items.len);
         defer self.allocator.free(append_exprs);
         for (append_items, 0..) |_, index| {
-            append_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
-            append_exprs[index] = try self.builder.localExpr(append_locals[index], item_ty);
+            append_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_item_ty);
+            append_exprs[index] = try self.builder.localExpr(append_locals[index], source_item_ty);
         }
 
         const index_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
@@ -15255,7 +15287,19 @@ const BodyContext = struct {
 
         const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, limit_expr }, bool_ty);
         const done_body = try self.breakCurrentLoopExpr();
-        const continue_body = try self.lowerListIteratorContinue(for_, result_ty, list_expr, len_expr, index_expr, item_ty, append_exprs, next_index, carries);
+        const continue_body = try self.lowerListIteratorContinue(
+            for_,
+            result_ty,
+            list_expr,
+            len_expr,
+            index_expr,
+            source_item_ty,
+            body_item_ty,
+            append_exprs,
+            next_index,
+            carries,
+            adapter,
+        );
         const body = try self.builder.ifExpr(done_cond, done_body, continue_body, result_ty);
 
         const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
@@ -15279,7 +15323,7 @@ const BodyContext = struct {
         var append_index = append_locals.len;
         while (append_index > 0) {
             append_index -= 1;
-            rest = try self.wrapLet(append_locals[append_index], item_ty, append_items[append_index], rest, result_ty);
+            rest = try self.wrapLet(append_locals[append_index], source_item_ty, append_items[append_index], rest, result_ty);
         }
         const limit_let = try self.wrapLet(limit_local, u64_ty, limit_value, rest, result_ty);
         const len_let = try self.wrapLet(len_local, u64_ty, len_value, limit_let, result_ty);
@@ -15297,7 +15341,7 @@ const BodyContext = struct {
         carries: []const LoopCarry,
         plan: static_dispatch.IteratorForPlan,
     ) Allocator.Error!?Ast.ExprData {
-        if (!self.builder.iterator_producer_plans) return null;
+        if (!self.iteratorProducerPlansEnabled()) return null;
 
         const iterator_ty = try self.lowerType(plan.iterator_ty);
         if (!try self.checkedExprCanProduceAppendPlan(for_.expr, iterator_ty)) return null;
@@ -15310,7 +15354,7 @@ const BodyContext = struct {
         const append_plan = (try self.listAppendIteratorPlanFromPlan(plan_id)) orelse return null;
         defer append_plan.deinit(self.allocator);
 
-        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, append_plan.list, append_plan.item_ty, append_plan.append_items);
+        return try self.lowerListIteratorPlanFor(for_, result_ty, carries, append_plan.list, append_plan.item_ty, append_plan.item_ty, append_plan.append_items, .none);
     }
 
     fn checkedExprCanProduceAppendPlan(
@@ -15351,6 +15395,205 @@ const BodyContext = struct {
         }
     }
 
+    fn mapListIteratorPlanForPlanValue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.iteratorProducerPlansEnabled()) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceIteratorAdapterPlan(for_.expr, iterator_ty, "map")) {
+            return null;
+        }
+
+        const plan_id = (try self.mapIteratorPlanForPrivateConsumer(for_.expr, iterator_ty)) orelse
+            Common.invariant("checked Iter.map expression did not lower to an iterator plan");
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        const map = switch (iter_plan_value.data) {
+            .map => |map| map,
+            else => Common.invariant("checked Iter.map expression lowered to a non-map iterator plan"),
+        };
+        const source = (try self.listAppendIteratorPlanFromPlan(map.source)) orelse return null;
+        defer source.deinit(self.allocator);
+
+        const mapping_fn_ty = self.builder.program.exprs.items[@intFromEnum(map.mapping_fn)].ty;
+        const mapping_fn = switch (self.builder.program.exprs.items[@intFromEnum(map.mapping_fn)].data) {
+            .fn_def => |fn_id| ListIteratorMapFn{ .direct = fn_id },
+            else => ListIteratorMapFn{ .value = map.mapping_fn },
+        };
+        switch (mapping_fn) {
+            .direct => {
+                return try self.lowerListIteratorPlanFor(
+                    for_,
+                    result_ty,
+                    carries,
+                    source.list,
+                    source.item_ty,
+                    iter_plan_value.item_ty,
+                    source.append_items,
+                    .{ .map = .{
+                        .mapping_fn = mapping_fn,
+                        .mapping_fn_ty = mapping_fn_ty,
+                        .result_ty = iter_plan_value.item_ty,
+                    } },
+                );
+            },
+            .value => {},
+        }
+
+        const mapping_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), mapping_fn_ty);
+        const mapping_fn_expr = try self.builder.localExpr(mapping_fn_local, mapping_fn_ty);
+        const loop = try self.builder.program.addExpr(.{
+            .ty = result_ty,
+            .data = try self.lowerListIteratorPlanFor(
+                for_,
+                result_ty,
+                carries,
+                source.list,
+                source.item_ty,
+                iter_plan_value.item_ty,
+                source.append_items,
+                .{ .map = .{
+                    .mapping_fn = .{ .value = mapping_fn_expr },
+                    .mapping_fn_ty = mapping_fn_ty,
+                    .result_ty = iter_plan_value.item_ty,
+                } },
+            ),
+        });
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(mapping_fn_local, mapping_fn_ty),
+            .value = map.mapping_fn,
+            .rest = loop,
+        } };
+    }
+
+    fn mapIteratorPlanForPrivateConsumer(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        if (!self.methodNameIs(plan.method, "map")) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.map dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.map dispatch plan had an unexpected argument shape");
+        }
+        const mapping_index: usize = if (receiver_index == 0) 1 else 0;
+
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
+        defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+
+        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, expr.ty, plan_args, iterator_ty);
+        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked Iter.map dispatch plan had a non-function type");
+        const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
+        defer self.allocator.free(plan_arg_tys);
+        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+
+        const lowered_args = self.builder.program.exprSpan(try self.lowerDispatchOperandsAtTypes(plan_args, plan_arg_tys, null));
+        const source_plan = try self.iteratorPlanForLoweredPublicExpr(lowered_args[receiver_index], dispatcher_ty);
+        const source = self.builder.program.iterPlan(source_plan);
+        const mapping_fn = lowered_args[mapping_index];
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(iterator_ty),
+            .length = source.length,
+            .steps = source.steps,
+            .done = source.done,
+            .materialized = null,
+            .data = .{ .map = .{
+                .source = source_plan,
+                .mapping_fn = mapping_fn,
+            } },
+        });
+    }
+
+    fn filterListIteratorPlanForPlanValue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.iteratorProducerPlansEnabled()) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceIteratorAdapterPlan(for_.expr, iterator_ty, "keep_if") and
+            !try self.checkedExprCanProduceIteratorAdapterPlan(for_.expr, iterator_ty, "drop_if"))
+        {
+            return null;
+        }
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked Iter filter expression did not lower to an iterator plan"),
+        };
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        const filter = switch (iter_plan_value.data) {
+            .filter => |filter| filter,
+            else => Common.invariant("checked Iter filter expression lowered to a non-filter iterator plan"),
+        };
+        const source = (try self.listAppendIteratorPlanFromPlan(filter.source)) orelse return null;
+        defer source.deinit(self.allocator);
+
+        const predicate_fn_ty = self.builder.program.exprs.items[@intFromEnum(filter.predicate_fn)].ty;
+        const predicate_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), predicate_fn_ty);
+        const predicate_fn_expr = try self.builder.localExpr(predicate_fn_local, predicate_fn_ty);
+        const loop = try self.builder.program.addExpr(.{
+            .ty = result_ty,
+            .data = try self.lowerListIteratorPlanFor(
+                for_,
+                result_ty,
+                carries,
+                source.list,
+                source.item_ty,
+                iter_plan_value.item_ty,
+                source.append_items,
+                .{ .filter = .{
+                    .predicate_fn = predicate_fn_expr,
+                    .kind = filter.kind,
+                } },
+            ),
+        });
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(predicate_fn_local, predicate_fn_ty),
+            .value = filter.predicate_fn,
+            .rest = loop,
+        } };
+    }
+
+    fn checkedExprCanProduceIteratorAdapterPlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        comptime method_name: []const u8,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        const expr_ty = try self.lowerType(expr.ty);
+        if (!self.sameType(expr_ty, iterator_ty)) return false;
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, method_name)) return false;
+        return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
+    }
+
     fn singleIteratorPlanForPlanValue(
         self: *BodyContext,
         for_: anytype,
@@ -15358,7 +15601,7 @@ const BodyContext = struct {
         carries: []const LoopCarry,
         plan: static_dispatch.IteratorForPlan,
     ) Allocator.Error!?Ast.ExprData {
-        if (!self.builder.iterator_producer_plans) return null;
+        if (!self.iteratorProducerPlansEnabled()) return null;
 
         const iterator_ty = try self.lowerType(plan.iterator_ty);
         if (!try self.checkedExprCanProduceSinglePlan(for_.expr, iterator_ty)) return null;
@@ -15460,7 +15703,7 @@ const BodyContext = struct {
         carries: []const LoopCarry,
         plan: static_dispatch.IteratorForPlan,
     ) Allocator.Error!?Ast.ExprData {
-        if (!self.builder.iterator_producer_plans) return null;
+        if (!self.iteratorProducerPlansEnabled()) return null;
 
         const iterator_ty = try self.lowerType(plan.iterator_ty);
         if (!try self.checkedExprCanProduceCustomPlan(for_.expr, iterator_ty)) return null;
@@ -15634,7 +15877,7 @@ const BodyContext = struct {
         carries: []const LoopCarry,
         plan: static_dispatch.IteratorForPlan,
     ) Allocator.Error!?Ast.ExprData {
-        if (!self.builder.iterator_producer_plans) return null;
+        if (!self.iteratorProducerPlansEnabled()) return null;
 
         const iterator_ty = try self.lowerType(plan.iterator_ty);
         if (!try self.checkedExprCanProduceRangePlan(for_.expr, iterator_ty)) return null;
@@ -15947,7 +16190,19 @@ const BodyContext = struct {
 
         const done_cond = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, limit_expr }, bool_ty);
         const done_body = try self.breakCurrentLoopExpr();
-        const continue_body = try self.lowerListIteratorContinue(for_, result_ty, list_expr, len_expr, index_expr, source.item_ty, append_exprs, next_index, carries);
+        const continue_body = try self.lowerListIteratorContinue(
+            for_,
+            result_ty,
+            list_expr,
+            len_expr,
+            index_expr,
+            source.item_ty,
+            source.item_ty,
+            append_exprs,
+            next_index,
+            carries,
+            .none,
+        );
         const body = try self.builder.ifExpr(done_cond, done_body, continue_body, result_ty);
 
         const params = try self.allocator.alloc(Ast.TypedLocal, 1 + carries.len);
@@ -15990,20 +16245,103 @@ const BodyContext = struct {
         list_expr: Ast.ExprId,
         len_expr: Ast.ExprId,
         index_expr: Ast.ExprId,
-        item_ty: Type.TypeId,
+        source_item_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
         append_exprs: []const Ast.ExprId,
         next_index: Ast.ExprId,
         carries: []const LoopCarry,
+        adapter: ListIteratorItemAdapter,
     ) Allocator.Error!Ast.ExprId {
-        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ list_expr, index_expr }, item_ty);
-        const list_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, list_item, item_ty, next_index, carries);
+        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ list_expr, index_expr }, source_item_ty);
+        const list_body = try self.lowerListIteratorAdaptedItemThenContinue(for_, result_ty, list_item, source_item_ty, body_item_ty, next_index, carries, adapter);
         if (append_exprs.len == 0) return list_body;
 
         const bool_ty = try self.builder.primitiveType(.bool);
         const in_list = try self.builder.lowLevelExpr(.num_is_lt, &.{ index_expr, len_expr }, bool_ty);
-        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, item_ty, append_exprs);
-        const tail_body = try self.lowerListIteratorBodyThenContinue(for_, result_ty, tail_item, item_ty, next_index, carries);
+        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, source_item_ty, append_exprs);
+        const tail_body = try self.lowerListIteratorAdaptedItemThenContinue(for_, result_ty, tail_item, source_item_ty, body_item_ty, next_index, carries, adapter);
         return try self.builder.ifExpr(in_list, list_body, tail_body, result_ty);
+    }
+
+    fn lowerListIteratorAdaptedItemThenContinue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        source_item: Ast.ExprId,
+        source_item_ty: Type.TypeId,
+        body_item_ty: Type.TypeId,
+        next_index: Ast.ExprId,
+        carries: []const LoopCarry,
+        adapter: ListIteratorItemAdapter,
+    ) Allocator.Error!Ast.ExprId {
+        switch (adapter) {
+            .none => {
+                if (!self.sameType(source_item_ty, body_item_ty)) {
+                    Common.invariant("unadapted list iterator item type differed from loop body item type");
+                }
+                return try self.lowerListIteratorBodyThenContinue(for_, result_ty, source_item, source_item_ty, next_index, carries);
+            },
+            .map => |map| {
+                const mapping_shape = self.builder.functionShape(map.mapping_fn_ty, "Iter.map mapping function had a non-function type");
+                const mapping_args = self.builder.program.types.span(mapping_shape.args);
+                if (mapping_args.len != 1) Common.invariant("Iter.map mapping function had an unexpected arity");
+                if (!self.sameType(mapping_args[0], source_item_ty) or !self.sameType(mapping_shape.ret, map.result_ty)) {
+                    Common.invariant("Iter.map mapping function type differed from iterator plan types");
+                }
+                if (!self.sameType(map.result_ty, body_item_ty)) {
+                    Common.invariant("Iter.map result type differed from loop body item type");
+                }
+                const mapped_data: Ast.ExprData = switch (map.mapping_fn) {
+                    .direct => |fn_id| .{ .call_proc = .{
+                        .callee = .{ .func = fn_id },
+                        .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{source_item}),
+                    } },
+                    .value => |mapping_fn| .{ .call_value = .{
+                        .callee = mapping_fn,
+                        .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{source_item}),
+                    } },
+                };
+                const mapped = try self.builder.program.addExpr(.{
+                    .ty = map.result_ty,
+                    .data = mapped_data,
+                });
+                return try self.lowerListIteratorBodyThenContinue(for_, result_ty, mapped, map.result_ty, next_index, carries);
+            },
+            .filter => |filter| {
+                if (!self.sameType(source_item_ty, body_item_ty)) {
+                    Common.invariant("Iter filter item type differed from loop body item type");
+                }
+                const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), source_item_ty);
+                const predicate_fn_ty = self.builder.program.exprs.items[@intFromEnum(filter.predicate_fn)].ty;
+                const predicate_shape = self.builder.functionShape(predicate_fn_ty, "Iter filter predicate had a non-function type");
+                const predicate_args = self.builder.program.types.span(predicate_shape.args);
+                if (predicate_args.len != 1) Common.invariant("Iter filter predicate had an unexpected arity");
+                if (!self.sameType(predicate_args[0], source_item_ty) or !self.typeHasBuiltinOwner(predicate_shape.ret, .bool)) {
+                    Common.invariant("Iter filter predicate type differed from iterator plan types");
+                }
+                const passes = try self.builder.program.addExpr(.{
+                    .ty = predicate_shape.ret,
+                    .data = .{ .call_value = .{
+                        .callee = filter.predicate_fn,
+                        .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{try self.builder.localExpr(item_local, source_item_ty)}),
+                    } },
+                });
+                const body = try self.lowerListIteratorBodyThenContinue(
+                    for_,
+                    result_ty,
+                    try self.builder.localExpr(item_local, source_item_ty),
+                    source_item_ty,
+                    next_index,
+                    carries,
+                );
+                const skip = try self.continueWithPrefixAndCarries(result_ty, &[_]Ast.ExprId{next_index}, carries);
+                const branch = switch (filter.kind) {
+                    .keep_if => try self.builder.ifExpr(passes, body, skip, result_ty),
+                    .drop_if => try self.builder.ifExpr(passes, skip, body, result_ty),
+                };
+                return try self.wrapLet(item_local, source_item_ty, source_item, branch, result_ty);
+            },
+        }
     }
 
     fn listIteratorTailItemExpr(

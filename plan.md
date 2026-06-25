@@ -95,8 +95,9 @@ Current branch status:
 - Monotype has an `ExprData.iter_plan` form.
 - Monotype has an `iter_plans` side store.
 - Monotype Lifted preserves plan expressions and plan stores.
-- Plan values carry the already-lowered public materialization expression needed
-  when they cross a public observation boundary.
+- Plan values that may cross a public observation boundary carry the
+  already-lowered public materialization expression needed at that boundary;
+  private consumer-owned plans do not need one.
 - Lambda solving currently owns the conservative materialization boundary used
   when an ordinary value path observes a plan. This is temporary scaffolding;
   the long-term shape is not a separate whole-body cleanup pass, but explicit
@@ -134,6 +135,11 @@ Current branch status:
 - direct `Append(ListIter, item...)` source `for` loops consume already-lowered
   `Append` plan trees and append item expressions instead of replaying the
   checked producer expression.
+- direct `Map(ListIter | Append(ListIter, item...), fn)` source `for` loops
+  consume child plan state directly and skip the public `Iter.map` wrapper.
+- direct `Filter(ListIter | Append(ListIter, item...), predicate)` source `for`
+  loops consume child plan state directly and bind each produced item once
+  before the predicate/body branch.
 - direct finite numeric ranges are consumed by optimized `for` as private
   numeric cursor state, including inclusive end values at numeric maxima.
 - direct `Iter.custom` is consumed by optimized `for` as private custom state
@@ -213,8 +219,9 @@ added.
 ### Producer Lowering
 
 When iterator producer plans are enabled, builtin producer calls lower to plan
-expressions that also carry the already-lowered public `Iter` expression for
-semantic materialization. This producer flag stays separate from the existing
+expressions. Plans that can be observed publicly also carry the already-lowered
+public `Iter` expression for materialization. This producer flag stays separate
+from the existing
 direct optimized-consumer flag until the iterator-aware normalization can
 consume common plans privately instead of materializing them back to the public
 representation.
@@ -553,7 +560,8 @@ Tasks:
 - [x] User-defined `.single` is not recognized as builtin `Iter.single`.
 - [x] Monotype has `ExprData.iter_plan`.
 - [x] Monotype Lifted preserves plan expressions.
-- [x] Iterator plans carry a public materialization expression.
+- [x] Publicly observable iterator plans carry a public materialization
+  expression.
 - [x] Iterator-plan normalization boundary exists before Lambda-to-LIR lowering.
 - [x] General call-pattern specialization treats raw iterator plans as opaque.
 - [x] `List.iter` can produce `ListIter` behind the producer-plan flag.
@@ -597,6 +605,11 @@ Tasks:
   values.
 - [ ] Optimized `for` over `Append` and `Concat` uses explicit phase state.
 - [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
+- [x] Optimized `for` over direct `Map(ListIter | Append(ListIter, item...), fn)`
+  uses child plan state.
+- [x] Optimized `for` over direct
+  `Filter(ListIter | Append(ListIter, item...), predicate)` uses child plan
+  state.
 - [x] Optimized `for` over ranges uses direct numeric state.
 - [x] Optimized `for` over direct `Iter.custom` uses private custom state.
 - [ ] Optimized `Iter.fold` consumes plan values directly.
