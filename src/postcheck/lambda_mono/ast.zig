@@ -28,8 +28,6 @@ pub const StmtId = enum(u32) { _ };
 pub const FnId = Type.FnId;
 /// Identifier for a local binding in Lambda Mono IR.
 pub const LocalId = enum(u32) { _ };
-/// Identifier for an iterator plan owned by the earlier post-check stages.
-pub const IterPlanId = Lifted.IterPlanId;
 /// Owned string literal id shared with the lifted stage.
 pub const StringLiteralId = Lifted.StringLiteralId;
 /// Identifier for a compile-time-observed control-flow site.
@@ -194,7 +192,6 @@ pub const StaticDataCandidate = struct {
 /// Lambda Mono expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
-    iter_plan: IterPlanId,
     unit,
     int_lit: can.CIR.IntValue,
     frac_f32_lit: f32,

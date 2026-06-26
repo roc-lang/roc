@@ -49,7 +49,7 @@ test "Monotype has direct calls and no checked-only expression forms" {
     try std.testing.expect(@hasField(Mono.ExprData, "structural_eq"));
     try std.testing.expect(@hasField(Mono.ExprData, "structural_hash"));
     try std.testing.expect(@hasField(Mono.ExprData, "loop_"));
-    try std.testing.expect(@hasField(Mono.ExprData, "iter_plan"));
+    try std.testing.expect(!@hasField(Mono.ExprData, "iter_plan"));
 
     try std.testing.expect(!@hasField(Mono.ExprData, "dispatch_call"));
     try std.testing.expect(!@hasField(Mono.ExprData, "type_dispatch_call"));
@@ -59,21 +59,10 @@ test "Monotype has direct calls and no checked-only expression forms" {
     try std.testing.expect(!@hasField(Mono.ExprData, "for_"));
 }
 
-test "Monotype owns explicit builtin iterator plan storage" {
-    try std.testing.expect(@hasField(Mono.Program, "iter_plans"));
-    try std.testing.expect(@hasDecl(Mono.Program, "addIterPlan"));
-    try std.testing.expect(@hasDecl(Mono.Program, "iterPlan"));
-    try std.testing.expect(Mono.IterPlanId == @import("iter_plan.zig").IterPlanId);
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "list"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "range"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "unbounded_range"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "single"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "append"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "concat"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "map"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "filter"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "custom"));
-    try std.testing.expect(@hasField(Mono.IterPlan.Data, "public"));
+test "Monotype has no explicit builtin iterator plan storage" {
+    try std.testing.expect(!@hasField(Mono.Program, "iter_plans"));
+    try std.testing.expect(!@hasDecl(Mono.Program, "addIterPlan"));
+    try std.testing.expect(!@hasDecl(Mono.Program, "iterPlan"));
 }
 
 test "Monotype types are closed checked types without row tails" {
@@ -136,7 +125,7 @@ test "Monotype lookup lowering uses explicit resolved use types" {
 
 test "Lifted functions own captures and consume Monotype expression storage" {
     try std.testing.expect(@hasField(Lifted.Fn, "captures"));
-    try std.testing.expect(@hasField(Lifted.Program, "iter_plans"));
+    try std.testing.expect(!@hasField(Lifted.Program, "iter_plans"));
     try std.testing.expect(Lifted.ExprId == Mono.ExprId);
     try std.testing.expect(Lifted.PatId == Mono.PatId);
     try std.testing.expect(Lifted.StmtId == Mono.StmtId);
@@ -164,7 +153,7 @@ test "Lambda Solved keeps lifted syntax and stores callable sets in types" {
 }
 
 test "Lambda Mono has concrete callable values and no function type" {
-    try std.testing.expect(@hasField(LambdaMono.ExprData, "iter_plan"));
+    try std.testing.expect(!@hasField(LambdaMono.ExprData, "iter_plan"));
     try std.testing.expect(@hasField(LambdaMono.ExprData, "direct_call"));
     try std.testing.expect(@hasField(LambdaMono.ExprData, "indirect_erased_call"));
     try std.testing.expect(@hasField(LambdaMono.ExprData, "packed_erased_fn"));

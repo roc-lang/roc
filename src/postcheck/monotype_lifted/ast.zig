@@ -11,7 +11,6 @@ const check = @import("check");
 const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
-const iter_plan = @import("../iter_plan.zig");
 const names = check.CheckedNames;
 
 /// Identifier for an expression in Monotype Lifted IR.
@@ -27,12 +26,8 @@ pub const FnId = Mono.LiftedFnId;
 pub const Span = Mono.Span;
 /// Local binding id shared with Monotype IR.
 pub const LocalId = Mono.LocalId;
-/// Identifier for an iterator plan shared with Monotype IR.
-pub const IterPlanId = Mono.IterPlanId;
 /// Local binding shared with Monotype IR.
 pub const Local = Mono.Local;
-/// Compiler-internal iterator plan after function ids have been lifted.
-pub const IterPlan = iter_plan.IterPlan(ExprId, FnId, Type.TypeId);
 /// Local id paired with a monomorphic type.
 pub const TypedLocal = Mono.TypedLocal;
 /// Owned string literal id shared with Monotype IR.
@@ -136,7 +131,6 @@ pub const Program = struct {
     next_symbol: u32,
     types: Type.Store,
     fns: std.ArrayList(Fn),
-    iter_plans: std.ArrayList(IterPlan),
     exprs: std.ArrayList(Expr),
     pats: std.ArrayList(Pat),
     stmts: std.ArrayList(Stmt),
@@ -181,7 +175,6 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         name_store: names.NameStore,
         types: Type.Store,
-        iter_plans: std.ArrayList(IterPlan),
         exprs: std.ArrayList(Expr),
         pats: std.ArrayList(Pat),
         stmts: std.ArrayList(Stmt),
@@ -214,7 +207,6 @@ pub const Program = struct {
             .next_symbol = next_symbol,
             .types = types,
             .fns = .empty,
-            .iter_plans = iter_plans,
             .exprs = exprs,
             .pats = pats,
             .stmts = stmts,
@@ -283,7 +275,6 @@ pub const Program = struct {
         self.stmts.deinit(self.allocator);
         self.pats.deinit(self.allocator);
         self.exprs.deinit(self.allocator);
-        self.iter_plans.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -292,12 +283,6 @@ pub const Program = struct {
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         try self.fns.append(self.allocator, fn_);
-        return id;
-    }
-
-    pub fn addIterPlan(self: *Program, plan: IterPlan) std.mem.Allocator.Error!IterPlanId {
-        const id: IterPlanId = @enumFromInt(@as(u32, @intCast(self.iter_plans.items.len)));
-        try self.iter_plans.append(self.allocator, plan);
         return id;
     }
 

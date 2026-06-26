@@ -489,7 +489,6 @@ const Pass = struct {
             .dec_lit,
             .str_lit,
             .static_data,
-            .iter_plan,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -632,7 +631,6 @@ const Pass = struct {
             .dec_lit,
             .str_lit,
             .static_data,
-            .iter_plan,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -914,7 +912,6 @@ const Pass = struct {
             .dec_lit,
             .str_lit,
             .static_data,
-            .iter_plan,
             .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -1698,7 +1695,6 @@ const Cloner = struct {
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| .{ .local = local },
-            .iter_plan => |plan_id| .{ .iter_plan = try self.cloneIterPlan(plan_id) },
             .unit => .unit,
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = payload },
@@ -1794,72 +1790,6 @@ const Cloner = struct {
             .expect => |child| .{ .expect = try self.cloneExpr(child) },
         };
         return try self.addExpr(.{ .ty = expr.ty, .data = data });
-    }
-
-    fn cloneIterPlan(self: *Cloner, plan_id: Ast.IterPlanId) Common.LowerError!Ast.IterPlanId {
-        const raw = @intFromEnum(plan_id);
-        if (raw >= self.pass.program.iter_plans.items.len) {
-            Common.invariant("iterator plan expression referenced a missing plan during call-pattern specialization");
-        }
-        const plan = self.pass.program.iter_plans.items[raw];
-        return try self.pass.program.addIterPlan(.{
-            .item_ty = plan.item_ty,
-            .length = switch (plan.length) {
-                .known => |expr| .{ .known = try self.cloneExpr(expr) },
-                .unknown => .unknown,
-            },
-            .steps = plan.steps,
-            .done = plan.done,
-            .materialized = if (plan.materialized) |expr| try self.cloneExpr(expr) else null,
-            .data = switch (plan.data) {
-                .list => |list| .{ .list = .{
-                    .list = try self.cloneExpr(list.list),
-                    .index = try self.cloneExpr(list.index),
-                    .len = try self.cloneExpr(list.len),
-                } },
-                .range => |range| .{ .range = .{
-                    .current = try self.cloneExpr(range.current),
-                    .end = try self.cloneExpr(range.end),
-                    .step = try self.cloneExpr(range.step),
-                    .inclusivity = range.inclusivity,
-                } },
-                .unbounded_range => |range| .{ .unbounded_range = .{
-                    .current = try self.cloneExpr(range.current),
-                    .step = try self.cloneExpr(range.step),
-                } },
-                .single => |single| .{ .single = .{
-                    .item = try self.cloneExpr(single.item),
-                    .emitted = try self.cloneExpr(single.emitted),
-                } },
-                .append => |append| .{ .append = .{
-                    .before = try self.cloneIterPlan(append.before),
-                    .after = try self.cloneExpr(append.after),
-                    .phase = try self.cloneExpr(append.phase),
-                } },
-                .concat => |concat| .{ .concat = .{
-                    .first = try self.cloneIterPlan(concat.first),
-                    .second = try self.cloneIterPlan(concat.second),
-                    .phase = try self.cloneExpr(concat.phase),
-                } },
-                .map => |map| .{ .map = .{
-                    .source = try self.cloneIterPlan(map.source),
-                    .mapping_fn = try self.cloneExpr(map.mapping_fn),
-                } },
-                .filter => |filter| .{ .filter = .{
-                    .source = try self.cloneIterPlan(filter.source),
-                    .predicate_fn = try self.cloneExpr(filter.predicate_fn),
-                    .kind = filter.kind,
-                } },
-                .custom => |custom| .{ .custom = .{
-                    .state = try self.cloneExpr(custom.state),
-                    .step_fn = try self.cloneExpr(custom.step_fn),
-                } },
-                .public => |public| .{ .public = .{
-                    .iter_value = try self.cloneExpr(public.iter_value),
-                    .materializer = public.materializer,
-                } },
-            },
-        });
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype) Common.LowerError!Value {
@@ -3385,7 +3315,6 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .dec_lit,
         .str_lit,
         .static_data,
-        .iter_plan,
         .uninitialized,
         .uninitialized_payload,
         .fn_ref,
@@ -3491,7 +3420,6 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .dec_lit,
         .str_lit,
         .static_data,
-        .iter_plan,
         .fn_ref,
         .crash,
         .comptime_exhaustiveness_failed,
@@ -3614,7 +3542,6 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .dec_lit,
         .str_lit,
         .static_data,
-        .iter_plan,
         .fn_ref,
         .uninitialized,
         .uninitialized_payload,

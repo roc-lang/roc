@@ -385,10 +385,6 @@ const Solver = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
-            .iter_plan => |plan_id| {
-                const materialized = self.materializeIterPlanExpr(expr_id, plan_id);
-                _ = try self.expectExpr(materialized, expected);
-            },
             .static_data_candidate => |candidate| {
                 _ = try self.expectExpr(candidate.fallback, expected);
             },
@@ -591,27 +587,6 @@ const Solver = struct {
             .comptime_branch_taken => |taken| _ = try self.expectExpr(taken.body, expected),
         }
         return self.program.types.root(expected);
-    }
-
-    fn materializeIterPlanExpr(
-        self: *Solver,
-        expr_id: Lifted.ExprId,
-        plan_id: Lifted.IterPlanId,
-    ) Lifted.ExprId {
-        const plan_raw = @intFromEnum(plan_id);
-        if (plan_raw >= self.program.lifted.iter_plans.items.len) {
-            Common.invariant("iterator plan expression referenced a missing plan during Lambda solving");
-        }
-        const materialized = self.program.lifted.iter_plans.items[plan_raw].materialized orelse
-            Common.invariant("iterator plan reached Lambda solving without a public materialization");
-
-        const expr = &self.program.lifted.exprs.items[@intFromEnum(expr_id)];
-        const materialized_expr = self.program.lifted.exprs.items[@intFromEnum(materialized)];
-        if (expr.ty != materialized_expr.ty) {
-            Common.invariant("iterator plan materialization had a different type than the plan expression");
-        }
-        expr.data = materialized_expr.data;
-        return materialized;
     }
 
     fn inferStmt(self: *Solver, stmt_id: Lifted.StmtId) Allocator.Error!void {

@@ -557,14 +557,14 @@ direct-list source.
 
 ## Completion Checklist
 
-- [ ] `Iter.step` has exactly `One`, `Skip`, and `Done`.
-- [ ] `Iter.next` has exactly `One`, `Skip`, and `Done`.
-- [ ] `Stream.step!` and `Stream.next!` remain the effectful three-variant
+- [x] `Iter.step` has exactly `One`, `Skip`, and `Done`.
+- [x] `Iter.next` has exactly `One`, `Skip`, and `Done`.
+- [x] `Stream.step!` and `Stream.next!` remain the effectful three-variant
       analog.
-- [ ] No iterator public API mentions `Append`.
-- [ ] No `src/postcheck/iter_plan.zig` remains.
-- [ ] No post-check IR expression has an `iter_plan` case.
-- [ ] Source `for` lowering uses ordinary checked `.iter` and `.next`.
+- [x] No iterator public API mentions `Append`.
+- [x] No `src/postcheck/iter_plan.zig` remains.
+- [x] No post-check IR expression has an `iter_plan` case.
+- [x] Source `for` lowering uses ordinary checked `.iter` and `.next`.
 - [ ] Shape specialization handles direct-call results in demanded contexts.
 - [ ] Shape specialization handles `if` and `match` joins.
 - [ ] Loop-state splitting handles iterator records and step callables.
@@ -581,8 +581,8 @@ direct-list source.
 - [ ] Rocci Bird `.iter()` collision source and direct-list collision source
       have equivalent optimized loop shape.
 - [ ] Final Rocci Bird wasm size is recorded and compared to the Rust port.
-- [ ] `zig build test` or the agreed focused compiler test set passes.
-- [ ] Changes are committed in small checkpoints.
+- [x] `zig build test` or the agreed focused compiler test set passes.
+- [x] Changes are committed in small checkpoints.
 
 ## Non-Negotiable Invariants
 
