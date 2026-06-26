@@ -260,6 +260,13 @@ const ReadBeforeRebindKey = struct {
     loop_keep_id: u32,
 };
 
+const AnalysisStop = union(enum) {
+    /// Stop at an explicit shared continuation statement.
+    stmt: LIR.CFStmtId,
+    /// Stop at jumps targeting one join, recording the jump-entry ownership.
+    jump_to: LIR.JoinPointId,
+};
+
 fn rewriteBoundaryForStop(boundaries: []const RewriteBoundary, cursor: LIR.CFStmtId) ?RewriteBoundary {
     var i = boundaries.len;
     while (i > 0) {
@@ -495,7 +502,7 @@ const Inserter = struct {
 
     const AnalysisPathTask = struct {
         cursor: LIR.CFStmtId,
-        stop: LIR.CFStmtId,
+        stop: AnalysisStop,
         owned: OwnedSet,
         exits: *std.ArrayList(OwnedSet),
         loop_keep: ?*const OwnedSet,
@@ -503,7 +510,7 @@ const Inserter = struct {
 
     const AnalysisSwitchContinuationTask = struct {
         continuation: LIR.CFStmtId,
-        stop: LIR.CFStmtId,
+        stop: AnalysisStop,
         switch_exits: std.ArrayList(OwnedSet),
         parent_exits: *std.ArrayList(OwnedSet),
         loop_keep: ?*const OwnedSet,
@@ -1295,6 +1302,9 @@ const Inserter = struct {
             .result = path.result,
         };
         self.next_loop_keep_id += 1;
+        var remainder_body_keep = try self.joinRemainderBodyOwnedSet(&path.owned, join_stmt.id, join_stmt.remainder, join_stmt.body);
+        defer remainder_body_keep.deinit();
+        state.body_keep.unionWith(&remainder_body_keep);
         var carried_body_keep = try state.body_keep.clone();
         defer carried_body_keep.deinit();
         carried_body_keep.intersect(&state.incoming_owned);
@@ -1721,7 +1731,30 @@ const Inserter = struct {
             tasks.deinit(self.store.allocator);
         }
 
-        try self.pushAnalysisPath(&tasks, start, stop, owned, exits, loop_keep);
+        try self.pushAnalysisPath(&tasks, start, .{ .stmt = stop }, owned, exits, loop_keep);
+        while (tasks.pop()) |task| {
+            switch (task) {
+                .path => |path| try self.processAnalysisPath(&tasks, path),
+                .resume_switch_continuation => |resume_task| try self.processAnalysisSwitchContinuation(&tasks, resume_task),
+            }
+        }
+    }
+
+    fn analyzeJumpsToJoin(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        owned: *const OwnedSet,
+        target: LIR.JoinPointId,
+        exits: *std.ArrayList(OwnedSet),
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!void {
+        var tasks = std.ArrayList(AnalysisTask).empty;
+        defer {
+            while (tasks.pop()) |task| self.destroyAnalysisTask(task);
+            tasks.deinit(self.store.allocator);
+        }
+
+        try self.pushAnalysisPath(&tasks, start, .{ .jump_to = target }, owned, exits, loop_keep);
         while (tasks.pop()) |task| {
             switch (task) {
                 .path => |path| try self.processAnalysisPath(&tasks, path),
@@ -1734,7 +1767,7 @@ const Inserter = struct {
         self: *Inserter,
         tasks: *std.ArrayList(AnalysisTask),
         start: LIR.CFStmtId,
-        stop: LIR.CFStmtId,
+        stop: AnalysisStop,
         owned: *const OwnedSet,
         exits: *std.ArrayList(OwnedSet),
         loop_keep: ?*const OwnedSet,
@@ -1756,7 +1789,7 @@ const Inserter = struct {
         errdefer self.destroyAnalysisPath(path);
 
         while (true) {
-            if (path.cursor == path.stop) {
+            if (path.stop == .stmt and path.cursor == path.stop.stmt) {
                 try path.exits.append(self.store.allocator, try path.owned.clone());
                 self.destroyAnalysisPath(path);
                 return;
@@ -1921,9 +1954,9 @@ const Inserter = struct {
                         queued = true;
 
                         for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                            try self.pushAnalysisPath(tasks, branch.body, continuation, &path.owned, &resume_task.switch_exits, path.loop_keep);
+                            try self.pushAnalysisPath(tasks, branch.body, .{ .stmt = continuation }, &path.owned, &resume_task.switch_exits, path.loop_keep);
                         }
-                        try self.pushAnalysisPath(tasks, switch_stmt.default_branch, continuation, &path.owned, &resume_task.switch_exits, path.loop_keep);
+                        try self.pushAnalysisPath(tasks, switch_stmt.default_branch, .{ .stmt = continuation }, &path.owned, &resume_task.switch_exits, path.loop_keep);
                         self.destroyAnalysisPath(path);
                         return;
                     }
@@ -1986,7 +2019,18 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
-                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {
+                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
+                    self.destroyAnalysisPath(path);
+                    return;
+                },
+                .jump => |jump_stmt| {
+                    if (path.stop == .jump_to and jump_stmt.target == path.stop.jump_to) {
+                        try path.exits.append(self.store.allocator, try path.owned.clone());
+                    }
+                    self.destroyAnalysisPath(path);
+                    return;
+                },
+                .ret, .crash, .expect_err => {
                     self.destroyAnalysisPath(path);
                     return;
                 },
@@ -2167,6 +2211,38 @@ const Inserter = struct {
             // even when read-before-rebind analysis would otherwise classify
             // the param as borrowed.
             self.addConditionallyOwnedIfRc(&owned, param);
+        }
+        return owned;
+    }
+
+    fn joinRemainderBodyOwnedSet(
+        self: *Inserter,
+        entry_owned: *const OwnedSet,
+        join_id: LIR.JoinPointId,
+        remainder: LIR.CFStmtId,
+        body: LIR.CFStmtId,
+    ) ResourceError!OwnedSet {
+        // Locals born in the run-once remainder can be carried into the loop
+        // body without being join params. Preserve exactly the owned locals
+        // present at jumps to this join and read by the body.
+        var jump_states = std.ArrayList(OwnedSet).empty;
+        defer {
+            for (jump_states.items) |*state| state.deinit();
+            jump_states.deinit(self.store.allocator);
+        }
+        try self.analyzeJumpsToJoin(remainder, entry_owned, join_id, &jump_states, null);
+
+        var owned = try OwnedSet.init(self.store.allocator, entry_owned.len());
+        errdefer owned.deinit();
+        for (jump_states.items) |*jump_owned| {
+            var iter = jump_owned.bits.iterator(.{});
+            while (iter.next()) |i| {
+                if (owned.bits.isSet(i)) continue;
+                const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
+                if (try self.groupUsedInPath(body, local, null)) {
+                    owned.set(local);
+                }
+            }
         }
         return owned;
     }
@@ -5088,6 +5164,27 @@ test "RC join remainder starts from join entry ownership" {
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
     try f.expectRc(pair, 0, 1, 0);
+}
+
+test "RC join body keeps local born in remainder" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const carried = try f.local(.str);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(carried);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const remainder = try f.assignStr(carried, "carried", jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = ret,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, join, .str);
+    try f.run();
+    try f.expectRc(carried, 0, 0, 0);
 }
 
 test "RC join loop jump releases body-only list but keeps carried state" {

@@ -541,8 +541,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/arc_certifier_large_tree.roc",
         .io_spec = "1><!DOCTYPE html><html class=\"en\"><head><meta class=\"ct\"><title>T</title><link class=\"ss\"></head><body><div class=\"main\"><div class=\"navbar\"><ul><li class=\"nav-link\"><a class=\"x\">X</a></li><li class=\"nav-link\"><a class=\"y\">Y</a></li></ul></div><div class=\"article\">body</div></div></body></html>",
-        .description = "Skipped regression: large refcounted recursive tree still fails ARC borrow certification with use of unbound refcounted local",
-        .skip = true,
+        .description = "Regression test: large refcounted recursive tree passes ARC borrow certification",
     },
 
     // Leak regression tests for the address-taken element-decref callbacks in
