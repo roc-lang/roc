@@ -109,6 +109,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/hoisted_constants_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9614_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9634_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_806_stack_aggregate_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9703_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9704_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
