@@ -248,6 +248,7 @@ const LineState = struct {
     in_buffer: [8]u8,
     history: *History,
     history_index: ?usize,
+    transient_line: ?[]const u8,
     /// Set after a Ctrl-C so that a second consecutive Ctrl-C quits. Any other
     /// input event clears it, so the two presses must be back-to-back.
     ctrl_c_armed: bool,
@@ -334,6 +335,7 @@ fn historyBackward(state: *LineState) CommandError!void {
     if (hist_len == 0) return;
 
     if (state.history_index == null) {
+        state.transient_line = try state.temp.dupe(u8, state.line_buffer.items);
         state.history_index = hist_len - 1;
     } else if (state.history_index.? > 0) {
         state.history_index = state.history_index.? - 1;
@@ -361,10 +363,15 @@ fn historyForward(state: *LineState) CommandError!void {
         try state.line_buffer.appendSlice(state.temp, entry);
         state.col_offset = entry.len;
     } else {
-        // Past the end, clear line
+        // Past the end, restore transient draft line
         state.history_index = null;
         state.line_buffer.clearAndFree(state.temp);
-        state.col_offset = 0;
+        if (state.transient_line) |transient| {
+            try state.line_buffer.appendSlice(state.temp, transient);
+            state.col_offset = transient.len;
+        } else {
+            state.col_offset = 0;
+        }
     }
 
     try ansi_term.setCursorColumn(state.out, state.prompt_width);
@@ -498,6 +505,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         .in_buffer = undefined,
         .history = &self.history,
         .history_index = null,
+        .transient_line = null,
         .ctrl_c_armed = false,
     };
 
@@ -984,4 +992,61 @@ test "History: basic appending and deduplication" {
     try testing.expectEqual(@as(usize, 2), history.entries.items.len);
     try testing.expectEqualStrings("x = 1", history.entries.items[0]);
     try testing.expectEqualStrings("y = 2", history.entries.items[1]);
+}
+
+test "History: transient line preservation" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try history.append("first command");
+    try history.append("second command");
+
+    var arena = base.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const temp = arena.allocator();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    var state = LineState{
+        .outlive = testing.allocator,
+        .temp = temp,
+        .prompt = "> ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined, // not used in history functions
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = &history,
+        .history_index = null,
+        .transient_line = null,
+        .ctrl_c_armed = false,
+    };
+
+    // Simulate typing a transient command "third draft"
+    try state.line_buffer.appendSlice(temp, "third draft");
+    state.col_offset = 11;
+
+    // Navigate back to history (second command)
+    try historyBackward(&state);
+    try testing.expectEqualStrings("second command", state.line_buffer.items);
+    try testing.expectEqualStrings("third draft", state.transient_line.?);
+    try testing.expectEqual(@as(?usize, 1), state.history_index);
+
+    // Navigate further back (first command)
+    try historyBackward(&state);
+    try testing.expectEqualStrings("first command", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 0), state.history_index);
+
+    // Navigate forward (second command)
+    try historyForward(&state);
+    try testing.expectEqualStrings("second command", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 1), state.history_index);
+
+    // Navigate past the end (restores transient command "third draft")
+    try historyForward(&state);
+    try testing.expectEqualStrings("third draft", state.line_buffer.items);
+    try testing.expect(state.history_index == null);
 }
