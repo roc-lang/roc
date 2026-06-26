@@ -1,4 +1,4 @@
-# Iter And Stream Shape Specialization Plan
+# Iter And Stream Known-Value Specialization Plan
 
 ## Goal
 
@@ -26,17 +26,20 @@ The desired end state is:
   ```
 
 - There is no public or private `Append` step variant.
-- There is no iterator-specific post-check plan representation in the long-term
+- There is no iterator-specific post-check plan representation in the target
   design.
 - `Iter` and `Stream` builtins stay written as ordinary Roc functions.
-- Optimized code specializes the ordinary record, tag, tuple, nominal, and
-  callable shapes those functions produce.
+- Optimized code specializes the ordinary known-value facts those functions
+  produce: primitive leaves, expression leaves, records, tuples, tags,
+  nominals, callables, and captures.
 - Lambda sets carry the concrete callable/capture information that Rust carries
   in concrete iterator adapter types.
 - Public iterator values remain immutable and reusable.
 - Optimized consuming loops may update only compiler-owned private cursor state.
 - Rocci Bird's collision loop has the same optimized shape whether its base
   collision points are written as a list or as a top-level `.iter()` value.
+- A primitive wrapped in a single-field record must not become more optimizable
+  merely because it was wrapped. Primitive leaves are valid private state.
 
 ## Backstory
 
@@ -49,7 +52,7 @@ Rocci Bird exposed two separate problems:
 The first wave of work improved the wasm path: wasm memory handling, Binaryen
 integration, host export stripping, `bulk-memory` code generation, and several
 Rocci Bird source cleanups. After that, the remaining size gap was concentrated
-in ordinary Roc code shape: the optimized `update` body still contained a lot
+in ordinary Roc value lowering: the optimized `update` body still contained a lot
 of iterator/list/control scaffolding compared to the Rust port.
 
 The collision code made the iterator issue concrete:
@@ -109,7 +112,7 @@ It also proved what is wrong with that direction:
 - It does not generalize to other APIs shaped like `Stream`, parser builders,
   or user-defined state machines.
 
-The long-term design should not keep this machinery.
+The target design does not keep this machinery.
 
 ### The `Append` Step Variant
 
@@ -145,7 +148,7 @@ adapter chain. Roc source like the Rocci Bird branch above must keep
 type-checking as one `Iter(Point)` value even when different branches build
 different adapter chains.
 
-Roc already has the tool that can preserve the internal shape without exposing
+Roc already has the tool that can preserve the internal adapter facts without exposing
 it in the public type: ordinary lambdas and lambda sets. A value of type
 `Iter(item)` is a record containing a step function. The step function's lambda
 set can retain the concrete function identity and captures for list iterators,
@@ -162,7 +165,7 @@ Roc: adapter shape is visible in finite lambda sets and captured values.
 ## The Erasure Problem
 
 If the compiler waits until a public `Iter(item)` value has been fully lowered
-to a generic record plus an erased or opaque callable, the adapter shape is
+to a generic record plus an erased or opaque callable, the adapter facts are
 gone. At that point the backend can only see "call this function value" and
 "match this public step tag." Recovering list/range/append/map behavior from
 that code would require guessing from generated code shape, names, or backend
@@ -173,16 +176,40 @@ The optimization must run while the compiler still has:
 - ordinary lifted function identities
 - explicit captures
 - finite callable flow
-- constructor-shaped records/tags/tuples/nominals
+- known primitive leaves and expression leaves
+- known records/tags/tuples/nominals
 - checked direct-call targets
 
 That means the work belongs in the existing post-check optimizer area that
-already specializes constructor and callable shapes, especially
+already specializes known constructor and callable values, especially
 `src/postcheck/monotype_lifted/spec_constr.zig`, plus any necessary explicit
 data handed to later stages. The solution is not a backend peephole and not an
 iterator-only lowering path.
 
 ## Target Design
+
+The optimizer's abstraction is a known-value fact, not a "shaped expression."
+A fact says what the compiler still knows about a value at a specific point
+while preserving the source program's evaluation order:
+
+- `Unknown`: no useful decomposition is available.
+- `Leaf(expr)`: an ordinary expression leaf, including primitive values,
+  runtime computations, and other values that should be carried directly.
+- `Record`, `Tuple`, `Tag`, or `Nominal`: a constructor with child facts.
+- `Callable`: a known lifted target or finite lambda-set member with child
+  facts for captures.
+
+This is deliberately broader than aggregate shape. Records, tuples, tags, and
+nominals can expose useful children, but they are not the only useful state.
+The pass must be able to carry primitive leaves directly. A loop whose private
+cursor is naturally `{ list, index, len }` should split to those leaves; a loop
+whose private cursor is naturally just `index` should carry only `index`, not a
+synthetic `{ index }` wrapper.
+
+The target implementation uses names such as `KnownValue` or `ValueFact` for
+this optimizer data. It does not expose APIs, comments, or tests that talk
+about "shaped expressions." Names such as `Shape` are reserved for actual type,
+layout, serialization, or source-shape concepts, not this optimizer fact model.
 
 ### Public Builtins
 
@@ -208,7 +235,7 @@ necessarily follow from that shape:
 
 ### Optimized Representation
 
-Optimized code should see ordinary constructor/callable shape, not an iterator
+Optimized code should see ordinary known-value facts, not an iterator
 plan:
 
 - A list iterator is an `Iter` record whose `step` callable captures the list
@@ -219,10 +246,12 @@ plan:
   source iterator and transform.
 - A filtered iterator is an `Iter` record whose `step` callable captures the
   source iterator and predicate.
-- A `Stream` has the same shape except its step function is effectful.
+- A `Stream` has the same public representation except its step function is
+  effectful.
 
-The optimizer should split these records and callables into fields only when
-the source meaning permits it. Reusing an iterator must remain correct:
+The optimizer should split records, callables, captures, and primitive leaves
+into private state only when the source meaning permits it. Reusing an iterator
+must remain correct:
 
 ```roc
 iter = [1, 2].iter()
@@ -238,43 +267,47 @@ use(saved)
 The loop may advance a private compiler-created cursor derived from `iter`. It
 must not mutate the public `iter` value or the `saved` value.
 
-### General Shape Specialization
+### General Known-Value Specialization
 
-The existing specialization pass already has most of the right vocabulary:
+The existing specialization pass already has most of the right mechanics, but
+its vocabulary should move from aggregate "shape" toward known-value facts.
+The target fact model is:
 
-- `Shape.any`
-- `Shape.tag`
-- `Shape.record`
-- `Shape.tuple`
-- `Shape.nominal`
-- `Shape.callable`
+- `Unknown`
+- `Leaf(expr)`
+- `Record(fields)`
+- `Tuple(elems)`
+- `Tag(name, payload)`
+- `Nominal(wrapper, child)`
+- `Callable(target_or_member, captures)`
 
 It also already:
 
 - records direct-call patterns
-- splits constructor-shaped arguments into leaves
+- splits known constructor arguments into leaves
 - simplifies field reads, tuple reads, known tags, and known callable calls
-- specializes loop state when loop initial values have constructor shape
+- specializes loop state when loop initial values have known constructor facts
 - inlines known callable calls
 - has direct-call inlining machinery guarded against recursion
 
 The work is to make that machinery complete enough and correctly staged, not
 to add a new iterator optimizer.
 
-The long-term pass design is one shape-specialization engine with two products:
+The target pass design is one known-value specialization engine with two
+products:
 
 - **Base body rewrite:** every original Roc function body is cloned once back
   into the same function id, with the same arguments, captures, return type,
-  and public ABI. This pass performs local shape rewrites such as field
-  projection, tag simplification, callable inlining, branch/match shape joins,
+  and public ABI. This pass performs local fact rewrites such as field
+  projection, tag simplification, callable inlining, branch/match fact joins,
   and loop-state splitting.
-- **Extra direct-call workers:** when a direct call passes a known-shaped value
-  into an argument that the callee actually uses in a shape-demanding way, the
-  same engine creates an additional worker whose ABI receives that argument's
-  leaves directly.
+- **Extra direct-call workers:** when a direct call passes a value with useful
+  known facts into an argument that the callee actually uses in a
+  fact-demanding way, the same engine creates an additional worker whose ABI
+  receives that argument's leaves directly.
 
 These two products must not be conflated. Loop-state splitting is local to a
-function body and must not require a constructor-shaped caller argument. This
+function body and must not require a constructor-valued caller argument. This
 must optimize the same way:
 
 ```roc
@@ -306,7 +339,8 @@ sum = |start| {
 ```
 
 The record argument only matters for a possible interprocedural worker ABI. It
-must not be the reason the body gets local loop-state specialization.
+must not be the reason the body gets local loop-state specialization. A
+primitive leaf is already valid private state.
 
 The pass should run as a worklist:
 
@@ -314,24 +348,25 @@ The pass should run as a worklist:
    by field access, tuple access, match, callable call, or by propagation
    through another direct call.
 2. Clone each original Roc function body in place as the base specialization,
-   preserving its ABI and applying the ordinary shape rewrites.
+   preserving its ABI and applying the ordinary known-value rewrites.
 3. While cloning any base body or worker, record newly discovered direct-call
-   worker patterns from explicit `Shape` facts.
+   worker patterns from explicit known-value facts.
 4. Reserve a function id for each newly discovered worker pattern.
-5. Clone each worker with split arguments, applying the same body-local shape
-   rewrites and recording any further worker patterns it discovers.
+5. Clone each worker with split arguments, applying the same body-local
+   known-value rewrites and recording any further worker patterns it discovers.
 6. Continue until the worklist is empty.
 
 There should be no separate post-clone cleanup phase that scans the finished
 program and tries to rewrite calls after the fact. Calls are rewritten while
-their containing body is cloned, using the same explicit `Shape`/`Value` facts
-as every other optimization. This gives the pass a single source of truth and
+their containing body is cloned, using the same explicit known-value facts as
+every other optimization. This gives the pass a single source of truth and
 avoids a late pass trying to reconstruct information that the cloner already
 had.
 
-The generalized pass must expose constructor/callable shape through:
+The generalized pass must expose known-value facts through:
 
-- direct calls whose bodies construct records/tags/tuples/nominals/callables
+- direct calls whose bodies produce primitive leaves, records, tags, tuples,
+  nominals, or callables
 - local bindings
 - blocks
 - `if` branches
@@ -341,17 +376,17 @@ The generalized pass must expose constructor/callable shape through:
 - calls through function fields such as `(iterator.step)()`
 - public `Iter.next` and `Stream.next!` wrappers after inlining
 
-When a direct call's result is demanded as a shape, the pass may inline the
-callee body through the existing direct-call inliner so the returned shape is
-visible. This must be demand-driven by the surrounding expression that consumes
-the shape, not by iterator names.
+When a direct call's result is demanded as a known value, the pass may inline
+the callee body through the existing direct-call inliner so the returned facts
+are visible. This must be demand-driven by the surrounding expression that
+consumes the facts, not by iterator names.
 
-Examples of shape-demanding contexts:
+Examples of fact-demanding contexts:
 
 - field access on a returned record
 - match on a returned tag
 - calling a returned callable
-- loop state that can be split
+- loop state that can be carried as private leaves
 - a `continue` value that must match a split loop state
 - a direct call argument position already selected for constructor/callable
   specialization
@@ -359,9 +394,9 @@ Examples of shape-demanding contexts:
 The pass must not infer iterator behavior from names such as `iter`, `append`,
 or `next`. It sees only ordinary checked direct calls and ordinary Roc values.
 
-### Branch And Match Joins
+### Branch And Match Fact Joins
 
-Rocci Bird needs shape to survive this pattern:
+Rocci Bird needs known iterator facts to survive this pattern:
 
 ```roc
 collision_points =
@@ -374,9 +409,9 @@ collision_points =
     }
 ```
 
-The optimizer must be able to represent a common outer shape when every branch
-returns the same kind of constructor-shaped value. For an `Iter`, that common
-outer shape is the record fields:
+The optimizer must be able to represent a common outer constructor when every
+branch returns the same kind of known value. For an `Iter`, that common outer
+constructor is the record fields:
 
 - `len_if_known`
 - `step`
@@ -385,9 +420,8 @@ The fields themselves may still be ordinary branch expressions when their
 values differ. This is still useful: the loop state can avoid rebuilding the
 outer record, and later lambda-set solving can keep the callable flow finite.
 
-If branches do not share a common constructor shape, the enclosing expression
-stays an ordinary expression. That is a normal outcome, not a compiler recovery
-path.
+If branches do not share a common constructor, the enclosing expression stays
+an ordinary expression. That is a normal outcome, not a compiler recovery path.
 
 Branch conditions, scrutinees, guards, branch-local `dbg`, `expect`, and
 `crash` must stay at their source evaluation positions. The optimizer must
@@ -395,8 +429,8 @@ never replay a declaration RHS later at a `for` site.
 
 ### Loop State
 
-When a loop starts with a known constructor shape, loop parameters should be
-split into the shape's leaves. This is already the Stream precedent:
+When a loop starts with useful known-value facts, loop parameters should be
+carried as private leaves. This is already the Stream precedent:
 
 ```text
 one Stream value
@@ -409,16 +443,16 @@ state. Map and filter add captured functions. The public `Iter` wrapper and
 public step tags should disappear from the hot loop when all uses are private
 consumer uses.
 
-Loop `continue` values must have the same selected shape as the loop's initial
-values. If they do, the continue passes leaves. If they do not, the loop must
-not be partially rewritten into an invalid mixed state.
+Loop `continue` values must have facts that are consistent with the loop's
+selected private state. If they do, the continue passes leaves. If they do not,
+the loop must not be partially rewritten into an invalid mixed state.
 
 ### Public Boundaries
 
 Some uses genuinely need the public value:
 
 - returning an iterator from a function whose caller is not specialized with
-  its shape
+  its facts
 - storing an iterator in a data structure as an ordinary value
 - passing an iterator to code whose body is not available for specialization
 - matching on `Iter.next(iter)` as a public value outside a private consuming
@@ -426,7 +460,7 @@ Some uses genuinely need the public value:
 
 At those boundaries, the compiler materializes the ordinary `Iter` record and
 ordinary step function value. That is correct. The optimizer is allowed to win
-only when ordinary specialization proves the concrete shape remains available
+only when ordinary specialization proves the concrete facts remain available
 at the consuming use.
 
 ## Implementation Steps
@@ -461,7 +495,7 @@ at the consuming use.
 - Run the smallest builtin/check test target that covers `Builtin.roc`.
 - Fix syntax/type errors caused by the restored three-variant shape.
 - Run the broader post-check test target that currently exercises iterator
-  plan shape so it exposes every stale `Append` assumption.
+  plan usage so it exposes every stale `Append` assumption.
 - Commit the public-shape restoration before removing deeper compiler code.
 
 ### 4. Remove The Explicit Iterator-Plan Path
@@ -485,12 +519,12 @@ non-iterator test, the test is pointing at a real dependency that needs to be
 represented with ordinary constructor/callable shape, not with an iterator
 plan.
 
-### 5. Add Focused Shape-Specialization Tests
+### 5. Add Focused Known-Value Specialization Tests
 
 Start with tests that fail after iterator-plan removal and pass only after the
-general optimizer handles the shape.
+general optimizer handles the facts.
 
-Required test shapes:
+Required test cases:
 
 - `for` over a local `list.iter()`
 - `for` over a local `list.iter().append(x)`
@@ -498,12 +532,12 @@ Required test shapes:
   - base iterator
   - base appended once
   - base appended twice
-- the same branch shape through `match`
+- the same branch facts through `match`
 - `Iter.map` over a list iterator
 - `Iter.keep_if` and `Iter.drop_if` over a list iterator
 - `Iter.concat` and `Iter.prepended`
-- `List.from_iter` over the same shapes
-- `Iter.fold` over the same shapes
+- `List.from_iter` over the same producer forms
+- `Iter.fold` over the same producer forms
 - `Stream.from_iter(...).map!` and `Stream.collect!`
 - a saved iterator reused after a loop, proving public values are not mutated
 - branch-local `dbg`, `expect`, and `crash` are not moved or duplicated
@@ -511,10 +545,10 @@ Required test shapes:
   is available for specialization
 - a function value captured inside the iterator step closure
 - a boxed lambda or closure-carrying value that exercises the same callable
-  shape machinery outside iterators
+  fact machinery outside iterators
 
 The tests should inspect the compiler IR or generated wasm/object text where
-possible, not only output values. Value tests prove correctness; shape tests
+possible, not only output values. Value tests prove correctness; fact tests
 prove the optimization happened.
 
 ### 6. Refactor `SpecConstr` Around Base Bodies And Worker Worklist
@@ -532,12 +566,12 @@ Concrete work:
   - same captures
   - same return type
   - existing calls to that function still type-check and lower unchanged
-- Run the same shape-aware cloner for base bodies and worker bodies.
+- Run the same fact-aware cloner for base bodies and worker bodies.
 - Let the base-body clone perform local rewrites:
   - known record/tuple field projection
   - known tag match simplification
   - known callable calls
-  - branch/match shape joins
+  - branch/match fact joins
   - loop-state splitting
   - demanded direct-call result exposure
 - While cloning any base body or worker, record newly discovered direct-call
@@ -547,6 +581,8 @@ Concrete work:
   popping that worklist until it is empty.
 - Rewrite calls while cloning the containing body. Delete the late
   `rewriteExistingCalls` style cleanup once the cloner owns all call rewriting.
+- Rename touched optimizer data structures away from legacy aggregate-shape
+  terminology and toward `KnownValue` or `ValueFact`.
 
 This step must add a regression test proving primitive arguments do not block
 local loop-state specialization:
@@ -564,18 +600,18 @@ sum = |start| {
 }
 ```
 
-The optimized LIR shape for that function must split the loop state just like
+The optimized LIR for that function must split the loop state just like
 the otherwise equivalent `{ n : I64 } -> I64` version. The test should assert
 the loop join parameter count, not just final output.
 
-### 7. Generalize Direct-Call Shape Exposure
+### 7. Generalize Direct-Call Fact Exposure
 
 Extend `spec_constr` so a direct call can expose a constructor/callable result
-when the caller is currently trying to use that result as a shape.
+when the caller is currently trying to use that result as known facts.
 
 Concrete work:
 
-- Make shape-demanding contexts explicit in the cloner.
+- Make fact-demanding contexts explicit in the cloner.
 - Reuse `inlineDirectCallValue` for available Roc callees with no `return`.
 - Keep the existing recursion guard.
 - Preserve argument evaluation order with the existing pending-let machinery.
@@ -587,23 +623,23 @@ Concrete work:
 This is the piece that lets calls like `Iter.append(base, point)` expose the
 record containing the new step thunk.
 
-### 8. Generalize Shape Joins
+### 8. Generalize Fact Joins
 
-Add a value-shape join operation for `if` and `match`.
+Add a known-value fact join operation for `if` and `match`.
 
 The join operation should:
 
 - accept branches with the same outer constructor kind
 - preserve record field names and tuple positions exactly
 - preserve nominal wrappers only when the checked type matches
-- preserve tag shape only when the tag name and payload structure match
-- preserve callable shape only when the callable target and capture structure
+- preserve tag facts only when the tag name and payload structure match
+- preserve callable facts only when the callable target and capture structure
   match
-- otherwise use ordinary expression leaves inside the outer shape when the
-  outer shape still matches
-- reject the join when no common outer shape exists
+- otherwise use ordinary expression leaves inside the outer constructor when the
+  outer constructor still matches
+- reject the join when no common outer constructor exists
 
-This lets `collision_points` keep the `Iter` record shape across branches even
+This lets `collision_points` keep the `Iter` record facts across branches even
 when the selected step callable value differs.
 
 ### 9. Strengthen Loop-State Splitting
@@ -611,14 +647,14 @@ when the selected step callable value differs.
 Update loop specialization so split loop state works with:
 
 - base-body rewrites, not only call-pattern workers
-- shapes returned from direct calls
-- shapes returned from branch/match joins
+- facts returned from direct calls
+- facts returned from branch/match joins
 - callable fields read from known records
 - step results returned by inlined `Iter.next`/`Stream.next!`
-- `continue` values that rebuild the same outer shape
+- `continue` values that rebuild the same outer constructor
 
 The loop rewrite must remain all-or-nothing for each loop parameter. If the
-initial shape and every reachable `continue` shape cannot be made consistent,
+initial facts and every reachable `continue` fact cannot be made consistent,
 keep the ordinary loop value.
 
 ### 10. Ensure Lambda Sets Stay Finite Until Lowering
@@ -632,7 +668,7 @@ Required checks:
 - calls through known callable fields inline when there is exactly one target
 - calls through branch-selected callable fields lower through finite lambda-set
   dispatch, not erased callable ABI, when all targets are known
-- captures are split where the shape-specialization pass can split them
+- captures are split where the known-value specialization pass can split them
 - public ABI or hosted boundaries still force erasure only through existing
   checked data
 
@@ -640,7 +676,7 @@ Required checks:
 
 - Remove structural tests asserting `iter_plan` fields exist.
 - Replace them with tests asserting the absence of iterator-plan IR.
-- Add shape-specialization tests for the cases listed above.
+- Add known-value specialization tests for the cases listed above.
 - Add regression tests for `Iter.next` returning exactly three variants.
 - Add regression tests that `Stream.next!` remains the effectful analog of
   `Iter.next`.
@@ -666,9 +702,9 @@ direct-list source.
 
 ### 13. Update Documentation
 
-- Update `design.md` to describe the lambda/callable-shape design.
-- Remove the old design claim that explicit iterator plans are the long-term
-  source of truth.
+- Update `design.md` to describe the lambda/callable known-value design.
+- Remove the old design claim that explicit iterator plans are the source of
+  truth.
 - Mention the Rust comparison explicitly:
   - Rust carries adapter state in concrete iterator types.
   - Roc carries adapter state in ordinary lambda sets and captures.
@@ -693,8 +729,9 @@ direct-list source.
 - [x] No late `rewriteExistingCalls` cleanup pass remains.
 - [x] Primitive function arguments get the same local loop-state
       specialization as equivalent single-field-record arguments.
-- [x] Shape specialization handles direct-call results in demanded contexts.
-- [x] Shape specialization handles `if` and `match` joins.
+- [x] Known-value specialization handles direct-call results in demanded
+      contexts.
+- [x] Known-value specialization handles `if` and `match` joins.
 - [ ] Loop-state splitting handles iterator records and step callables.
 - [ ] Lambda solving keeps known step callables finite where bodies are
       available.
@@ -702,7 +739,7 @@ direct-list source.
 - [ ] `dbg`, `expect`, and `crash` movement/duplication tests pass.
 - [ ] Imported-module iterator producer tests pass.
 - [ ] Stream optimization tests pass.
-- [ ] Boxed/captured callable shape tests pass outside iterator code.
+- [ ] Boxed/captured callable fact tests pass outside iterator code.
 - [ ] Rocci Bird `--opt=size` builds.
 - [ ] Rocci Bird optimized collision loop disassembly contains no public
       iterator wrapper churn on the hot path.
@@ -724,8 +761,8 @@ direct-list source.
 - Do not move or duplicate `dbg`, `expect`, `crash`, branch conditions,
   appended item expressions, or stream effects.
 - Do not let LIR or backends know iterator rules.
-- Do not keep both explicit iterator plans and generalized shape specialization
-  as competing long-term systems.
-- Do not add a late cleanup pass that reconstructs call-shape information after
-  body cloning; calls must be rewritten by the same shape-aware cloner that has
+- Do not keep both explicit iterator plans and generalized known-value
+  specialization as competing systems.
+- Do not add a late cleanup pass that reconstructs call fact information after
+  body cloning; calls must be rewritten by the same fact-aware cloner that has
   the explicit facts.

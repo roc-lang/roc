@@ -1334,7 +1334,7 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
-### Builtin Iter And Stream Shape Specialization
+### Builtin Iter And Stream Known-Value Specialization
 
 `Iter` and `Stream` are public Roc builtins whose methods remain ordinary Roc
 functions. Their public representation is the same family:
@@ -1366,41 +1366,60 @@ that typing model. Roc keeps the concrete public type `Iter(item)` and the
 concrete public type `Stream(item)`, and different branches that produce
 different adapter chains still unify as one `Iter(item)` or `Stream(item)`.
 
-Roc carries the adapter shape through ordinary function values instead. The
+Roc carries the adapter facts through ordinary function values instead. The
 step field is a normal callable, and lambda-set solving records the finite set
 of possible step functions plus their captures. The optimizer uses those
-ordinary record, tag, tuple, nominal, and callable shapes to produce private
-cursor state. This is how Roc aims for the same optimized result as Rust's
-`Iterator` lowering while keeping Roc's public API purely functional and
+ordinary record, tag, tuple, nominal, callable, and primitive facts to produce
+private cursor state. This is how Roc aims for the same optimized result as
+Rust's `Iterator` lowering while keeping Roc's public API purely functional and
 concrete. The adapter chain is neither represented in the user-facing type
 system nor erased into an opaque closure before optimization has had a chance
 to see it.
 
+A known-value fact is optimizer data about what an expression already is. It is
+not a new runtime value and it is not limited to aggregate source syntax. The
+fact model has these categories:
+
+- unknown value
+- expression leaf, including primitive values and ordinary runtime expressions
+- record, tuple, tag, or nominal constructor with known child facts
+- callable target with known capture facts
+
+Records and tuples are only one way to expose child facts. A primitive wrapped
+in `{ value : primitive }` must not become more optimizable merely because it
+was wrapped. The wrapper can expose a named field, but the primitive leaf itself
+is already valid private state. If a loop's best cursor state is just a `U64`
+index, the loop should carry that `U64`; it should not need a synthetic
+single-field record to qualify for specialization.
+
 The lambda set is the key difference from both obvious alternatives. It carries
-the exact callable targets and capture shapes that Rust carries in concrete
+the exact callable targets and capture facts that Rust carries in concrete
 iterator adapter types, but it does so behind the ordinary Roc type
 `Iter(item)`/`Stream(item)`. It also avoids the allocation-heavy erased-closure
 model: when a consumer can see a finite lambda set, the optimizer can split the
 captures into private loop state instead of building a heap wrapper and
 indirectly calling through it. If a value crosses a true materialization
 boundary and only an erased callable remains, the compiler lowers the ordinary
-public value; it must not recover shape later by recognizing builtin names or
+public value; it must not recover facts later by recognizing builtin names or
 backend artifacts.
 
-The post-check pipeline must not add a separate builtin iterator-plan IR as the
-long-term solution. There is no `iter_plan` expression, no iterator-plan side
-store, and no lowering path that recognizes builtin iterator behavior by
-source names, generated symbols, public closure layout, wasm bytes, object
-bytes, or backend output. If an optimization needs constructor or callable
-shape, it consumes ordinary checked direct-call targets, lifted function ids,
-captures, and type data produced by earlier stages.
+The post-check pipeline must not add a separate builtin iterator-plan IR. There
+is no `iter_plan` expression, no iterator-plan side store, and no lowering path
+that recognizes builtin iterator behavior by source names, generated symbols,
+public closure layout, wasm bytes, object bytes, or backend output. If an
+optimization needs constructor or callable facts, it consumes ordinary checked
+direct-call targets, lifted function ids, captures, known-value facts, and type
+data produced by earlier stages.
 
-The existing constructor/callable shape specialization pass is the owner of
-this optimization direction. It is general over values shaped as tags, records,
-tuples, nominals, and callables; `Iter` and `Stream` are important clients, not
-special cases.
+The existing constructor/callable specialization pass is the owner of this
+optimization direction, but the target model is known-value specialization,
+not aggregate-only "shape" handling. It is general over primitive leaves,
+records, tuples, tags, nominals, callables, and ordinary expression leaves;
+`Iter` and `Stream` are important clients, not special cases. Source `for`
+lowering emits ordinary `.iter` and `.next` calls for language semantics. The
+optimizer must not have a second, special iterator lowering for performance.
 
-The shape-specialization engine has one value/shape model and two outputs:
+The known-value specialization engine has one fact model and two outputs:
 
 1. It rewrites every original Roc function body in place while preserving that
    function's public ABI: the same function id, arguments, captures, return
@@ -1409,12 +1428,15 @@ The shape-specialization engine has one value/shape model and two outputs:
    proves that splitting a callee argument is useful and correct.
 
 This separation is required. Local optimizations such as loop-state splitting
-must not depend on whether some caller happened to pass a constructor-shaped
+must not depend on whether some caller happened to pass a constructor-valued
 argument. A function taking `I64` should get the same local loop-state
 specialization as the same function taking `{ n : I64 }` when the loop state
-inside the function has the same known shape. Constructor-shaped arguments are
+inside the function has the same known facts. Constructor-valued arguments are
 only relevant to interprocedural worker ABIs; they are not the permission slip
-for optimizing the callee's own body.
+for optimizing the callee's own body. More generally, source wrappers must not
+be required to unlock a local optimization. The optimizer should specialize the
+value facts demanded by the body, whether those facts are exposed by fields,
+lambda captures, tag payloads, or direct primitive leaves.
 
 The pass should therefore operate as a worklist:
 
@@ -1422,7 +1444,7 @@ The pass should therefore operate as a worklist:
   direct-call arguments are worth splitting.
 - Then clone each original Roc body once as the base specialization, preserving
   its ABI and applying the same field-read, tag-match, callable, direct-call,
-  branch-join, and loop-state shape rewrites used everywhere else.
+  branch-join, and loop-state value rewrites used everywhere else.
 - While cloning a base body or worker, record any newly discovered direct-call
   worker pattern.
 - Pop unwritten worker patterns from the worklist, reserve their function ids,
@@ -1431,29 +1453,29 @@ The pass should therefore operate as a worklist:
 
 There should not be a separate post-clone cleanup pass whose job is to scan the
 finished program and rewrite calls after the fact. Calls are rewritten while
-their containing body is cloned, using the same explicit `Shape` and `Value`
-facts as every other transformation. That keeps the source of truth single and
-prevents one pass from guessing at information another pass already had.
+their containing body is cloned, using the same explicit known-value facts as
+every other transformation. That keeps the source of truth single and prevents
+one pass from guessing at information another pass already had.
 
-The pass may expose shape through a direct call when the caller is currently
-using that result in a shape-demanding context, such as field access, tag
-matching, calling a returned callable, loop-state splitting, or a specialized
-call argument. This uses the ordinary direct-call body and preserves argument
-evaluation order. It must not decide based on method names such as `iter`,
-`append`, `next`, or `map`.
+The pass may expose known-value facts through a direct call when the caller is
+currently using that result in a fact-demanding context, such as field access,
+tag matching, calling a returned callable, loop-state splitting, or a
+specialized call argument. This uses the ordinary direct-call body and
+preserves argument evaluation order. It must not decide based on method names
+such as `iter`, `append`, `next`, or `map`.
 
-Shape must flow through ordinary local bindings, blocks, `if`, `match`, loop
-initial values, and loop `continue` values. When branches share a common outer
-constructor shape, such as an `Iter` record with `len_if_known` and `step`
-fields, the optimizer may keep that outer shape while leaving differing fields
-as ordinary branch values. If branches do not share a common outer shape, the
-expression remains an ordinary value. Branch conditions, scrutinees, guards,
-branch-local `dbg`, `expect`, `crash`, stream effects, and appended item
-expressions remain at their source evaluation positions; optimization never
-replays a declaration body later at a consumer.
+Known-value facts must flow through ordinary local bindings, blocks, `if`,
+`match`, loop initial values, and loop `continue` values. When branches share a
+common outer constructor, such as an `Iter` record with `len_if_known` and
+`step` fields, the optimizer may keep that outer constructor while leaving
+differing fields as ordinary expression leaves. If branches do not share a
+common outer constructor, the expression remains an ordinary value. Branch
+conditions, scrutinees, guards, branch-local `dbg`, `expect`, `crash`, stream
+effects, and appended item expressions remain at their source evaluation
+positions; optimization never replays a declaration body later at a consumer.
 
-When a loop starts with a known constructor shape, the loop parameter may be
-split into the shape's leaves. For `Iter` and `Stream`, that means the public
+When a loop starts with useful known-value facts, the loop parameter may be
+split into private leaves. For `Iter` and `Stream`, that means the public
 wrapper can disappear from the hot loop. The loop carries private fields such
 as list pointer, index, length, phase, selected callable target, and captured
 values. A step call through a known callable field can be inlined when it has a
@@ -1484,12 +1506,12 @@ as an ordinary value, passing it to unspecialized code, or directly observing
 the public result of `Iter.next`/`Stream.next!`. At those boundaries the
 compiler builds the ordinary public record and callable value. That is normal
 lowering, not a cleanup pass. The optimizer wins only when ordinary
-specialization keeps enough shape available at the consuming use.
+specialization keeps enough facts available at the consuming use.
 
 Finite and infinite iterators use the same public model. An unbounded range or
 custom Fibonacci-style iterator is just a step callable that may never produce
 `Done` unless a later adapter does. Optimized finite consumers may still become
-bounded loops when the shape proves a bound; otherwise they remain ordinary
+bounded loops when the facts prove a bound; otherwise they remain ordinary
 potentially nonterminating Roc computations.
 
 LIR and backends consume only ordinary values, control flow, calls, committed
