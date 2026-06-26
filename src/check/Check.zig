@@ -209,6 +209,11 @@ checking_call_arg: bool = false,
 checking_binding_rhs: bool = false,
 /// Pattern for the immediate binding RHS being checked.
 checking_binding_rhs_pattern: ?CIR.Pattern.Idx = null,
+/// The outer RHS expression of the currently checked `_ = ...` discard binding,
+/// if any. Nested instantiations inside that RHS use this as their error target:
+/// the value is explicitly discarded, so no caller can later pin return-only
+/// where-clause obligations created by the RHS.
+discarded_binding_rhs_expr: ?CIR.Expr.Idx = null,
 /// Nonzero while checking source that constructs a compile-time value. Static
 /// exhaustiveness diagnostics under this depth are empirical candidates: the
 /// compile-time finalizer either observes them executing, reports their generated
@@ -379,6 +384,11 @@ const InstantiationDispatcher = struct {
     /// left unpinnable is reported and marked a runtime error at exactly this
     /// expression. Null only if the dispatcher was created outside `checkExpr`.
     instantiation_expr: ?CIR.Expr.Idx,
+    /// True when `instantiation_expr` came from the RHS of an explicit discard
+    /// binding (`_ = ...`). A generalized, body-required where-clause created
+    /// there is not an exposed polymorphic obligation; the value has been thrown
+    /// away, so the obligation must be reported and poisoned.
+    discarded_binding_rhs: bool,
 };
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
@@ -3136,7 +3146,8 @@ fn instantiateVarHelp(
                         try self.instantiation_dispatchers.append(self.gpa, .{
                             .dispatcher_var = fresh_var,
                             .constraints = flex.constraints,
-                            .instantiation_expr = self.instantiation_source_expr,
+                            .instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
+                            .discarded_binding_rhs = self.discarded_binding_rhs_expr != null,
                         });
                     }
                 }
@@ -6093,13 +6104,17 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // skipped here either.
         if (resolved.desc.rank == .generalized) {
             var all_where_clause = true;
+            var any_body_required_where_clause = false;
             for (self.types.sliceStaticDispatchConstraints(constraints_range)) |c| {
                 if (c.origin != .where_clause) {
                     all_where_clause = false;
                     break;
                 }
+                if (c.origin.where_clause.body_required) {
+                    any_body_required_where_clause = true;
+                }
             }
-            if (all_where_clause) continue;
+            if (all_where_clause and !(dispatcher.discarded_binding_rhs and any_body_required_where_clause)) continue;
         }
 
         // Pick the constraint to report. Instantiated where-clause contracts get
@@ -6212,9 +6227,11 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // corpus case, is caught by the def-site sweep instead.
         var primary: ?Region = null;
         var secondary: ?Region = null;
+        var runtime_error_inserted = false;
         if (is_instantiated_where_clause and where_dispatch_use != null) {
             const dispatch_use = where_dispatch_use.?;
             primary = dispatch_use.region;
+            runtime_error_inserted = true;
 
             if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
                 const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
@@ -6231,6 +6248,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             // then emits a crash instead of reaching the ownerless dispatch.
             if (dispatcher.instantiation_expr) |inst_expr| {
                 primary = self.cir.store.getExprRegion(inst_expr);
+                runtime_error_inserted = true;
                 if (self.cir.store.getExpr(inst_expr) != .e_runtime_error) {
                     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
                         .region = primary.?,
@@ -6239,9 +6257,9 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                 }
             } else {
                 // A dispatcher created outside `checkExpr` has no recorded source
-                // expression to mark. Reporting still suffices: `unresolved_dispatcher`
-                // is `runtime_error` severity, so `hasUserErrors` blocks all lowering —
-                // the ownerless dispatch is never reached even without a per-expr mark.
+                // expression to mark. This report must remain artifact-blocking for
+                // run paths because there is no explicit runtime-error node for
+                // post-check lowering to consume.
                 primary = self.getRegionAt(dispatcher.dispatcher_var);
             }
         } else {
@@ -6277,6 +6295,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                     .region = self.cir.store.getExprRegion(expr_idx),
                 } });
                 self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+                runtime_error_inserted = true;
             }
         }
 
@@ -6298,6 +6317,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             .method_name = constraint.fn_name,
             .is_binop = is_binop,
             .binop_negated = constraint.origin.binopNegated(),
+            .runtime_error_inserted = runtime_error_inserted,
         } } });
     }
 }
@@ -6432,6 +6452,7 @@ fn reportAmbiguousStaticDispatch(
             .method_name = constraint.fn_name,
             .is_binop = is_binop,
             .binop_negated = constraint.origin.binopNegated(),
+            .runtime_error_inserted = true,
         } } });
 
         // Mark the expression a runtime error so lowering skips it and never
@@ -9345,6 +9366,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const binding_rhs_pattern = self.checking_binding_rhs_pattern;
     self.checking_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
+
+    const prev_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
+    if (is_binding_rhs) {
+        if (binding_rhs_pattern) |pattern_idx| {
+            if (self.cir.store.getPattern(pattern_idx) == .underscore) {
+                self.discarded_binding_rhs_expr = expr_idx;
+            }
+        }
+    }
+    defer self.discarded_binding_rhs_expr = prev_discarded_binding_rhs_expr;
 
     // Decide whether this binding generalizes — see `shouldGeneralize` for the
     // three qualifying paths and why each is sound.
@@ -15814,6 +15845,26 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // If this constraint is already an error, the skip this pass
                         continue;
                     }
+                    // Run the builtin-backing walk only when this nominal does not
+                    // define its own literal-conversion method. If it defines its own
+                    // `from_numeral` / `from_quote` / …, that method takes precedence,
+                    // so skip the walk and let the dispatch below resolve and run it.
+                    // Otherwise the walk would validate against the builtin backing and
+                    // shadow the user's own conversion.
+                    const nominal_defines_literal_method = original_env.lookupMethodBindingFromEnvAndDeclConst(
+                        self.cir,
+                        nominal_type.sourceDeclOptional(),
+                        constraint.fn_name,
+                    ) != null;
+                    if (!nominal_defines_literal_method and try self.literalConstraintSatisfiedByNominalBacking(
+                        deferred_constraint.var_,
+                        constraint,
+                        nominal_type,
+                        env,
+                        is_numeric_default_pass,
+                    )) {
+                        continue;
+                    }
                     if (!try self.validateFromNumeralLiteralForBuiltinNominal(
                         deferred_constraint.var_,
                         constraint,
@@ -17237,6 +17288,72 @@ fn validateResolvedOpenNumeralLiterals(
             continue;
         }
         _ = try self.reportInvalidBuiltinFromNumeralInfo(resolved.var_, num_kind, entry.info, env);
+    }
+}
+
+fn literalConstraintSatisfiedByNominalBacking(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    nominal_type: types_mod.NominalType,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) Allocator.Error!bool {
+    const literal_kind = constraint.origin.literalKind() orelse return false;
+    if (!nominal_type.canLiftInner(self.cir.qualified_module_ident)) return false;
+
+    const visited_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(visited_top);
+
+    var current = nominal_type;
+    while (true) {
+        const backing_var = self.types.getNominalBackingVar(current);
+        const backing_resolved = self.types.resolveVar(backing_var);
+        if (backing_resolved.desc.content != .structure) return false;
+        const backing_flat = backing_resolved.desc.content.structure;
+        if (backing_flat != .nominal_type) return false;
+
+        const backing_nominal = backing_flat.nominal_type;
+        switch (literal_kind) {
+            .numeral => {
+                if (self.builtinNumKindFromNominalType(backing_nominal) != null) {
+                    _ = try self.validateFromNumeralLiteralForBuiltinNominal(
+                        dispatcher_var,
+                        constraint,
+                        backing_nominal,
+                        env,
+                        is_numeric_default_pass,
+                    );
+                    return true;
+                }
+            },
+            .quote => {
+                if (self.nominalIsBuiltinStrType(backing_nominal)) return true;
+            },
+            .interpolation => {
+                if (self.nominalIsBuiltinStrType(backing_nominal)) {
+                    _ = try self.satisfyBuiltinStrInterpolation(dispatcher_var, constraint, env);
+                    return true;
+                }
+            },
+        }
+
+        // `backing_nominal` didn't match the terminal builtin above, so we are
+        // about to lift *through* it to a deeper backing. Re-check opacity at
+        // this level: a literal must not be coerced through an opaque boundary
+        // this module is not allowed to see past, even when the outer nominal
+        // is transparent.
+        if (!backing_nominal.canLiftInner(self.cir.qualified_module_ident)) return false;
+
+        // Cycle guard: store and compare already-resolved representative vars so
+        // we never re-resolve a visited entry. A representative var is 1:1 with
+        // its descriptor, so this is equivalent to the previous desc_idx compare
+        // but avoids the per-iteration resolveVar (no O(depth) work per step).
+        for (self.scratch_vars.sliceFromStart(visited_top)) |visited_var| {
+            if (visited_var == backing_resolved.var_) return false;
+        }
+        try self.scratch_vars.append(backing_resolved.var_);
+        current = backing_nominal;
     }
 }
 

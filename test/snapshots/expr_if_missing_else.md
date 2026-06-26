@@ -11,28 +11,29 @@ foo = if tru 0
 UNDEFINED VARIABLE - expr_if_missing_else.md:1:10:1:13
 MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `tru` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**expr_if_missing_else.md:1:10:1:13:**
-```roc
-foo = if tru 0
-```
-         ^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `tru` in this scope. ────────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  foo = if tru 0                                                            │
+ │           ‾‾‾                                                              │
+ └────────────────────────────────────────────── expr_if_missing_else.md:1:10 ┘
+
+    Is there an `import` or `exposing` missing up-top?
 
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**expr_if_missing_else.md:1:14:1:15:**
-```roc
-foo = if tru 0
-```
-             ^
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  foo = if tru 0                                                            │
+ │               ‾                                                            │
+ └────────────────────────────────────────────── expr_if_missing_else.md:1:14 ┘
 
-The value's type, which does not have a method named **from_numeral**, is:
+    The value's type, which does not have a method named `from_numeral`, is:
 
-    {}
+        {}
 
 # TOKENS
 ~~~zig

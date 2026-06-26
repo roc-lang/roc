@@ -13,61 +13,69 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
-**MISSING METHOD**
-This **add_try** method is being called on a value whose type doesn't have that method:
-**range_missing_method_error.md:1:5:1:14:**
-```roc
-r = "a"..<"z"
-```
-    ^^^^^^^^^
 
-The value's type, which does not have a method named **add_try**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `add_try` method is being called on a value whose ───┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
-    Str
+    The value's type, which does not have a method named `add_try`, is:
 
-**Hint:** For this to work, the type would need to have a method named **add_try** associated with it in the type's declaration.
+        Str
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**range_missing_method_error.md:1:5:1:14:**
-```roc
-r = "a"..<"z"
-```
-    ^^^^^^^^^
+    Hint: For this to work, the type would need to have a method named
+    `add_try` associated with it in the type's declaration.
 
-The value's type, which does not have a method named **from_numeral**, is:
 
-    Str
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+    The value's type, which does not have a method named `from_numeral`, is:
 
-**MISSING METHOD**
-This **is_lt** method is being called on a value whose type doesn't have that method:
-**range_missing_method_error.md:1:5:1:14:**
-```roc
-r = "a"..<"z"
-```
-    ^^^^^^^^^
+        Str
 
-The value's type, which does not have a method named **is_lt**, is:
+    Hint: For this to work, the type would need to have a method named
+    `from_numeral` associated with it in the type's declaration.
 
-    Str
 
-**Hint:** For this to work, the type would need to have a method named **is_lt** associated with it in the type's declaration.
+┌────────────────┐
+│ MISSING METHOD ├─ This `is_lt` method is being called on a value whose ─────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
-**MISSING METHOD**
-This **steps_between** method is being called on a value whose type doesn't have that method:
-**range_missing_method_error.md:1:5:1:14:**
-```roc
-r = "a"..<"z"
-```
-    ^^^^^^^^^
+    The value's type, which does not have a method named `is_lt`, is:
 
-The value's type, which does not have a method named **steps_between**, is:
+        Str
 
-    Str
+    Hint: For this to work, the type would need to have a method named `is_lt`
+    associated with it in the type's declaration.
 
-**Hint:** For this to work, the type would need to have a method named **steps_between** associated with it in the type's declaration.
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `steps_between` method is being called on a value ───┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  r = "a"..<"z"                                                             │
+ │      ‾‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+
+    The value's type, which does not have a method named `steps_between`, is:
+
+        Str
+
+    Hint: For this to work, the type would need to have a method named
+    `steps_between` associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -15,19 +15,20 @@ main! = |_| mapList([1,2,3,4,5])
 # EXPECTED
 TOO FEW ARGS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TOO FEW ARGS**
-The `mapList` function expects 2 arguments, but it got 1 instead:
-**type_app_with_vars.md:6:13:6:33:**
-```roc
-main! = |_| mapList([1,2,3,4,5])
-```
-            ^^^^^^^^^^^^^^^^^^^^
 
-The `mapList` function has the type:
+┌──────────────┐
+│ TOO FEW ARGS ├─ The `mapList` function expects 2 arguments, but it got 1 ───┐
+└┬─────────────┘  instead.                                                    │
+ │                                                                            │
+ │  main! = |_| mapList([1,2,3,4,5])                                          │
+ │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+ └──────────────────────────────────────────────── type_app_with_vars.md:6:13 ┘
 
-    List(a), (a -> b) -> List(b)
+    The `mapList` function has the type:
 
-Are there any missing commas?
+        List(a), (a -> b) -> List(b)
+
+    Are there any missing commas?
 
 # TOKENS
 ~~~zig

@@ -14,49 +14,49 @@ PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_018.md:1:1:1:2:**
-```roc
-0 b:S
-```
-^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  0 b:S                                                                     │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_018.md:1:1 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_018.md:2:1:2:3:**
-```roc
-.R
-```
-^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**UNDECLARED TYPE**
-The type _S_ is not declared in this scope.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  .R                                                                        │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────────────── fuzz_crash_018.md:2:1 ┘
 
-This type is referenced here:
-**fuzz_crash_018.md:1:5:1:6:**
-```roc
-0 b:S
-```
-    ^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_018.md:1:3:1:6:**
-```roc
-0 b:S
-```
-  ^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `S` is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  0 b:S                                                                     │
+ │      ‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_018.md:1:5 ┘
+
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  0 b:S                                                                     │
+ │    ‾‾‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_018.md:1:3 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

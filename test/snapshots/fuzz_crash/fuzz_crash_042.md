@@ -12,38 +12,38 @@ PARSE ERROR - fuzz_crash_042.md:1:11:1:12
 MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_042.md:1:11:1:12:**
-```roc
-import u.R}g:r->R.a.E
-```
-          ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  import u.R}g:r->R.a.E                                                     │
+ │            ‾                                                               │
+ └──────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
 
-
-**MODULE NOT FOUND**
-The type `a.E` is qualified by the module `u.R`, but that module was not found in this Roc project.
-
-You're attempting to use this type here:
-**fuzz_crash_042.md:1:20:1:22:**
-```roc
-import u.R}g:r->R.a.E
-```
-                   ^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_042.md:1:12:1:22:**
-```roc
-import u.R}g:r->R.a.E
-```
-           ^^^^^^^^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  import u.R}g:r->R.a.E                                                     │
+ │                     ‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_042.md:1:20 ┘
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  import u.R}g:r->R.a.E                                                     │
+ │             ‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_042.md:1:12 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

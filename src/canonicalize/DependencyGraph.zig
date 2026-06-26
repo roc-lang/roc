@@ -111,196 +111,515 @@ pub const EvaluationOrder = struct {
     }
 };
 
-/// Collects all definition dependencies from an expression
-/// Returns a list of Ident.Idx that this expression references
-fn collectExprDependencies(
-    cir: *const ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-    dependencies: *std.AutoHashMapUnmanaged(base.Ident.Idx, void),
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(4096, allocator);
-    const stack_allocator = stack_allocator_state.get();
-    var pending: std.ArrayList(CIR.Expr.Idx) = .empty;
-    defer pending.deinit(stack_allocator);
+const DemandSummary = struct {
+    deps: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
+    called_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
 
-    try pending.append(stack_allocator, expr_idx);
-    while (pending.pop()) |current_idx| {
-        const expr = cir.store.getExpr(current_idx);
-        switch (expr) {
+    fn deinit(self: *DemandSummary, allocator: std.mem.Allocator) void {
+        self.deps.deinit(allocator);
+        self.called_patterns.deinit(allocator);
+    }
+
+    fn addDep(self: *DemandSummary, allocator: std.mem.Allocator, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!bool {
+        const gop = try self.deps.getOrPut(allocator, def_idx);
+        if (gop.found_existing) return false;
+        gop.value_ptr.* = {};
+        return true;
+    }
+
+    fn addCalledPattern(self: *DemandSummary, allocator: std.mem.Allocator, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!bool {
+        const gop = try self.called_patterns.getOrPut(allocator, pattern_idx);
+        if (gop.found_existing) return false;
+        gop.value_ptr.* = {};
+        return true;
+    }
+
+    fn mergeFrom(self: *DemandSummary, allocator: std.mem.Allocator, other: *const DemandSummary) std.mem.Allocator.Error!bool {
+        var changed = false;
+
+        var dep_iter = other.deps.keyIterator();
+        while (dep_iter.next()) |def_idx| {
+            if (try self.addDep(allocator, def_idx.*)) changed = true;
+        }
+
+        var called_iter = other.called_patterns.keyIterator();
+        while (called_iter.next()) |pattern_idx| {
+            if (try self.addCalledPattern(allocator, pattern_idx.*)) changed = true;
+        }
+
+        return changed;
+    }
+};
+
+const LocalCallables = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx);
+
+const DemandAnalyzer = struct {
+    cir: *const ModuleEnv,
+    allocator: std.mem.Allocator,
+    summary_defs: []const CIR.Def.Idx,
+    graph_def_set: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
+    pattern_to_def: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx) = .{},
+    summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
+    active_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+
+    fn init(
+        cir: *const ModuleEnv,
+        summary_defs: []const CIR.Def.Idx,
+        graph_defs: []const CIR.Def.Idx,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!DemandAnalyzer {
+        var analyzer = DemandAnalyzer{
+            .cir = cir,
+            .allocator = allocator,
+            .summary_defs = summary_defs,
+        };
+        errdefer analyzer.deinit();
+
+        for (graph_defs) |def_idx| {
+            try analyzer.graph_def_set.put(allocator, def_idx, {});
+        }
+
+        for (summary_defs) |def_idx| {
+            const def = cir.store.getDef(def_idx);
+            try analyzer.pattern_to_def.put(allocator, def.pattern, def_idx);
+        }
+
+        return analyzer;
+    }
+
+    fn deinit(self: *DemandAnalyzer) void {
+        var summary_iter = self.summaries.valueIterator();
+        while (summary_iter.next()) |summary| {
+            summary.deinit(self.allocator);
+        }
+        self.summaries.deinit(self.allocator);
+        self.pattern_to_def.deinit(self.allocator);
+        self.graph_def_set.deinit(self.allocator);
+        self.active_lambdas.deinit(self.allocator);
+    }
+
+    fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.summary_defs) |def_idx| {
+                const lambda_idx = self.lambdaFromDef(def_idx) orelse continue;
+
+                var local_callables = LocalCallables{};
+                defer local_callables.deinit(self.allocator);
+
+                var computed = DemandSummary{};
+                defer computed.deinit(self.allocator);
+
+                try self.collectLambdaExecution(lambda_idx, &computed, &local_callables);
+
+                const gop = try self.summaries.getOrPut(self.allocator, lambda_idx);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .{};
+                }
+                if (try gop.value_ptr.mergeFrom(self.allocator, &computed)) {
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    fn collectDefDependencies(self: *DemandAnalyzer, def_idx: CIR.Def.Idx, out: *DemandSummary) std.mem.Allocator.Error!void {
+        var local_callables = LocalCallables{};
+        defer local_callables.deinit(self.allocator);
+
+        const def = self.cir.store.getDef(def_idx);
+        try self.collectExprConstruction(def.expr, out, &local_callables);
+    }
+
+    fn addGraphDep(self: *DemandAnalyzer, out: *DemandSummary, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+        if (self.graph_def_set.contains(def_idx)) {
+            _ = try out.addDep(self.allocator, def_idx);
+        }
+    }
+
+    fn lambdaFromDef(self: *const DemandAnalyzer, def_idx: CIR.Def.Idx) ?CIR.Expr.Idx {
+        const def = self.cir.store.getDef(def_idx);
+        return self.lambdaFromExprWithLocals(def.expr, null);
+    }
+
+    fn lambdaFromExprWithLocals(
+        self: *const DemandAnalyzer,
+        expr_idx: CIR.Expr.Idx,
+        local_callables: ?*const LocalCallables,
+    ) ?CIR.Expr.Idx {
+        return switch (self.cir.store.getExpr(expr_idx)) {
+            .e_lambda => expr_idx,
+            .e_closure => |closure| closure.lambda_idx,
+            .e_lookup_local => |lookup| blk: {
+                if (local_callables) |locals| {
+                    if (locals.get(lookup.pattern_idx)) |lambda_idx| break :blk lambda_idx;
+                }
+                const def_idx = self.pattern_to_def.get(lookup.pattern_idx) orelse break :blk null;
+                break :blk self.lambdaFromDef(def_idx);
+            },
+            else => null,
+        };
+    }
+
+    fn rememberLocalCallable(
+        self: *DemandAnalyzer,
+        pattern_idx: CIR.Pattern.Idx,
+        expr_idx: CIR.Expr.Idx,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        if (self.lambdaFromExprWithLocals(expr_idx, local_callables)) |lambda_idx| {
+            try local_callables.put(self.allocator, pattern_idx, lambda_idx);
+        }
+    }
+
+    fn collectLambdaExecution(
+        self: *DemandAnalyzer,
+        lambda_idx: CIR.Expr.Idx,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        if (self.active_lambdas.contains(lambda_idx)) return;
+        try self.active_lambdas.put(self.allocator, lambda_idx, {});
+        defer _ = self.active_lambdas.remove(lambda_idx);
+
+        const expr = self.cir.store.getExpr(lambda_idx);
+        if (expr != .e_lambda) return;
+        try self.collectExprConstruction(expr.e_lambda.body, out, local_callables);
+    }
+
+    fn collectExprSpan(
+        self: *DemandAnalyzer,
+        span: CIR.Expr.Span,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        for (self.cir.store.sliceExpr(span)) |expr_idx| {
+            try self.collectExprConstruction(expr_idx, out, local_callables);
+        }
+    }
+
+    fn collectCall(
+        self: *DemandAnalyzer,
+        call_func: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        try self.collectExprConstruction(call_func, out, local_callables);
+        try self.collectExprSpan(call_args, out, local_callables);
+        try self.applyCallTarget(call_func, call_args, out, local_callables);
+    }
+
+    fn applyCallTarget(
+        self: *DemandAnalyzer,
+        call_func: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        switch (self.cir.store.getExpr(call_func)) {
             .e_lookup_local => |lookup| {
-                const pattern = cir.store.getPattern(lookup.pattern_idx);
-                if (pattern == .assign) {
-                    try dependencies.put(allocator, pattern.assign.ident, {});
+                if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
+                    try self.applyLambdaSummary(lambda_idx, call_args, out, local_callables);
+                    return;
                 }
-            },
-            .e_call => |call| {
-                for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                    try pending.append(stack_allocator, arg_idx);
+                if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
+                    if (self.lambdaFromDef(def_idx)) |lambda_idx| {
+                        try self.applyLambdaSummary(lambda_idx, call_args, out, local_callables);
+                    }
+                    return;
                 }
-                try pending.append(stack_allocator, call.func);
+                _ = try out.addCalledPattern(self.allocator, lookup.pattern_idx);
             },
-            .e_lambda => |lambda| {
-                try pending.append(stack_allocator, lambda.body);
+            .e_lambda => try self.applyLambdaSummary(call_func, call_args, out, local_callables),
+            .e_closure => |closure| try self.applyLambdaSummary(closure.lambda_idx, call_args, out, local_callables),
+            else => {},
+        }
+    }
+
+    fn applyLambdaSummary(
+        self: *DemandAnalyzer,
+        lambda_idx: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        var computed = DemandSummary{};
+        defer computed.deinit(self.allocator);
+
+        if (self.summaries.getPtr(lambda_idx)) |summary| {
+            _ = try computed.mergeFrom(self.allocator, summary);
+        } else {
+            try self.collectLambdaExecution(lambda_idx, &computed, local_callables);
+        }
+
+        var dep_iter = computed.deps.keyIterator();
+        while (dep_iter.next()) |def_idx| {
+            try self.addGraphDep(out, def_idx.*);
+        }
+
+        var called_iter = computed.called_patterns.keyIterator();
+        while (called_iter.next()) |pattern_idx| {
+            if (self.callArgForPattern(lambda_idx, call_args, pattern_idx.*)) |arg_expr| {
+                try self.collectCalledValue(arg_expr, out, local_callables);
+            } else {
+                _ = try out.addCalledPattern(self.allocator, pattern_idx.*);
+            }
+        }
+    }
+
+    fn collectCalledValue(
+        self: *DemandAnalyzer,
+        expr_idx: CIR.Expr.Idx,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        try self.collectExprConstruction(expr_idx, out, local_callables);
+        switch (self.cir.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
+                    const empty_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
+                    try self.applyLambdaSummary(lambda_idx, empty_args, out, local_callables);
+                    return;
+                }
+                if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
+                    if (self.lambdaFromDef(def_idx)) |lambda_idx| {
+                        const empty_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
+                        try self.applyLambdaSummary(lambda_idx, empty_args, out, local_callables);
+                    }
+                    return;
+                }
+                _ = try out.addCalledPattern(self.allocator, lookup.pattern_idx);
+            },
+            .e_lambda => {
+                const empty_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
+                try self.applyLambdaSummary(expr_idx, empty_args, out, local_callables);
             },
             .e_closure => |closure| {
-                try pending.append(stack_allocator, closure.lambda_idx);
+                const empty_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
+                try self.applyLambdaSummary(closure.lambda_idx, empty_args, out, local_callables);
+            },
+            else => {},
+        }
+    }
+
+    fn callArgForPattern(
+        self: *DemandAnalyzer,
+        lambda_idx: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?CIR.Expr.Idx {
+        const lambda_expr = self.cir.store.getExpr(lambda_idx);
+        if (lambda_expr != .e_lambda) return null;
+
+        const args = self.cir.store.slicePatterns(lambda_expr.e_lambda.args);
+        const call_arg_exprs = self.cir.store.sliceExpr(call_args);
+        const arg_count = @min(args.len, call_arg_exprs.len);
+        for (args[0..arg_count], call_arg_exprs[0..arg_count]) |arg_pattern, arg_expr| {
+            if (self.patternBinds(arg_pattern, pattern_idx)) return arg_expr;
+        }
+        return null;
+    }
+
+    fn patternBinds(self: *DemandAnalyzer, root: CIR.Pattern.Idx, needle: CIR.Pattern.Idx) bool {
+        if (root == needle) return true;
+
+        var stack_allocator_state = std.heap.stackFallback(2048, self.allocator);
+        const stack_allocator = stack_allocator_state.get();
+        var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer pending.deinit(stack_allocator);
+
+        pending.append(stack_allocator, root) catch return false;
+        while (pending.pop()) |current| {
+            if (current == needle) return true;
+            switch (self.cir.store.getPattern(current)) {
+                .as => |as_pattern| pending.append(stack_allocator, as_pattern.pattern) catch return false,
+                .applied_tag => |tag| {
+                    for (self.cir.store.slicePatterns(tag.args)) |arg| {
+                        pending.append(stack_allocator, arg) catch return false;
+                    }
+                },
+                .nominal => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
+                .nominal_external => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
+                .record_destructure => |record| {
+                    for (self.cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                        const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                        pending.append(stack_allocator, destruct.kind.toPatternIdx()) catch return false;
+                    }
+                },
+                .list => |list| {
+                    for (self.cir.store.slicePatterns(list.patterns)) |item| {
+                        pending.append(stack_allocator, item) catch return false;
+                    }
+                    if (list.rest_info) |rest| {
+                        if (rest.pattern) |rest_pattern| {
+                            pending.append(stack_allocator, rest_pattern) catch return false;
+                        }
+                    }
+                },
+                .tuple => |tuple| {
+                    for (self.cir.store.slicePatterns(tuple.patterns)) |item| {
+                        pending.append(stack_allocator, item) catch return false;
+                    }
+                },
+                .str_interpolation => |str| {
+                    for (0..str.steps.span.len) |offset| {
+                        const step = self.cir.store.getStrPatternStep(str.steps, @intCast(offset));
+                        if (step.capture) |capture| {
+                            pending.append(stack_allocator, capture) catch return false;
+                        }
+                    }
+                },
+                .assign,
+                .num_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => {},
+            }
+        }
+
+        return false;
+    }
+
+    fn collectExprConstruction(
+        self: *DemandAnalyzer,
+        expr_idx: CIR.Expr.Idx,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        switch (self.cir.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
+                    try self.addGraphDep(out, def_idx);
+                }
+            },
+            .e_call => |call| try self.collectCall(call.func, call.args, out, local_callables),
+            .e_lambda => {},
+            .e_closure => |closure| {
+                for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
+                    const capture = self.cir.store.getCapture(capture_idx);
+                    if (self.pattern_to_def.get(capture.pattern_idx)) |def_idx| {
+                        try self.addGraphDep(out, def_idx);
+                    }
+                }
             },
             .e_if => |if_expr| {
-                try pending.append(stack_allocator, if_expr.final_else);
-                for (cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
-                    const branch = cir.store.getIfBranch(branch_idx);
-                    try pending.append(stack_allocator, branch.body);
-                    try pending.append(stack_allocator, branch.cond);
+                try self.collectExprConstruction(if_expr.final_else, out, local_callables);
+                for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getIfBranch(branch_idx);
+                    try self.collectExprConstruction(branch.body, out, local_callables);
+                    try self.collectExprConstruction(branch.cond, out, local_callables);
                 }
             },
             .e_match => |match_expr| {
-                for (cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
-                    const branch = cir.store.getMatchBranch(branch_idx);
+                for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getMatchBranch(branch_idx);
                     if (branch.guard) |guard_idx| {
-                        try pending.append(stack_allocator, guard_idx);
+                        try self.collectExprConstruction(guard_idx, out, local_callables);
                     }
-                    try pending.append(stack_allocator, branch.value);
+                    try self.collectExprConstruction(branch.value, out, local_callables);
                 }
-                try pending.append(stack_allocator, match_expr.cond);
+                try self.collectExprConstruction(match_expr.cond, out, local_callables);
             },
-            .e_list => |list| {
-                for (cir.store.sliceExpr(list.elems)) |elem_idx| {
-                    try pending.append(stack_allocator, elem_idx);
-                }
-            },
+            .e_list => |list| try self.collectExprSpan(list.elems, out, local_callables),
             .e_record => |record| {
                 if (record.ext) |ext_idx| {
-                    try pending.append(stack_allocator, ext_idx);
+                    try self.collectExprConstruction(ext_idx, out, local_callables);
                 }
-                for (cir.store.sliceRecordFields(record.fields)) |field_idx| {
-                    const field = cir.store.getRecordField(field_idx);
-                    try pending.append(stack_allocator, field.value);
+                for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
+                    const field = self.cir.store.getRecordField(field_idx);
+                    try self.collectExprConstruction(field.value, out, local_callables);
                 }
             },
-            .e_field_access => |access| {
-                try pending.append(stack_allocator, access.receiver);
-            },
+            .e_field_access => |access| try self.collectExprConstruction(access.receiver, out, local_callables),
             .e_method_call => |call| {
-                for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                    try pending.append(stack_allocator, arg_idx);
-                }
-                try pending.append(stack_allocator, call.receiver);
+                try self.collectExprConstruction(call.receiver, out, local_callables);
+                try self.collectExprSpan(call.args, out, local_callables);
             },
             .e_dispatch_call => |call| {
-                for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                    try pending.append(stack_allocator, arg_idx);
-                }
-                try pending.append(stack_allocator, call.receiver);
+                try self.collectExprConstruction(call.receiver, out, local_callables);
+                try self.collectExprSpan(call.args, out, local_callables);
             },
             .e_interpolation => |interpolation| {
-                for (cir.store.sliceExpr(interpolation.parts)) |part_idx| {
-                    try pending.append(stack_allocator, part_idx);
-                }
-                try pending.append(stack_allocator, interpolation.first);
+                try self.collectExprSpan(interpolation.parts, out, local_callables);
+                try self.collectExprConstruction(interpolation.first, out, local_callables);
             },
             .e_structural_eq => |eq| {
-                try pending.append(stack_allocator, eq.rhs);
-                try pending.append(stack_allocator, eq.lhs);
+                try self.collectExprConstruction(eq.rhs, out, local_callables);
+                try self.collectExprConstruction(eq.lhs, out, local_callables);
             },
             .e_structural_hash => |h| {
-                try pending.append(stack_allocator, h.hasher);
-                try pending.append(stack_allocator, h.value);
+                try self.collectExprConstruction(h.hasher, out, local_callables);
+                try self.collectExprConstruction(h.value, out, local_callables);
             },
             .e_method_eq => |eq| {
-                try pending.append(stack_allocator, eq.rhs);
-                try pending.append(stack_allocator, eq.lhs);
+                try self.collectExprConstruction(eq.rhs, out, local_callables);
+                try self.collectExprConstruction(eq.lhs, out, local_callables);
             },
-            .e_type_method_call => |call| {
-                for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                    try pending.append(stack_allocator, arg_idx);
-                }
-            },
-            .e_type_dispatch_call => |call| {
-                for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                    try pending.append(stack_allocator, arg_idx);
-                }
-            },
-            .e_tuple_access => |tuple_access| {
-                try pending.append(stack_allocator, tuple_access.tuple);
-            },
-            .e_tuple => |tuple| {
-                for (cir.store.sliceExpr(tuple.elems)) |elem_idx| {
-                    try pending.append(stack_allocator, elem_idx);
-                }
-            },
+            .e_type_method_call => |call| try self.collectExprSpan(call.args, out, local_callables),
+            .e_type_dispatch_call => |call| try self.collectExprSpan(call.args, out, local_callables),
+            .e_tuple_access => |tuple_access| try self.collectExprConstruction(tuple_access.tuple, out, local_callables),
+            .e_tuple => |tuple| try self.collectExprSpan(tuple.elems, out, local_callables),
             .e_binop => |binop| {
-                try pending.append(stack_allocator, binop.rhs);
-                try pending.append(stack_allocator, binop.lhs);
+                try self.collectExprConstruction(binop.rhs, out, local_callables);
+                try self.collectExprConstruction(binop.lhs, out, local_callables);
             },
-            .e_unary_minus => |unop| {
-                try pending.append(stack_allocator, unop.expr);
-            },
-            .e_unary_not => |unop| {
-                try pending.append(stack_allocator, unop.expr);
-            },
+            .e_unary_minus => |unop| try self.collectExprConstruction(unop.expr, out, local_callables),
+            .e_unary_not => |unop| try self.collectExprConstruction(unop.expr, out, local_callables),
             .e_block => |block| {
-                try pending.append(stack_allocator, block.final_expr);
-                for (cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                    const stmt = cir.store.getStatement(stmt_idx);
+                for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    const stmt = self.cir.store.getStatement(stmt_idx);
                     switch (stmt) {
-                        .s_decl => |decl| try pending.append(stack_allocator, decl.expr),
-                        .s_var => |var_stmt| try pending.append(stack_allocator, var_stmt.expr),
+                        .s_decl => |decl| {
+                            try self.collectExprConstruction(decl.expr, out, local_callables);
+                            try self.rememberLocalCallable(decl.pattern, decl.expr, local_callables);
+                        },
+                        .s_var => |var_stmt| {
+                            try self.collectExprConstruction(var_stmt.expr, out, local_callables);
+                            try self.rememberLocalCallable(var_stmt.pattern_idx, var_stmt.expr, local_callables);
+                        },
                         .s_var_uninitialized => {},
-                        .s_reassign => |reassign| try pending.append(stack_allocator, reassign.expr),
-                        .s_dbg => |dbg| try pending.append(stack_allocator, dbg.expr),
-                        .s_expr => |expr_stmt| try pending.append(stack_allocator, expr_stmt.expr),
-                        .s_expect => |expect| try pending.append(stack_allocator, expect.body),
-                        .s_for => |for_stmt| try pending.append(stack_allocator, for_stmt.expr),
+                        .s_reassign => |reassign| try self.collectExprConstruction(reassign.expr, out, local_callables),
+                        .s_dbg => |dbg| try self.collectExprConstruction(dbg.expr, out, local_callables),
+                        .s_expr => |expr_stmt| try self.collectExprConstruction(expr_stmt.expr, out, local_callables),
+                        .s_expect => |expect| try self.collectExprConstruction(expect.body, out, local_callables),
+                        .s_for => |for_stmt| try self.collectExprConstruction(for_stmt.expr, out, local_callables),
                         .s_while => |while_stmt| {
-                            try pending.append(stack_allocator, while_stmt.body);
-                            try pending.append(stack_allocator, while_stmt.cond);
+                            try self.collectExprConstruction(while_stmt.body, out, local_callables);
+                            try self.collectExprConstruction(while_stmt.cond, out, local_callables);
                         },
                         .s_infinite_loop => |loop_stmt| {
-                            try pending.append(stack_allocator, loop_stmt.body);
-                            try pending.append(stack_allocator, loop_stmt.cond);
+                            try self.collectExprConstruction(loop_stmt.body, out, local_callables);
+                            try self.collectExprConstruction(loop_stmt.cond, out, local_callables);
                         },
                         .s_breakable_loop => |loop_stmt| {
-                            try pending.append(stack_allocator, loop_stmt.body);
-                            try pending.append(stack_allocator, loop_stmt.cond);
+                            try self.collectExprConstruction(loop_stmt.body, out, local_callables);
+                            try self.collectExprConstruction(loop_stmt.cond, out, local_callables);
                         },
-                        .s_return => |ret| try pending.append(stack_allocator, ret.expr),
+                        .s_return => |ret| try self.collectExprConstruction(ret.expr, out, local_callables),
                         .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
                     }
                 }
+                try self.collectExprConstruction(block.final_expr, out, local_callables);
             },
-            .e_tag => |tag| {
-                for (cir.store.sliceExpr(tag.args)) |arg_idx| {
-                    try pending.append(stack_allocator, arg_idx);
-                }
-            },
-            .e_nominal => |nominal| {
-                try pending.append(stack_allocator, nominal.backing_expr);
-            },
-            .e_run_low_level => |run_ll| {
-                for (cir.store.sliceExpr(run_ll.args)) |arg_idx| {
-                    try pending.append(stack_allocator, arg_idx);
-                }
-            },
-            .e_nominal_external => |nominal| {
-                try pending.append(stack_allocator, nominal.backing_expr);
-            },
-            .e_dbg => |dbg| {
-                try pending.append(stack_allocator, dbg.expr);
-            },
-            .e_expect_err => |expect_err| {
-                try pending.append(stack_allocator, expect_err.expr);
-            },
-            .e_expect => |expect| {
-                try pending.append(stack_allocator, expect.body);
-            },
-            .e_return => |ret| {
-                try pending.append(stack_allocator, ret.expr);
-            },
+            .e_tag => |tag| try self.collectExprSpan(tag.args, out, local_callables),
+            .e_nominal => |nominal| try self.collectExprConstruction(nominal.backing_expr, out, local_callables),
+            .e_run_low_level => |run_ll| try self.collectExprSpan(run_ll.args, out, local_callables),
+            .e_nominal_external => |nominal| try self.collectExprConstruction(nominal.backing_expr, out, local_callables),
+            .e_dbg => |dbg| try self.collectExprConstruction(dbg.expr, out, local_callables),
+            .e_expect_err => |expect_err| try self.collectExprConstruction(expect_err.expr, out, local_callables),
+            .e_expect => |expect| try self.collectExprConstruction(expect.body, out, local_callables),
+            .e_return => |ret| try self.collectExprConstruction(ret.expr, out, local_callables),
             .e_break => {},
             .e_for => |for_expr| {
-                try pending.append(stack_allocator, for_expr.body);
-                try pending.append(stack_allocator, for_expr.expr);
+                try self.collectExprConstruction(for_expr.body, out, local_callables);
+                try self.collectExprConstruction(for_expr.expr, out, local_callables);
             },
             .e_num,
             .e_frac_f32,
@@ -327,7 +646,7 @@ fn collectExprDependencies(
             => {},
         }
     }
-}
+};
 
 /// Build a dependency graph for all definitions
 pub fn buildDependencyGraph(
@@ -339,41 +658,20 @@ pub fn buildDependencyGraph(
     var graph = DependencyGraph.init(allocator, defs_slice);
     errdefer graph.deinit();
 
-    // Map from Ident.Idx to Def.Idx for resolving references
-    var ident_to_def = std.AutoHashMapUnmanaged(base.Ident.Idx, CIR.Def.Idx){};
-    defer ident_to_def.deinit(allocator);
+    var analyzer = try DemandAnalyzer.init(cir, defs_slice, defs_slice, allocator);
+    defer analyzer.deinit();
 
-    // First pass: build ident -> def mapping
+    try analyzer.computeSummaries();
+
     for (defs_slice) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-        const pattern = cir.store.getPattern(def.pattern);
-
-        if (pattern == .assign) {
-            try ident_to_def.put(allocator, pattern.assign.ident, def_idx);
-        }
-    }
-
-    // Second pass: collect dependencies and build graph
-    for (defs_slice) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-
-        // Collect all identifiers this def's expression references
-        var deps = std.AutoHashMapUnmanaged(base.Ident.Idx, void){};
+        var deps = DemandSummary{};
         defer deps.deinit(allocator);
 
-        try collectExprDependencies(cir, def.expr, &deps, allocator);
+        try analyzer.collectDefDependencies(def_idx, &deps);
 
-        // Convert ident dependencies to def dependencies
-        var dep_iter = deps.keyIterator();
-        while (dep_iter.next()) |ident_idx| {
-            if (ident_to_def.get(ident_idx.*)) |dep_def_idx| {
-                try graph.addEdge(def_idx, dep_def_idx);
-            }
-            // If ident not found in ident_to_def, it's either:
-            // - A builtin function
-            // - An external module reference
-            // - A parameter/local variable
-            // In all cases, we don't need to track it for top-level evaluation order
+        var dep_iter = deps.deps.keyIterator();
+        while (dep_iter.next()) |dep_def_idx| {
+            try graph.addEdge(def_idx, dep_def_idx.*);
         }
     }
 
@@ -462,42 +760,21 @@ pub fn getConstantsInDependencyOrder(
     var graph = DependencyGraph.init(allocator, constants);
     errdefer graph.deinit();
 
-    // Map from Ident.Idx to Def.Idx for resolving references (only for constants)
-    var ident_to_def = std.AutoHashMapUnmanaged(base.Ident.Idx, CIR.Def.Idx){};
-    defer ident_to_def.deinit(allocator);
+    const defs_slice = cir.store.sliceDefs(all_defs);
+    var analyzer = try DemandAnalyzer.init(cir, defs_slice, constants, allocator);
+    defer analyzer.deinit();
 
-    // First pass: build ident -> def mapping for constants only
+    try analyzer.computeSummaries();
+
     for (constants) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-        const pattern = cir.store.getPattern(def.pattern);
-
-        if (pattern == .assign) {
-            try ident_to_def.put(allocator, pattern.assign.ident, def_idx);
-        }
-    }
-
-    // Second pass: collect dependencies and build graph
-    for (constants) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-
-        // Collect all identifiers this def's expression references
-        var deps = std.AutoHashMapUnmanaged(base.Ident.Idx, void){};
+        var deps = DemandSummary{};
         defer deps.deinit(allocator);
 
-        try collectExprDependencies(cir, def.expr, &deps, allocator);
+        try analyzer.collectDefDependencies(def_idx, &deps);
 
-        // Convert ident dependencies to def dependencies
-        var dep_iter = deps.keyIterator();
-        while (dep_iter.next()) |ident_idx| {
-            if (ident_to_def.get(ident_idx.*)) |dep_def_idx| {
-                try graph.addEdge(def_idx, dep_def_idx);
-            }
-            // If ident not found in ident_to_def, it's either:
-            // - A function (not a constant)
-            // - A builtin function
-            // - An external module reference
-            // - A parameter/local variable
-            // In all cases, we don't need to track it for constant evaluation order
+        var dep_iter = deps.deps.keyIterator();
+        while (dep_iter.next()) |dep_def_idx| {
+            try graph.addEdge(def_idx, dep_def_idx.*);
         }
     }
 

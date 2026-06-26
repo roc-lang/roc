@@ -32,5 +32,5 @@ test "issue 9711: custom interpolation against an instantiated annotation is a c
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
 }

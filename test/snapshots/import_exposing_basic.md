@@ -18,27 +18,27 @@ main = {
 UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
 UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `encode` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**import_exposing_basic.md:5:15:5:21:**
-```roc
-    encoded = encode(data)
-```
-              ^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `encode` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  encoded = encode(data)                                                    │
+ │            ‾‾‾‾‾‾                                                          │
+ └───────────────────────────────────────────── import_exposing_basic.md:5:15 ┘
+
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `decode` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `decode` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  decoded = decode(encoded)                                                 │
+ │            ‾‾‾‾‾‾                                                          │
+ └───────────────────────────────────────────── import_exposing_basic.md:6:15 ┘
 
-**import_exposing_basic.md:6:15:6:21:**
-```roc
-    decoded = decode(encoded)
-```
-              ^^^^^^
-
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

@@ -10,17 +10,18 @@ x = 12.34()
 # EXPECTED
 MISSING METHOD - call_float_literal.md:1:5:1:10
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**call_float_literal.md:1:5:1:10:**
-```roc
-x = 12.34()
-```
-    ^^^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  x = 12.34()                                                               │
+ │      ‾‾‾‾‾                                                                 │
+ └───────────────────────────────────────────────── call_float_literal.md:1:5 ┘
 
-    ({}) -> _ret
+    The value's type, which does not have a method named `from_numeral`, is:
+
+        ({}) -> _ret
 
 # TOKENS
 ~~~zig

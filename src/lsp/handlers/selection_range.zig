@@ -462,6 +462,12 @@ fn collectContainingRegionsFromExpr(
             try collectContainingRegionsFromExpr(allocator, ast, nr.mapper, target_offset, regions);
             try collectContainingRegionsFromExpr(allocator, ast, nr.backing, target_offset, regions);
         },
+        .nominal_apply => |na| {
+            try collectContainingRegionsFromExpr(allocator, ast, na.mapper, target_offset, regions);
+            for (ast.store.exprSlice(na.args)) |arg| {
+                try collectContainingRegionsFromExpr(allocator, ast, arg, target_offset, regions);
+            }
+        },
         .for_expr => |f| {
             try collectContainingRegionsFromExpr(allocator, ast, f.expr, target_offset, regions);
             try collectContainingRegionsFromExpr(allocator, ast, f.body, target_offset, regions);

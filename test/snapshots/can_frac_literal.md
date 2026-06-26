@@ -14,17 +14,18 @@ z = 0.5
 # EXPECTED
 INVALID NUMBER - can_frac_literal.md:3:5:3:12
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**can_frac_literal.md:3:5:3:12:**
-```roc
-y = 1.23e45
-```
-    ^^^^^^^
 
-The inferred type is:
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  y = 1.23e45                                                               │
+ │      ‾‾‾‾‾‾‾                                                               │
+ └─────────────────────────────────────────────────── can_frac_literal.md:3:5 ┘
 
-    Dec
+    The inferred type is:
+
+        Dec
 
 # TOKENS
 ~~~zig

@@ -80,323 +80,309 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:43:17:43:20
 EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:3:5:3:26
 EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
 
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+┌──────────────────────────┐
+│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  module [                                                                  │
+ │      Color,                                                                │
+ │      ModuleA.ModuleB.TypeC,                                                │
+ │      Try,                                                                  │
+ │      ExternalModule,                                                       │
+ │  ]                                                                         │
+ │                                                                            │
+ └──────────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
 
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**qualified_type_canonicalization.md:1:1:6:2:**
-```roc
-module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Try,
-    ExternalModule,
-]
-```
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
+    Remove the `module` header and ensure your file defines a type that matches
+    the filename.
 
-**DUPLICATE DEFINITION**
-The name `Try` is being redeclared in this scope.
 
-The redeclaration is here:
-**qualified_type_canonicalization.md:8:1:8:18:**
-```roc
-import Basics.Try
-```
-^^^^^^^^^^^^^^^^^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import Basics.Try                                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+ └──────────────────────────────────── qualified_type_canonicalization.md:8:1 ┘
 
-But `Try` was already defined here:
-**qualified_type_canonicalization.md:1:1:1:1:**
-```roc
-module [
-```
-^
+    In this scope, `Try` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  module [                                                             │
+      │  ‾                                                                    │
+      └─────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
 
 
-**MODULE NOT FOUND**
-The module `Basics` was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `Basics` was not found in this Roc project. ─┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import Basics.Try                                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
+ └──────────────────────────────────── qualified_type_canonicalization.md:8:1 ┘
 
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:8:1:8:18:**
-```roc
-import Basics.Try
-```
-^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `Color` was not found in this Roc project. ──┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import Color                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └──────────────────────────────────── qualified_type_canonicalization.md:9:1 ┘
 
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:9:1:9:13:**
-```roc
-import Color
-```
-^^^^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `ModuleA` was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `ModuleA` was not found in this Roc ─────────┐
+└┬─────────────────┘  project.                                                │
+ │                                                                            │
+ │  import ModuleA.ModuleB exposing [TypeC]                                   │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
+ └─────────────────────────────────── qualified_type_canonicalization.md:10:1 ┘
 
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:10:1:10:40:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `ExternalModule` was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `ExternalModule` was not found in this Roc ──┐
+└┬─────────────────┘  project.                                                │
+ │                                                                            │
+ │  import ExternalModule as ExtMod                                           │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+ └─────────────────────────────────── qualified_type_canonicalization.md:11:1 ┘
 
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:11:1:11:32:**
-```roc
-import ExternalModule as ExtMod
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  simpleQualified : Color.RGB                                               │
+ │                         ‾‾‾‾                                               │
+ └────────────────────────────────── qualified_type_canonicalization.md:14:24 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:14:24:14:28:**
-```roc
-simpleQualified : Color.RGB
-```
-                       ^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })                       │
+ │                    ‾‾‾‾‾                                                   │
+ └────────────────────────────────── qualified_type_canonicalization.md:15:19 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:15:19:15:24:**
-```roc
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-```
-                  ^^^^^
 
 
-**MODULE NOT FOUND**
-The type `DataType` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
+└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
+ │                                                                            │
+ │  aliasedQualified : ExtMod.DataType                                        │
+ │                           ‾‾‾‾‾‾‾‾‾                                        │
+ └────────────────────────────────── qualified_type_canonicalization.md:18:26 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:18:26:18:35:**
-```roc
-aliasedQualified : ExtMod.DataType
-```
-                         ^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The type `DataType` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
+└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
+ │                                                                            │
+ │  aliasedQualified = ExtMod.DataType.Default                                │
+ │                           ‾‾‾‾‾‾‾‾‾                                        │
+ └────────────────────────────────── qualified_type_canonicalization.md:19:26 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:19:26:19:35:**
-```roc
-aliasedQualified = ExtMod.DataType.Default
-```
-                         ^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The type `ModuleB.TypeC` is qualified by the module `ModuleA`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `ModuleB.TypeC` type is declared to be in ─────────┐
+└┬─────────────────┘  `ModuleA`, which does not exist.                        │
+ │                                                                            │
+ │  multiLevelQualified : ModuleA.ModuleB.TypeC                               │
+ │                                       ‾‾‾‾‾‾                               │
+ └────────────────────────────────── qualified_type_canonicalization.md:22:38 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:22:38:22:44:**
-```roc
-multiLevelQualified : ModuleA.ModuleB.TypeC
-```
-                                     ^^^^^^
 
 
-**DOES NOT EXIST**
-`TypeC.new` does not exist.
+┌────────────────┐
+│ DOES NOT EXIST ├─ `TypeC.new` does not exist. ──────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  multiLevelQualified = TypeC.new                                           │
+ │                        ‾‾‾‾‾‾‾‾‾                                           │
+ └────────────────────────────────── qualified_type_canonicalization.md:23:23 ┘
 
-**qualified_type_canonicalization.md:23:23:23:32:**
-```roc
-multiLevelQualified = TypeC.new
-```
-                      ^^^^^^^^^
 
 
-**MISSING NESTED TYPE**
-`Try` is in scope, but it doesn't have a nested type that's also named `Try`.
+┌─────────────────────┐
+│ MISSING NESTED TYPE ├─ `Try` is in scope, but it doesn't have a nested ─────┐
+└┬────────────────────┘  type that's also named `Try`.                        │
+ │                                                                            │
+ │  resultType : Try.Try(I32, Str)                                            │
+ │               ‾‾‾‾‾‾‾                                                      │
+ └────────────────────────────────── qualified_type_canonicalization.md:26:14 ┘
 
-It's referenced here:
-**qualified_type_canonicalization.md:26:14:26:21:**
-```roc
-resultType : Try.Try(I32, Str)
-```
-             ^^^^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  getColor : {} -> Color.RGB                                                │
+ │                        ‾‾‾‾                                                │
+ └────────────────────────────────── qualified_type_canonicalization.md:30:23 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:30:23:30:27:**
-```roc
-getColor : {} -> Color.RGB
-```
-                      ^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })                          │
+ │                 ‾‾‾‾‾                                                      │
+ └────────────────────────────────── qualified_type_canonicalization.md:31:16 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:31:16:31:21:**
-```roc
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-```
-               ^^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  processColor : Color.RGB -> Str                                           │
+ │                      ‾‾‾‾                                                  │
+ └────────────────────────────────── qualified_type_canonicalization.md:34:21 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:34:21:34:25:**
-```roc
-processColor : Color.RGB -> Str
-```
-                    ^^^^
 
 
-**UNUSED VARIABLE**
-Variable `color` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `color` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processColor = |color|                                                    │
+ │                  ‾‾‾‾‾                                                     │
+ └────────────────────────────────── qualified_type_canonicalization.md:35:17 ┘
 
-If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
-The unused variable is declared here:
-**qualified_type_canonicalization.md:35:17:35:22:**
-```roc
-processColor = |color|
-```
-                ^^^^^
+    If you don't need this variable, prefix it with an underscore like `_color`
+    to suppress this warning.
 
 
-**MISSING NESTED TYPE**
-`Try` is in scope, but it doesn't have a nested type that's also named `Try`.
+┌─────────────────────┐
+│ MISSING NESTED TYPE ├─ `Try` is in scope, but it doesn't have a nested ─────┐
+└┬────────────────────┘  type that's also named `Try`.                        │
+ │                                                                            │
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
+ │              ‾‾‾‾‾‾‾                                                       │
+ └────────────────────────────────── qualified_type_canonicalization.md:39:13 ┘
 
-It's referenced here:
-**qualified_type_canonicalization.md:39:13:39:20:**
-```roc
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-            ^^^^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
+ │                           ‾‾‾‾                                             │
+ └────────────────────────────────── qualified_type_canonicalization.md:39:26 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:39:26:39:30:**
-```roc
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-                         ^^^^
 
 
-**MODULE NOT FOUND**
-The type `Error` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `Error` type is declared to be in ─────────────────┐
+└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
+ │                                                                            │
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
+ │                                       ‾‾‾‾‾‾                               │
+ └────────────────────────────────── qualified_type_canonicalization.md:39:38 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:39:38:39:44:**
-```roc
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-                                     ^^^^^^
 
 
-**MODULE NOT FOUND**
-The type `ModuleB.TypeC` is qualified by the module `ModuleA`, but that module was not found in this Roc project.
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `ModuleB.TypeC` type is declared to be in ─────────┐
+└┬─────────────────┘  `ModuleA`, which does not exist.                        │
+ │                                                                            │
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
+ │                                                                 ‾‾‾‾‾‾     │
+ └────────────────────────────────── qualified_type_canonicalization.md:39:64 ┘
 
-You're attempting to use this type here:
-**qualified_type_canonicalization.md:39:64:39:70:**
-```roc
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-                                                               ^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Try_ is not declared in this scope.
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Try.Ok(rgb) => TypeC.fromColor(rgb)                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────── qualified_type_canonicalization.md:42:9 ┘
 
-This type is referenced here:
-**qualified_type_canonicalization.md:42:9:42:12:**
-```roc
-        Try.Ok(rgb) => TypeC.fromColor(rgb)
-```
-        ^^^
 
 
-**DOES NOT EXIST**
-`TypeC.fromColor` does not exist.
+┌────────────────┐
+│ DOES NOT EXIST ├─ `TypeC.fromColor` does not exist. ────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  Try.Ok(rgb) => TypeC.fromColor(rgb)                                       │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ └────────────────────────────────── qualified_type_canonicalization.md:42:24 ┘
 
-**qualified_type_canonicalization.md:42:24:42:39:**
-```roc
-        Try.Ok(rgb) => TypeC.fromColor(rgb)
-```
-                       ^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Try_ is not declared in this scope.
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Try.Err(err) => TypeC.default                                             │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────── qualified_type_canonicalization.md:43:9 ┘
 
-This type is referenced here:
-**qualified_type_canonicalization.md:43:9:43:12:**
-```roc
-        Try.Err(err) => TypeC.default
-```
-        ^^^
 
 
-**DOES NOT EXIST**
-`TypeC.default` does not exist.
+┌────────────────┐
+│ DOES NOT EXIST ├─ `TypeC.default` does not exist. ──────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  Try.Err(err) => TypeC.default                                             │
+ │                  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
+ └────────────────────────────────── qualified_type_canonicalization.md:43:25 ┘
 
-**qualified_type_canonicalization.md:43:25:43:38:**
-```roc
-        Try.Err(err) => TypeC.default
-```
-                        ^^^^^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `err` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `err` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Try.Err(err) => TypeC.default                                             │
+ │          ‾‾‾                                                               │
+ └────────────────────────────────── qualified_type_canonicalization.md:43:17 ┘
 
-If you don't need this variable, prefix it with an underscore like `_err` to suppress this warning.
-The unused variable is declared here:
-**qualified_type_canonicalization.md:43:17:43:20:**
-```roc
-        Try.Err(err) => TypeC.default
-```
-                ^^^
+    If you don't need this variable, prefix it with an underscore like `_err`
+    to suppress this warning.
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `.TypeC` is exposed, but it is not defined anywhere in this module.
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that `.TypeC` is ─────────┐
+└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
+ │                           this module.                                     │
+ │                                                                            │
+ │  ModuleA.ModuleB.TypeC,                                                    │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────── qualified_type_canonicalization.md:3:5 ┘
 
-**qualified_type_canonicalization.md:3:5:3:26:**
-```roc
-    ModuleA.ModuleB.TypeC,
-```
-    ^^^^^^^^^^^^^^^^^^^^^
-You can fix this by either defining `.TypeC` in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining `.TypeC` in this module, or by removing
+    it from the list of exposed values.
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Try` is exposed, but it is not defined anywhere in this module.
 
-**qualified_type_canonicalization.md:4:5:4:8:**
-```roc
-    Try,
-```
-    ^^^
-You can fix this by either defining `Try` in this module, or by removing it from the list of exposed values.
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The module header says that `Try` is exposed, ───┐
+└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+ │                                                                            │
+ │  Try,                                                                      │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────── qualified_type_canonicalization.md:4:5 ┘
+
+    You can fix this by either defining `Try` in this module, or by removing it
+    from the list of exposed values.
 
 # TOKENS
 ~~~zig

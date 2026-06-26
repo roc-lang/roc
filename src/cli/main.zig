@@ -2309,6 +2309,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
                 &reporter,
+                true,
             );
             const result = if (lowered_result) |*value| value else unreachable;
             entrypoint_names = result.entrypoint_names;
@@ -2326,6 +2327,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
                 &reporter,
+                true,
             );
             shm_handle_opt = shm_result.handle;
             entrypoint_names = shm_result.entrypoint_names;
@@ -2337,7 +2339,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         .size, .speed => unreachable,
     }
 
-    if (error_count > 0) {
+    if (error_count > 0 and entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -2946,10 +2948,10 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter, true);
     defer closeSharedMemoryHandle(shm_result.handle);
 
-    if (shm_result.error_count > 0) {
+    if (shm_result.error_count > 0 and shm_result.entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -3065,10 +3067,11 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         debugEffectsForOpt(args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
         &reporter,
+        true,
     );
     defer lowered_result.deinit();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -4841,12 +4844,12 @@ fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []
                 ctx.gpa.free(@constCast(note_entry.value));
             }
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         } else if (rep.severity == .warning) {
             counts.warnings += 1;
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         }
     }
@@ -5111,6 +5114,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         debugEffectsForOpt(.dev),
         resolutionConfigFromLimits(args.resolve_limits),
         null,
+        false,
     );
     defer lowered_result.deinit();
 
@@ -5414,6 +5418,7 @@ fn lowerLirWithCoordinator(
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
 
@@ -5558,7 +5563,7 @@ fn lowerLirWithCoordinator(
         return err;
     };
 
-    if (coord.hasUserErrors()) {
+    if (coord.hasUserErrors() and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
         if (reporter) |r| r.fail();
         const watch_inputs = try coord.collectWatchInputStates();
@@ -5573,11 +5578,15 @@ fn lowerLirWithCoordinator(
         };
     }
 
-    try coord.finalizeExecutableArtifacts();
+    if (allow_user_errors) {
+        try coord.finalizeExecutableArtifactsAllowUserErrors();
+    } else {
+        try coord.finalizeExecutableArtifacts();
+    }
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     const watch_inputs = try coord.collectWatchInputStates();
     errdefer coord.freeWatchInputStates(watch_inputs);
-    if (finalized_counts.errors > 0) {
+    if (finalized_counts.errors > 0 and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         if (reporter) |r| r.fail();
         return .{
             .lowered = null,
@@ -5667,6 +5676,7 @@ pub fn buildLirImageWithCoordinator(
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
@@ -5686,10 +5696,11 @@ pub fn buildLirImageWithCoordinator(
         debug_effects,
         resolution_config,
         reporter,
+        allow_user_errors,
     );
     defer lowered_result.deinitWatchInputs();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         shm.updateHeader();
         return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
     }
@@ -5722,7 +5733,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, true);
 }
 
 /// Platform resolution result containing the platform source path
@@ -5972,12 +5983,10 @@ fn resolvePackages(ctx: *CliCtx, roc_file_abs: []const u8, resolution_config: co
         error.OutOfMemory => error.OutOfMemory,
         error.ResolutionFailed => {
             for (resolver.diagnostics.items) |diagnostic| {
-                var report = reporting.Report.init(ctx.gpa, diagnostic.title, .runtime_error);
+                var report = reporting.Report.init(ctx.gpa, diagnostic.title, diagnostic.message, .runtime_error) catch break;
                 defer report.deinit();
-                const owned = report.addOwnedString(diagnostic.message) catch break;
-                report.addErrorMessage(owned) catch break;
                 if (!builtin.is_test) {
-                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
                 }
             }
             ctx.io.flush();
@@ -6837,6 +6846,12 @@ fn selectBuildPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             try ctx.io.stderr().print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
@@ -6873,6 +6888,12 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
@@ -7506,6 +7527,7 @@ fn rocBuildWasmSurgical(
     defer codegen.deinit();
     loaded_module = false;
     codegen.configureBuiltinRelocs(builtin_symbols);
+    codegen.configureStaticDataAddressTracking();
 
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
@@ -11066,7 +11088,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "FAIL",
+                        "Fail",
                         .runtime_error,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -11080,7 +11102,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "COMPILER_ERROR",
+                        "Compiler Error",
                         .warning,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -11108,9 +11130,6 @@ fn printTestProblem(
 ) ReportRenderError!void {
     const src = env.getSourceAll();
 
-    var report = reporting.Report.init(allocator, label, severity);
-    defer report.deinit();
-
     const doc_comment: ?[]const u8 = blk: {
         const line_starts = env.getLineStarts();
         const curr_line_start_idx = region_info.start_line_idx;
@@ -11122,10 +11141,24 @@ fn printTestProblem(
         }
         break :blk null;
     };
-    if (doc_comment) |comment| {
-        try report.document.addText(comment);
-        try report.document.addLineBreak();
+
+    // The headline is the test's doc comment, if any. House style requires a
+    // headline to end in a period, so append one when it's missing.
+    var headline: []const u8 = "";
+    var headline_owned = false;
+    if (doc_comment) |dc| {
+        if (std.mem.endsWith(u8, dc, ".")) {
+            headline = dc;
+        } else {
+            headline = try std.fmt.allocPrint(allocator, "{s}.", .{dc});
+            headline_owned = true;
+        }
     }
+    defer if (headline_owned) allocator.free(headline);
+
+    var report = try reporting.Report.init(allocator, label, headline, severity);
+    defer report.deinit();
+
     try report.addSourceContext(region_info, path, src, env.getLineStarts());
 
     const should_print_detail = switch (failure_detail_visibility) {
@@ -11302,10 +11335,16 @@ fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMod
     const color_disabled = repl_args.no_color or no_color_env;
     const should_color = !color_disabled and (force_color or (mode == .interactive and stderr_is_tty));
 
+    // Always render the box layout; when color is disabled, keep the
+    // color_terminal target but force the no-color palette so the REPL shows the
+    // same plain box as non-TTY output (rather than the old markdown layout).
     var config = if (should_color)
-        if (high_contrast) reporting.ReportingConfig.initHighContrast() else reporting.ReportingConfig.initColorTerminal()
-    else
-        reporting.ReportingConfig.initMarkdown();
+        if (high_contrast) reporting.ReportingConfig.initHighContrast() else ctx.terminalReportConfig()
+    else blk: {
+        var plain = ctx.terminalReportConfig();
+        plain.color_preference = .never;
+        break :blk plain;
+    };
 
     config.is_tty = stderr_is_tty;
     return config;
@@ -11334,6 +11373,11 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
+        .opt = switch (args.opt) {
+            .dev => .dev,
+            .interpreter => .interpreter,
+            .size, .speed => unreachable,
+        },
     }, temp_dir, ctx.io.std_io);
 }
 
@@ -12040,7 +12084,7 @@ fn finishRocCheck(
 
     for (check_result.reports) |module| {
         for (module.reports) |*report| {
-            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig());
         }
     }
 
@@ -12583,7 +12627,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
         for (module.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig()) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}", .{report.title}) catch {};

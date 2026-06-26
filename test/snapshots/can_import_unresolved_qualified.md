@@ -44,126 +44,123 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `method` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**can_import_unresolved_qualified.md:5:8:5:31:**
-```roc
-main = Json.NonExistent.method
-```
-       ^^^^^^^^^^^^^^^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `method` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  main = Json.NonExistent.method                                            │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ └──────────────────────────────────── can_import_unresolved_qualified.md:5:8 ┘
 
-
-**MODULE NOT FOUND**
-The type `InvalidType` is qualified by the module `json.Json`, but that module was not found in this Roc project.
-
-You're attempting to use this type here:
-**can_import_unresolved_qualified.md:8:17:8:29:**
-```roc
-parseData : Json.InvalidType -> Str
-```
-                ^^^^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `stringify` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_unresolved_qualified.md:9:20:9:34:**
-```roc
-parseData = |data| Json.stringify(data)
-```
-                   ^^^^^^^^^^^^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `InvalidType` type is declared to be in ───────────┐
+└┬─────────────────┘  `json.Json`, which does not exist.                      │
+ │                                                                            │
+ │  parseData : Json.InvalidType -> Str                                       │
+ │                  ‾‾‾‾‾‾‾‾‾‾‾‾                                              │
+ └─────────────────────────────────── can_import_unresolved_qualified.md:8:17 ┘
 
 
-**MODULE NOT FOUND**
-The type `Server.Request` is qualified by the module `http.Client`, but that module was not found in this Roc project.
 
-You're attempting to use this type here:
-**can_import_unresolved_qualified.md:12:29:12:37:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                            ^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `stringify` in this scope. ──────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  parseData = |data| Json.stringify(data)                                   │
+ │                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └─────────────────────────────────── can_import_unresolved_qualified.md:9:20 ┘
 
-
-**MODULE NOT FOUND**
-The type `Server.Response` is qualified by the module `http.Client`, but that module was not found in this Roc project.
-
-You're attempting to use this type here:
-**can_import_unresolved_qualified.md:12:52:12:61:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                                                   ^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `defaultResponse` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_unresolved_qualified.md:13:24:13:51:**
-```roc
-processRequest = |req| Http.Server.defaultResponse
-```
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `Server.Request` type is declared to be in ────────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
+ │                                                                            │
+ │  processRequest : Http.Server.Request -> Http.Server.Response              │
+ │                              ‾‾‾‾‾‾‾‾                                      │
+ └────────────────────────────────── can_import_unresolved_qualified.md:12:29 ┘
 
 
-**UNUSED VARIABLE**
-Variable `req` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
-The unused variable is declared here:
-**can_import_unresolved_qualified.md:13:19:13:22:**
-```roc
-processRequest = |req| Http.Server.defaultResponse
-```
-                  ^^^
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ This `Server.Response` type is declared to be in ───────┐
+└┬─────────────────┘  `http.Client`, which does not exist.                    │
+ │                                                                            │
+ │  processRequest : Http.Server.Request -> Http.Server.Response              │
+ │                                                     ‾‾‾‾‾‾‾‾‾              │
+ └────────────────────────────────── can_import_unresolved_qualified.md:12:52 ┘
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `prase` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**can_import_unresolved_qualified.md:16:10:16:20:**
-```roc
-result = Json.prase("test")
-```
-         ^^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `defaultResponse` in this scope. ────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  processRequest = |req| Http.Server.defaultResponse                        │
+ │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                        │
+ └────────────────────────────────── can_import_unresolved_qualified.md:13:24 ┘
 
-
-**DOES NOT EXIST**
-`Unknown.Module.config` does not exist.
-
-**can_import_unresolved_qualified.md:19:10:19:31:**
-```roc
-config = Unknown.Module.config
-```
-         ^^^^^^^^^^^^^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `invalidMethod` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `req` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processRequest = |req| Http.Server.defaultResponse                        │
+ │                    ‾‾‾                                                     │
+ └────────────────────────────────── can_import_unresolved_qualified.md:13:19 ┘
 
-**can_import_unresolved_qualified.md:22:10:22:28:**
-```roc
-client = Http.invalidMethod
-```
-         ^^^^^^^^^^^^^^^^^^
+    If you don't need this variable, prefix it with an underscore like `_req`
+    to suppress this warning.
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `create` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `prase` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  result = Json.prase("test")                                               │
+ │           ‾‾‾‾‾‾‾‾‾‾                                                       │
+ └────────────────────────────────── can_import_unresolved_qualified.md:16:10 ┘
 
-**can_import_unresolved_qualified.md:25:10:25:49:**
-```roc
-parser = Json.Parser.Advanced.NonExistent.create
-```
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
+
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Unknown.Module.config` does not exist. ──────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  config = Unknown.Module.config                                            │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ └────────────────────────────────── can_import_unresolved_qualified.md:19:10 ┘
+
+
+
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `invalidMethod` in this scope. ──────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  client = Http.invalidMethod                                               │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+ └────────────────────────────────── can_import_unresolved_qualified.md:22:10 ┘
+
+    Is there an `import` or `exposing` missing up-top?
+
+
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `create` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  parser = Json.Parser.Advanced.NonExistent.create                          │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
+ └────────────────────────────────── can_import_unresolved_qualified.md:25:10 ┘
+
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

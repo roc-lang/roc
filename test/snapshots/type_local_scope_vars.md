@@ -41,21 +41,22 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**type_local_scope_vars.md:19:14:**
-```roc
-		_result2 = f(b)
-```
-               ^
 
-This argument has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
+└┬──────────────┘  wrong type.                                                │
+ │                                                                            │
+ │  _result2 = f(b)                                                           │
+ │               ‾                                                            │
+ └──────────────────────────────────────────── type_local_scope_vars.md:19:16 ┘
 
-    b
+    This argument has the type:
 
-But `f` needs the first argument to be:
+        b
 
-    a
+    But `f` needs the first argument to be:
+
+        a
 
 # TOKENS
 ~~~zig

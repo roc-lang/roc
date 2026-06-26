@@ -12,56 +12,57 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:2:1:3
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:5:1:12
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_mismatch_then_nested_error.md:1:2:1:3:**
-```roc
-[1, "hello", [3, "world"]]
-```
- ^
 
-The type was determined to be non-numeric here:
-**can_list_mismatch_then_nested_error.md:1:14:1:26:**
-```roc
-[1, "hello", [3, "world"]]
-```
-             ^^^^^^^^^^^^
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  [1, "hello", [3, "world"]]                                                │
+ │   ‾                                                                        │
+ └──────────────────────────────── can_list_mismatch_then_nested_error.md:1:2 ┘
 
-Other code expects this to have the type:
+    The type was determined to be non-numeric here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  [1, "hello", [3, "world"]]                                           │
+      │               ‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+      └────────────────────────── can_list_mismatch_then_nested_error.md:1:14 ┘
+    Other code expects this to have the type:
 
-    List(a)
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
-      ]
+        List(a)
+          where [
+            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+            a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+          ]
 
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**can_list_mismatch_then_nested_error.md:1:5:1:12:**
-```roc
-[1, "hello", [3, "world"]]
-```
-    ^^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [1, "hello", [3, "world"]]                                                │
+ │      ‾‾‾‾‾‾‾                                                               │
+ └──────────────────────────────── can_list_mismatch_then_nested_error.md:1:5 ┘
 
-    List(a)
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
-      ]
+    The type was determined to be:
 
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**can_list_mismatch_then_nested_error.md:1:18:1:25:**
-```roc
-[1, "hello", [3, "world"]]
-```
-                 ^^^^^^^
+        List(a)
+          where [
+            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+            a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+          ]
 
-The type was determined to be:
 
-    Dec
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [1, "hello", [3, "world"]]                                                │
+ │                   ‾‾‾‾‾‾‾                                                  │
+ └─────────────────────────────── can_list_mismatch_then_nested_error.md:1:18 ┘
+
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

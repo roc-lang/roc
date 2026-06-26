@@ -41,118 +41,119 @@ PARSE ERROR - fuzz_crash_025.md:13:3:13:4
 PARSE ERROR - fuzz_crash_025.md:13:4:13:5
 INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  d = 18446744073709551615                                                  │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_025.md:9:1 ┘
 
-Instead of:
-    **List U8**
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
-Use:
-    **List(U8)**
+    Instead of:
+        List U8
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+    Use:
+        List(U8)
 
-**fuzz_crash_025.md:9:1:9:2:**
-```roc
-d = 18446744073709551615
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_025.md:9:3:9:4:**
-```roc
-d = 18446744073709551615
-```
-  ^
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  d = 18446744073709551615                                                  │
+ │    ‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_025.md:9:3 ┘
 
-**fuzz_crash_025.md:9:5:9:25:**
-```roc
-d = 18446744073709551615
-```
-    ^^^^^^^^^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_025.md:12:48:12:49:**
-```roc
-e = 3402823669209384634633746074317682114553.14: I8
-```
-                                               ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  d = 18446744073709551615                                                  │
+ │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_025.md:9:5 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_025.md:13:1:13:2:**
-```roc
-f =8
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  e = 3402823669209384634633746074317682114553.14: I8                       │
+ │                                                 ‾                          │
+ └─────────────────────────────────────────────────── fuzz_crash_025.md:12:48 ┘
 
-**fuzz_crash_025.md:13:3:13:4:**
-```roc
-f =8
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_025.md:13:4:13:5:**
-```roc
-f =8
-```
-   ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**fuzz_crash_025.md:12:5:12:48:**
-```roc
-e = 3402823669209384634633746074317682114553.14: I8
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  f =8                                                                      │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_025.md:13:1 ┘
 
-The inferred type is:
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
-    U128
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  f =8                                                                      │
+ │    ‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_025.md:13:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  f =8                                                                      │
+ │     ‾                                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_025.md:13:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  e = 3402823669209384634633746074317682114553.14: I8                       │
+ │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                           │
+ └──────────────────────────────────────────────────── fuzz_crash_025.md:12:5 ┘
+
+    The inferred type is:
+
+        U128
 
 # TOKENS
 ~~~zig
