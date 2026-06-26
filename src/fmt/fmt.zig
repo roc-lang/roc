@@ -1131,8 +1131,17 @@ const Formatter = struct {
         try fmt.push('"');
     }
 
-    fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!AST.TokenizedRegion {
+    const FormattedExpr = struct {
+        region: AST.TokenizedRegion,
+        ends_with_multiline_string_line: bool = false,
+    };
+
+    fn formatExprWithInfo(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!FormattedExpr {
         return formatExprInner(fmt, ei, .normal);
+    }
+
+    fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!AST.TokenizedRegion {
+        return (try fmt.formatExprWithInfo(ei)).region;
     }
 
     fn discardRegion(region: AST.TokenizedRegion) void {
@@ -1144,13 +1153,13 @@ const Formatter = struct {
     }
 
     fn formatExprDiscard(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!void {
-        const region = try fmt.formatExpr(ei);
-        Formatter.discardRegion(region);
+        const formatted = try fmt.formatExprWithInfo(ei);
+        Formatter.discardRegion(formatted.region);
     }
 
     fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!void {
-        const region = try fmt.formatExprInner(ei, format_behavior);
-        Formatter.discardRegion(region);
+        const formatted = try fmt.formatExprInner(ei, format_behavior);
+        Formatter.discardRegion(formatted.region);
     }
 
     fn formatPatternDiscard(fmt: *Formatter, pi: AST.Pattern.Idx) FormatAstError!void {
@@ -1177,9 +1186,21 @@ const Formatter = struct {
         }
     }
 
-    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!AST.TokenizedRegion {
+    fn continueAfterMultilineStringLine(fmt: *Formatter, formatted: FormattedExpr) error{WriteFailed}!bool {
+        if (!formatted.ends_with_multiline_string_line) {
+            return false;
+        }
+
+        fmt.curr_indent += 1;
+        try fmt.ensureNewline();
+        try fmt.pushIndent();
+        return true;
+    }
+
+    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!FormattedExpr {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
+        var formatted = FormattedExpr{ .region = region };
         const multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, ei);
         const indent_modifier: u32 = @intFromBool(format_behavior == .no_indent_on_access and fmt.curr_indent > 0);
         const curr_indent: u32 = fmt.curr_indent - indent_modifier;
@@ -1252,6 +1273,7 @@ const Formatter = struct {
                     }
                 }
                 fmt.has_multiline_string = true;
+                formatted.ends_with_multiline_string_line = true;
             },
             .typed_multiline_string => |s| {
                 if (!fmt.has_newline) {
@@ -1311,7 +1333,7 @@ const Formatter = struct {
                     break :blk ld_right == .ident or ld_right == .tag;
                 } else false;
 
-                try fmt.formatExprDiscard(fa.left);
+                const left = try fmt.formatExprWithInfo(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
                 if (needs_newline_before_dot) {
                     // Force newline to disambiguate from qualified identifier
@@ -1319,9 +1341,12 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
-                } else if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
+                } else {
+                    const continued = try fmt.continueAfterMultilineStringLine(left);
+                    if (!continued and multiline and try fmt.flushCommentsBefore(right_region.start)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    }
                 }
                 try fmt.push('.');
                 try fmt.formatExprInnerDiscard(fa.right, .no_indent_on_access);
@@ -1336,15 +1361,18 @@ const Formatter = struct {
                     break :blk ld_right == .ident or ld_right == .tag;
                 } else false;
 
-                try fmt.formatExprDiscard(mc.receiver);
+                const receiver = try fmt.formatExprWithInfo(mc.receiver);
                 if (needs_newline_before_dot) {
                     // Force newline to disambiguate from qualified identifier.
                     fmt.curr_indent += 1;
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
-                } else if (multiline and try fmt.flushCommentsBefore(mc.method_token)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
+                } else {
+                    const continued = try fmt.continueAfterMultilineStringLine(receiver);
+                    if (!continued and multiline and try fmt.flushCommentsBefore(mc.method_token)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    }
                 }
                 try fmt.push('.');
                 try fmt.pushTokenText(mc.method_token);
@@ -1356,12 +1384,14 @@ const Formatter = struct {
                 try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
             },
             .arrow_call => |ld| {
-                try fmt.formatExprDiscard(ld.left);
+                const left = try fmt.formatExprWithInfo(ld.left);
                 if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
                     if (format_behavior == .normal) {
                         fmt.curr_indent += 1;
                     }
                     try fmt.pushIndent();
+                } else {
+                    _ = try fmt.continueAfterMultilineStringLine(left);
                 }
                 try fmt.pushAll("->");
                 if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
@@ -1434,7 +1464,8 @@ const Formatter = struct {
             },
             .tuple_access => |ta| {
                 // Format: expr.N (e.g., tuple.0, tuple.1)
-                try fmt.formatExprDiscard(ta.expr);
+                const target = try fmt.formatExprWithInfo(ta.expr);
+                _ = try fmt.continueAfterMultilineStringLine(target);
                 // Get the element index from the token
                 const token_text = fmt.ast.resolve(ta.elem_token);
                 // Token includes leading dot (e.g., ".0")
@@ -1555,9 +1586,11 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                 }
-                try fmt.formatExprDiscard(op.left);
+                const left = try fmt.formatExprWithInfo(op.left);
                 var pushed = false;
-                if (multiline and try fmt.flushCommentsBefore(op.operator)) {
+                if (try fmt.continueAfterMultilineStringLine(left)) {
+                    pushed = true;
+                } else if (multiline and try fmt.flushCommentsBefore(op.operator)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                     pushed = true;
@@ -1582,7 +1615,8 @@ const Formatter = struct {
                 }
             },
             .suffix_single_question => |s| {
-                try fmt.formatExprDiscard(s.expr);
+                const body = try fmt.formatExprWithInfo(s.expr);
+                _ = try fmt.continueAfterMultilineStringLine(body);
                 try fmt.push('?');
             },
             .tag => |t| {
@@ -1680,7 +1714,7 @@ const Formatter = struct {
                 const branches = fmt.ast.store.matchBranchSlice(m.branches);
                 if (branches.len == 0) {
                     try fmt.push('}');
-                    return region;
+                    return formatted;
                 }
                 var branch_region = fmt.nodeRegion(@intFromEnum(branches[0]));
                 for (branches) |b| {
@@ -1842,7 +1876,7 @@ const Formatter = struct {
                 std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
             },
         }
-        return region;
+        return formatted;
     }
 
     fn formatPatternRecordField(fmt: *Formatter, idx: AST.PatternRecordField.Idx) FormatAstError!AST.TokenizedRegion {
@@ -3465,6 +3499,17 @@ test "issue 8851: arrow call with uppercase tag (module-like) is idempotent" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->M .c", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->M\n\t.c\n", result);
+}
+
+test "issue 9785: multiline string followed by tuple access formats to valid source" {
+    // https://github.com/roc-lang/roc/issues/9785
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\n=\\
+        \\.0-||
+        \\0
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("n = \\\\\n\t.0 - ||\n\t0\n", result);
 }
 
 test "issue 8894: typed integer literal formats correctly" {
