@@ -3244,6 +3244,48 @@ test "public Iter.next materializes non-list iterator plans with public behavior
     , &.{ "42", "1", "1", "0", "30", "5", "10", "11", "-2", "-2" });
 }
 
+test "direct public Iter.next materializes recognized iterator plans before Lambda" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 1 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\step_code = |step|
+        \\    match step {
+        \\        Append({ after, .. }) => after
+        \\        One({ item, .. }) => item
+        \\        Skip(_) => -2
+        \\        Done => -1
+        \\    }
+        \\
+        \\main : (I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64)
+        \\main = (
+        \\    step_code(Iter.next([10.I64, 20.I64].iter())),
+        \\    step_code(Iter.next(Iter.single(42.I64))),
+        \\    step_code(Iter.next(1.I64..<3.I64)),
+        \\    step_code(Iter.next(1.I64..=3.I64)),
+        \\    step_code(Iter.next(Iter.custom(0.I64, Known(1.U64), advance))),
+        \\    step_code(Iter.next([10.I64].iter().append(20.I64))),
+        \\    step_code(Iter.next([10.I64].iter().prepended(5.I64))),
+        \\    step_code(Iter.next([10.I64].iter().iter())),
+        \\    step_code(Iter.next([10.I64].iter().concat([20.I64].iter()))),
+        \\    step_code(Iter.next([10.I64].iter().map(|n| n + 1))),
+        \\    step_code(Iter.next([10.I64, 20.I64].iter().keep_if(|n| n > 10))),
+        \\    step_code(Iter.next([10.I64, 20.I64].iter().drop_if(|n| n < 20))),
+        \\)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
 test "public aggregate storage materializes iterator plan before Lambda" {
     const allocator = std.testing.allocator;
     var lifted_source = try solveModuleWithIteratorPlans(allocator,

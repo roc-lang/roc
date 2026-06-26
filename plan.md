@@ -643,11 +643,13 @@ Tasks:
 - [x] Direct `.step` field access is not a public materialization boundary:
   external access is rejected because `Iter` is opaque, and builtin-internal
   access is lowered with iterator producer plans disabled.
-- [ ] Public `Iter.next` materializes when not specialized.
+- [x] Public `Iter.next` materializes when not specialized.
   - [x] Direct `Iter.next(List.iter(...))` materializes before Lambda and
     preserves public iterator behavior.
   - [x] Public `Iter.next` through an unspecialized iterator argument preserves
     public step variants for recognized non-list producer plans.
+  - [x] Direct `Iter.next(...)` over every recognized iterator producer
+    materializes before Lambda.
 - [x] Public aggregate storage materializes.
   - [x] Tuple storage containing `List.iter(...)` materializes before Lambda.
   - [x] Tuple storage containing every recognized iterator producer
