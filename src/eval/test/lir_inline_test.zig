@@ -3434,7 +3434,6 @@ test "local appended iterator with public alias keeps public iterator semantics"
         \\    }
         \\
         \\    saved_step = match Iter.next(saved) {
-        \\        Append({ after, .. }) => after
         \\        One({ item, .. }) => item
         \\        _ => 0
         \\    }
@@ -3444,7 +3443,7 @@ test "local appended iterator with public alias keeps public iterator semantics"
         \\}
     ;
 
-    try expectOptimizedDbgEvents(source, &.{"(6, 3)"});
+    try expectOptimizedDbgEvents(source, &.{"(6, 1)"});
 }
 
 test "local mapped iterator with public alias keeps public iterator semantics" {
@@ -3538,7 +3537,6 @@ test "public Iter.next materializes non-list iterator plans with public behavior
         \\step_code : Iter(I64) -> I64
         \\step_code = |iter|
         \\    match Iter.next(iter) {
-        \\        Append({ after, .. }) => after
         \\        One({ item, .. }) => item
         \\        Skip(_) => -2
         \\        _ => -1
@@ -3566,7 +3564,7 @@ test "public Iter.next materializes non-list iterator plans with public behavior
         \\    dbg step_code([10.I64, 20.I64].iter().drop_if(|n| n < 20))
         \\    {}
         \\}
-    , &.{ "42", "1", "1", "0", "30", "5", "10", "11", "-2", "-2" });
+    , &.{ "42", "1", "1", "0", "10", "5", "10", "11", "-2", "-2" });
 }
 
 test "public Iter.next filter rest advances after Skip" {
@@ -3651,7 +3649,6 @@ test "direct public Iter.next materializes recognized iterator plans before Lamb
         \\
         \\step_code = |step|
         \\    match step {
-        \\        Append({ after, .. }) => after
         \\        One({ item, .. }) => item
         \\        Skip(_) => -2
         \\        Done => -1
@@ -3891,7 +3888,6 @@ test "unspecialized function argument materializes recognized iterator plans bef
         \\take_first : Iter(I64) -> I64
         \\take_first = |iter|
         \\    match Iter.next(iter) {
-        \\        Append({ after, .. }) => after
         \\        One({ item, .. }) => item
         \\        Skip(_) => -2
         \\        _ => -1
