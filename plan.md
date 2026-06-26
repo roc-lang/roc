@@ -632,10 +632,15 @@ Tasks:
   - [x] Direct `Custom` plans can cross an immutable local and are consumed
     with private custom state.
 - [ ] Private plan state can cross `if`.
+  - [x] Direct `for` over an `if` whose branches are known `Map(ListIter |
+    Append(ListIter, item...), fn)` plans avoids public iterator step tags.
 - [ ] Private plan state can cross `match`.
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans lowers each selected branch to a private
     cursor loop while preserving scrutinee and producer operand order.
+  - [x] Direct `for` over a `match` whose branches are known
+    `Filter(ListIter | Append(ListIter, item...), predicate)` plans avoids
+    public iterator step tags.
 - [ ] Materialization is implemented for every plan.
   - [x] Recognized non-list producer plans (`Single`, finite `Range`,
     `Custom`, `Append`, `Concat`, `Map`, and `Filter`) materialize to public
@@ -698,9 +703,15 @@ Tasks:
   - [x] Direct `for` over an `if` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans lowers to branch-local private cursor
     loops instead of public iterator steps.
+  - [x] Direct `for` over an `if` whose branches are known `Map(ListIter |
+    Append(ListIter, item...), fn)` plans lowers to branch-local private cursor
+    loops instead of public iterator steps.
 - [ ] Optimized `for` through `match` avoids public step values.
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans avoids public iterator step tags.
+  - [x] Direct `for` over a `match` whose branches are known
+    `Filter(ListIter | Append(ListIter, item...), predicate)` plans avoids
+    public iterator step tags.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
 - [x] Optimized `for` over direct `Iter.iter` forwards and consumes the known
   plan value.
@@ -816,6 +827,9 @@ Tasks:
   - [x] Direct filtered append operands and accumulator operands consumed by
     `Iter.fold` preserve `dbg` ordering relative to the fold result and
     following expressions.
+  - [x] Match-selected filtered append operands consumed by optimized `for`
+    preserve `dbg` ordering relative to scrutinee evaluation, predicate calls,
+    loop body, and following expressions.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
   - [x] Direct `List.from_iter(List(Str).iter().append(...))` passes optimized
     LIR interpretation with the expected string list.
