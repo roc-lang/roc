@@ -15553,6 +15553,10 @@ const BodyContext = struct {
             return append_for;
         }
 
+        if (try self.concatListIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |concat_for| {
+            return concat_for;
+        }
+
         if (try self.mapListIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |map_for| {
             return map_for;
         }
@@ -15714,6 +15718,7 @@ const BodyContext = struct {
         if (try self.listIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |list_for| return list_for;
         if (try self.singleIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |single_for| return single_for;
         if (try self.appendListIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |append_for| return append_for;
+        if (try self.concatListIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |concat_for| return concat_for;
         if (try self.mapListIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |map_for| return map_for;
         if (try self.filterListIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |filter_for| return filter_for;
         return null;
@@ -15871,6 +15876,7 @@ const BodyContext = struct {
                 }
                 return try self.lowerRangeIteratorFor(for_, result_ty, carries, range, iter_plan_value.item_ty);
             },
+            .concat => |concat| return try self.lowerConcatListIteratorPlanFor(for_, result_ty, carries, concat, iter_plan_value.item_ty),
             .custom => |custom| return try self.lowerCustomIteratorFor(for_, result_ty, carries, custom, iter_plan_value.item_ty),
             else => return null,
         }
@@ -16420,6 +16426,46 @@ const BodyContext = struct {
         return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
     }
 
+    fn concatListIteratorPlanForPlanValue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.iteratorProducerPlansEnabled()) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceConcatPlan(for_.expr, iterator_ty)) return null;
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked Iter.concat expression did not lower to an iterator plan"),
+        };
+        const iter_plan_value = self.builder.program.iterPlan(plan_id);
+        const concat = switch (iter_plan_value.data) {
+            .concat => |concat| concat,
+            else => Common.invariant("checked Iter.concat expression lowered to a non-concat iterator plan"),
+        };
+
+        return try self.lowerConcatListIteratorPlanFor(for_, result_ty, carries, concat, iter_plan_value.item_ty);
+    }
+
+    fn checkedExprCanProduceConcatPlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        const expr_ty = try self.lowerType(expr.ty);
+        if (!self.sameType(expr_ty, iterator_ty)) return false;
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, "concat")) return false;
+        return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
+    }
+
     fn listAppendIteratorPlanFromPlan(
         self: *BodyContext,
         plan_id: Ast.IterPlanId,
@@ -16442,6 +16488,170 @@ const BodyContext = struct {
             },
             else => return null,
         }
+    }
+
+    fn lowerConcatListIteratorPlanFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        concat: Ast.IterPlan.ConcatIter,
+        item_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprData {
+        var first = (try self.listAppendIteratorPlanFromPlan(concat.first)) orelse return null;
+        defer first.deinit(self.allocator);
+        var second = (try self.listAppendIteratorPlanFromPlan(concat.second)) orelse return null;
+        defer second.deinit(self.allocator);
+
+        if (!self.sameType(first.item_ty, item_ty) or !self.sameType(second.item_ty, item_ty)) {
+            Common.invariant("Iter.concat child item type differed from concat item type");
+        }
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const one_expr = try self.builder.intLiteralExpr(1, u64_ty);
+        const false_expr = try self.boolLiteral(false, bool_ty);
+        const true_expr = try self.boolLiteral(true, bool_ty);
+
+        const first_list_ty = self.builder.program.exprs.items[@intFromEnum(first.list.list)].ty;
+        const first_list_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), first_list_ty);
+        const first_list_expr = try self.builder.localExpr(first_list_local, first_list_ty);
+        const first_len_value = try self.builder.lowLevelExpr(.list_len, &.{first_list_expr}, u64_ty);
+        const first_len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const first_len_expr = try self.builder.localExpr(first_len_local, u64_ty);
+        const first_limit_value = if (first.append_items.len == 0)
+            first_len_expr
+        else
+            try self.builder.lowLevelExpr(
+                .num_plus,
+                &.{ first_len_expr, try self.builder.intLiteralExpr(first.append_items.len, u64_ty) },
+                u64_ty,
+            );
+        const first_limit_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const first_limit_expr = try self.builder.localExpr(first_limit_local, u64_ty);
+        const first_append_locals = try self.allocator.alloc(Ast.LocalId, first.append_items.len);
+        defer self.allocator.free(first_append_locals);
+        const first_append_exprs = try self.allocator.alloc(Ast.ExprId, first.append_items.len);
+        defer self.allocator.free(first_append_exprs);
+        for (first.append_items, 0..) |_, index| {
+            first_append_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+            first_append_exprs[index] = try self.builder.localExpr(first_append_locals[index], item_ty);
+        }
+
+        const second_list_ty = self.builder.program.exprs.items[@intFromEnum(second.list.list)].ty;
+        const second_list_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), second_list_ty);
+        const second_list_expr = try self.builder.localExpr(second_list_local, second_list_ty);
+        const second_len_value = try self.builder.lowLevelExpr(.list_len, &.{second_list_expr}, u64_ty);
+        const second_len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const second_len_expr = try self.builder.localExpr(second_len_local, u64_ty);
+        const second_limit_value = if (second.append_items.len == 0)
+            second_len_expr
+        else
+            try self.builder.lowLevelExpr(
+                .num_plus,
+                &.{ second_len_expr, try self.builder.intLiteralExpr(second.append_items.len, u64_ty) },
+                u64_ty,
+            );
+        const second_limit_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const second_limit_expr = try self.builder.localExpr(second_limit_local, u64_ty);
+        const second_append_locals = try self.allocator.alloc(Ast.LocalId, second.append_items.len);
+        defer self.allocator.free(second_append_locals);
+        const second_append_exprs = try self.allocator.alloc(Ast.ExprId, second.append_items.len);
+        defer self.allocator.free(second_append_exprs);
+        for (second.append_items, 0..) |_, index| {
+            second_append_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+            second_append_exprs[index] = try self.builder.localExpr(second_append_locals[index], item_ty);
+        }
+
+        const phase_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), bool_ty);
+        const phase_expr = try self.builder.localExpr(phase_local, bool_ty);
+        const index_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), u64_ty);
+        const index_expr = try self.builder.localExpr(index_local, u64_ty);
+        const next_index = try self.builder.lowLevelExpr(.num_plus, &.{ index_expr, one_expr }, u64_ty);
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (carries) |carry| {
+            try self.saveBinder(carry.binder, &saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        defer self.restoreBinders(saved.items);
+
+        try self.pushLoopContext(result_ty, carries);
+        defer self.popLoopContext();
+
+        const first_done = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, first_limit_expr }, bool_ty);
+        const second_done = try self.builder.lowLevelExpr(.num_is_eq, &.{ index_expr, second_limit_expr }, bool_ty);
+        const switch_to_second = try self.continueWithPrefixAndCarries(result_ty, &[_]Ast.ExprId{ true_expr, second.list.index }, carries);
+        const done_body = try self.breakCurrentLoopExpr();
+        const first_continue = try self.lowerListIteratorContinueWithPrefix(
+            for_,
+            result_ty,
+            first_list_expr,
+            first_len_expr,
+            index_expr,
+            item_ty,
+            first_append_exprs,
+            &[_]Ast.ExprId{ false_expr, next_index },
+            carries,
+        );
+        const second_continue = try self.lowerListIteratorContinueWithPrefix(
+            for_,
+            result_ty,
+            second_list_expr,
+            second_len_expr,
+            index_expr,
+            item_ty,
+            second_append_exprs,
+            &[_]Ast.ExprId{ true_expr, next_index },
+            carries,
+        );
+        const first_body = try self.builder.ifExpr(first_done, switch_to_second, first_continue, result_ty);
+        const second_body = try self.builder.ifExpr(second_done, done_body, second_continue, result_ty);
+        const body = try self.builder.ifExpr(phase_expr, second_body, first_body, result_ty);
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, 2 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = phase_local, .ty = bool_ty };
+        params[1] = .{ .local = index_local, .ty = u64_ty };
+        for (carries, 0..) |carry, i| params[i + 2] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(Ast.ExprId, 2 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = concat.phase;
+        initial_values[1] = first.list.index;
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 2] = try self.builder.localExpr(carry.initial_local, carry.ty);
+        }
+
+        const loop_expr = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = try self.builder.program.addTypedLocalSpan(params),
+            .initial_values = try self.builder.program.addExprSpan(initial_values),
+            .body = body,
+        } } });
+
+        var rest = loop_expr;
+        var second_append_index = second_append_locals.len;
+        while (second_append_index > 0) {
+            second_append_index -= 1;
+            rest = try self.wrapLet(second_append_locals[second_append_index], item_ty, second.append_items[second_append_index], rest, result_ty);
+        }
+        rest = try self.wrapLet(second_limit_local, u64_ty, second_limit_value, rest, result_ty);
+        rest = try self.wrapLet(second_len_local, u64_ty, second_len_value, rest, result_ty);
+        rest = try self.wrapLet(second_list_local, second_list_ty, second.list.list, rest, result_ty);
+
+        var first_append_index = first_append_locals.len;
+        while (first_append_index > 0) {
+            first_append_index -= 1;
+            rest = try self.wrapLet(first_append_locals[first_append_index], item_ty, first.append_items[first_append_index], rest, result_ty);
+        }
+        rest = try self.wrapLet(first_limit_local, u64_ty, first_limit_value, rest, result_ty);
+        rest = try self.wrapLet(first_len_local, u64_ty, first_len_value, rest, result_ty);
+        return .{ .let_ = .{
+            .bind = try self.builder.bindPat(first_list_local, first_list_ty),
+            .value = first.list.list,
+            .rest = rest,
+        } };
     }
 
     fn lowerIteratorPlanToList(
@@ -18110,6 +18320,29 @@ const BodyContext = struct {
         const in_list = try self.builder.lowLevelExpr(.num_is_lt, &.{ index_expr, len_expr }, bool_ty);
         const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, source_item_ty, append_exprs);
         const tail_body = try self.lowerListIteratorAdaptedItemThenContinue(for_, result_ty, tail_item, source_item_ty, body_item_ty, next_index, carries, adapter);
+        return try self.builder.ifExpr(in_list, list_body, tail_body, result_ty);
+    }
+
+    fn lowerListIteratorContinueWithPrefix(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        list_expr: Ast.ExprId,
+        len_expr: Ast.ExprId,
+        index_expr: Ast.ExprId,
+        item_ty: Type.TypeId,
+        append_exprs: []const Ast.ExprId,
+        prefix_values: []const Ast.ExprId,
+        carries: []const LoopCarry,
+    ) Allocator.Error!Ast.ExprId {
+        const list_item = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ list_expr, index_expr }, item_ty);
+        const list_body = try self.lowerIteratorPlanItemThenContinue(for_, result_ty, list_item, item_ty, prefix_values, carries);
+        if (append_exprs.len == 0) return list_body;
+
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const in_list = try self.builder.lowLevelExpr(.num_is_lt, &.{ index_expr, len_expr }, bool_ty);
+        const tail_item = try self.listIteratorTailItemExpr(len_expr, index_expr, item_ty, append_exprs);
+        const tail_body = try self.lowerIteratorPlanItemThenContinue(for_, result_ty, tail_item, item_ty, prefix_values, carries);
         return try self.builder.ifExpr(in_list, list_body, tail_body, result_ty);
     }
 

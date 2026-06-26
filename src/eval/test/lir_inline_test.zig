@@ -3425,6 +3425,37 @@ test "optimized for over list.iter append chain uses private iterator cursor" {
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
+test "optimized for over list-backed concat uses private phase cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in [1.I64, 2.I64].iter().append(3.I64).concat([4.I64, 5.I64].iter().append(6.I64)) {
+        \\        if item == 5 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"10"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 2), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 2), shape.list_get_unsafe_count);
+}
+
 test "optimized for over list.iter map uses child plan cursor" {
     const source =
         \\module [main]

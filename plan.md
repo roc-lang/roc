@@ -637,6 +637,8 @@ Tasks:
 - [x] Optimized `for` over direct `Append(ListIter, item...)` consumes plan
   values.
 - [ ] Optimized `for` over `Append` and `Concat` uses explicit phase state.
+  - [x] Direct `Concat` of list-backed/list-append-backed plans uses one
+    private phase cursor and preserves source `break` as a whole-loop break.
 - [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
 - [x] Optimized `for` over direct `Map(ListIter | Append(ListIter, item...), fn)`
   uses child plan state.
