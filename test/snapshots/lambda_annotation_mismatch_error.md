@@ -104,11 +104,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 199)
-				(receiver
-					(e-runtime-error (tag "erroneous_value_use")))
-				(args
-					(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

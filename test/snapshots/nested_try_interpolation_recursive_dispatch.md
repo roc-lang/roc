@@ -162,7 +162,7 @@ main = {
 					(e-nominal (nominal "Url")
 						(e-tag (name "Url")
 							(args
-								(e-dispatch-call (method "fold") (constraint-fn-var 183)
+								(e-dispatch-call (method "fold") (constraint-fn-var 192)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "rest"))))
@@ -176,9 +176,9 @@ main = {
 													(patterns
 														(p-assign (ident "interpolated"))
 														(p-assign (ident "segment")))))
-											(e-dispatch-call (method "concat") (constraint-fn-var 181)
+											(e-dispatch-call (method "concat") (constraint-fn-var 190)
 												(receiver
-													(e-dispatch-call (method "concat") (constraint-fn-var 179)
+													(e-dispatch-call (method "concat") (constraint-fn-var 188)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "acc"))))
@@ -213,7 +213,7 @@ main = {
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "domain"))))
-					(e-interpolation (constraint-fn-var 396)
+					(e-interpolation (constraint-fn-var 421)
 						(first
 							(e-literal (string "https://")))
 						(parts

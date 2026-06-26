@@ -199,13 +199,7 @@ expect result == result
 					(e-lookup-local
 						(p-assign (ident "w")))))))
 	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-lookup-local
-					(p-assign (ident "result"))))
-			(rhs
-				(e-lookup-local
-					(p-assign (ident "result")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
