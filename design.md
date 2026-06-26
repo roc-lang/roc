@@ -1334,202 +1334,116 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
-### Builtin Iterator Internal Plans
+### Builtin Iter And Stream Shape Specialization
 
-`Iter` is a public Roc builtin whose methods are pure functions. The public
-API remains ordinary Roc: iterator-producing methods return `Iter(item)`,
-`Iter.next` returns a step value, and reusing an iterator value must observe the
-same value every time.
+`Iter` and `Stream` are public Roc builtins whose methods remain ordinary Roc
+functions. Their public representation is the same family:
 
-This public model is not the optimized internal representation. In optimized
-post-check code, builtin iterator operations may lower to compiler-owned
-iterator plans. An iterator plan is a value-level state machine described by
-explicit checked and Monotype data, not by source syntax, names, closure bytes,
-or backend inspection.
+```roc
+Iter(item) :: {
+	len_if_known : [Known(U64), Unknown],
+	step : () -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
+}
 
-Iterator plans are first-class post-check values until they are either consumed
-by an optimized iterator consumer or materialized into the public `Iter`
-representation. This is the source of truth for propagation through locals,
-blocks, `if`, `match`, and function specialization. The compiler must not
-propagate iterator information by replaying checked expressions, re-lowering
-declaration right-hand sides, mining the public record/closure representation,
-or asking a backend to recover iterator behavior from generated code.
+Stream(item) :: {
+	len_if_known : [Known(U64), Unknown],
+	step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
+}
+```
 
-The implementation owner for this is the iterator-aware post-check lowering
-logic that is already deciding how expressions become lower IR. This must not be
-a separate plan-elimination pass. Monotype lowering may produce `iter_plan`
-expressions with the public `Iter(item)` type, and the existing lowering paths
-that understand iterator plans must either consume those plans at optimized
-consumer sites or materialize them exactly where they cross a public boundary.
-No raw plan value may survive into LIR, because LIR has only ordinary values,
-control flow, calls, and explicit ARC statements.
+`Iter.next` and `Stream.next!` return only `One`, `Skip`, or `Done`. There is no
+public `Append` step, and there is no private step variant with different
+public meaning. Adapters such as `append`, `concat`, `map`, and filters are
+ordinary Roc functions that build another record containing a step callable.
 
-Passes that do not explicitly own iterator-plan behavior must treat
-`iter_plan` as opaque. In particular, general call-pattern specialization must
-not mine private plan operands or the materialized public fallback to discover
-new call patterns. If those optimizations should compose, iterator-plan
-lowering must first rewrite the plan into ordinary post-check IR that the
-general pass already understands, at the materialization boundary already being
-lowered.
+The optimized target is the same useful code shape Rust gets from iterators:
+private cursor state with a direct `next` operation. Rust reaches that by
+representing each adapter chain in concrete iterator types and then
+monomorphizing/inlining calls to `Iterator::next(&mut state)`. Roc must not copy
+that typing model. Roc keeps the concrete public type `Iter(item)`, and
+different branches that produce different adapter chains still unify as one
+`Iter(item)`.
 
-Because plans are post-check values, source evaluation order is preserved by
-normal IR evaluation. For example, a declaration whose right-hand side is an
-`if` expression evaluates the condition and selected branch at the declaration
-site, producing a plan value. A later `for` over that local consumes that
-already-produced plan value; it does not re-evaluate the condition, branch body,
-or any appended item expressions. This matters for `dbg`, `expect`, `crash`,
-and any other observable runtime behavior that is not modeled as an ordinary
-effectful function call.
+Roc carries the adapter shape through ordinary function values instead. The
+step field is a normal callable, and lambda-set solving records the finite set
+of possible step functions plus their captures. The optimizer uses those
+ordinary record, tag, tuple, nominal, and callable shapes to produce private
+cursor state. This is how Roc avoids heap allocation for iterator wrappers
+without exposing adapter chains in user-facing types and without relying on
+reference-count uniqueness of an `Iter` value.
 
-The plan representation is therefore not a binder side table. The
-iterator-aware lowering boundary may keep temporary maps from locals to plan
-values while rewriting a body, but those maps are indexes into already-lowered
-IR values.
-They must not point back to checked expressions or source declarations that
-would need to be re-evaluated later. If an iterator value is produced by an
-`if` or `match`, the condition, scrutinee, pattern tests, selected branch, and
-branch-local observable behavior belong at that expression's source position.
-Optimized consumption must preserve that order, either by consuming the
-already-produced plan value or by rewriting the surrounding IR into explicit
-private plan state at that same point.
+The post-check pipeline must not add a separate builtin iterator-plan IR as the
+long-term solution. There is no `iter_plan` expression, no iterator-plan side
+store, and no lowering path that recognizes builtin iterator behavior by
+source names, generated symbols, public closure layout, wasm bytes, object
+bytes, or backend output. If an optimization needs constructor or callable
+shape, it consumes ordinary checked direct-call targets, lifted function ids,
+captures, and type data produced by earlier stages.
 
-The reason for the split is purity. Source such as:
+The existing constructor/callable shape specialization pass is the owner of
+this optimization direction. It is general over values shaped as tags, records,
+tuples, nominals, and callables; `Iter` and `Stream` are important clients, not
+special cases. The pass may expose shape through a direct call when the caller
+is currently using that result in a shape-demanding context, such as field
+access, tag matching, calling a returned callable, loop-state splitting, or a
+specialized call argument. This uses the ordinary direct-call body and preserves
+argument evaluation order. It must not decide based on method names such as
+`iter`, `append`, `next`, or `map`.
+
+Shape must flow through ordinary local bindings, blocks, `if`, `match`, loop
+initial values, and loop `continue` values. When branches share a common outer
+constructor shape, such as an `Iter` record with `len_if_known` and `step`
+fields, the optimizer may keep that outer shape while leaving differing fields
+as ordinary branch values. If branches do not share a common outer shape, the
+expression remains an ordinary value. Branch conditions, scrutinees, guards,
+branch-local `dbg`, `expect`, `crash`, stream effects, and appended item
+expressions remain at their source evaluation positions; optimization never
+replays a declaration body later at a consumer.
+
+When a loop starts with a known constructor shape, the loop parameter may be
+split into the shape's leaves. For `Iter` and `Stream`, that means the public
+wrapper can disappear from the hot loop. The loop carries private fields such
+as list pointer, index, length, phase, selected callable target, and captured
+values. A step call through a known callable field can be inlined when it has a
+single target, or lowered through finite lambda-set dispatch when multiple
+known targets remain. Matches on known step tags simplify through the same
+ordinary known-tag machinery used for all tag unions.
+
+Public iterator values remain immutable and reusable. Source such as:
 
 ```roc
 iter = [1, 2].iter()
 saved = iter
 
 for item in iter {
-    {}
+	{}
 }
 
 use(saved)
 ```
 
-must not mutate `saved`. If optimized iteration advances a cursor, that cursor
-is a private compiler-created loop state copied or derived from `iter`; it is
-not the public Roc value that other bindings can still observe. Public `Iter`
-values remain immutable and reusable. Internal cursors may be mutated only
-because they are fresh lowering state whose mutation is not observable by Roc
-source.
+must not mutate `saved`. Any cursor mutation introduced by optimized iteration
+belongs to compiler-created private loop state derived from `iter`, not to the
+public Roc value. This rule is the same for pure `Iter` and effectful `Stream`;
+stream effects still run exactly when the source program steps the stream.
 
-Iterator plans must not require heap allocation or reference counting for the
-`Iter` wrapper itself. A first-class plan value carries initial state as
-ordinary expressions, static data references, or nested plans. An optimized
-consumer may later introduce private loop locals or loop parameters for that
-state, but those locals belong to the consumer rewrite, not to the producer
-plan value. Refcounted payloads inside the state, such as lists, strings,
-elements, or captured function values, are still ordinary Roc values and are
-managed only by LIR ARC insertion through explicit `incref`, `decref`, and
-`free` statements. ARC may optimize those payloads, but ARC must not be used to
-decide whether an `Iter` wrapper is unique.
+Some uses require the public representation: storing or returning an iterator
+as an ordinary value, passing it to unspecialized code, or directly observing
+the public result of `Iter.next`/`Stream.next!`. At those boundaries the
+compiler builds the ordinary public record and callable value. That is normal
+lowering, not a cleanup pass. The optimizer wins only when ordinary
+specialization keeps enough shape available at the consuming use.
 
-The internal plan vocabulary is extensible, but the core cases are:
+Finite and infinite iterators use the same public model. An unbounded range or
+custom Fibonacci-style iterator is just a step callable that may never produce
+`Done` unless a later adapter does. Optimized finite consumers may still become
+bounded loops when the shape proves a bound; otherwise they remain ordinary
+potentially nonterminating Roc computations.
 
-```text
-ListIter(list, index, len)
-Range(current, end, inclusivity, step)
-UnboundedRange(current, step)
-Single(item, emitted)
-Append(before, after, phase)
-Concat(first, second, phase)
-Map(source, mapping_fn)
-Filter(source, predicate_fn)
-Custom(state, step_fn)
-Public(iter_value)
-```
-
-Finite and infinite iterators use the same model. A finite plan can produce a
-`Done` state. An infinite plan, such as an unbounded range or Fibonacci-like
-custom state machine, simply has no reachable `Done` transition unless a later
-adapter or consumer introduces one. Consumers such as `for`, `Iter.fold`, and
-`List.from_iter` must still be ordinary finite or potentially nonterminating
-Roc computations according to the source iterator they consume.
-
-The `Public(iter_value)` plan is the materialization boundary. It represents an
-iterator value whose public representation must be preserved because the
-compiler has no explicit plan for the producer or because the value is being
-observed in a way that requires the public API. Examples include:
-
-- calling public `Iter.next` outside an optimized consumer
-- storing or returning an iterator value as an ordinary Roc value
-- passing an iterator to code that is not being specialized with an internal
-  iterator plan
-- matching on the exact result of public `Iter.next` outside an optimized
-  consumer
-
-Direct `.step` field access is not a public materialization boundary. `Iter` is
-opaque outside the builtin module, so ordinary Roc code cannot observe that
-field. The builtin module can access the backing record field internally, but
-iterator producer plans are disabled while lowering the builtin module.
-
-Materialization is a meaning-preserving lowering operation, not a size cleanup. When a known plan
-crosses this boundary, lowering constructs the ordinary public `Iter` value and
-public step values with the same meaning as the Roc builtin implementation. A
-later consumer that receives only a public iterator value must treat it as a
-`Public` plan unless explicit specialization data proves a more concrete plan.
-
-Unmaterialized iterator plans must not reach LIR. That is an invariant checked
-by LIR lowering, not a request for a generic cleanup pass. By the time an
-ordinary value is handed to LIR lowering, every post-check plan value that could
-reach that point must already have been handled by the existing lowering
-decision that introduced or observed it:
-
-- consumed by an optimized post-check consumer such as source `for`,
-  specialized `Iter.fold`, or specialized `List.from_iter`
-- materialized to the public `Iter` representation because it crosses a public
-  observation boundary
-- explicitly represented as `Public(iter_value)` because the compiler has no
-  more precise plan for that value
-
-LIR and backends consume ordinary values, control flow, and explicit ARC
-statements. They must not know builtin iterator behavior, public `Iter`
-closure layouts, or special reference-counting rules for iterator wrappers.
-
-Private plan state produced by iterator-aware lowering is still ordinary
-post-check IR: locals, tuples, tag unions, loop parameters, branches, calls, and
-low-level operations. It is compiler-owned state, not a public `Iter` wrapper.
-For example, an `if` that chooses between two known iterator plans may lower to
-a private phase value plus the fields needed by the selected plan. A following
-optimized `for` consumes that private state. If the same source iterator is also
-observed publicly, the public observation receives a separately materialized
-`Iter` value with the same source meaning.
-
-Optimized consumers lower plans directly. For example, consuming a
-`ListIter(list, index, len)` in a `for` loop produces loop state carrying the
-list and index fields. Each iteration checks the index against the length,
-loads the current element, advances the private index, and runs the loop body.
-It must not construct a public `Iter` record, call a zero-argument step
-closure, construct a public `One`/`Skip`/`Append`/`Done` step value, then
-immediately destructure that value again.
-
-Adapter plans compose without allocating iterator wrappers. `Map(source, f)`
-steps the source plan and applies `f` only to produced items. `Filter(source,
-p)` steps the source plan until it finds an item for which `p` returns true or
-until the source is done. `Append(before, after, phase)` and `Concat(first,
-second, phase)` are explicit state machines rather than public iterator-record
-rebuilds. If a source plan can only produce `One` and `Done`, later lowering
-must not keep unreachable `Append` or `Skip` branches alive.
-
-Post-check must recognize builtin iterator operations by exact checked identity:
-the builtin method owner, method name id, checked function template, static
-dispatch plan, and Monotype instantiation. It must not recognize iterator
-operations by source names, display strings, generated symbol names, closure
-layout shape, wasm bytes, or backend output. If a stage needs to know that an
-expression is builtin `Iter.map`, the checked stage must have produced explicit
-identity output that records that relationship.
-
-This design deliberately mirrors the useful part of Rust iterators: optimized
-code sees concrete state machines whose `next` operation mutates private
-cursor state. Roc differs at the public boundary: Roc methods remain pure, and
-public `Iter` values are immutable. The compiler may lower pure iterator code
-to mutable private state only when doing so preserves that public meaning.
-
-The existing call-pattern specialization pass is a useful precedent and may
-remain part of the implementation, but the long-term source of truth for
-iterator optimization is the explicit iterator-plan representation. General
-constructor/call-pattern specialization should not be responsible for
-rediscovering builtin iterator behavior from the public Roc implementation.
+LIR and backends consume only ordinary values, control flow, calls, committed
+layouts, and explicit ARC statements. They do not know iterator rules, stream
+rules, public step-callable layouts, or reference-count policy for iterator
+wrappers.
 
 ### Structural Serialization Methods
 
