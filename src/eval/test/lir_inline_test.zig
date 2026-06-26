@@ -215,6 +215,45 @@ fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) an
     }
 }
 
+const ExpectedHostEvent = union(enum) {
+    dbg: []const u8,
+    expect_failed,
+    crashed: []const u8,
+};
+
+fn expectOptimizedHostEvents(
+    source: []const u8,
+    expected_termination: eval.RuntimeHostEnv.Termination,
+    expected: []const ExpectedHostEvent,
+) anyerror!void {
+    const allocator = std.testing.allocator;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+    defer run.deinit(allocator);
+
+    try std.testing.expectEqual(expected_termination, run.termination);
+    try std.testing.expectEqual(expected.len, run.events.len);
+    for (expected, run.events) |expected_event, actual_event| {
+        switch (expected_event) {
+            .dbg => |expected_msg| switch (actual_event) {
+                .dbg => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
+                else => return error.TestUnexpectedResult,
+            },
+            .expect_failed => switch (actual_event) {
+                .expect_failed => {},
+                else => return error.TestUnexpectedResult,
+            },
+            .crashed => |expected_msg| switch (actual_event) {
+                .crashed => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
+                else => return error.TestUnexpectedResult,
+            },
+        }
+    }
+}
+
 const DebugEffectCounts = struct {
     debug: usize = 0,
     expect: usize = 0,
@@ -2381,6 +2420,40 @@ test "optimized for over if-selected mapped list iter append uses private iterat
     try std.testing.expectEqual(@as(usize, 2), shape.list_get_unsafe_count);
 }
 
+test "optimized for over if-selected filtered list iter append preserves unselected crash" {
+    const source =
+        \\module [main]
+        \\
+        \\choose : () -> Bool
+        \\choose = || {
+        \\    dbg "cond"
+        \\    True
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    for item in if choose() { [1.I64, 2.I64].iter().append(3.I64).keep_if(|n| n > 1) } else { [4.I64].iter().append({ crash "unselected" }) } {
+        \\        dbg item
+        \\    }
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedHostEvents(source, .returned, &.{
+        .{ .dbg = "\"cond\"" },
+        .{ .dbg = "2" },
+        .{ .dbg = "3" },
+    });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+}
+
 test "optimized for over match-selected filtered list iter append preserves producer order" {
     const source =
         \\module [main]
@@ -2423,6 +2496,52 @@ test "optimized for over match-selected filtered list iter append preserves prod
     try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
     try std.testing.expectEqual(@as(usize, 2), shape.list_len_count);
     try std.testing.expectEqual(@as(usize, 2), shape.list_get_unsafe_count);
+}
+
+test "optimized for over match-selected mapped list iter append preserves expect order" {
+    const source =
+        \\module [main]
+        \\
+        \\choose : () -> I64
+        \\choose = || {
+        \\    dbg "scrutinee"
+        \\    1.I64
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in match choose() {
+        \\        0 => [4.I64].iter().append({ crash "unselected" }).map(|n| n)
+        \\        _ => [1.I64, 2.I64].iter().append(3.I64).map(|n| {
+        \\            expect n < 3
+        \\            n * 2
+        \\        })
+        \\    } {
+        \\        dbg item
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedHostEvents(source, .returned, &.{
+        .{ .dbg = "\"scrutinee\"" },
+        .{ .dbg = "2" },
+        .{ .dbg = "4" },
+        .expect_failed,
+        .{ .dbg = "6" },
+        .{ .dbg = "12" },
+    });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
 }
 
 test "optimized List.from_iter over direct list append consumes iterator plan" {
@@ -3344,6 +3463,61 @@ test "local appended iterator with public alias keeps public iterator semantics"
     try expectOptimizedDbgEvents(source, &.{"(6, 3)"});
 }
 
+test "local mapped iterator with public alias keeps public iterator semantics" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    iter = [1.I64, 2.I64].iter().map(|n| n * 2)
+        \\    saved = iter
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\
+        \\    saved_first = match Iter.next(saved) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    dbg ($sum, saved_first)
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"(6, 2)"});
+}
+
+test "local filtered iterator with public alias keeps public iterator semantics" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    iter = [1.I64, 2.I64].iter().keep_if(|n| n > 1)
+        \\    saved = iter
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\
+        \\    saved_step = match Iter.next(saved) {
+        \\        One({ item, .. }) => item
+        \\        Skip(_) => -2
+        \\        _ => 0
+        \\    }
+        \\
+        \\    dbg ($sum, saved_step)
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"(2, -2)"});
+}
+
 test "public Iter.next materializes iterator plan before Lambda" {
     try expectOptimizedDbgEvents(
         \\module [main]
@@ -3409,6 +3583,73 @@ test "public Iter.next materializes non-list iterator plans with public behavior
         \\    {}
         \\}
     , &.{ "42", "1", "1", "0", "30", "5", "10", "11", "-2", "-2" });
+}
+
+test "public Iter.next filter rest advances after Skip" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    first = Iter.next([1.I64, 2.I64].iter().keep_if(|n| {
+        \\        dbg n
+        \\        n > 1
+        \\    }))
+        \\    second = match first {
+        \\        Skip({ rest }) => match Iter.next(rest) {
+        \\            One({ item, .. }) => item
+        \\            Skip(_) => -2
+        \\            _ => -1
+        \\        }
+        \\        One({ item, .. }) => item
+        \\        _ => -3
+        \\    }
+        \\    dbg second
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "1", "2", "2" });
+}
+
+test "public Iter.next list rest advances after One" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    first = Iter.next([1.I64, 2.I64].iter())
+        \\    second = match first {
+        \\        One({ rest, .. }) => match Iter.next(rest) {
+        \\            One({ item, .. }) => item
+        \\            _ => -1
+        \\        }
+        \\        _ => -2
+        \\    }
+        \\    dbg second
+        \\    {}
+        \\}
+    , &.{"2"});
+}
+
+test "public Iter.next map rest advances after One" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    first = Iter.next([1.I64, 2.I64].iter().map(|n| n + 10))
+        \\    second = match first {
+        \\        One({ rest, .. }) => match Iter.next(rest) {
+        \\            One({ item, .. }) => item
+        \\            _ => -1
+        \\        }
+        \\        _ => -2
+        \\    }
+        \\    dbg second
+        \\    {}
+        \\}
+    , &.{"12"});
 }
 
 test "direct public Iter.next materializes recognized iterator plans before Lambda" {

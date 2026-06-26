@@ -212,7 +212,6 @@ const WrapperAnalyzer = struct {
             .static_data,
             .iter_plan,
             .def_ref,
-            .fn_ref,
             => true,
             .static_data_candidate => |candidate| self.exprReadsOnlyArgs(candidate.fallback, args),
             .list,
@@ -241,6 +240,11 @@ const WrapperAnalyzer = struct {
             .structural_hash => |h| self.exprReadsOnlyArgs(h.value, args) and self.exprReadsOnlyArgs(h.hasher, args),
             .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and self.exprReadsOnlyArgs(block.final_expr, args),
             .lambda,
+            // A function reference can carry a nested body whose captures must
+            // be rebound for each inline site. This inliner only remaps the
+            // immediate callee body, so closure-producing wrappers are not
+            // transparent here.
+            .fn_ref,
             .fn_def,
             .let_,
             .match_,

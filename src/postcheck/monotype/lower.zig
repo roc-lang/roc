@@ -4647,9 +4647,10 @@ const BodyContext = struct {
         if (try self.lowerParseIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| return expr;
         const lowered = try self.lowerCall(checked_ret_ty, call);
         if (try self.lowerIteratorDirectConsumerCallExpr(call, lowered)) |consumer_expr| return consumer_expr;
+        const public_data = try self.materializeIteratorPlansInCallData(lowered.data);
         const call_expr = try self.builder.program.addExpr(.{
             .ty = lowered.ret_ty,
-            .data = lowered.data,
+            .data = public_data,
         });
         if (try self.lowerIteratorDirectProducerPlanExpr(call, lowered, call_expr)) |plan_expr| return plan_expr;
         return call_expr;
@@ -10010,9 +10011,10 @@ const BodyContext = struct {
                     Common.invariant("checked call expression lowered at a type different from its context type");
                 }
                 if (try self.lowerIteratorDirectConsumerCallExpr(call, lowered)) |consumer_expr| return consumer_expr;
+                const public_data = try self.materializeIteratorPlansInCallData(lowered.data);
                 const call_expr = try self.builder.program.addExpr(.{
                     .ty = ty,
-                    .data = lowered.data,
+                    .data = public_data,
                 });
                 if (try self.lowerIteratorDirectProducerPlanExpr(call, lowered, call_expr)) |plan_expr| return plan_expr;
                 return call_expr;
@@ -10379,9 +10381,10 @@ const BodyContext = struct {
         if (try self.lowerIteratorConsumerDispatchExpr(plan, resolved, dispatcher_ty, lowered_call, fn_data.ret)) |consumer_expr| {
             return try self.applyDispatchResultMode(plan.result_mode, consumer_expr, fn_data.ret);
         }
+        const public_call = try self.materializeIteratorPlansInResolvedDispatchCall(lowered_call);
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = lowered_call.exprData(),
+            .data = public_call.exprData(),
         });
         if (try self.lowerIteratorProducerPlanExpr(plan, resolved, dispatcher_ty, lowered_call, call_expr)) |plan_expr| {
             return try self.applyDispatchResultMode(plan.result_mode, plan_expr, fn_data.ret);
@@ -11015,6 +11018,65 @@ const BodyContext = struct {
         return .{
             .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
             .args = args,
+        };
+    }
+
+    fn materializeIteratorPlansInResolvedDispatchCall(
+        self: *BodyContext,
+        lowered: LoweredResolvedDispatchCall,
+    ) Allocator.Error!LoweredResolvedDispatchCall {
+        return .{
+            .callee = lowered.callee,
+            .args = try self.materializeIteratorPlansInExprSpan(lowered.args),
+        };
+    }
+
+    fn materializeIteratorPlansInCallData(
+        self: *BodyContext,
+        data: Ast.ExprData,
+    ) Allocator.Error!Ast.ExprData {
+        return switch (data) {
+            .call_proc => |call| .{ .call_proc = .{
+                .callee = call.callee,
+                .args = try self.materializeIteratorPlansInExprSpan(call.args),
+                .is_cold = call.is_cold,
+            } },
+            .call_value => |call| .{ .call_value = .{
+                .callee = call.callee,
+                .args = try self.materializeIteratorPlansInExprSpan(call.args),
+            } },
+            else => data,
+        };
+    }
+
+    fn materializeIteratorPlansInExprSpan(
+        self: *BodyContext,
+        span: Ast.Span(Ast.ExprId),
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        const exprs = self.builder.program.exprSpan(span);
+        if (exprs.len == 0) return span;
+
+        var changed = false;
+        const lowered = try self.allocator.alloc(Ast.ExprId, exprs.len);
+        defer self.allocator.free(lowered);
+
+        for (exprs, 0..) |expr, index| {
+            lowered[index] = try self.materializeIteratorPlanExpr(expr);
+            changed = changed or lowered[index] != expr;
+        }
+
+        if (!changed) return span;
+        return try self.builder.program.addExprSpan(lowered);
+    }
+
+    fn materializeIteratorPlanExpr(
+        self: *BodyContext,
+        expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (self.builder.program.exprs.items[@intFromEnum(expr)].data) {
+            .iter_plan => |plan_id| self.builder.program.iterPlan(plan_id).materialized orelse
+                Common.invariant("iterator plan crossed a public boundary without materialization"),
+            else => expr,
         };
     }
 
