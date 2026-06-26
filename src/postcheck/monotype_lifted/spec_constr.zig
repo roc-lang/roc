@@ -1540,8 +1540,8 @@ const Cloner = struct {
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingShape(initial);
             if (try self.pass.shapeFromValue(values[index])) |shape| {
-                if (shapeCanProjectFromExpr(shape)) {
-                    shapes[index] = shape;
+                if (try self.projectableLoopShape(shape)) |loop_shape| {
+                    shapes[index] = loop_shape;
                     has_constructor = true;
                 } else {
                     shapes[index] = .{ .any = valueType(self.pass.program, values[index]) };
@@ -1582,6 +1582,51 @@ const Cloner = struct {
             .initial_values = try self.pass.program.addExprSpan(new_initials.items),
             .body = try self.cloneExpr(loop.body),
         } } });
+    }
+
+    fn projectableLoopShape(self: *Cloner, shape: Shape) Allocator.Error!?Shape {
+        if (shapeCanProjectFromExpr(shape)) return shape;
+
+        return switch (shape) {
+            .any => shape,
+            .record => |record| blk: {
+                const fields = try self.pass.arena.allocator().alloc(FieldShape, record.fields.len);
+                for (record.fields, fields) |field, *out| {
+                    out.* = .{
+                        .name = field.name,
+                        .shape = (try self.projectableLoopShape(field.shape)) orelse
+                            .{ .any = shapeType(field.shape) },
+                    };
+                }
+                break :blk Shape{ .record = .{
+                    .ty = record.ty,
+                    .fields = fields,
+                } };
+            },
+            .tuple => |tuple| blk: {
+                const items = try self.pass.arena.allocator().alloc(Shape, tuple.items.len);
+                for (tuple.items, items) |item, *out| {
+                    out.* = (try self.projectableLoopShape(item)) orelse
+                        .{ .any = shapeType(item) };
+                }
+                break :blk Shape{ .tuple = .{
+                    .ty = tuple.ty,
+                    .items = items,
+                } };
+            },
+            .nominal => |nominal| blk: {
+                const backing = (try self.projectableLoopShape(nominal.backing.*)) orelse break :blk null;
+                const stored = try self.pass.arena.allocator().create(Shape);
+                stored.* = backing;
+                break :blk Shape{ .nominal = .{
+                    .ty = nominal.ty,
+                    .backing = stored,
+                } };
+            },
+            .tag,
+            .callable,
+            => null,
+        };
     }
 
     fn cloneBlock(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Ast.ExprId {

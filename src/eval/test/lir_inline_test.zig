@@ -2144,6 +2144,45 @@ test "spec constr specializes primitive-start record state carried by while loop
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
 }
 
+test "spec constr splits loop record state with opaque callable field" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\State : { n : I64, f : I64 -> I64 }
+        \\
+        \\inc : I64 -> I64
+        \\inc = |n| n + 1
+        \\
+        \\sum_from : I64 -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start, f: inc }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, f: $state.f }
+        \\    }
+        \\
+        \\    f = $state.f
+        \\    f($state.n)
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
 test "spec constr exposes direct call record result for field access" {
     const allocator = std.testing.allocator;
     const source =
