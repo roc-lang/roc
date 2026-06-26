@@ -173,6 +173,33 @@ Spike result, 2026-06-26:
   whether read/accessor operations should become capability extensions or remain
   edge-specific thunks guarded by the owning capability.
 
+Follow-up finding after `29e304f0fe`:
+
+- **Revise the crossing shape before continuing migration.** The host-side
+  registry model is still the right direction, but the current Roc descriptor
+  shape is not sound enough to validate. `HostValue.CapabilityHandle(a)` is a
+  typed handle because its `split` field contains `Box(a)`. Erased descriptors
+  such as `Elem.TextSignal`, `Node.SignalExpr`, task descriptors, and event
+  descriptors currently spell that field as bare `HostValue.CapabilityHandle`.
+  `roc check` accepts this, but app builds can lower the omitted type argument as
+  an unconstrained/empty payload while nearby read thunks require `Str` or
+  `Bool`. A reduced repro is:
+  `Html.text_s(Signal.const("hello"))` against this platform. Static HTML builds,
+  and constructing `Signal.const("hello")` alone can be made to get further, but
+  the signal-backed text path exposes the mismatch.
+- **What this means.** We cannot honestly claim the full typed handle is proven
+  across the erased descriptor boundary yet. Either the descriptor graph must
+  remain typed all the way through the relevant nodes, or the host-visible
+  capability ABI must become an intentionally erased, app-generated operation
+  table whose fields no longer mention `Box(a)` in the descriptor type. A
+  language/compiler feature for generated per-app typed handle operations could
+  also solve this by letting glue expose stable erased wrappers for app concrete
+  types.
+- **Current architectural judgment.** Keep the capability-owned host registry
+  contract, but revise the Roc boundary API. Do not keep adding bare
+  `CapabilityHandle` fields to erased descriptors and do not paper over the
+  build failure with compiler fallback behavior.
+
 Priority order:
 
 1. **Define the capability contract.** Introduce a platform-level capability shape
