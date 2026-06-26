@@ -22825,18 +22825,6 @@ fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     };
 }
 
-fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
-    const expr = view.bodies.expr(expr_id);
-    const plan_id = switch (expr.data) {
-        .dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
-        .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization type dispatch expression had no dispatch plan"),
-        else => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
-    };
-    const plan_raw = @intFromEnum(plan_id);
-    if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
-    return view.static_dispatch_plans.plans[plan_raw];
-}
-
 fn moduleIdFromDigest(ref: names.CheckedModuleDigest) checked.ModuleId {
     return .{ .bytes = ref.bytes };
 }
