@@ -668,7 +668,11 @@ Tasks:
     loops using list low-level operations.
   - [x] Direct `Single` plans are consumed by `List.from_iter` and list-result
     `Iter.collect` without public iterator step values.
-  - [x] Direct `Map(ListIter | Append(ListIter, item...) | Range | Single, fn)`
+  - [x] Direct `Concat` of list-backed/list-append-backed plans is consumed by
+    `List.from_iter` and list-result `Iter.collect` with one exact-capacity
+    output list and a private phase cursor.
+  - [x] Direct
+    `Map(ListIter | Append(ListIter, item...) | Range | Single | Concat, fn)`
     plans with direct mapping functions are consumed by `List.from_iter` and
     list-result `Iter.collect` without public collect-worker specialization.
 - [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public
@@ -693,6 +697,8 @@ Tasks:
     ordering relative to collection and following expressions.
   - [x] Direct mapped append operands consumed by `List.from_iter` preserve
     `dbg` ordering relative to collection and following expressions.
+  - [x] Direct concat operands consumed by `List.from_iter` preserve `dbg`
+    ordering relative to collection and following expressions.
   - [x] Direct mapped append operands and accumulator operands consumed by
     `Iter.fold` preserve `dbg` ordering relative to the fold result and
     following expressions.
@@ -710,6 +716,8 @@ Tasks:
     interpretation with the expected string list.
   - [x] Direct `List.from_iter(List(Str).iter().append(...).map(...))` passes
     optimized LIR interpretation with the expected string list.
+  - [x] Direct `List.from_iter(List(Str).iter().append(...).concat(...))`
+    passes optimized LIR interpretation with the expected string list.
 - [ ] Infinite iterator tests pass.
   - [x] An infinite `Iter.custom` source can be consumed by optimized `for`
     and exited by a source `break` without requiring a reachable `Done`.
