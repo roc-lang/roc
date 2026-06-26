@@ -2352,13 +2352,11 @@ pub const Coordinator = struct {
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         missing: check.CheckedArtifact.PlatformRequirementMissingValue,
     ) compile_package.PublishError!void {
-        var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
-        errdefer report.deinit();
-
         const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
-        try report.document.addText("The app does not provide ");
-        try report.document.addAnnotated(required_name, .inline_code);
-        try report.document.addText(", but the platform requires it.");
+        const headline = try std.fmt.allocPrint(self.gpa, "The app does not provide {s}, but the platform requires it.", .{required_name});
+        defer self.gpa.free(headline);
+        var report = try Report.init(self.gpa, "Missing Required Value", headline, .runtime_error);
+        errdefer report.deinit();
 
         try self.appendNonLowerableReport(app_mod, report);
     }
@@ -2370,17 +2368,11 @@ pub const Coordinator = struct {
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         mismatch: check.CheckedArtifact.PlatformRequirementTypeMismatch,
     ) Allocator.Error!void {
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-        errdefer report.deinit();
-
         const required_name = platform_artifact.canonical_names.exportNameText(mismatch.declaration.platform_name);
-        try report.document.addText("The app provides ");
-        try report.document.addAnnotated(required_name, .inline_code);
-        try report.document.addText(" with a type that does not match the platform's ");
-        try report.document.addAnnotated("requires", .inline_code);
-        try report.document.addText(" entry.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        const headline = try std.fmt.allocPrint(self.gpa, "The app provides {s} with a type that does not match the platform's requires entry.", .{required_name});
+        defer self.gpa.free(headline);
+        var report = try Report.init(self.gpa, "Type Mismatch", headline, .runtime_error);
+        errdefer report.deinit();
 
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, mismatch.actual);
         defer self.gpa.free(actual);
@@ -2575,7 +2567,7 @@ pub const Coordinator = struct {
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, actual_ty);
         defer self.gpa.free(actual);
 
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This ");
@@ -2633,7 +2625,7 @@ pub const Coordinator = struct {
         const module_env = app_mod.moduleEnv() orelse {
             coordinatorInvariant("platform-required invalid numeric report missing module env", .{});
         };
-        var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
+        var report = try Report.init(self.gpa, "Invalid Number", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This numeric literal does not fit in the type required by the platform.");
@@ -2690,7 +2682,7 @@ pub const Coordinator = struct {
         const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, pattern_ty);
         defer self.gpa.free(actual);
 
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This numeric pattern cannot match the type required by the platform.");
@@ -2730,7 +2722,7 @@ pub const Coordinator = struct {
         defer self.gpa.free(dispatcher_type);
 
         if (std.mem.eql(u8, method_name, "from_numeral")) {
-            var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+            var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
             errdefer report.deinit();
 
             try report.document.addText("This number is being used where a non-number type is needed.");
@@ -2745,7 +2737,7 @@ pub const Coordinator = struct {
             return;
         }
 
-        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("This ");
@@ -3504,11 +3496,11 @@ pub const Coordinator = struct {
         path: []const u8,
         err: WorkerFailureError,
     ) void {
-        var rep = Report.init(allocator, title, .fatal);
-        const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
+        const msg = std.fmt.allocPrint(allocator, "{s}: {s}.", .{ path, @errorName(err) }) catch null;
         defer if (msg) |owned| allocator.free(owned);
-        rep.addErrorMessage(msg orelse @errorName(err)) catch |report_err| {
-            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(report_err) });
+        var rep = Report.init(allocator, title, msg orelse "A compilation worker failed.", .fatal) catch |headline_err| {
+            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(headline_err) });
+            return;
         };
         reports.append(allocator, rep) catch |append_err| {
             rep.deinit();
@@ -4384,9 +4376,7 @@ pub const Coordinator = struct {
         const child = pkg.getModule(child_id).?;
 
         // Create cycle error report
-        var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-        const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-        try rep.addErrorMessage(msg);
+        const rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
         try mod.reports.append(self.gpa, rep);
 
         // Mark both as done
@@ -4402,9 +4392,7 @@ pub const Coordinator = struct {
             if (self.total_remaining > 0) self.total_remaining -= 1;
 
             // Add report to child too
-            var child_rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-            const child_msg = try child_rep.addOwnedString("This module participates in an import cycle.");
-            try child_rep.addErrorMessage(child_msg);
+            const child_rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle.", .runtime_error);
             try child.reports.append(self.gpa, child_rep);
         }
     }
@@ -4792,8 +4780,8 @@ pub const Coordinator = struct {
             } },
             else => |e| blk: {
                 const title = switch (e) {
-                    error.FileNotFound => "FILE NOT FOUND",
-                    else => "PARSING FAILED",
+                    error.FileNotFound => "File Not Found",
+                    else => "Parsing Failed",
                 };
                 const source_file_state = if (self.track_watch_inputs)
                     sourceFileStateForParseReadError(e)
@@ -5017,7 +5005,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, e),
+                .reports = self.workerFailureReports(allocators.result, "Type Checking Failed", task.path, e),
                 .partial_env = task.module_env,
             } },
         };

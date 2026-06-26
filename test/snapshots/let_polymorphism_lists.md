@@ -46,104 +46,104 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **+** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**let_polymorphism_lists.md:12:26:12:27:**
-```roc
-all_int_list = int_list ++ my_empty_list
-```
-                         ^
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  all_int_list = int_list ++ my_empty_list                                  │
+ │                           ‾                                                │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:12:26 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**let_polymorphism_lists.md:12:28:12:41:**
-```roc
-all_int_list = int_list ++ my_empty_list
-```
-                           ^^^^^^^^^^^^^
+    Expressions can be identifiers, literals, function calls, or operators.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **+** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  all_int_list = int_list ++ my_empty_list                                  │
+ │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:12:28 ┘
 
-**let_polymorphism_lists.md:13:26:13:27:**
-```roc
-all_str_list = str_list ++ my_empty_list
-```
-                         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**let_polymorphism_lists.md:13:28:13:41:**
-```roc
-all_str_list = str_list ++ my_empty_list
-```
-                           ^^^^^^^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **+** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  all_str_list = str_list ++ my_empty_list                                  │
+ │                           ‾                                                │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:13:26 ┘
 
-**let_polymorphism_lists.md:14:30:14:31:**
-```roc
-all_float_list = float_list ++ my_empty_list
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**let_polymorphism_lists.md:14:32:14:45:**
-```roc
-all_float_list = float_list ++ my_empty_list
-```
-                               ^^^^^^^^^^^^^
+    Expressions can be identifiers, literals, function calls, or operators.
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  all_str_list = str_list ++ my_empty_list                                  │
+ │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:13:28 ┘
 
-**let_polymorphism_lists.md:12:16:12:27:**
-```roc
-all_int_list = int_list ++ my_empty_list
-```
-               ^^^^^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
-This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token + is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  all_float_list = float_list ++ my_empty_list                              │
+ │                               ‾                                            │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:14:30 ┘
 
-**let_polymorphism_lists.md:13:16:13:27:**
-```roc
-all_str_list = str_list ++ my_empty_list
-```
-               ^^^^^^^^^^^
+    Expressions can be identifiers, literals, function calls, or operators.
 
-This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  all_float_list = float_list ++ my_empty_list                              │
+ │                                 ‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:14:32 ┘
 
-**let_polymorphism_lists.md:14:18:14:31:**
-```roc
-all_float_list = float_list ++ my_empty_list
-```
-                 ^^^^^^^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
-This might be a syntax error, an unsupported language feature, or a typo.
+
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  all_int_list = int_list ++ my_empty_list                                  │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:12:16 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
+
+
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  all_str_list = str_list ++ my_empty_list                                  │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:13:16 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
+
+
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  all_float_list = float_list ++ my_empty_list                              │
+ │                   ‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ └─────────────────────────────────────────── let_polymorphism_lists.md:14:18 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

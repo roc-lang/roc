@@ -237,7 +237,7 @@ test "where clause - missing method on type" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertFirstTypeError("MISSING METHOD");
+    try test_env_b.assertFirstTypeError("Missing Method");
 }
 
 test "where clause - method signature mismatch" {
@@ -260,7 +260,7 @@ test "where clause - method signature mismatch" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertFirstTypeError("TYPE MISMATCH");
+    try test_env_b.assertFirstTypeError("Type Mismatch");
 }
 
 test "where clause - discarded unpinned return type reports missing method" {

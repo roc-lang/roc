@@ -26,59 +26,54 @@ UNDECLARED TYPE - type_declarations.md:5:19:5:21
 UNDECLARED TYPE - type_declarations.md:5:32:5:41
 MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
 
-This type is referenced here:
-**type_declarations.md:3:8:3:11:**
-```roc
-Foo : (Bar, Baz)
-```
-       ^^^
-
-
-**UNDECLARED TYPE**
-The type _Baz_ is not declared in this scope.
-
-This type is referenced here:
-**type_declarations.md:3:13:3:16:**
-```roc
-Foo : (Bar, Baz)
-```
-            ^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │         ‾‾‾                                                                │
+ └────────────────────────────────────────────────── type_declarations.md:3:8 ┘
 
 
-**UNDECLARED TYPE**
-The type _Ok_ is not declared in this scope.
 
-This type is referenced here:
-**type_declarations.md:5:19:5:21:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                  ^^
-
-
-**UNDECLARED TYPE**
-The type _Something_ is not declared in this scope.
-
-This type is referenced here:
-**type_declarations.md:5:32:5:41:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                               ^^^^^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │              ‾‾‾                                                           │
+ └───────────────────────────────────────────────── type_declarations.md:3:13 ┘
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Module` imported into this Roc file.
 
-You're attempting to use this module here:
-**type_declarations.md:13:11:13:24:**
-```roc
-MyType2 : Module.Thingy
-```
-          ^^^^^^^^^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : Something }                                │
+ │                    ‾‾                                                      │
+ └───────────────────────────────────────────────── type_declarations.md:5:19 ┘
+
+
+
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : Something }                                │
+ │                                 ‾‾‾‾‾‾‾‾‾                                  │
+ └───────────────────────────────────────────────── type_declarations.md:5:32 ┘
+
+
+
+┌─────────────────────┐
+│ MODULE NOT IMPORTED ├─ There is no module with the name `Module` imported ──┐
+└┬────────────────────┘  into this Roc file.                                  │
+ │                                                                            │
+ │  MyType2 : Module.Thingy                                                   │
+ │            ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+ └──────────────────────────────────────────────── type_declarations.md:13:11 ┘
 
 
 # TOKENS

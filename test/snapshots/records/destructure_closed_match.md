@@ -13,26 +13,28 @@ describe = |rec| match rec {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 # PROBLEMS
-**TYPE MISMATCH**
-The first pattern in this `match` is incompatible:
-**destructure_closed_match.md:2:18:**
-```roc
-describe = |rec| match rec {
-    { x, y } => x + y
-}
-```
-    ^^^^^^^^
 
-The first pattern is trying to match:
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first pattern in this `match` is incompatible. ────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  describe = |rec| match rec {                                              │
+ │      { x, y } => x + y                                                     │
+ │  }                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────── destructure_closed_match.md:2:5 ┘
 
-    { x: _field, y: _field2 }
+    The first pattern is trying to match:
 
-But the expression between the `match` parenthesis has the type:
+        { x: _field, y: _field2 }
 
-    { x: U64, y: U64, z: U64 }
+    But the expression between the `match` parenthesis has the type:
 
-These can never match! Either the pattern or expression has a problem.
-**Hint:** This pattern doesn't bind the `z` field. Match it explicitly with `z: _`, or add `..` to match all the remaining fields.
+        { x: U64, y: U64, z: U64 }
+
+    These can never match! Either the pattern or expression has a problem.
+    Hint: This pattern doesn't bind the `z` field. Match it explicitly with `z:
+    _`, or add `..` to match all the remaining fields.
 
 # TOKENS
 ~~~zig

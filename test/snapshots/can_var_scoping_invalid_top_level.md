@@ -11,16 +11,16 @@ var topLevelVar_ = 0
 # EXPECTED
 PARSE ERROR - can_var_scoping_invalid_top_level.md:2:1:2:4
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `var_only_allowed_in_a_body`
-This is an unexpected parsing error. Please check your syntax.
 
-**can_var_scoping_invalid_top_level.md:2:1:2:4:**
-```roc
-var topLevelVar_ = 0
-```
-^^^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: var_only_allowed_in_a_body ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  var topLevelVar_ = 0                                                      │
+ │  ‾‾‾                                                                       │
+ └────────────────────────────────── can_var_scoping_invalid_top_level.md:2:1 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

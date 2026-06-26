@@ -730,7 +730,7 @@ test "check - repro - self-recursive local fn recursive use still type-checked a
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "check - repro - issue 9670 - typed local binding of parametric fn result" {

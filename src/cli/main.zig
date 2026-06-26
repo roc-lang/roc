@@ -4841,12 +4841,12 @@ fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []
                 ctx.gpa.free(@constCast(note_entry.value));
             }
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         } else if (rep.severity == .warning) {
             counts.warnings += 1;
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         }
     }
@@ -5981,12 +5981,10 @@ fn resolvePackages(ctx: *CliCtx, roc_file_abs: []const u8, resolution_config: co
         error.OutOfMemory => error.OutOfMemory,
         error.ResolutionFailed => {
             for (resolver.diagnostics.items) |diagnostic| {
-                var report = reporting.Report.init(ctx.gpa, diagnostic.title, .runtime_error);
+                var report = reporting.Report.init(ctx.gpa, diagnostic.title, diagnostic.message, .runtime_error) catch break;
                 defer report.deinit();
-                const owned = report.addOwnedString(diagnostic.message) catch break;
-                report.addErrorMessage(owned) catch break;
                 if (!builtin.is_test) {
-                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
                 }
             }
             ctx.io.flush();
@@ -11089,7 +11087,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "FAIL",
+                        "Fail",
                         .runtime_error,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -11103,7 +11101,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "COMPILER_ERROR",
+                        "Compiler Error",
                         .warning,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -11131,9 +11129,6 @@ fn printTestProblem(
 ) ReportRenderError!void {
     const src = env.getSourceAll();
 
-    var report = reporting.Report.init(allocator, label, severity);
-    defer report.deinit();
-
     const doc_comment: ?[]const u8 = blk: {
         const line_starts = env.getLineStarts();
         const curr_line_start_idx = region_info.start_line_idx;
@@ -11145,10 +11140,24 @@ fn printTestProblem(
         }
         break :blk null;
     };
-    if (doc_comment) |comment| {
-        try report.document.addText(comment);
-        try report.document.addLineBreak();
+
+    // The headline is the test's doc comment, if any. House style requires a
+    // headline to end in a period, so append one when it's missing.
+    var headline: []const u8 = "";
+    var headline_owned = false;
+    if (doc_comment) |dc| {
+        if (std.mem.endsWith(u8, dc, ".")) {
+            headline = dc;
+        } else {
+            headline = try std.fmt.allocPrint(allocator, "{s}.", .{dc});
+            headline_owned = true;
+        }
     }
+    defer if (headline_owned) allocator.free(headline);
+
+    var report = try reporting.Report.init(allocator, label, headline, severity);
+    defer report.deinit();
+
     try report.addSourceContext(region_info, path, src, env.getLineStarts());
 
     const should_print_detail = switch (failure_detail_visibility) {
@@ -11325,10 +11334,16 @@ fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMod
     const color_disabled = repl_args.no_color or no_color_env;
     const should_color = !color_disabled and (force_color or (mode == .interactive and stderr_is_tty));
 
+    // Always render the box layout; when color is disabled, keep the
+    // color_terminal target but force the no-color palette so the REPL shows the
+    // same plain box as non-TTY output (rather than the old markdown layout).
     var config = if (should_color)
-        if (high_contrast) reporting.ReportingConfig.initHighContrast() else reporting.ReportingConfig.initColorTerminal()
-    else
-        reporting.ReportingConfig.initMarkdown();
+        if (high_contrast) reporting.ReportingConfig.initHighContrast() else ctx.terminalReportConfig()
+    else blk: {
+        var plain = ctx.terminalReportConfig();
+        plain.color_preference = .never;
+        break :blk plain;
+    };
 
     config.is_tty = stderr_is_tty;
     return config;
@@ -12068,7 +12083,7 @@ fn finishRocCheck(
 
     for (check_result.reports) |module| {
         for (module.reports) |*report| {
-            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig());
         }
     }
 
@@ -12611,7 +12626,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
         for (module.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig()) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}", .{report.title}) catch {};

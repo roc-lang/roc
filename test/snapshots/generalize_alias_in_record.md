@@ -14,17 +14,18 @@ main = (r.f(1), r.f("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_record.md:5:21:5:24
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**generalize_alias_in_record.md:5:21:5:24:**
-```roc
-main = (r.f(1), r.f("a"))
-```
-                    ^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  main = (r.f(1), r.f("a"))                                                 │
+ │                      ‾‾‾                                                   │
+ └──────────────────────────────────────── generalize_alias_in_record.md:5:21 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

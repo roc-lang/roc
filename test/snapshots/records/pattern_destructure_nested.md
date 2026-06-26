@@ -14,28 +14,28 @@ match person {
 UNDEFINED VARIABLE - pattern_destructure_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**pattern_destructure_nested.md:1:7:1:13:**
-```roc
-match person {
-```
-      ^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `person` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  match person {                                                            │
+ │        ‾‾‾‾‾‾                                                              │
+ └───────────────────────────────────────── pattern_destructure_nested.md:1:7 ┘
+
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNUSED VARIABLE**
-Variable `zipCode` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `zipCode` is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  …, city, zipCode } } => "${name} lives on ${street} in ${city}"           │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────────── pattern_destructure_nested.md:2:38 ┘
 
-If you don't need this variable, prefix it with an underscore like `_zipCode` to suppress this warning.
-The unused variable is declared here:
-**pattern_destructure_nested.md:2:38:2:45:**
-```roc
-    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
-```
-                                     ^^^^^^^
-
+    If you don't need this variable, prefix it with an underscore like
+    `_zipCode` to suppress this warning.
 
 # TOKENS
 ~~~zig

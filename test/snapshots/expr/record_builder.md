@@ -19,82 +19,84 @@ UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
 DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **<-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**record_builder.md:1:15:1:17:**
-```roc
-{ Foo.Bar.baz <-
-```
-              ^^
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token <- is not expected in an ───────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  { Foo.Bar.baz <-                                                          │
+ │                ‾‾                                                          │
+ └──────────────────────────────────────────────────── record_builder.md:1:15 ┘
 
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **5** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**record_builder.md:2:8:2:9:**
-```roc
-    x: 5,
-```
-       ^
+    Expressions can be identifiers, literals, function calls, or operators.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 5 is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:2:8 ┘
 
-**record_builder.md:2:9:2:10:**
-```roc
-    x: 5,
-```
-        ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**record_builder.md:3:8:3:9:**
-```roc
-    y: 0,
-```
-       ^
+    Type annotations should contain types like Str, Num a, or List U64.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │      ‾                                                                     │
+ └───────────────────────────────────────────────────── record_builder.md:2:9 ┘
 
-**record_builder.md:3:9:3:10:**
-```roc
-    y: 0,
-```
-        ^
-
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_builder.md:2:5:2:9:**
-```roc
-    x: 5,
-```
-    ^^^^
+    Expressions can be identifiers, literals, function calls, or operators.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:3:8 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_builder.md:3:5:3:9:**
-```roc
-    y: 0,
-```
-    ^^^^
+    Type annotations should contain types like Str, Num a, or List U64.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │      ‾                                                                     │
+ └───────────────────────────────────────────────────── record_builder.md:3:9 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:2:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:3:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

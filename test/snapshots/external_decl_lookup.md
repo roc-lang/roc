@@ -20,27 +20,27 @@ main! = |_| {
 UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
 UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**external_decl_lookup.md:8:14:8:23:**
-```roc
-    result = Json.utf8("Hello from external module!")
-```
-             ^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `utf8` in this scope. ───────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  result = Json.utf8("Hello from external module!")                         │
+ │           ‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────────────────────── external_decl_lookup.md:8:14 ┘
+
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  Stdout.line!(result)                                                      │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────── external_decl_lookup.md:9:5 ┘
 
-**external_decl_lookup.md:9:5:9:17:**
-```roc
-    Stdout.line!(result)
-```
-    ^^^^^^^^^^^^
-
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
