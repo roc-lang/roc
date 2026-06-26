@@ -7,12 +7,11 @@ platform ""
 	provides { "roc_ui_init": ui_init }
 	hosted {
 		"roc_host_value_clone": HostValue.clone,
-		"roc_host_value_get": HostValue.get,
-		"roc_host_value_get_tagged": HostValue.get_tagged,
-		"roc_host_value_store": HostValue.store,
-		"roc_host_value_store_tagged": HostValue.store_tagged,
-		"roc_host_value_take": HostValue.take,
-		"roc_host_value_take_tagged": HostValue.take_tagged,
+		"roc_host_value_get_with_capability": HostValue.get_with_capability,
+		"roc_host_value_get_with_split": HostValue.get_with_split,
+		"roc_host_value_store_with_capability": HostValue.store_with_capability,
+		"roc_host_value_take_with_capability": HostValue.take_with_capability,
+		"roc_host_value_take_with_split": HostValue.take_with_split,
 	}
 	targets: {
 		inputs_dir: "../targets/",

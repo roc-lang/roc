@@ -10,10 +10,10 @@ const abi = @import("roc_platform_abi.zig");
 
 pub const HostValue = u64;
 pub const HostValueList = abi.RocListWith(HostValue, false);
-pub const StartTaskCmd = abi.__AnonStruct100;
+pub const StartTaskCmd = abi.__AnonStruct186;
 pub const RocBoxPair = extern struct {
-    @"keep": abi.RocBox,
-    @"out": abi.RocBox,
+    keep: abi.RocBox,
+    out: abi.RocBox,
 };
 
 pub const ErasedUnitArgs = extern struct {};

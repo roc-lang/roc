@@ -30,90 +30,54 @@ Ui := [].{
 
 		## Build a unit-triggered reducer message: `f` maps the current value to the
 		## next value, ignoring the unit payload.
-		on_unit : State(a), (a -> a) -> Node.Msg
-	on_unit = |st, f| {
-			current_cap = st.cap
-			payload_unit_tag : HostValue.TypeTag({})
-			payload_unit_tag = HostValue.new_unit_payload_tag({})
-			payload_str_tag : HostValue.TypeTag(Str)
-			payload_str_tag = HostValue.new_str_payload_tag({})
-			payload_bool_tag : HostValue.TypeTag(Bool)
-			payload_bool_tag = HostValue.new_bool_payload_tag({})
-			wrapped : HostValue, HostValue -> HostValue
-			wrapped = |current_hv, _payload_hv| {
-				current : a
+			on_unit : State(a), (a -> a) -> Node.Msg
+		on_unit = |st, f| {
+				current_cap = st.cap
+				payload_cap = Capability.new({})
+				wrapped : HostValue, HostValue -> HostValue
+				wrapped = |current_hv, _payload_hv| {
+					current : a
 				current = Box.unbox(Capability.get(current_hv, current_cap))
 				next : a
-				next = f(current)
-				Capability.store(Box.box(next), current_cap)
+					next = f(current)
+					Capability.store(Box.box(next), current_cap)
+				}
+				{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_accessor: Node.payload_accessor_none, payload_cap: Capability.handle(payload_cap), transform: Box.box(wrapped) }
 			}
-			payload_drop : HostValue -> {}
-			payload_drop = |payload_hv| {
-				boxed : Box({})
-				boxed = HostValue.take_tagged(payload_hv, payload_unit_tag)
-				_ = boxed
-				{}
-			}
-			{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_accessor: Node.payload_accessor_none, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
-		}
 
 		on_str : State(a), (a, Str -> a) -> Node.Msg
-	on_str = |st, f| {
-			current_cap = st.cap
-			payload_unit_tag : HostValue.TypeTag({})
-			payload_unit_tag = HostValue.new_unit_payload_tag({})
-			payload_str_tag : HostValue.TypeTag(Str)
-			payload_str_tag = HostValue.new_str_payload_tag({})
-			payload_bool_tag : HostValue.TypeTag(Bool)
-			payload_bool_tag = HostValue.new_bool_payload_tag({})
-			wrapped : HostValue, HostValue -> HostValue
-			wrapped = |current_hv, payload_hv| {
-				current : a
+		on_str = |st, f| {
+				current_cap = st.cap
+				payload_cap = Capability.new({})
+				wrapped : HostValue, HostValue -> HostValue
+				wrapped = |current_hv, payload_hv| {
+					current : a
 				current = Box.unbox(Capability.get(current_hv, current_cap))
 				payload : Str
-				payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_str_tag))
+				payload = Box.unbox(Capability.get(payload_hv, payload_cap))
 				next : a
-				next = f(current, payload)
-				Capability.store(Box.box(next), current_cap)
+					next = f(current, payload)
+					Capability.store(Box.box(next), current_cap)
+				}
+				{ binder: st.ref, payload_kind: Node.str_payload_kind, payload_accessor: Node.payload_accessor_target_value, payload_cap: Capability.handle(payload_cap), transform: Box.box(wrapped) }
 			}
-			payload_drop : HostValue -> {}
-			payload_drop = |payload_hv| {
-				boxed : Box(Str)
-				boxed = HostValue.take_tagged(payload_hv, payload_str_tag)
-				_ = boxed
-				{}
-			}
-			{ binder: st.ref, payload_kind: Node.str_payload_kind, payload_accessor: Node.payload_accessor_target_value, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
-		}
 
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
-	on_bool = |st, f| {
-			current_cap = st.cap
-			payload_unit_tag : HostValue.TypeTag({})
-			payload_unit_tag = HostValue.new_unit_payload_tag({})
-			payload_str_tag : HostValue.TypeTag(Str)
-			payload_str_tag = HostValue.new_str_payload_tag({})
-			payload_bool_tag : HostValue.TypeTag(Bool)
-			payload_bool_tag = HostValue.new_bool_payload_tag({})
-			wrapped : HostValue, HostValue -> HostValue
-			wrapped = |current_hv, payload_hv| {
-				current : a
+		on_bool = |st, f| {
+				current_cap = st.cap
+				payload_cap = Capability.new({})
+				wrapped : HostValue, HostValue -> HostValue
+				wrapped = |current_hv, payload_hv| {
+					current : a
 				current = Box.unbox(Capability.get(current_hv, current_cap))
 				payload : Bool
-				payload = Box.unbox(HostValue.get_tagged(payload_hv, payload_bool_tag))
+				payload = Box.unbox(Capability.get(payload_hv, payload_cap))
 				next : a
-				next = f(current, payload)
-				Capability.store(Box.box(next), current_cap)
+					next = f(current, payload)
+					Capability.store(Box.box(next), current_cap)
+				}
+				{ binder: st.ref, payload_kind: Node.bool_payload_kind, payload_accessor: Node.payload_accessor_target_checked, payload_cap: Capability.handle(payload_cap), transform: Box.box(wrapped) }
 			}
-			payload_drop : HostValue -> {}
-			payload_drop = |payload_hv| {
-				boxed : Box(Bool)
-				boxed = HostValue.take_tagged(payload_hv, payload_bool_tag)
-				_ = boxed
-				{}
-			}
-			{ binder: st.ref, payload_kind: Node.bool_payload_kind, payload_accessor: Node.payload_accessor_target_checked, payload_unit_tag, payload_str_tag, payload_bool_tag, payload_drop: Box.box(payload_drop), transform: Box.box(wrapped) }
-		}
 	}
 
 	## Introduce a state binder. `init` is the initial value; `body` receives a
@@ -124,20 +88,20 @@ Ui := [].{
 			where [
 				a.is_eq : a, a -> Bool,
 			]
-	state = |init, body| {
-		cap = Capability.new({})
-		initial : {} -> HostValue
-		initial = |_| Capability.store(Box.box(init), cap)
-		token = Box.box(0)
-		handle : State(a)
-		handle = { ref: Node.BinderRef.BinderRef(token), cap }
+		state = |init, body| {
+			cap = Capability.new({})
+				initial : {} -> HostValue
+				initial = |_| Capability.store(Box.box(init), cap)
+				token : Box(U64)
+				token = Node.new_token({})
+			handle : State(a)
+			handle = { ref: Node.BinderRef.BinderRef(token), cap }
 		child = body(handle)
 		Elem.State(
 			{
 				binder: handle.ref,
 				initial: Box.box(initial),
-				eq: Capability.eq(cap),
-				drop: Capability.drop(cap),
+				cap: Capability.handle(cap),
 				child: Box.box(child),
 			},
 		)
@@ -176,6 +140,7 @@ Ui := [].{
 		Elem.When(
 			{
 				condition: Signal.to_expr(condition),
+				read_cap: Capability.handle(condition_cap),
 				read: Box.box(read_condition),
 				when_true: Box.box(when_true({})),
 				when_false: Box.box(when_false({})),
@@ -218,19 +183,19 @@ Ui := [].{
 		}
 		row_hv : HostValue, HostValue -> Elem
 		row_hv = |key_hv, item_hv| {
-			key : k
-			key = Box.unbox(Capability.get(key_hv, key_cap))
-			row_item : {} -> HostValue
-			row_item = |_| HostValue.clone(item_hv)
-			row_signal_token = Box.box(0)
-			row(
+				key : k
+				key = Box.unbox(Capability.get(key_hv, key_cap))
+				row_item : {} -> HostValue
+				row_item = |_| HostValue.clone(item_hv)
+				row_signal_token : Box(U64)
+				row_signal_token = Node.new_token({})
+				row(
 				key,
 				Signal.from_expr(
 					Node.SignalExpr.ConstValue(
 						row_signal_token,
 						Box.box(row_item),
-						Capability.eq(item_cap),
-						Capability.drop(item_cap),
+						Capability.handle(item_cap),
 					),
 					item_cap,
 				),
@@ -240,12 +205,10 @@ Ui := [].{
 			{
 				items: Signal.to_expr(items),
 				items_to_values: Box.box(items_to_values),
+				item_cap: Capability.handle(item_cap),
+				key_cap: Capability.handle(key_cap),
 				key_hash: Box.box(key_hash_hv),
 				key_of: Box.box(key_of_hv),
-				key_eq: Capability.eq(key_cap),
-				key_drop: Capability.drop(key_cap),
-				item_eq: Capability.eq(item_cap),
-				item_drop: Capability.drop(item_cap),
 				row: Box.box(row_hv),
 			},
 		)

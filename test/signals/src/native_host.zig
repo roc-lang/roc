@@ -19,7 +19,7 @@ const engine = @import("engine.zig");
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RocStr = abi.RocStr;
 const HostValue = u64;
-const HostValueTypeTag = hv.HostValueTypeTag;
+const HostValueCapability = hv.HostValueCapabilityHandle;
 const HostValueList = abi.RocListWith(HostValue, false);
 const I64List = abi.RocListWith(i64, false);
 const RenderTextField = render.TextField;
@@ -28,13 +28,9 @@ const RenderEventKind = render.EventKind;
 const CommandCounts = render.Counts;
 const HostScopeBranch = scope_tree.Branch;
 
-const native_host_value_type_tags_enabled = true;
-
 const NativeCtx = struct {
     pub const Handle = *HostEnv;
-    pub const HostValueTypeTag = hv.HostValueTypeTag;
-    pub const host_value_type_tags_enabled = native_host_value_type_tags_enabled;
-    pub const RegistryOps = hv.RegistryOps(@This().HostValueTypeTag);
+    pub const RegistryOps = hv.RegistryOps();
     pub const Metrics = RuntimeMetrics;
     pub const Sink = render_sink.DomSink(HostEnv);
 
@@ -54,12 +50,8 @@ const NativeCtx = struct {
         return ctx.stateValueByNodeId(node_id);
     }
 
-    pub fn stateEqCallable(ctx: Handle, node_id: u64) abi.RocErasedCallable {
-        return ctx.stateEqCallable(node_id);
-    }
-
-    pub fn stateDropCallable(ctx: Handle, node_id: u64) abi.RocErasedCallable {
-        return ctx.stateDropCallable(node_id);
+    pub fn stateCapability(ctx: Handle, node_id: u64) HostValueCapability {
+        return ctx.stateCapability(node_id);
     }
 
     pub fn sink(ctx: Handle) Sink {
@@ -85,7 +77,7 @@ test "NoMetrics is a zero-size no-op metrics sink" {
 const EventPayloadKind = engine.EventPayloadKind;
 const EventPayloadAccessor = engine.EventPayloadAccessor;
 const SignalKind = engine.SignalKind;
-const HostActiveEventDesc = engine.HostActiveEventDesc(HostValueTypeTag);
+const HostActiveEventDesc = engine.HostActiveEventDesc;
 const HostPendingTask = engine.HostPendingTask;
 
 const HostSignalCacheSlot = engine.HostSignalCacheSlot;
@@ -661,9 +653,9 @@ fn failHostValueRegistryError(err: anyerror) noreturn {
         error.InvalidHandle => failHost("HostValue handle referenced an unknown value"),
         error.ReleasedHandle => failHost("HostValue handle referenced a released value"),
         error.UnconsumedHandle => failHost("HostValue consuming callback returned without taking the transferred value"),
-        error.MissingTag => failHost("HostValue read crossed erasure boundary without a type tag"),
-        error.TagMismatch => failHost("HostValue read crossed erasure boundary with the wrong type tag"),
-        error.ConflictingTag => failHost("HostValue was tagged with a conflicting type tag"),
+        error.MissingCapability => failHost("HostValue operation crossed erasure boundary without an owning capability"),
+        error.CapabilityMismatch => failHost("HostValue operation used a capability that does not own the retained value"),
+        error.ConflictingCapability => failHost("HostValue was assigned a conflicting capability"),
         else => failHost("HostValue registry operation failed"),
     }
 }
@@ -792,14 +784,14 @@ const HostEnv = struct {
     }
 
     fn activeRocHost(self: *HostEnv) *abi.RocHost {
-        return self.engine.roc_host orelse failHost("HostValue type tag release requires an active Roc host");
+        return self.engine.roc_host orelse failHost("HostValue capability release requires an active Roc host");
     }
 
-    fn releaseOwnedHostValueTypeTag(self: *HostEnv, tag: HostValueTypeTag) void {
-        hv.releaseHostValueTypeTag(tag, self.activeRocHost());
+    fn releaseOwnedHostValueCapability(self: *HostEnv, cap: HostValueCapability) void {
+        hv.releaseHostValueCapability(cap, self.activeRocHost());
     }
 
-    fn hostValueRegistryOps(self: *HostEnv) hv.RegistryOps(HostValueTypeTag) {
+    fn hostValueRegistryOps(self: *HostEnv) hv.RegistryOps() {
         return .{ .roc_host = self.activeRocHost() };
     }
 
@@ -807,6 +799,10 @@ const HostEnv = struct {
     // (`pub` so the `host_values` module can call them through `anytype`).
     pub fn store(self: *HostEnv, box: abi.RocBox) HostValue {
         return self.storeHostValue(box);
+    }
+
+    pub fn storeWithCapability(self: *HostEnv, box: abi.RocBox, cap: HostValueCapability) HostValue {
+        return self.storeHostValueWithRetainedCapability(box, cap);
     }
 
     pub fn recordKind(self: *HostEnv, value: HostValue, kind: hv.ValueKind) void {
@@ -830,18 +826,19 @@ const HostEnv = struct {
         }
     }
 
-    fn storeHostValueWithOwnedTag(self: *HostEnv, box: abi.RocBox, owned_tag: ?HostValueTypeTag) HostValue {
+    fn storeHostValueWithOwnedCapability(self: *HostEnv, box: abi.RocBox, owned_cap: HostValueCapability) HostValue {
         const allocator = self.gpa.allocator();
-        const value = self.engine.host_values.storeOwnedTag(allocator, box, owned_tag, self.hostValueRegistryOps()) catch |err| {
+        defer self.releaseOwnedHostValueCapability(owned_cap);
+        const value = self.engine.host_values.storeOwnedCapability(allocator, box, owned_cap, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
         self.resetTestHostValueKind(value);
         return value;
     }
 
-    fn storeHostValueWithRetainedTag(self: *HostEnv, box: abi.RocBox, borrowed_tag: ?HostValueTypeTag) HostValue {
+    fn storeHostValueWithRetainedCapability(self: *HostEnv, box: abi.RocBox, borrowed_cap: HostValueCapability) HostValue {
         const allocator = self.gpa.allocator();
-        const value = self.engine.host_values.storeRetainedTag(allocator, box, borrowed_tag, self.hostValueRegistryOps()) catch |err| {
+        const value = self.engine.host_values.storeRetainedCapability(allocator, box, borrowed_cap, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
         self.resetTestHostValueKind(value);
@@ -849,11 +846,12 @@ const HostEnv = struct {
     }
 
     fn storeHostValue(self: *HostEnv, box: abi.RocBox) HostValue {
-        return self.storeHostValueWithOwnedTag(box, null);
-    }
-
-    fn storeTaggedHostValue(self: *HostEnv, box: abi.RocBox, owned_tag: HostValueTypeTag) HostValue {
-        return self.storeHostValueWithOwnedTag(box, owned_tag);
+        const allocator = self.gpa.allocator();
+        const value = self.engine.host_values.storeOwnedCapability(allocator, box, null, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+        self.resetTestHostValueKind(value);
+        return value;
     }
 
     fn setTestHostValueKind(self: *HostEnv, value: HostValue, kind: TestHostValueKind) void {
@@ -870,54 +868,36 @@ const HostEnv = struct {
         return self.test_host_value_kinds.items[@intCast(index)] orelse @panic("test HostValue kind was not recorded");
     }
 
+    fn setHostValueCapability(self: *HostEnv, value: HostValue, borrowed_cap: HostValueCapability) void {
+        self.engine.host_values.setCapability(value, borrowed_cap, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+    }
+
+    fn assertHostValueCapability(self: *HostEnv, value: HostValue, expected_cap: HostValueCapability) void {
+        self.engine.host_values.assertCapability(value, expected_cap, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+    }
+
     fn getHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
         return self.engine.host_values.get(value, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
     }
 
-    fn hostValueTypeTag(self: *HostEnv, value: HostValue) ?HostValueTypeTag {
-        return self.engine.host_values.tag(value) catch |err| {
+    fn getHostValueWithCapability(self: *HostEnv, value: HostValue, owned_cap: HostValueCapability) abi.RocBox {
+        defer self.releaseOwnedHostValueCapability(owned_cap);
+        return self.engine.host_values.getWithCapability(value, owned_cap, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
     }
 
-    fn assertHostValueTypeTag(self: *HostEnv, value: HostValue, expected_tag: HostValueTypeTag) void {
-        if (comptime native_host_value_type_tags_enabled) {
-            const actual_tag = self.hostValueTypeTag(value) orelse failHost("HostValue read crossed erasure boundary without a type tag");
-            if (!self.hostValueRegistryOps().tagsMatch(actual_tag, expected_tag)) {
-                const actual_split = hv.hostValueTypeTagSplit(actual_tag);
-                const expected_split = hv.hostValueTypeTagSplit(expected_tag);
-                const actual_split_fn = hv.hostValueTypeTagSplitFn(actual_tag);
-                const expected_split_fn = hv.hostValueTypeTagSplitFn(expected_tag);
-                var buf: [320]u8 = undefined;
-                const message = std.fmt.bufPrint(
-                    &buf,
-                    "HostValue read crossed erasure boundary with the wrong type tag: value={} actual_id={} expected_id={} actual_split=0x{x} expected_split=0x{x} actual_split_fn=0x{x} expected_split_fn=0x{x}",
-                    .{
-                        value,
-                        hv.hostValueTypeTagId(actual_tag),
-                        hv.hostValueTypeTagId(expected_tag),
-                        if (actual_split) |ptr| @intFromPtr(ptr) else 0,
-                        if (expected_split) |ptr| @intFromPtr(ptr) else 0,
-                        if (actual_split_fn) |ptr| @intFromPtr(ptr) else 0,
-                        if (expected_split_fn) |ptr| @intFromPtr(ptr) else 0,
-                    },
-                ) catch "HostValue read crossed erasure boundary with the wrong type tag";
-                failHost(message);
-            }
-        }
-    }
-
-    fn setHostValueTypeTag(self: *HostEnv, value: HostValue, borrowed_tag: HostValueTypeTag) void {
-        self.engine.host_values.setTag(value, borrowed_tag, self.hostValueRegistryOps()) catch |err| {
+    fn getHostValueWithSplit(self: *HostEnv, value: HostValue, owned_split: abi.RocErasedCallable) abi.RocBox {
+        defer abi.decrefErasedCallable(owned_split, self.activeRocHost());
+        return self.engine.host_values.getWithSplit(value, owned_split, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
-    }
-
-    fn getTaggedHostValue(self: *HostEnv, value: HostValue, tag: HostValueTypeTag) abi.RocBox {
-        self.assertHostValueTypeTag(value, tag);
-        return self.getHostValue(value);
     }
 
     fn takeHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
@@ -928,9 +908,20 @@ const HostEnv = struct {
         return box;
     }
 
-    fn takeTaggedHostValue(self: *HostEnv, value: HostValue, tag: HostValueTypeTag) abi.RocBox {
-        self.assertHostValueTypeTag(value, tag);
-        return self.takeHostValue(value);
+    fn takeHostValueWithCapability(self: *HostEnv, value: HostValue, owned_cap: HostValueCapability) abi.RocBox {
+        defer self.releaseOwnedHostValueCapability(owned_cap);
+        return self.engine.host_values.takeWithCapability(value, owned_cap, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+    }
+
+    fn takeHostValueWithSplit(self: *HostEnv, value: HostValue, owned_split: abi.RocErasedCallable) abi.RocBox {
+        defer abi.decrefErasedCallable(owned_split, self.activeRocHost());
+        const box = self.engine.host_values.takeWithSplit(value, owned_split, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+        if (builtin.is_test) self.test_host_value_kinds.items[@intCast(value - 1)] = null;
+        return box;
     }
 
     fn hostValueTakeEpoch(self: *const HostEnv) u64 {
@@ -1175,15 +1166,9 @@ const HostEnv = struct {
         return true;
     }
 
-    pub fn stateEqCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
-        return self.engine.stateEqCallable(node_id) catch |err| switch (err) {
-            error.MissingActiveState => failHost("active state has no equality callable"),
-        };
-    }
-
-    pub fn stateDropCallable(self: *HostEnv, node_id: u64) abi.RocErasedCallable {
-        return self.engine.stateDropCallable(node_id) catch |err| switch (err) {
-            error.MissingActiveState => failHost("active state has no drop callable"),
+    pub fn stateCapability(self: *HostEnv, node_id: u64) HostValueCapability {
+        return self.engine.stateCapability(node_id) catch |err| switch (err) {
+            error.MissingActiveState => failHost("active state has no capability"),
         };
     }
 
@@ -1214,8 +1199,8 @@ const HostEnv = struct {
         return result.scope_id;
     }
 
-    fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) u64 {
-        return self.engine.createEachRowScope(self, parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
+    fn createEachRowScope(self: *HostEnv, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
+        return self.engine.createEachRowScope(self, parent_scope_id, site_ordinal, key, item, key_cap, item_cap);
     }
 
     fn internNodeIdentity(self: *HostEnv, scope_id: u64, ordinal: u64) u64 {
@@ -1238,8 +1223,8 @@ const HostEnv = struct {
         return self.engine.eachRowScopeValues(scope_id);
     }
 
-    fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_eq: abi.RocErasedCallable, key_drop: abi.RocErasedCallable, item_eq: abi.RocErasedCallable, item_drop: abi.RocErasedCallable) HostKeyedRowDiffResult {
-        return self.engine.syncEachRowScopes(self, roc_host, parent_scope_id, site_ordinal, keys, items, key_hash, key_eq, key_drop, item_eq, item_drop);
+    fn syncEachRowScopes(self: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_cap: HostValueCapability, item_cap: HostValueCapability) HostKeyedRowDiffResult {
+        return self.engine.syncEachRowScopes(self, roc_host, parent_scope_id, site_ordinal, keys, items, key_hash, key_cap, item_cap);
     }
 
     fn bindNodeSignal(self: *HostEnv, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) HostSignalBinding {
@@ -1663,34 +1648,24 @@ fn hostValueClone(value: HostValue) callconv(.c) HostValue {
     return currentHost().cloneHostValue(value);
 }
 
-fn hostValueGet(value: HostValue) callconv(.c) abi.RocBox {
-    return currentHost().getHostValue(value);
+fn hostValueGetWithCapability(value: HostValue, cap: HostValueCapability) callconv(.c) abi.RocBox {
+    return currentHost().getHostValueWithCapability(value, cap);
 }
 
-fn hostValueGetTagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
-    const host = currentHost();
-    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
-    defer host.releaseOwnedHostValueTypeTag(normalized_tag);
-    return host.getTaggedHostValue(value, normalized_tag);
+fn hostValueGetWithSplit(value: HostValue, split: abi.RocErasedCallable) callconv(.c) abi.RocBox {
+    return currentHost().getHostValueWithSplit(value, split);
 }
 
-fn hostValueStore(box: abi.RocBox) callconv(.c) HostValue {
-    return currentHost().storeHostValue(box);
+fn hostValueStoreWithCapability(box: abi.RocBox, cap: HostValueCapability) callconv(.c) HostValue {
+    return currentHost().storeHostValueWithOwnedCapability(box, cap);
 }
 
-fn hostValueStoreTagged(box: abi.RocBox, tag: abi.__AnonStruct7) callconv(.c) HostValue {
-    return currentHost().storeTaggedHostValue(box, hv.normalizeHostValueTypeTag(tag));
+fn hostValueTakeWithCapability(value: HostValue, cap: HostValueCapability) callconv(.c) abi.RocBox {
+    return currentHost().takeHostValueWithCapability(value, cap);
 }
 
-fn hostValueTake(value: HostValue) callconv(.c) abi.RocBox {
-    return currentHost().takeHostValue(value);
-}
-
-fn hostValueTakeTagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
-    const host = currentHost();
-    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
-    defer host.releaseOwnedHostValueTypeTag(normalized_tag);
-    return host.takeTaggedHostValue(value, normalized_tag);
+fn hostValueTakeWithSplit(value: HostValue, split: abi.RocErasedCallable) callconv(.c) abi.RocBox {
+    return currentHost().takeHostValueWithSplit(value, split);
 }
 
 fn failHost(message: []const u8) noreturn {
@@ -1959,20 +1934,18 @@ fn propagateDirtyActiveSignals(host: *HostEnv, roc_host: *abi.RocHost, allocator
     return host.engine.propagateDirtyActiveSignals(host, roc_host, allocator, dirty_source_node_ids, dirty_generation);
 }
 
-fn hostSignalRecordEqCallable(host: *HostEnv, record: *const HostSignalRecord) abi.RocErasedCallable {
-    return host.engine.hostSignalRecordEqCallable(host, record);
+fn hostSignalRecordCapability(host: *HostEnv, record: *const HostSignalRecord) HostValueCapability {
+    return host.engine.hostSignalRecordCapability(host, record);
 }
 
-fn hostSignalBindingEqCallable(host: *HostEnv, signal: *const HostSignalBinding) abi.RocErasedCallable {
-    return hostSignalRecordEqCallable(host, signal.record);
-}
-
-fn hostSignalBindingDropCallable(host: *HostEnv, signal: *const HostSignalBinding) abi.RocErasedCallable {
-    return host.engine.hostSignalBindingDropCallable(host, signal);
+fn hostSignalBindingCapability(host: *HostEnv, signal: *const HostSignalBinding) HostValueCapability {
+    return hostSignalRecordCapability(host, signal.record);
 }
 
 fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) bool {
-    return host.engine.updateDirtySignalCache(roc_host, cache_slot, value, testHostValueEqCallable(roc_host), testHostValueDropCallable(roc_host));
+    const cap = testHostValueCapability(roc_host);
+    defer abi.decrefHostValueCapabilityHandle(cap, roc_host);
+    return host.engine.updateDirtySignalCache(roc_host, cache_slot, value, cap);
 }
 
 fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
@@ -1989,7 +1962,7 @@ fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, 
         failHost("fake task result matched a pending request for a different task source");
     }
 
-    const payload_value = hostValueStrTagged(host, roc_host, payload_text, task_payload.payload_tag);
+    const payload_value = hostValueStrWithCapability(host, roc_host, payload_text, task_payload.payload_cap);
     const payload_take_epoch = host.hostValueTakeEpoch();
     const next = if (failed)
         callErasedHostValueToHostValue(roc_host, task_payload.failed, payload_value)
@@ -2106,12 +2079,8 @@ fn hostValueStr(host: *HostEnv, roc_host: *abi.RocHost, value: []const u8) HostV
     return hv.makeStr(host, roc_host, value);
 }
 
-fn hostValueStrTagged(host: *HostEnv, roc_host: *abi.RocHost, value: []const u8, tag: HostValueTypeTag) HostValue {
-    const payload: *RocStr = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(RocStr), @alignOf(RocStr), true, roc_host)));
-    payload.* = RocStr.fromSlice(value, roc_host);
-    const host_value = host.storeHostValueWithRetainedTag(@ptrCast(payload), tag);
-    if (builtin.is_test) host.setTestHostValueKind(host_value, .str);
-    return host_value;
+fn hostValueStrWithCapability(host: *HostEnv, roc_host: *abi.RocHost, value: []const u8, cap: HostValueCapability) HostValue {
+    return hv.makeStrWithCapability(host, roc_host, value, cap);
 }
 
 fn hostValueBool(host: *HostEnv, roc_host: *abi.RocHost, value: bool) HostValue {
@@ -2218,8 +2187,8 @@ fn acceptInitElem(host: *HostEnv, roc_host: *abi.RocHost, root_box: ElemBox) voi
 fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, payload_kind: EventPayloadKind, payload: HostValue, stats: ?*BenchmarkStats) void {
     const desc = hostEventById(host, event_id);
     validateEventPayloadKind(desc, payload_kind);
-    host.setHostValueTypeTag(payload, desc.payload_tag);
-    defer callErasedHostValueToUnit(roc_host, desc.payload_drop, payload);
+    host.setHostValueCapability(payload, desc.payload_cap);
+    defer callErasedHostValueToUnit(roc_host, hv.hostValueCapabilityDrop(desc.payload_cap), payload);
 
     host.recordDispatch();
 
@@ -2230,7 +2199,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
 
     const start_ns = benchmarkNowNs();
     const current = host.stateValueByNodeId(desc.target_node_id);
-    defer callErasedHostValueToUnit(roc_host, host.stateDropCallable(desc.target_node_id), current);
+    defer callErasedHostValueToUnit(roc_host, hv.hostValueCapabilityDrop(host.stateCapability(desc.target_node_id)), current);
     const next = callErasedHostValueHostValueToHostValue(roc_host, desc.transform, current, payload);
     if (stats) |s| s.dispatch_roc_ns += benchmarkNowNs() - start_ns;
 
@@ -2499,12 +2468,11 @@ comptime {
         @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
         @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
         @export(&hostValueClone, .{ .name = "roc_host_value_clone", .visibility = .hidden });
-        @export(&hostValueGet, .{ .name = "roc_host_value_get", .visibility = .hidden });
-        @export(&hostValueGetTagged, .{ .name = "roc_host_value_get_tagged", .visibility = .hidden });
-        @export(&hostValueStore, .{ .name = "roc_host_value_store", .visibility = .hidden });
-        @export(&hostValueStoreTagged, .{ .name = "roc_host_value_store_tagged", .visibility = .hidden });
-        @export(&hostValueTake, .{ .name = "roc_host_value_take", .visibility = .hidden });
-        @export(&hostValueTakeTagged, .{ .name = "roc_host_value_take_tagged", .visibility = .hidden });
+        @export(&hostValueGetWithCapability, .{ .name = "roc_host_value_get_with_capability", .visibility = .hidden });
+        @export(&hostValueGetWithSplit, .{ .name = "roc_host_value_get_with_split", .visibility = .hidden });
+        @export(&hostValueStoreWithCapability, .{ .name = "roc_host_value_store_with_capability", .visibility = .hidden });
+        @export(&hostValueTakeWithCapability, .{ .name = "roc_host_value_take_with_capability", .visibility = .hidden });
+        @export(&hostValueTakeWithSplit, .{ .name = "roc_host_value_take_with_split", .visibility = .hidden });
 
         @export(&main, .{ .name = "main" });
         if (@import("builtin").os.tag == .windows) {
@@ -3163,7 +3131,7 @@ const TestErasedHostValueCapture = extern struct {
 };
 
 const TestTaskPayloadCapture = extern struct {
-    payload_tag: HostValueTypeTag,
+    payload_cap: HostValueCapability,
 };
 
 var test_erased_callable_drop_count: u64 = 0;
@@ -3202,10 +3170,10 @@ fn testCurrentRocHost() *abi.RocHost {
     return currentHost().engine.roc_host orelse failHost("test HostValue helper requires an active Roc host");
 }
 
-fn tagTestHostValue(host: *HostEnv, roc_host: *abi.RocHost, value: HostValue) HostValue {
-    const tag = newTestHostValueTypeTag(roc_host);
-    host.setHostValueTypeTag(value, tag);
-    host.releaseOwnedHostValueTypeTag(tag);
+fn capabilityTestHostValue(host: *HostEnv, roc_host: *abi.RocHost, value: HostValue) HostValue {
+    const cap = testHostValueCapability(roc_host);
+    host.setHostValueCapability(value, cap);
+    host.releaseOwnedHostValueCapability(cap);
     return value;
 }
 
@@ -3217,19 +3185,19 @@ fn testHostValueUnit() HostValue {
 
 fn testHostValueStr(roc_host: *abi.RocHost, value: []const u8) HostValue {
     const host = hostFromRocHost(roc_host);
-    return tagTestHostValue(host, roc_host, hostValueStr(host, roc_host, value));
+    return capabilityTestHostValue(host, roc_host, hostValueStr(host, roc_host, value));
 }
 
 fn testHostValueBool(value: bool) HostValue {
     const host = currentHost();
     const roc_host = testCurrentRocHost();
-    return tagTestHostValue(host, roc_host, hostValueBool(host, roc_host, value));
+    return capabilityTestHostValue(host, roc_host, hostValueBool(host, roc_host, value));
 }
 
 fn testHostValueI64(value: i64) HostValue {
     const host = currentHost();
     const roc_host = testCurrentRocHost();
-    return tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, value));
+    return capabilityTestHostValue(host, roc_host, hostValueI64(host, roc_host, value));
 }
 
 fn testReadHostValueI64(roc_host: *abi.RocHost, value: HostValue) i64 {
@@ -3309,6 +3277,30 @@ fn testHostValueEqCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
     );
 }
 
+fn testHostValueCapabilityWithEq(roc_host: *abi.RocHost, eq_fn: abi.RocErasedCallableFn) HostValueCapability {
+    return .{
+        .split = writeTestErasedCallable(
+            TestErasedI64Capture,
+            roc_host,
+            &testSplitHostValueBoxCallable,
+            &testErasedCallableOnDrop,
+            .{ .amount = 0 },
+        ),
+        .eq = writeTestErasedCallable(
+            TestErasedI64Capture,
+            roc_host,
+            eq_fn,
+            &testErasedCallableOnDrop,
+            .{ .amount = 0 },
+        ),
+        .drop = testHostValueDropCallable(roc_host),
+    };
+}
+
+fn testHostValueCapability(roc_host: *abi.RocHost) HostValueCapability {
+    return testHostValueCapabilityWithEq(roc_host, &testHostValueEqErasedCallable);
+}
+
 fn testHostValueHashCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
     return writeTestErasedCallable(
         TestErasedI64Capture,
@@ -3354,7 +3346,7 @@ fn testUnaryHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]con
     const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
     const input = testReadHostValueI64(roc_host, call_args.arg0);
     const host = hostFromRocHost(roc_host);
-    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, input + capture.amount)));
+    writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueI64(host, roc_host, input + capture.amount)));
 }
 
 fn testHostValueHashErasedCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3376,7 +3368,7 @@ fn testBinaryHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]co
     const left = testReadHostValueI64(roc_host, call_args.arg0);
     const right = testReadHostValueI64(roc_host, call_args.arg1);
     const host = hostFromRocHost(roc_host);
-    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, left + right + capture.amount)));
+    writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueI64(host, roc_host, left + right + capture.amount)));
 }
 
 fn testUnitIncrementHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3385,7 +3377,7 @@ fn testUnitIncrementHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args:
     const current = testReadHostValueI64(roc_host, call_args.arg0);
     if (hostFromRocHost(roc_host).testHostValueKind(call_args.arg1) != .unit) @panic("test unit event callable expected unit payload");
     const host = hostFromRocHost(roc_host);
-    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, current + 1)));
+    writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueI64(host, roc_host, current + 1)));
 }
 
 fn testInitialHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3447,6 +3439,7 @@ fn testNestedWhenRowElemCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(roc_host, testNodeRefExpr(capture.condition_binder)),
+                .read_cap = testHostValueCapability(roc_host),
                 .read = testReadBoolCallable(roc_host),
                 .when_false = boxTestElem(roc_host, testNodeText(roc_host, false_text)),
                 .when_true = boxTestElem(roc_host, testNodeText(roc_host, true_text)),
@@ -3485,21 +3478,21 @@ fn testStableStrHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*
     _ = args;
     _ = capture_ptr;
     const host = hostFromRocHost(roc_host);
-    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueStr(host, roc_host, "stable")));
+    writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueStr(host, roc_host, "stable")));
 }
 
 fn testStableI64HostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     const capture = testCapturePtrAs(TestErasedI64Capture, capture_ptr);
     const host = hostFromRocHost(roc_host);
-    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, capture.amount)));
+    writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueI64(host, roc_host, capture.amount)));
 }
 
 fn testStableBoolHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     _ = args;
     _ = capture_ptr;
     const host = hostFromRocHost(roc_host);
-    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueBool(host, roc_host, true)));
+    writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueBool(host, roc_host, true)));
 }
 
 fn testBoolIdentityHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3507,7 +3500,7 @@ fn testBoolIdentityHostValueCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: 
     const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
     const input = testReadHostValueBool(roc_host, call_args.arg0);
     const host = hostFromRocHost(roc_host);
-    writeTestErasedResult(HostValue, ret, tagTestHostValue(host, roc_host, hostValueBool(host, roc_host, input)));
+    writeTestErasedResult(HostValue, ret, capabilityTestHostValue(host, roc_host, hostValueBool(host, roc_host, input)));
 }
 
 fn testAlwaysEqualHostValueCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -3553,8 +3546,8 @@ fn testConsumeTaskPayloadStrCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: 
     const host = hostFromRocHost(roc_host);
     const capture = testCapturePtrAs(TestTaskPayloadCapture, capture_ptr);
     const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
-    const box = host.takeTaggedHostValue(call_args.arg0, capture.payload_tag);
-    const value = host.storeHostValueWithRetainedTag(box, capture.payload_tag);
+    const box = host.takeHostValueWithCapability(call_args.arg0, hv.retainHostValueCapability(capture.payload_cap));
+    const value = host.storeHostValueWithRetainedCapability(box, capture.payload_cap);
     if (builtin.is_test) host.setTestHostValueKind(value, .str);
     writeTestErasedResult(HostValue, ret, value);
 }
@@ -3583,7 +3576,7 @@ fn testI64ListToHostValuesCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[
     if (source_items.len > 0) {
         const dest = result.elements_ptr orelse unreachable;
         for (source_items, 0..) |item, index| {
-            dest[index] = tagTestHostValue(host, roc_host, hostValueI64(host, roc_host, item));
+            dest[index] = capabilityTestHostValue(host, roc_host, hostValueI64(host, roc_host, item));
         }
     }
     writeTestErasedResult(HostValueList, ret, result);
@@ -3616,13 +3609,12 @@ fn expectCachedTaskSourceText(roc_host: *abi.RocHost, record: *HostSignalRecord,
 
 fn makeTestConsumingTaskSourceRecord(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8) *HostSignalRecord {
     const allocator = host.gpa.allocator();
-    const payload_tag: HostValueTypeTag = newTestHostValueTypeTag(roc_host);
-    const capture = TestTaskPayloadCapture{ .payload_tag = payload_tag };
+    const payload_cap = testHostValueCapability(roc_host);
+    const capture = TestTaskPayloadCapture{ .payload_cap = payload_cap };
     return HostSignalRecord.init(allocator, .{ .task_source = .{
         .token = newTestSignalToken(roc_host),
         .name = allocator.dupe(u8, name) catch @panic("out of memory"),
-        .payload_tag = payload_tag,
-        .payload_drop = testHostValueDropCallable(roc_host),
+        .payload_cap = payload_cap,
         .initial = writeTestErasedCallable(
             TestErasedI64Capture,
             roc_host,
@@ -3644,8 +3636,7 @@ fn makeTestConsumingTaskSourceRecord(host: *HostEnv, roc_host: *abi.RocHost, nam
             &testErasedCallableOnDrop,
             capture,
         ),
-        .eq = testHostValueEqCallable(roc_host),
-        .drop = testHostValueDropCallable(roc_host),
+        .cap = testHostValueCapability(roc_host),
         .reset_on_start = false,
     } });
 }
@@ -3801,29 +3792,23 @@ test "signals host interns scopes and node identities from explicit paths" {
     const nested_true_branch = host.internWhenBranchScope(true_branch, 2, .true_branch);
     try std.testing.expect(nested_true_branch != true_branch);
 
-    const key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    defer abi.decrefErasedCallable(key_eq, &roc_host);
+    const key_cap = testHostValueCapability(&roc_host);
+    defer abi.decrefHostValueCapabilityHandle(key_cap, &roc_host);
 
     const initial_keys = [_]HostValue{ testHostValueI64(10), testHostValueI64(11) };
-    const initial_rows = syncTestEachRowScopes(&host, &roc_host, root, 7, &initial_keys, &initial_keys, key_eq, key_eq);
+    const initial_rows = syncTestEachRowScopes(&host, &roc_host, root, 7, &initial_keys, &initial_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, initial_rows);
     const row_a = initial_rows.scope_ids[0];
     const row_b = initial_rows.scope_ids[1];
     try std.testing.expect(row_b != row_a);
 
     const same_keys = [_]HostValue{testHostValueI64(10)};
-    const same_rows = syncTestEachRowScopes(&host, &roc_host, root, 7, &same_keys, &same_keys, key_eq, key_eq);
+    const same_rows = syncTestEachRowScopes(&host, &roc_host, root, 7, &same_keys, &same_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, same_rows);
     try std.testing.expectEqual(row_a, same_rows.scope_ids[0]);
 
     const other_site_keys = [_]HostValue{testHostValueI64(10)};
-    const other_site_rows = syncTestEachRowScopes(&host, &roc_host, root, 8, &other_site_keys, &other_site_keys, key_eq, key_eq);
+    const other_site_rows = syncTestEachRowScopes(&host, &roc_host, root, 8, &other_site_keys, &other_site_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, other_site_rows);
     const same_key_other_site = other_site_rows.scope_ids[0];
     try std.testing.expect(same_key_other_site != row_a);
@@ -3849,17 +3834,11 @@ test "signals host disposal retires scope subtree identities" {
         _ = host.gpa.deinit();
     }
 
-    const key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    defer abi.decrefErasedCallable(key_eq, &roc_host);
+    const key_cap = testHostValueCapability(&roc_host);
+    defer abi.decrefHostValueCapabilityHandle(key_cap, &roc_host);
 
     const root = host.internRootScope();
-    const row = createTestEachRowScope(&host, &roc_host, root, 3, testHostValueI64(10), testHostValueI64(10), key_eq, key_eq);
+    const row = createTestEachRowScope(&host, &roc_host, root, 3, testHostValueI64(10), testHostValueI64(10), key_cap, key_cap);
     const branch = host.internWhenBranchScope(row, 4, .true_branch);
     const row_state = host.internNodeIdentity(row, 0);
     const branch_state = host.internNodeIdentity(branch, 0);
@@ -3871,7 +3850,7 @@ test "signals host disposal retires scope subtree identities" {
     try std.testing.expect(!host.engine.node_identities.items[@intCast(row_state)].active);
     try std.testing.expect(!host.engine.node_identities.items[@intCast(branch_state)].active);
 
-    const recreated_row = createTestEachRowScope(&host, &roc_host, root, 3, testHostValueI64(10), testHostValueI64(10), key_eq, key_eq);
+    const recreated_row = createTestEachRowScope(&host, &roc_host, root, 3, testHostValueI64(10), testHostValueI64(10), key_cap, key_cap);
     try std.testing.expect(recreated_row != row);
 
     const recreated_state = host.internNodeIdentity(recreated_row, 0);
@@ -4128,7 +4107,7 @@ test "signals host prunes dirty combine output through cache-owned equality" {
     var binding = host.bindNodeSignal(host.gpa.allocator(), &stream, combine, &.{});
     defer binding.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
     var cache: HostSignalCacheSlot = .absent;
-    cache.replace(&roc_host, &host.engine.pending_roc_metrics, testHostValueI64List(&roc_host, &initial_items), hostSignalBindingEqCallable(&host, &binding), hostSignalBindingDropCallable(&host, &binding));
+    cache.replace(&roc_host, &host.engine.pending_roc_metrics, testHostValueI64List(&roc_host, &initial_items), hostSignalBindingCapability(&host, &binding));
     defer cache.deinit(&roc_host, &host.engine.pending_roc_metrics);
     abi.decrefNodeSignalExpr(combine, &roc_host);
 
@@ -4154,6 +4133,7 @@ test "signals host marks dirty structural sources for structural patching" {
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(&roc_host, testNodeRefExpr(state_token)),
+                .read_cap = testHostValueCapability(&roc_host),
                 .read = testReadBoolCallable(&roc_host),
                 .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "false branch")),
                 .when_true = boxTestElem(&roc_host, testNodeText(&roc_host, "true branch")),
@@ -4213,6 +4193,7 @@ test "signals host reuses active signal records while collecting dirty when bran
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(&roc_host, ready),
+                .read_cap = testHostValueCapability(&roc_host),
                 .read = testReadBoolCallable(&roc_host),
                 .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "loading")),
                 .when_true = boxTestElem(&roc_host, testNodeTextSignal(&roc_host, label)),
@@ -4269,6 +4250,7 @@ test "signals host prunes structural render when retained condition equality is 
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(&roc_host, condition),
+                .read_cap = testHostValueCapability(&roc_host),
                 .read = testReadBoolCallable(&roc_host),
                 .when_false = boxTestElem(&roc_host, testNodeText(&roc_host, "false branch")),
                 .when_true = boxTestElem(&roc_host, testNodeText(&roc_host, "true branch")),
@@ -4861,7 +4843,7 @@ fn freeKeyedRowDiff(host: *HostEnv, diff: HostKeyedRowDiffResult) void {
     diff.deinit(host.gpa.allocator());
 }
 
-fn syncTestEachRowScopes(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) HostKeyedRowDiffResult {
+fn syncTestEachRowScopes(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) HostKeyedRowDiffResult {
     const allocator = host.gpa.allocator();
     const key_values = allocator.alloc(HostValue, keys.len) catch std.process.exit(1);
     defer allocator.free(key_values);
@@ -4883,21 +4865,13 @@ fn syncTestEachRowScopes(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id
         }
     }
 
-    const key_drop = testHostValueDropCallable(roc_host);
-    defer abi.decrefErasedCallable(key_drop, roc_host);
     const key_hash = testHostValueHashCallable(roc_host);
     defer abi.decrefErasedCallable(key_hash, roc_host);
-    const item_drop = testHostValueDropCallable(roc_host);
-    defer abi.decrefErasedCallable(item_drop, roc_host);
-    return host.syncEachRowScopes(roc_host, parent_scope_id, site_ordinal, key_values, item_values, key_hash, key_eq, key_drop, item_eq, item_drop);
+    return host.syncEachRowScopes(roc_host, parent_scope_id, site_ordinal, key_values, item_values, key_hash, key_cap, item_cap);
 }
 
-fn createTestEachRowScope(host: *HostEnv, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_eq: abi.RocErasedCallable, item_eq: abi.RocErasedCallable) u64 {
-    const key_drop = testHostValueDropCallable(roc_host);
-    defer abi.decrefErasedCallable(key_drop, roc_host);
-    const item_drop = testHostValueDropCallable(roc_host);
-    defer abi.decrefErasedCallable(item_drop, roc_host);
-    return host.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_eq, key_drop, item_eq, item_drop);
+fn createTestEachRowScope(host: *HostEnv, _: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, key: HostValue, item: HostValue, key_cap: HostValueCapability, item_cap: HostValueCapability) u64 {
+    return host.createEachRowScope(parent_scope_id, site_ordinal, key, item, key_cap, item_cap);
 }
 
 fn boxTestElem(roc_host: *abi.RocHost, elem: abi.Elem) *abi.Elem {
@@ -4931,43 +4905,13 @@ fn newTestSignalToken(roc_host: *abi.RocHost) HostSignalToken {
     return token;
 }
 
-fn newTestHostValueTypeTag(roc_host: *abi.RocHost) HostValueTypeTag {
-    return .{
-        .id = 0,
-        .split = writeTestErasedCallable(
-            TestErasedI64Capture,
-            roc_host,
-            &testSplitHostValueBoxCallable,
-            null,
-            .{ .amount = 0 },
-        ),
-    };
-}
-
-fn newTestBoolHostValueTypeTag(roc_host: *abi.RocHost) abi.__AnonStruct76 {
-    const tag = newTestHostValueTypeTag(roc_host);
-    return .{ .id = tag.id, .split = tag.split };
-}
-
-fn newTestStrHostValueTypeTag(roc_host: *abi.RocHost) abi.__AnonStruct59 {
-    const tag = newTestHostValueTypeTag(roc_host);
-    return .{ .id = tag.id, .split = tag.split };
-}
-
-fn newTestUnitHostValueTypeTag(roc_host: *abi.RocHost) abi.__AnonStruct82 {
-    const tag = newTestHostValueTypeTag(roc_host);
-    return .{ .id = tag.id, .split = tag.split };
-}
-
 fn testNodeConstExpr(roc_host: *abi.RocHost, value: HostValue) abi.NodeSignalExpr {
-    const eq = testHostValueEqCallable(roc_host);
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{ .const_value = .{
             ._0 = newTestSignalToken(roc_host),
             ._1 = testHostValueInitialThunk(roc_host, value),
-            ._2 = eq,
-            ._3 = drop,
+            ._2 = cap,
         } },
         .tag = .ConstValue,
     };
@@ -4988,16 +4932,14 @@ fn testNodeMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSi
         &testErasedCallableOnDrop,
         .{ .amount = 1 },
     );
-    const eq = testHostValueEqCallable(roc_host);
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .map = .{
                 ._0 = newTestSignalToken(roc_host),
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
-                ._3 = eq,
-                ._4 = drop,
+                ._3 = cap,
             },
         },
         .tag = .Map,
@@ -5012,16 +4954,14 @@ fn testNodeStableStrMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) a
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const eq = testHostValueEqCallable(roc_host);
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .map = .{
                 ._0 = newTestSignalToken(roc_host),
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
-                ._3 = eq,
-                ._4 = drop,
+                ._3 = cap,
             },
         },
         .tag = .Map,
@@ -5036,16 +4976,14 @@ fn testNodeStableI64MapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr, v
         &testErasedCallableOnDrop,
         .{ .amount = value },
     );
-    const eq = testHostValueEqCallable(roc_host);
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .map = .{
                 ._0 = newTestSignalToken(roc_host),
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
-                ._3 = eq,
-                ._4 = drop,
+                ._3 = cap,
             },
         },
         .tag = .Map,
@@ -5060,16 +4998,14 @@ fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) 
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const eq = testHostValueEqCallable(roc_host);
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .map = .{
                 ._0 = newTestSignalToken(roc_host),
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
-                ._3 = eq,
-                ._4 = drop,
+                ._3 = cap,
             },
         },
         .tag = .Map,
@@ -5084,16 +5020,14 @@ fn testNodeBoolIdentityMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const eq = testHostValueEqCallable(roc_host);
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .map = .{
                 ._0 = newTestSignalToken(roc_host),
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
-                ._3 = eq,
-                ._4 = drop,
+                ._3 = cap,
             },
         },
         .tag = .Map,
@@ -5108,22 +5042,14 @@ fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalE
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testAlwaysEqualHostValueCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapabilityWithEq(roc_host, &testAlwaysEqualHostValueCallable);
     return .{
         .payload = .{
             .combine = .{
                 ._0 = newTestSignalToken(roc_host),
                 ._1 = abi.RocList(abi.NodeSignalExpr).fromSlice(children, roc_host),
                 ._2 = transform,
-                ._3 = eq,
-                ._4 = drop,
+                ._3 = cap,
             },
         },
         .tag = .Combine,
@@ -5140,6 +5066,7 @@ fn testNodeText(roc_host: *abi.RocHost, text: []const u8) abi.Elem {
 fn testNodeTextSignal(roc_host: *abi.RocHost, signal: abi.NodeSignalExpr) abi.Elem {
     return .{
         .payload = .{ .text_signal = .{
+            .read_cap = testHostValueCapability(roc_host),
             .read = testReadStrCallable(roc_host),
             .signal = boxTestNodeSignalExpr(roc_host, signal),
         } },
@@ -5164,6 +5091,7 @@ fn testNodeSignalTextAttr(roc_host: *abi.RocHost, field: RenderTextField, signal
         .payload = .{
             .signal_text = .{
                 .field = @intFromEnum(field),
+                .read_cap = testHostValueCapability(roc_host),
                 .read = testReadStrCallable(roc_host),
                 .signal = boxTestNodeSignalExpr(roc_host, signal),
             },
@@ -5189,6 +5117,7 @@ fn testNodeSignalBoolAttr(roc_host: *abi.RocHost, field: RenderBoolField, signal
         .payload = .{
             .signal_bool = .{
                 .field = @intFromEnum(field),
+                .read_cap = testHostValueCapability(roc_host),
                 .read = testReadBoolCallable(roc_host),
                 .signal = boxTestNodeSignalExpr(roc_host, signal),
             },
@@ -5213,19 +5142,16 @@ fn testNodeEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind, binder_token
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const payload_drop = testHostValueDropCallable(roc_host);
+    const payload_cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .on_event = .{
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
-                    .payload_bool_tag = newTestBoolHostValueTypeTag(roc_host),
                     .payload_accessor = @intFromEnum(testPayloadAccessorForKind(payload_kind)),
-                    .payload_drop = payload_drop,
+                    .payload_cap = payload_cap,
                     .payload_kind = @intFromEnum(payload_kind),
-                    .payload_str_tag = newTestStrHostValueTypeTag(roc_host),
-                    .payload_unit_tag = newTestUnitHostValueTypeTag(roc_host),
                     .transform = transform,
                 },
             },
@@ -5242,19 +5168,16 @@ fn testNodeUnitIncrementEventAttr(roc_host: *abi.RocHost, kind: RenderEventKind,
         &testErasedCallableOnDrop,
         .{ .amount = 0 },
     );
-    const payload_drop = testHostValueDropCallable(roc_host);
+    const payload_cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .on_event = .{
                 .kind = @intFromEnum(kind),
                 .msg = .{
                     .binder = cloneTestBinderToken(binder_token),
-                    .payload_bool_tag = newTestBoolHostValueTypeTag(roc_host),
                     .payload_accessor = @intFromEnum(EventPayloadAccessor.none),
-                    .payload_drop = payload_drop,
+                    .payload_cap = payload_cap,
                     .payload_kind = @intFromEnum(EventPayloadKind.unit),
-                    .payload_str_tag = newTestStrHostValueTypeTag(roc_host),
-                    .payload_unit_tag = newTestUnitHostValueTypeTag(roc_host),
                     .transform = transform,
                 },
             },
@@ -5292,15 +5215,13 @@ fn testHostValueInitialThunk(roc_host: *abi.RocHost, initial: HostValue) abi.Roc
 
 fn testNodeStateWithTokenAndInitial(roc_host: *abi.RocHost, binder_token: HostBinderToken, initial: HostValue, child: abi.Elem) abi.Elem {
     const initial_thunk = testHostValueInitialThunk(roc_host, initial);
-    const eq = testHostValueEqCallable(roc_host);
-    const drop = testHostValueDropCallable(roc_host);
+    const cap = testHostValueCapability(roc_host);
     return .{
         .payload = .{
             .state = .{
                 .binder = binder_token,
                 .child = boxTestElem(roc_host, child),
-                .drop = drop,
-                .eq = eq,
+                .cap = cap,
                 .initial = initial_thunk,
             },
         },
@@ -5321,6 +5242,7 @@ fn testNodeWhen(roc_host: *abi.RocHost, when_true: abi.Elem, when_false: abi.Ele
         .payload = .{
             .when = .{
                 .condition = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, testHostValueBool(true))),
+                .read_cap = testHostValueCapability(roc_host),
                 .read = testReadBoolCallable(roc_host),
                 .when_false = boxTestElem(roc_host, when_false),
                 .when_true = boxTestElem(roc_host, when_true),
@@ -5344,17 +5266,11 @@ fn testHostValueI64List(roc_host: *abi.RocHost, items: []const HostValue) HostVa
     payload.* = values;
     const host_value = host.storeHostValue(@ptrCast(payload));
     host.setTestHostValueKind(host_value, .i64_list);
-    return tagTestHostValue(host, roc_host, host_value);
+    return capabilityTestHostValue(host, roc_host, host_value);
 }
 
 fn testNodeEachWithSignalAndRow(roc_host: *abi.RocHost, signal: abi.NodeSignalExpr, row_fn: abi.RocErasedCallableFn) abi.Elem {
-    const key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+    const key_cap = testHostValueCapability(roc_host);
     const key_of = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -5363,15 +5279,7 @@ fn testNodeEachWithSignalAndRow(roc_host: *abi.RocHost, signal: abi.NodeSignalEx
         .{ .amount = 0 },
     );
     const key_hash = testHostValueHashCallable(roc_host);
-    const item_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    const key_drop = testHostValueDropCallable(roc_host);
-    const item_drop = testHostValueDropCallable(roc_host);
+    const item_cap = testHostValueCapability(roc_host);
     const items_to_values = testItemsToValuesCallable(roc_host);
     const row = writeTestErasedCallable(
         TestErasedI64Capture,
@@ -5385,12 +5293,10 @@ fn testNodeEachWithSignalAndRow(roc_host: *abi.RocHost, signal: abi.NodeSignalEx
             .each = .{
                 .items = boxTestNodeSignalExpr(roc_host, signal),
                 .items_to_values = items_to_values,
+                .item_cap = item_cap,
                 .key_hash = key_hash,
-                .key_drop = key_drop,
-                .key_eq = key_eq,
+                .key_cap = key_cap,
                 .key_of = key_of,
-                .item_drop = item_drop,
-                .item_eq = item_eq,
                 .row = row,
             },
         },
@@ -5403,13 +5309,7 @@ fn testNodeEachWithItemsAndRow(roc_host: *abi.RocHost, items: []const HostValue,
 }
 
 fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const HostValue, condition_binder: HostBinderToken) abi.Elem {
-    const key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+    const key_cap = testHostValueCapability(roc_host);
     const key_of = writeTestErasedCallable(
         TestErasedI64Capture,
         roc_host,
@@ -5418,15 +5318,7 @@ fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const HostVal
         .{ .amount = 0 },
     );
     const key_hash = testHostValueHashCallable(roc_host);
-    const item_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    const key_drop = testHostValueDropCallable(roc_host);
-    const item_drop = testHostValueDropCallable(roc_host);
+    const item_cap = testHostValueCapability(roc_host);
     const items_to_values = testItemsToValuesCallable(roc_host);
     const row = writeTestErasedCallable(
         TestErasedBinderCapture,
@@ -5440,12 +5332,10 @@ fn testNodeEachWithNestedWhenRows(roc_host: *abi.RocHost, items: []const HostVal
             .each = .{
                 .items = boxTestNodeSignalExpr(roc_host, testNodeConstExpr(roc_host, testHostValueI64List(roc_host, items))),
                 .items_to_values = items_to_values,
+                .item_cap = item_cap,
                 .key_hash = key_hash,
-                .key_drop = key_drop,
-                .key_eq = key_eq,
+                .key_cap = key_cap,
                 .key_of = key_of,
-                .item_drop = item_drop,
-                .item_eq = item_eq,
                 .row = row,
             },
         },
@@ -5481,19 +5371,13 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
         _ = host.gpa.deinit();
     }
 
-    const key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    defer abi.decrefErasedCallable(key_eq, &roc_host);
+    const key_cap = testHostValueCapability(&roc_host);
+    defer abi.decrefHostValueCapabilityHandle(key_cap, &roc_host);
 
     const root = host.internRootScope();
 
     const initial_keys = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(3) };
-    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_keys, key_eq, key_eq);
+    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, initial);
     try std.testing.expectEqual(@as(u64, 0), initial.rows_reused);
     try std.testing.expectEqual(@as(u64, 3), initial.rows_created);
@@ -5504,7 +5388,7 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     const state_for_key_2 = host.internNodeIdentity(initial.scope_ids[1], 0);
 
     const reordered_keys = [_]HostValue{ testHostValueI64(3), testHostValueI64(1), testHostValueI64(2) };
-    const reordered = syncTestEachRowScopes(&host, &roc_host, root, 5, &reordered_keys, &reordered_keys, key_eq, key_eq);
+    const reordered = syncTestEachRowScopes(&host, &roc_host, root, 5, &reordered_keys, &reordered_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, reordered);
     try std.testing.expectEqual(@as(u64, 3), reordered.rows_reused);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
@@ -5518,7 +5402,7 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
 
     const changed_keys = [_]HostValue{ testHostValueI64(2), testHostValueI64(4) };
     const changed_items = [_]HostValue{ testHostValueI64(22), testHostValueI64(4) };
-    const changed = syncTestEachRowScopes(&host, &roc_host, root, 5, &changed_keys, &changed_items, key_eq, key_eq);
+    const changed = syncTestEachRowScopes(&host, &roc_host, root, 5, &changed_keys, &changed_items, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, changed);
     try std.testing.expectEqual(@as(u64, 1), changed.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), changed.rows_created);
@@ -5530,7 +5414,7 @@ test "signals host keyed row diff reuses creates and removes by typed key" {
     try std.testing.expect(changed.scope_ids[1] != initial.scope_ids[2]);
 
     const reappeared_keys = [_]HostValue{ testHostValueI64(1), testHostValueI64(2), testHostValueI64(4) };
-    const reappeared = syncTestEachRowScopes(&host, &roc_host, root, 5, &reappeared_keys, &reappeared_keys, key_eq, key_eq);
+    const reappeared = syncTestEachRowScopes(&host, &roc_host, root, 5, &reappeared_keys, &reappeared_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, reappeared);
     try std.testing.expectEqual(@as(u64, 2), reappeared.rows_reused);
     try std.testing.expectEqual(@as(u64, 1), reappeared.rows_created);
@@ -5557,14 +5441,8 @@ test "signals host keyed row diff hash probes scale linearly" {
         _ = host.gpa.deinit();
     }
 
-    const key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    defer abi.decrefErasedCallable(key_eq, &roc_host);
+    const key_cap = testHostValueCapability(&roc_host);
+    defer abi.decrefHostValueCapabilityHandle(key_cap, &roc_host);
 
     const root = host.internRootScope();
     const row_count = 64;
@@ -5573,7 +5451,7 @@ test "signals host keyed row diff hash probes scale linearly" {
     for (&initial_keys, 0..) |*key, index| {
         key.* = testHostValueI64(@intCast(index + 1));
     }
-    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_keys, key_eq, key_eq);
+    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, initial);
     try std.testing.expectEqual(@as(u64, row_count), initial.rows_created);
 
@@ -5583,7 +5461,7 @@ test "signals host keyed row diff hash probes scale linearly" {
     for (&reordered_keys, 0..) |*key, index| {
         key.* = testHostValueI64(@intCast(row_count - index));
     }
-    const reordered = syncTestEachRowScopes(&host, &roc_host, root, 5, &reordered_keys, &reordered_keys, key_eq, key_eq);
+    const reordered = syncTestEachRowScopes(&host, &roc_host, root, 5, &reordered_keys, &reordered_keys, key_cap, key_cap);
     defer freeKeyedRowDiff(&host, reordered);
     try std.testing.expectEqual(@as(u64, row_count), reordered.rows_reused);
     try std.testing.expectEqual(@as(u64, 0), reordered.rows_created);
@@ -5593,7 +5471,7 @@ test "signals host keyed row diff hash probes scale linearly" {
     try std.testing.expectEqual(@as(u64, row_count * 3), compare_delta);
 }
 
-test "signals host row scopes retain key and item equality thunks" {
+test "signals host row scopes retain key and item capabilities" {
     test_erased_callable_drop_count = 0;
 
     var host = HostEnv.init();
@@ -5604,54 +5482,30 @@ test "signals host row scopes retain key and item equality thunks" {
         _ = host.gpa.deinit();
     }
 
-    const key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    const item_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testHostValueEqErasedCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
+    const key_cap = testHostValueCapability(&roc_host);
+    const item_cap = testHostValueCapability(&roc_host);
 
     const root = host.internRootScope();
     const initial_keys = [_]HostValue{testHostValueI64(1)};
     const initial_items = [_]HostValue{testHostValueI64(10)};
-    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_items, key_eq, item_eq);
+    const initial = syncTestEachRowScopes(&host, &roc_host, root, 5, &initial_keys, &initial_items, key_cap, item_cap);
     defer freeKeyedRowDiff(&host, initial);
     try std.testing.expectEqual(@as(u64, 1), initial.rows_created);
     const row_scope_id = initial.scope_ids[0];
 
     test_erased_callable_drop_count = 0;
-    abi.decrefErasedCallable(key_eq, &roc_host);
-    abi.decrefErasedCallable(item_eq, &roc_host);
+    abi.decrefHostValueCapabilityHandle(key_cap, &roc_host);
+    abi.decrefHostValueCapabilityHandle(item_cap, &roc_host);
     try std.testing.expectEqual(@as(u64, 0), test_erased_callable_drop_count);
 
-    const incoming_key_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testNeverEqualHostValueCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    defer abi.decrefErasedCallable(incoming_key_eq, &roc_host);
-    const incoming_item_eq = writeTestErasedCallable(
-        TestErasedI64Capture,
-        &roc_host,
-        &testNeverEqualHostValueCallable,
-        &testErasedCallableOnDrop,
-        .{ .amount = 0 },
-    );
-    defer abi.decrefErasedCallable(incoming_item_eq, &roc_host);
+    const incoming_key_cap = testHostValueCapabilityWithEq(&roc_host, &testNeverEqualHostValueCallable);
+    defer abi.decrefHostValueCapabilityHandle(incoming_key_cap, &roc_host);
+    const incoming_item_cap = testHostValueCapabilityWithEq(&roc_host, &testNeverEqualHostValueCallable);
+    defer abi.decrefHostValueCapabilityHandle(incoming_item_cap, &roc_host);
 
     const next_keys = [_]HostValue{testHostValueI64(1)};
     const next_items = [_]HostValue{testHostValueI64(10)};
-    const next = syncTestEachRowScopes(&host, &roc_host, root, 5, &next_keys, &next_items, incoming_key_eq, incoming_item_eq);
+    const next = syncTestEachRowScopes(&host, &roc_host, root, 5, &next_keys, &next_items, incoming_key_cap, incoming_item_cap);
     defer freeKeyedRowDiff(&host, next);
     try std.testing.expectEqual(@as(u64, 1), next.rows_reused);
     try std.testing.expectEqual(@as(u64, 0), next.rows_created);

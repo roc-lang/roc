@@ -18,7 +18,7 @@ const hv = @import("host_values.zig");
 const engine = @import("engine.zig");
 
 const HostValue = u64;
-const HostValueTypeTag = hv.HostValueTypeTag;
+const HostValueCapability = hv.HostValueCapabilityHandle;
 const HostValueList = abi.RocListWith(HostValue, false);
 const ElemBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const RenderTextField = render.TextField;
@@ -31,9 +31,7 @@ const HostActiveEventDesc = SharedEngine.ActiveEventDesc;
 
 const WasmCtx = struct {
     pub const Handle = WasmCtx;
-    pub const HostValueTypeTag = hv.HostValueTypeTag;
-    pub const host_value_type_tags_enabled = true;
-    pub const RegistryOps = hv.RegistryOps(@This().HostValueTypeTag);
+    pub const RegistryOps = hv.RegistryOps();
     pub const Metrics = engine.NoMetrics;
     pub const Sink = WasmSink;
 
@@ -55,12 +53,8 @@ const WasmCtx = struct {
         return currentStateValue(node_id);
     }
 
-    pub fn stateEqCallable(_: Handle, node_id: u64) abi.RocErasedCallable {
-        return shared_engine.stateEqCallable(node_id) catch failHost();
-    }
-
-    pub fn stateDropCallable(_: Handle, node_id: u64) abi.RocErasedCallable {
-        return shared_engine.stateDropCallable(node_id) catch failHost();
+    pub fn stateCapability(_: Handle, node_id: u64) HostValueCapability {
+        return shared_engine.stateCapability(node_id) catch failHost();
     }
 
     pub fn sink(_: Handle) Sink {
@@ -273,7 +267,7 @@ const callErasedHostValueToUnit = erased_calls.callErasedHostValueToUnit;
 
 // --- Host value registry glue (all routed through the engine's registry) ---
 
-fn registryOps() hv.RegistryOps(HostValueTypeTag) {
+fn registryOps() hv.RegistryOps() {
     return .{ .roc_host = &roc_host };
 }
 
@@ -282,9 +276,9 @@ fn failHostValueRegistryError(err: host_value_registry.Error) noreturn {
         error.InvalidHandle => failHostWith("HostValue handle referenced an unknown value"),
         error.ReleasedHandle => failHostWith("HostValue handle referenced a released value"),
         error.UnconsumedHandle => failHostWith("HostValue consuming callback returned without taking the transferred value"),
-        error.MissingTag => failHostWith("HostValue read crossed erasure boundary without a type tag"),
-        error.TagMismatch => failHostWith("HostValue read crossed erasure boundary with the wrong type tag"),
-        error.ConflictingTag => failHostWith("HostValue was tagged with a conflicting type tag"),
+        error.MissingCapability => failHostWith("HostValue operation crossed erasure boundary without an owning capability"),
+        error.CapabilityMismatch => failHostWith("HostValue operation used a capability that does not own the retained value"),
+        error.ConflictingCapability => failHostWith("HostValue was assigned a conflicting capability"),
         error.OutOfMemory => failHostWith("HostValue registry allocation failed"),
     }
 }
@@ -295,34 +289,16 @@ fn cloneHostValue(value: HostValue) HostValue {
     };
 }
 
-fn setHostValueTypeTag(value: HostValue, tag: HostValueTypeTag) void {
-    shared_engine.host_values.setTag(value, tag, registryOps()) catch |err| {
+fn setHostValueCapability(value: HostValue, cap: HostValueCapability) void {
+    shared_engine.host_values.setCapability(value, cap, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-fn assertHostValueTypeTag(value: HostValue, expected_tag: HostValueTypeTag) void {
-    const actual_tag = (shared_engine.host_values.tag(value) catch |err| {
+fn assertHostValueCapability(value: HostValue, cap: HostValueCapability) void {
+    shared_engine.host_values.assertCapability(value, cap, registryOps()) catch |err| {
         failHostValueRegistryError(err);
-    }) orelse failHostWith("HostValue read crossed erasure boundary without a type tag");
-    if (host_value_registry.tagsMatch(HostValueTypeTag, actual_tag, expected_tag, registryOps())) return;
-
-    const actual_split = hv.hostValueTypeTagSplit(actual_tag);
-    const expected_split = hv.hostValueTypeTagSplit(expected_tag);
-    const actual_split_fn = hv.hostValueTypeTagSplitFn(actual_tag);
-    const expected_split_fn = hv.hostValueTypeTagSplitFn(expected_tag);
-    failHostWithFmt(
-        "HostValue read crossed erasure boundary with the wrong type tag value={} actual_id={} expected_id={} actual_split=0x{x} expected_split=0x{x} actual_split_fn=0x{x} expected_split_fn=0x{x}",
-        .{
-            value,
-            hv.hostValueTypeTagId(actual_tag),
-            hv.hostValueTypeTagId(expected_tag),
-            if (actual_split) |ptr| @intFromPtr(ptr) else 0,
-            if (expected_split) |ptr| @intFromPtr(ptr) else 0,
-            if (actual_split_fn) |ptr| @intFromPtr(ptr) else 0,
-            if (expected_split_fn) |ptr| @intFromPtr(ptr) else 0,
-        },
-    );
+    };
 }
 
 fn hostValueTakeEpoch() u64 {
@@ -339,7 +315,13 @@ fn assertHostValueTakenAfter(value: HostValue, epoch: u64) void {
 // browser host has no test-kind bookkeeping, so `recordKind` is a no-op.
 const HostValueOpsCtx = struct {
     pub fn store(_: HostValueOpsCtx, box: abi.RocBox) HostValue {
-        return shared_engine.host_values.storeOwnedTag(allocator(), box, null, registryOps()) catch |err| {
+        return shared_engine.host_values.storeOwnedCapability(allocator(), box, null, registryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+    }
+
+    pub fn storeWithCapability(_: HostValueOpsCtx, box: abi.RocBox, cap: HostValueCapability) HostValue {
+        return shared_engine.host_values.storeRetainedCapability(allocator(), box, cap, registryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
     }
@@ -418,13 +400,13 @@ fn dispatchEvent(event_id: u32, payload_kind: EventPayloadKind, payload: HostVal
     const ctx = WasmCtx{};
     const desc = hostEventById(event_id);
     if (desc.payload_kind != payload_kind) failHost();
-    setHostValueTypeTag(payload, desc.payload_tag);
-    defer callErasedHostValueToUnit(&roc_host, desc.payload_drop, payload);
+    setHostValueCapability(payload, desc.payload_cap);
+    defer callErasedHostValueToUnit(&roc_host, hv.hostValueCapabilityDrop(desc.payload_cap), payload);
 
     shared_engine.recordDispatch();
 
     const current = currentStateValue(desc.target_node_id);
-    defer callErasedHostValueToUnit(&roc_host, shared_engine.stateDropCallable(desc.target_node_id) catch failHost(), current);
+    defer callErasedHostValueToUnit(&roc_host, hv.hostValueCapabilityDrop(shared_engine.stateCapability(desc.target_node_id) catch failHost()), current);
     const next = callErasedHostValueHostValueToHostValue(&roc_host, desc.transform, current, payload);
     if (!updateStateValue(desc.target_node_id, next)) return;
 
@@ -460,7 +442,7 @@ fn resolveTask(request_id: u64, payload_text: []const u8, failed: bool) void {
 
     roc_allocation_phase = 10;
     const payload = hostValueStr(payload_text);
-    setHostValueTypeTag(payload, task_payload.payload_tag);
+    setHostValueCapability(payload, task_payload.payload_cap);
     const payload_take_epoch = hostValueTakeEpoch();
 
     roc_allocation_phase = 20;
@@ -932,62 +914,52 @@ export fn roc_host_value_clone(value: HostValue) callconv(.c) HostValue {
     };
 }
 
-export fn roc_host_value_get(value: HostValue) callconv(.c) abi.RocBox {
+export fn roc_host_value_get_with_capability(value: HostValue, cap: HostValueCapability) callconv(.c) abi.RocBox {
     const previous_phase = roc_allocation_phase;
-    roc_allocation_phase = 102;
+    roc_allocation_phase = 108;
     defer roc_allocation_phase = previous_phase;
-    return shared_engine.host_values.get(value, registryOps()) catch |err| {
+    defer hv.releaseHostValueCapability(cap, &roc_host);
+    return shared_engine.host_values.getWithCapability(value, cap, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-export fn roc_host_value_get_tagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
+export fn roc_host_value_get_with_split(value: HostValue, split: abi.RocErasedCallable) callconv(.c) abi.RocBox {
     const previous_phase = roc_allocation_phase;
     roc_allocation_phase = 103;
     defer roc_allocation_phase = previous_phase;
-    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
-    defer registryOps().releaseTag(normalized_tag);
-    assertHostValueTypeTag(value, normalized_tag);
-    return shared_engine.host_values.getTagged(value, normalized_tag, registryOps()) catch |err| {
+    defer abi.decrefErasedCallable(split, &roc_host);
+    return shared_engine.host_values.getWithSplit(value, split, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-export fn roc_host_value_store(box: abi.RocBox) callconv(.c) HostValue {
+export fn roc_host_value_store_with_capability(box: abi.RocBox, cap: HostValueCapability) callconv(.c) HostValue {
     const previous_phase = roc_allocation_phase;
-    roc_allocation_phase = 104;
+    roc_allocation_phase = 109;
     defer roc_allocation_phase = previous_phase;
-    return shared_engine.host_values.storeOwnedTag(std.heap.wasm_allocator, box, null, registryOps()) catch |err| {
+    defer hv.releaseHostValueCapability(cap, &roc_host);
+    return shared_engine.host_values.storeOwnedCapability(std.heap.wasm_allocator, box, cap, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-export fn roc_host_value_store_tagged(box: abi.RocBox, tag: abi.__AnonStruct7) callconv(.c) HostValue {
+export fn roc_host_value_take_with_capability(value: HostValue, cap: HostValueCapability) callconv(.c) abi.RocBox {
     const previous_phase = roc_allocation_phase;
-    roc_allocation_phase = 105;
+    roc_allocation_phase = 110;
     defer roc_allocation_phase = previous_phase;
-    return shared_engine.host_values.storeOwnedTag(std.heap.wasm_allocator, box, hv.normalizeHostValueTypeTag(tag), registryOps()) catch |err| {
+    defer hv.releaseHostValueCapability(cap, &roc_host);
+    return shared_engine.host_values.takeWithCapability(value, cap, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
 
-export fn roc_host_value_take(value: HostValue) callconv(.c) abi.RocBox {
-    const previous_phase = roc_allocation_phase;
-    roc_allocation_phase = 106;
-    defer roc_allocation_phase = previous_phase;
-    return shared_engine.host_values.take(value, registryOps()) catch |err| {
-        failHostValueRegistryError(err);
-    };
-}
-
-export fn roc_host_value_take_tagged(value: HostValue, tag: abi.__AnonStruct19) callconv(.c) abi.RocBox {
+export fn roc_host_value_take_with_split(value: HostValue, split: abi.RocErasedCallable) callconv(.c) abi.RocBox {
     const previous_phase = roc_allocation_phase;
     roc_allocation_phase = 107;
     defer roc_allocation_phase = previous_phase;
-    const normalized_tag = hv.normalizeHostValueTypeTag(tag);
-    defer registryOps().releaseTag(normalized_tag);
-    assertHostValueTypeTag(value, normalized_tag);
-    return shared_engine.host_values.takeTagged(value, normalized_tag, registryOps()) catch |err| {
+    defer abi.decrefErasedCallable(split, &roc_host);
+    return shared_engine.host_values.takeWithSplit(value, split, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }

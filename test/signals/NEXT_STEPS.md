@@ -112,6 +112,67 @@ types. The app artifact can: platform Roc is compiled with the app, so each
 `Signal(a)`, state binder, event payload, row key/item, and sink read site can
 package the exact operations for its concrete `a`.
 
+Spike result, 2026-06-26:
+
+- **Sound direction, real host-owned capability object.** The prebuilt native
+  and wasm hosts now remain app-type blind while each retained erased value is
+  paired in the registry with an app-compiled `HostValueCapabilityHandle`. The
+  handle has a stable ABI shape known to the host:
+  `{ split : RocErasedCallable, eq : RocErasedCallable, drop : RocErasedCallable
+  }`. Those callables are generated from platform Roc after app
+  monomorphization, so they operate on the concrete app type without exposing
+  that type or layout to Zig.
+- **Exact ownership contract.** A retained cell is conceptually
+  `{ box : RocBox, capability : HostValueCapabilityHandle }`. `store_with_capability`
+  transfers a boxed value plus its owned capability into the registry.
+  `get_with_capability` first checks the supplied handle against the stored
+  handle, then calls `split` and replaces the stored box with `keep`; the
+  returned `out` box is owned by the caller. `take_with_capability` checks the
+  handle, removes the cell, releases the registry's retained capability exactly
+  once, and transfers the box to Roc. `clone` uses the stored capability's
+  `split`, stores the clone with the same retained capability, and leaves the
+  original cell valid. Internal host inspection may use the stored capability,
+  but there is no hosted untyped get/take/store API.
+- **Host sequencing changed.** Signal const/map/map2/combine/interval/task
+  sources, signal-backed text/bool sinks, `Ui.when`, event payload descriptors,
+  task request descriptors, and active descriptor cleanup now retain, compare,
+  invoke, and release the same capability handle instead of reconstructing
+  unrelated tag/split/eq/drop fields. Task payload callbacks keep consuming
+  ownership: `Done(Str)` and `Failed(Str)` still use the capability take path,
+  and the host asserts the payload handle was consumed before completing the
+  callback.
+- **Debug hardening added.** The registry rejects reads before capability
+  assignment, full-capability mismatches, split-only mismatches, conflicting
+  capability assignment, released handles, and unconsumed consuming callbacks.
+  Taking a value releases the stored capability once; a second take fails rather
+  than trying to recover. Native and wasm report these as loud host contract
+  failures with specific registry errors.
+- **Remaining deliberate split-only path.** `Capability(a)` builds `eq` and
+  `drop` thunks in Roc. Those thunks cannot close over the full handle without
+  making the handle recursively self-referential, so they call
+  `get_with_split`/`take_with_split` with the same `split` callable contained in
+  the capability. The registry allows that only when the split callable matches
+  the retained capability. Edge-specific read/accessor thunks still travel next
+  to `read_cap`/`payload_cap`; they are explicitly tied to the same capability
+  but are not yet folded into a richer capability-extension object.
+- **Regressions and validation.** Added focused registry coverage for
+  capability mismatch, conflicting capability assignment, clone preservation,
+  split-only thunk access, exactly-once release on consuming take, and rejection
+  of reads before a capability is assigned. `zig build`, both required
+  `roc check` commands, `node --test test/signals/browser/runtime_contract.test.mjs`,
+  and `zig test test/signals/src/host_value_registry.zig` pass.
+  `zig build run-test-signals` and the task-lifetime wasm build are blocked
+  before runtime by the compiler postcheck invariant
+  `checked direct call result type differed from its expected Monotype type`,
+  currently triggered in the shared boxed token/capability shape. The exact glue
+  regeneration command used for the ABI update was
+  `./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/src test/signals/platform/main.roc`.
+- **Judgment.** Proceed with the capability-owned architecture. The host is now
+  sequencing a first-class capability object rather than only a Roc-side wrapper.
+  The next work is to isolate/fix the compiler postcheck bug and then decide
+  whether read/accessor operations should become capability extensions or remain
+  edge-specific thunks guarded by the owning capability.
+
 Priority order:
 
 1. **Define the capability contract.** Introduce a platform-level capability shape
@@ -155,7 +216,7 @@ How we'll know this phase is complete:
 - the host has no app-type-specific layout or nested-refcount logic;
 - debug capability assertions are green across the maintained native and wasm
   suite;
-- task payload consume semantics remain unchanged: callbacks use `take_tagged`,
+- task payload consume semantics remain unchanged: callbacks use capability take,
   the host asserts consumption, and the host does not drop consumed payloads;
 - the new task-to-UTF8 lifetime regression, ops dashboard wasm harness, and full
   signals suite pass with unmount cleanup enabled.

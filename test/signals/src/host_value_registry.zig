@@ -9,18 +9,15 @@ pub const Error = error{
     InvalidHandle,
     ReleasedHandle,
     UnconsumedHandle,
-    MissingTag,
-    TagMismatch,
-    ConflictingTag,
+    MissingCapability,
+    CapabilityMismatch,
+    ConflictingCapability,
 };
 
-pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
-    const Cell = if (tags_enabled) struct {
+pub fn Registry(comptime Capability: type) type {
+    const Cell = struct {
         box: abi.RocBox,
-        tag: ?TypeTag,
-        last_taken_epoch: u64,
-    } else struct {
-        box: abi.RocBox,
+        capability: ?Capability,
         last_taken_epoch: u64,
     };
 
@@ -60,12 +57,8 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             return count;
         }
 
-        fn cell(box: abi.RocBox, owned_tag: ?TypeTag, last_taken_epoch: u64) Cell {
-            if (comptime tags_enabled) {
-                return .{ .box = box, .tag = owned_tag, .last_taken_epoch = last_taken_epoch };
-            } else {
-                return .{ .box = box, .last_taken_epoch = last_taken_epoch };
-            }
+        fn cell(box: abi.RocBox, owned_capability: ?Capability, last_taken_epoch: u64) Cell {
+            return .{ .box = box, .capability = owned_capability, .last_taken_epoch = last_taken_epoch };
         }
 
         fn slot(self: *Self, value: HostValue) Error!*Slot {
@@ -82,49 +75,35 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             };
         }
 
-        pub fn tag(self: *Self, value: HostValue) Error!?TypeTag {
-            if (comptime tags_enabled) {
-                const occupied = try self.occupiedCell(value);
-                return occupied.tag;
-            } else {
-                _ = try self.occupiedCell(value);
-                return null;
-            }
+        pub fn capability(self: *Self, value: HostValue) Error!?Capability {
+            const occupied = try self.occupiedCell(value);
+            return occupied.capability;
         }
 
-        pub fn storeOwnedTag(self: *Self, allocator: std.mem.Allocator, box: abi.RocBox, owned_tag: ?TypeTag, ops: anytype) Error!HostValue {
-            const registry_tag: ?TypeTag = if (comptime tags_enabled) owned_tag else blk: {
-                if (owned_tag) |tag_value| ops.releaseTag(tag_value);
-                break :blk null;
-            };
-
+        pub fn storeOwnedCapability(self: *Self, allocator: std.mem.Allocator, box: abi.RocBox, owned_capability: ?Capability, ops: anytype) Error!HostValue {
             for (self.slots.items, 0..) |*entry, index| {
                 switch (entry.*) {
                     .vacant => |last_taken_epoch| {
-                        entry.* = .{ .occupied = cell(box, registry_tag, last_taken_epoch) };
+                        entry.* = .{ .occupied = cell(box, owned_capability, last_taken_epoch) };
                         return @intCast(index + 1);
                     },
                     .occupied => {},
                 }
             }
 
-            self.slots.append(allocator, .{ .occupied = cell(box, registry_tag, 0) }) catch {
-                if (comptime tags_enabled) {
-                    if (registry_tag) |tag_value| ops.releaseTag(tag_value);
-                }
+            self.slots.append(allocator, .{ .occupied = cell(box, owned_capability, 0) }) catch {
+                if (owned_capability) |capability_value| ops.releaseCapability(capability_value);
                 return Error.OutOfMemory;
             };
             return @intCast(self.slots.items.len);
         }
 
-        pub fn storeRetainedTag(self: *Self, allocator: std.mem.Allocator, box: abi.RocBox, borrowed_tag: ?TypeTag, ops: anytype) Error!HostValue {
-            if (comptime tags_enabled) {
-                if (borrowed_tag) |tag_value| ops.retainTag(tag_value);
-                errdefer if (borrowed_tag) |tag_value| ops.releaseTag(tag_value);
-                return try self.storeOwnedTag(allocator, box, borrowed_tag, ops);
-            } else {
-                return try self.storeOwnedTag(allocator, box, null, ops);
+        pub fn storeRetainedCapability(self: *Self, allocator: std.mem.Allocator, box: abi.RocBox, borrowed_capability: ?Capability, ops: anytype) Error!HostValue {
+            if (borrowed_capability) |capability_value| {
+                ops.retainCapability(capability_value);
+                errdefer ops.releaseCapability(capability_value);
             }
+            return try self.storeOwnedCapability(allocator, box, borrowed_capability, ops);
         }
 
         fn vacantSlotAvailable(self: *const Self) bool {
@@ -142,23 +121,57 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
             self.slots.ensureUnusedCapacity(allocator, 1) catch return Error.OutOfMemory;
         }
 
+        fn storedCapability(self: *Self, value: HostValue) Error!Capability {
+            return (try self.capability(value)) orelse Error.MissingCapability;
+        }
+
+        pub fn assertCapability(self: *Self, value: HostValue, expected_capability: Capability, ops: anytype) Error!void {
+            const actual_capability = try self.storedCapability(value);
+            if (!ops.capabilitiesMatch(actual_capability, expected_capability)) return Error.CapabilityMismatch;
+        }
+
+        pub fn assertCapabilitySplit(self: *Self, value: HostValue, expected_split: abi.RocErasedCallable, ops: anytype) Error!void {
+            const actual_capability = try self.storedCapability(value);
+            if (!ops.capabilityMatchesSplit(actual_capability, expected_split)) return Error.CapabilityMismatch;
+        }
+
+        pub fn getWithCapability(self: *Self, value: HostValue, expected_capability: Capability, ops: anytype) Error!abi.RocBox {
+            try self.assertCapability(value, expected_capability, ops);
+            return try self.getWithStoredCapability(value, ops);
+        }
+
         pub fn get(self: *Self, value: HostValue, ops: anytype) Error!abi.RocBox {
-            if (comptime !tags_enabled) return Error.MissingTag;
+            return try self.getWithStoredCapability(value, ops);
+        }
+
+        pub fn getWithSplit(self: *Self, value: HostValue, expected_split: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
+            try self.assertCapabilitySplit(value, expected_split, ops);
+            return try self.getWithSplitUnchecked(value, expected_split, ops);
+        }
+
+        fn getWithStoredCapability(self: *Self, value: HostValue, ops: anytype) Error!abi.RocBox {
+            const capability_value = try self.storedCapability(value);
             const entry = try self.slot(value);
             return switch (entry.*) {
                 .vacant => Error.ReleasedHandle,
                 .occupied => |*occupied| blk: {
-                    const tag_value = occupied.tag orelse return Error.MissingTag;
-                    const split = ops.splitBox(occupied.box, tag_value);
-                    occupied.box = split.@"keep";
-                    break :blk split.@"out";
+                    const split = ops.splitBoxWithCapability(occupied.box, capability_value);
+                    occupied.box = split.keep;
+                    break :blk split.out;
                 },
             };
         }
 
-        pub fn getTagged(self: *Self, value: HostValue, expected_tag: TypeTag, ops: anytype) Error!abi.RocBox {
-            try self.assertTag(value, expected_tag, ops);
-            return try self.get(value, ops);
+        fn getWithSplitUnchecked(self: *Self, value: HostValue, split_callable: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
+            const entry = try self.slot(value);
+            return switch (entry.*) {
+                .vacant => Error.ReleasedHandle,
+                .occupied => |*occupied| blk: {
+                    const split = ops.splitBoxWithSplit(occupied.box, split_callable);
+                    occupied.box = split.keep;
+                    break :blk split.out;
+                },
+            };
         }
 
         pub fn take(self: *Self, value: HostValue, ops: anytype) Error!abi.RocBox {
@@ -168,16 +181,19 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
                 .occupied => |occupied| blk: {
                     self.take_epoch +%= 1;
                     entry.* = .{ .vacant = self.take_epoch };
-                    if (comptime tags_enabled) {
-                        if (occupied.tag) |tag_value| ops.releaseTag(tag_value);
-                    }
+                    if (occupied.capability) |capability_value| ops.releaseCapability(capability_value);
                     break :blk occupied.box;
                 },
             };
         }
 
-        pub fn takeTagged(self: *Self, value: HostValue, expected_tag: TypeTag, ops: anytype) Error!abi.RocBox {
-            try self.assertTag(value, expected_tag, ops);
+        pub fn takeWithCapability(self: *Self, value: HostValue, expected_capability: Capability, ops: anytype) Error!abi.RocBox {
+            try self.assertCapability(value, expected_capability, ops);
+            return try self.take(value, ops);
+        }
+
+        pub fn takeWithSplit(self: *Self, value: HostValue, expected_split: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
+            try self.assertCapabilitySplit(value, expected_split, ops);
             return try self.take(value, ops);
         }
 
@@ -203,76 +219,68 @@ pub fn Registry(comptime TypeTag: type, comptime tags_enabled: bool) type {
         }
 
         pub fn clone(self: *Self, allocator: std.mem.Allocator, value: HostValue, ops: anytype) Error!HostValue {
-            if (comptime !tags_enabled) return Error.MissingTag;
             try self.ensureStoreCapacity(allocator);
             const entry = try self.slot(value);
             return switch (entry.*) {
                 .vacant => Error.ReleasedHandle,
                 .occupied => |*occupied| blk: {
-                    const tag_value = occupied.tag orelse return Error.MissingTag;
-                    const split = ops.splitBox(occupied.box, tag_value);
-                    occupied.box = split.@"keep";
-                    ops.retainTag(tag_value);
-                    break :blk try self.storeOwnedTag(allocator, split.@"out", tag_value, ops);
+                    const capability_value = occupied.capability orelse return Error.MissingCapability;
+                    const split = ops.splitBoxWithCapability(occupied.box, capability_value);
+                    occupied.box = split.keep;
+                    break :blk try self.storeRetainedCapability(allocator, split.out, capability_value, ops);
                 },
             };
         }
 
-        pub fn setTag(self: *Self, value: HostValue, borrowed_tag: TypeTag, ops: anytype) Error!void {
-            if (comptime !tags_enabled) return;
-
+        pub fn setCapability(self: *Self, value: HostValue, borrowed_capability: Capability, ops: anytype) Error!void {
             const entry = try self.slot(value);
             switch (entry.*) {
                 .vacant => return Error.ReleasedHandle,
                 .occupied => |*occupied| {
-                    if (occupied.tag) |actual_tag| {
-                        if (!tagsMatch(TypeTag, actual_tag, borrowed_tag, ops)) return Error.ConflictingTag;
+                    if (occupied.capability) |actual_capability| {
+                        if (!ops.capabilitiesMatch(actual_capability, borrowed_capability)) return Error.ConflictingCapability;
                         return;
                     }
-                    ops.retainTag(borrowed_tag);
-                    occupied.tag = borrowed_tag;
+                    ops.retainCapability(borrowed_capability);
+                    occupied.capability = borrowed_capability;
                 },
             }
-        }
-
-        pub fn assertTag(self: *Self, value: HostValue, expected_tag: TypeTag, ops: anytype) Error!void {
-            if (comptime !tags_enabled) return;
-
-            const actual_tag = (try self.tag(value)) orelse return Error.MissingTag;
-            if (!tagsMatch(TypeTag, actual_tag, expected_tag, ops)) return Error.TagMismatch;
         }
     };
 }
 
-pub fn tagsMatch(comptime TypeTag: type, actual_tag: TypeTag, expected_tag: TypeTag, ops: anytype) bool {
-    return ops.tagsMatch(actual_tag, expected_tag);
-}
-
-const TestTag = *u64;
+const TestCapability = extern struct {
+    split: usize,
+    eq: usize,
+    drop: usize,
+};
 
 const TestOps = struct {
-    retained_tags: *u64,
-    released_tags: *u64,
+    retained_capabilities: *u64,
+    released_capabilities: *u64,
     split_boxes: *u64,
 
-    pub fn retainTag(self: TestOps, _: TestTag) void {
-        self.retained_tags.* += 1;
+    pub fn retainCapability(self: TestOps, _: TestCapability) void {
+        self.retained_capabilities.* += 1;
     }
 
-    pub fn releaseTag(self: TestOps, _: TestTag) void {
-        self.released_tags.* += 1;
+    pub fn releaseCapability(self: TestOps, _: TestCapability) void {
+        self.released_capabilities.* += 1;
     }
 
-    pub fn tagId(_: TestOps, tag_value: TestTag) u64 {
-        return tag_value.*;
+    pub fn capabilitiesMatch(_: TestOps, actual: TestCapability, expected: TestCapability) bool {
+        return actual.split == expected.split and actual.eq == expected.eq and actual.drop == expected.drop;
     }
 
-    pub fn tagsMatch(self: TestOps, actual_tag: TestTag, expected_tag: TestTag) bool {
-        const actual_id = self.tagId(actual_tag);
-        return actual_id != 0 and actual_id == self.tagId(expected_tag);
+    pub fn capabilityMatchesSplit(_: TestOps, actual: TestCapability, expected_split: abi.RocErasedCallable) bool {
+        return actual.split == @intFromPtr(expected_split);
     }
 
-    pub fn splitBox(self: TestOps, box: abi.RocBox, _: TestTag) erased_calls.RocBoxPair {
+    pub fn splitBoxWithCapability(self: TestOps, box: abi.RocBox, capability: TestCapability) erased_calls.RocBoxPair {
+        return self.splitBoxWithSplit(box, @ptrFromInt(capability.split));
+    }
+
+    pub fn splitBoxWithSplit(self: TestOps, box: abi.RocBox, _: abi.RocErasedCallable) erased_calls.RocBoxPair {
         self.split_boxes.* += 1;
         const addr = @intFromPtr(box orelse unreachable);
         return .{
@@ -282,52 +290,53 @@ const TestOps = struct {
     }
 };
 
+fn testOps(retained: *u64, released: *u64, splits: *u64) TestOps {
+    return .{
+        .retained_capabilities = retained,
+        .released_capabilities = released,
+        .split_boxes = splits,
+    };
+}
+
 test "host value registry uses one-based handles and reuses vacant slots" {
-    var registry: Registry(TestTag, true) = .{};
+    var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_tags: u64 = 0;
-    var released_tags: u64 = 0;
-    var split_boxes: u64 = 0;
-    const ops = TestOps{
-        .retained_tags = &retained_tags,
-        .released_tags = &released_tags,
-        .split_boxes = &split_boxes,
-    };
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const cap = TestCapability{ .split = 0x100, .eq = 0x101, .drop = 0x102 };
 
-    var tag_a: u64 = 1;
-    const first = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x10), &tag_a, ops);
-    const second = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x20), null, ops);
+    const first = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x10), cap, ops);
+    const second = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x20), null, ops);
     try std.testing.expectEqual(@as(HostValue, 1), first);
     try std.testing.expectEqual(@as(HostValue, 2), second);
 
     try std.testing.expectEqual(@as(usize, 2), registry.slots.items.len);
     try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x10)), try registry.take(first, ops));
-    try std.testing.expectEqual(@as(u64, 1), released_tags);
+    try std.testing.expectEqual(@as(u64, 1), released);
 
-    const reused = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x30), null, ops);
+    const reused = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x30), null, ops);
     try std.testing.expectEqual(first, reused);
     try std.testing.expectEqual(@as(usize, 2), registry.slots.items.len);
 }
 
 test "host value registry reports live count and reaches zero when drained" {
-    var registry: Registry(TestTag, false) = .{};
+    var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_tags: u64 = 0;
-    var released_tags: u64 = 0;
-    var split_boxes: u64 = 0;
-    const ops = TestOps{
-        .retained_tags = &retained_tags,
-        .released_tags = &released_tags,
-        .split_boxes = &split_boxes,
-    };
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const cap = TestCapability{ .split = 0x200, .eq = 0x201, .drop = 0x202 };
 
     try std.testing.expectEqual(@as(usize, 0), registry.liveCount());
     try std.testing.expect(!registry.hasLiveValues());
 
-    const first = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x10), null, ops);
-    const second = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x20), null, ops);
+    const first = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x10), cap, ops);
+    const second = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x20), cap, ops);
     try std.testing.expectEqual(@as(usize, 2), registry.liveCount());
 
     _ = try registry.take(first, ops);
@@ -337,22 +346,18 @@ test "host value registry reports live count and reaches zero when drained" {
     _ = try registry.take(second, ops);
     try std.testing.expectEqual(@as(usize, 0), registry.liveCount());
     try std.testing.expect(!registry.hasLiveValues());
+    try std.testing.expectEqual(@as(u64, 2), released);
 }
 
 test "host value registry asserts consuming callbacks released their handle" {
-    var registry: Registry(TestTag, false) = .{};
+    var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_tags: u64 = 0;
-    var released_tags: u64 = 0;
-    var split_boxes: u64 = 0;
-    const ops = TestOps{
-        .retained_tags = &retained_tags,
-        .released_tags = &released_tags,
-        .split_boxes = &split_boxes,
-    };
-
-    const value = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x70), null, ops);
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x70), null, ops);
     try std.testing.expectError(Error.UnconsumedHandle, registry.assertReleased(value));
 
     _ = try registry.take(value, ops);
@@ -360,68 +365,92 @@ test "host value registry asserts consuming callbacks released their handle" {
     try std.testing.expectError(Error.ReleasedHandle, registry.take(value, ops));
 }
 
-test "host value registry clones by splitting retained boxes and tags" {
-    var registry: Registry(TestTag, true) = .{};
+test "host value registry clones by splitting retained boxes and retaining capabilities" {
+    var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_tags: u64 = 0;
-    var released_tags: u64 = 0;
-    var split_boxes: u64 = 0;
-    const ops = TestOps{
-        .retained_tags = &retained_tags,
-        .released_tags = &released_tags,
-        .split_boxes = &split_boxes,
-    };
-
-    var tag_a: u64 = 1;
-    const original = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x40), &tag_a, ops);
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const cap = TestCapability{ .split = 0x300, .eq = 0x301, .drop = 0x302 };
+    const original = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x40), cap, ops);
     const cloned = try registry.clone(std.testing.allocator, original, ops);
 
     try std.testing.expect(cloned != original);
-    try std.testing.expectEqual(@as(u64, 1), split_boxes);
-    try std.testing.expectEqual(@as(u64, 1), retained_tags);
-    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x4040)), try registry.getTagged(cloned, &tag_a, ops));
-    try std.testing.expectEqual(@as(u64, 2), split_boxes);
+    try std.testing.expectEqual(@as(u64, 1), splits);
+    try std.testing.expectEqual(@as(u64, 1), retained);
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x4040)), try registry.getWithCapability(cloned, cap, ops));
+    try std.testing.expectEqual(@as(u64, 2), splits);
 }
 
-test "host value registry compares tags by nonzero type id" {
-    var registry: Registry(TestTag, true) = .{};
+test "host value registry enforces full capability identity" {
+    var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_tags: u64 = 0;
-    var released_tags: u64 = 0;
-    var split_boxes: u64 = 0;
-    const ops = TestOps{
-        .retained_tags = &retained_tags,
-        .released_tags = &released_tags,
-        .split_boxes = &split_boxes,
-    };
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const cap_a = TestCapability{ .split = 0x400, .eq = 0x401, .drop = 0x402 };
+    const cap_b = TestCapability{ .split = 0x400, .eq = 0x411, .drop = 0x402 };
+    const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x80), cap_a, ops);
 
-    var tag_a: u64 = 9;
-    var tag_b_same_id: u64 = 9;
-    var tag_c_other_id: u64 = 10;
-    const value = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x50), &tag_a, ops);
-
-    try registry.assertTag(value, &tag_b_same_id, ops);
-    try std.testing.expectError(Error.TagMismatch, registry.assertTag(value, &tag_c_other_id, ops));
+    try registry.assertCapability(value, cap_a, ops);
+    try std.testing.expectError(Error.CapabilityMismatch, registry.assertCapability(value, cap_b, ops));
+    try std.testing.expectError(Error.ConflictingCapability, registry.setCapability(value, cap_b, ops));
+    try std.testing.expectError(Error.CapabilityMismatch, registry.getWithCapability(value, cap_b, ops));
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x2080)), try registry.getWithCapability(value, cap_a, ops));
 }
 
-test "host value registry can compile without stored tags" {
-    var registry: Registry(TestTag, false) = .{};
+test "host value registry permits split-only access for capability thunks" {
+    var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
-    var retained_tags: u64 = 0;
-    var released_tags: u64 = 0;
-    var split_boxes: u64 = 0;
-    const ops = TestOps{
-        .retained_tags = &retained_tags,
-        .released_tags = &released_tags,
-        .split_boxes = &split_boxes,
-    };
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const cap = TestCapability{ .split = 0x500, .eq = 0x501, .drop = 0x502 };
+    const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x90), cap, ops);
 
-    var tag_a: u64 = 1;
-    const value = try registry.storeOwnedTag(std.testing.allocator, @ptrFromInt(0x60), &tag_a, ops);
-    try std.testing.expectEqual(@as(u64, 1), released_tags);
-    try registry.assertTag(value, &tag_a, ops);
-    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x60)), try registry.take(value, ops));
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x2090)), try registry.getWithSplit(value, @ptrFromInt(0x500), ops));
+    try std.testing.expectError(Error.CapabilityMismatch, registry.getWithSplit(value, @ptrFromInt(0x501), ops));
+}
+
+test "host value registry consuming operations release capabilities exactly once" {
+    var registry: Registry(TestCapability) = .{};
+    defer registry.deinit(std.testing.allocator);
+
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const cap = TestCapability{ .split = 0x600, .eq = 0x601, .drop = 0x602 };
+    const value = try registry.storeRetainedCapability(std.testing.allocator, @ptrFromInt(0xa0), cap, ops);
+    try std.testing.expectEqual(@as(u64, 1), retained);
+
+    const take_epoch = registry.takeEpoch();
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0xa0)), try registry.takeWithCapability(value, cap, ops));
+    try registry.assertTakenAfter(value, take_epoch);
+    try std.testing.expectEqual(@as(u64, 1), released);
+    try std.testing.expectError(Error.ReleasedHandle, registry.takeWithCapability(value, cap, ops));
+    try std.testing.expectEqual(@as(u64, 1), released);
+}
+
+test "host value registry rejects reads before a capability is assigned" {
+    var registry: Registry(TestCapability) = .{};
+    defer registry.deinit(std.testing.allocator);
+
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const ops = testOps(&retained, &released, &splits);
+    const cap = TestCapability{ .split = 0x700, .eq = 0x701, .drop = 0x702 };
+    const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0xb0), null, ops);
+
+    try std.testing.expectError(Error.MissingCapability, registry.getWithCapability(value, cap, ops));
+    try registry.setCapability(value, cap, ops);
+    try std.testing.expectEqual(@as(u64, 1), retained);
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x20b0)), try registry.getWithCapability(value, cap, ops));
 }

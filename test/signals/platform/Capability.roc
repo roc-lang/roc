@@ -1,36 +1,37 @@
 import HostValue exposing [HostValue]
 
 Capability(a) := [
-	Capability(
-		{
-			tag : HostValue.TypeTag(a),
-			eq : Box((HostValue, HostValue -> Bool)),
-			drop : Box((HostValue -> {})),
-		},
-	),
+	Capability(HostValue.CapabilityHandle(a)),
 ].{
 	new_with_eq : (a, a -> Bool) -> Capability(a)
 	new_with_eq = |is_equal| {
-		tag = HostValue.new_tag({})
+		split : Box(a) -> { keep : Box(a), out : Box(a) }
+		split = |boxed| {
+			value = Box.unbox(boxed)
+			{ keep: Box.box(value), out: Box.box(value) }
+		}
+
+		split_handle : Box((Box(a) -> { keep : Box(a), out : Box(a) }))
+		split_handle = Box.box(split)
 
 		eq : HostValue, HostValue -> Bool
 		eq = |left_hv, right_hv| {
 			left : a
-			left = Box.unbox(HostValue.get_tagged(left_hv, tag))
+			left = Box.unbox(HostValue.get_with_split(left_hv, split_handle))
 			right : a
-			right = Box.unbox(HostValue.get_tagged(right_hv, tag))
+			right = Box.unbox(HostValue.get_with_split(right_hv, split_handle))
 			is_equal(left, right)
 		}
 
 		drop : HostValue -> {}
 		drop = |host_value| {
 			boxed : Box(a)
-			boxed = HostValue.take_tagged(host_value, tag)
+			boxed = HostValue.take_with_split(host_value, split_handle)
 			_ = boxed
 			{}
 		}
 
-		Capability({ tag, eq: Box.box(eq), drop: Box.box(drop) })
+		Capability({ split: split_handle, eq: Box.box(eq), drop: Box.box(drop) })
 	}
 
 	new : {} -> Capability(a)
@@ -39,21 +40,21 @@ Capability(a) := [
 		]
 	new = |_| Capability.new_with_eq(|left, right| left.is_eq(right))
 
-	tag : Capability(a) -> HostValue.TypeTag(a)
-	tag = |Capability(payload)| payload.tag
+	handle : Capability(a) -> HostValue.CapabilityHandle(a)
+	handle = |Capability(handle_value)| handle_value
 
 	eq : Capability(a) -> Box((HostValue, HostValue -> Bool))
-	eq = |Capability(payload)| payload.eq
+	eq = |Capability(handle_value)| handle_value.eq
 
 	drop : Capability(a) -> Box((HostValue -> {}))
-	drop = |Capability(payload)| payload.drop
+	drop = |Capability(handle_value)| handle_value.drop
 
 	store : Box(a), Capability(a) -> HostValue
-	store = |boxed, cap| HostValue.store_tagged(boxed, Capability.tag(cap))
+	store = |boxed, cap| HostValue.store_with_capability(boxed, Capability.handle(cap))
 
 	get : HostValue, Capability(a) -> Box(a)
-	get = |host_value, cap| HostValue.get_tagged(host_value, Capability.tag(cap))
+	get = |host_value, cap| HostValue.get_with_capability(host_value, Capability.handle(cap))
 
 	take : HostValue, Capability(a) -> Box(a)
-	take = |host_value, cap| HostValue.take_tagged(host_value, Capability.tag(cap))
+	take = |host_value, cap| HostValue.take_with_capability(host_value, Capability.handle(cap))
 }

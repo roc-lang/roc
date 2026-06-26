@@ -9,9 +9,12 @@ import HostValue exposing [HostValue]
 ## A `Signal` is an expression that references state/source binders by a binder
 ## ref (a path-relative index assigned during the host walk). Declaration of a
 ## binder (via `Ui.state`) mints identity; a use (`map`, sink) does not.
-Node := [].{
+	Node := [].{
 
-	## Reference to a state/source binder. The token is minted by `Ui.state` and
+		new_token : {} -> Box(U64)
+		new_token = |_| Box.box(0)
+
+		## Reference to a state/source binder. The token is minted by `Ui.state` and
 	## copied into both the state declaration and all signal/message references to
 	## that declaration. The host maps tokens to construction-order node ids during
 	## the active descriptor walk; the token is not the state identity.
@@ -23,12 +26,9 @@ Node := [].{
 	## marshal the typed payload before calling the transform.
 	Msg : {
 		binder : BinderRef,
-		payload_bool_tag : HostValue.TypeTag(Bool),
-		payload_str_tag : HostValue.TypeTag(Str),
-		payload_unit_tag : HostValue.TypeTag({}),
+		payload_cap : HostValue.CapabilityHandle,
 		payload_accessor : U64,
 		payload_kind : U64,
-		payload_drop : Box((HostValue -> {})),
 		transform : Box((HostValue, HostValue -> HostValue)),
 	}
 
@@ -43,31 +43,28 @@ Node := [].{
 	TaskSource : {
 		token : Box(U64),
 		name : Str,
-		payload_tag : HostValue.TypeTag(Str),
-		payload_drop : Box((HostValue -> {})),
+		cap : HostValue.CapabilityHandle,
+		payload_cap : HostValue.CapabilityHandle,
 		initial : Box(({} -> HostValue)),
 		done : Box((HostValue -> HostValue)),
 		failed : Box((HostValue -> HostValue)),
-		eq : Box((HostValue, HostValue -> Bool)),
-		drop : Box((HostValue -> {})),
 		reset_on_start : Bool,
 	}
 
 	IntervalSource : {
 		token : Box(U64),
 		period_ms : U64,
+		cap : HostValue.CapabilityHandle,
 		initial : Box(({} -> HostValue)),
 		tick : Box((HostValue -> HostValue)),
-		eq : Box((HostValue, HostValue -> Bool)),
-		drop : Box((HostValue -> {})),
 	}
 
 	SignalExpr := [
 		Ref(BinderRef),
-		ConstValue(Box(U64), Box(({} -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
-		Map(Box(U64), Box(SignalExpr), Box((HostValue -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
-		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((HostValue, HostValue -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
-		Combine(Box(U64), List(SignalExpr), Box((List(HostValue) -> HostValue)), Box((HostValue, HostValue -> Bool)), Box((HostValue -> {}))),
+		ConstValue(Box(U64), Box(({} -> HostValue)), HostValue.CapabilityHandle),
+		Map(Box(U64), Box(SignalExpr), Box((HostValue -> HostValue)), HostValue.CapabilityHandle),
+		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((HostValue, HostValue -> HostValue)), HostValue.CapabilityHandle),
+		Combine(Box(U64), List(SignalExpr), Box((List(HostValue) -> HostValue)), HostValue.CapabilityHandle),
 		TaskSource(TaskSource),
 		IntervalSource(IntervalSource),
 	]
@@ -78,8 +75,8 @@ Node := [].{
 				task_token : Box(U64),
 				task_name : Str,
 				request_init : Box(({} -> HostValue)),
+				request_cap : HostValue.CapabilityHandle,
 				request_read : Box((HostValue -> Str)),
-				request_drop : Box((HostValue -> {})),
 			},
 		),
 	]
@@ -144,9 +141,9 @@ Node := [].{
 	## `SignalExpr`; event handlers carry a `Msg`.
 	Attr := [
 		StaticText({ field : U64, value : Str }),
-		SignalText({ field : U64, signal : Box(SignalExpr), read : Box((HostValue -> Str)) }),
+		SignalText({ field : U64, signal : Box(SignalExpr), read_cap : HostValue.CapabilityHandle, read : Box((HostValue -> Str)) }),
 		StaticBool({ field : U64, value : Bool }),
-		SignalBool({ field : U64, signal : Box(SignalExpr), read : Box((HostValue -> Bool)) }),
+		SignalBool({ field : U64, signal : Box(SignalExpr), read_cap : HostValue.CapabilityHandle, read : Box((HostValue -> Bool)) }),
 		OnEvent({ kind : U64, msg : Msg }),
 	]
 }
