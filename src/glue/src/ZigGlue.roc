@@ -11,6 +11,8 @@ import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
 import pf.TagVariant exposing [TagVariant]
 import pf.ProvidesEntry exposing [ProvidesEntry]
+import pf.TypeTable exposing [TypeTable]
+import pf.RocName exposing [RocName]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
@@ -68,10 +70,8 @@ compare_by_index = |a, b| {
 ## Map a type table entry to its Zig type string using structured TypeRepr
 type_id_to_zig : List(TypeRepr), U64 -> Str
 type_id_to_zig = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => type_repr_to_zig(type_table, type_repr)
-		Err(_) => "*anyopaque"
-	}
+	table = TypeTable.from_list(type_table)
+	type_repr_to_zig(type_table, TypeTable.get(table, type_id))
 }
 
 ## Render one `extern struct` field declaration for a record field. Unnamed
@@ -103,9 +103,9 @@ type_repr_to_zig = |type_table, type_repr| {
 	match type_repr {
 		RocBool => "bool"
 		RocBox(inner_id) =>
-			match List.get(type_table, inner_id) {
-				Ok(RocFunction(_)) => "RocErasedCallable"
-				Ok(RocUnknown(_)) => "RocBox"
+			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
+				RocFunction(_) => "RocErasedCallable"
+				RocUnknown(_) => "RocBox"
 				_ => {
 					inner_zig = type_id_to_zig(type_table, inner_id)
 					if inner_zig == "*anyopaque" {
@@ -151,57 +151,23 @@ type_repr_to_zig = |type_table, type_repr| {
 ## Determine whether a type is refcounted (heap-allocated).
 ## Refcounted types need 2*ptr_width header space in list allocations.
 is_type_refcounted : List(TypeRepr), U64 -> Bool
-is_type_refcounted = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => is_repr_refcounted(type_table, type_repr)
-		Err(_) => Bool.False
-	}
-}
+is_type_refcounted = |type_table, type_id| TypeTable.is_refcounted(TypeTable.from_list(type_table), type_id)
 
 is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
-is_repr_refcounted = |type_table, type_repr| {
-	match type_repr {
-		RocStr => Bool.True
-		RocBox(_) => Bool.True
-		RocList(_) => Bool.True
-		RocFunction(_) => Bool.True
-		RocRecord(rec) => List.any(rec.fields, |field| !field.is_padding and is_type_refcounted(type_table, field.type_id))
-		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
-		RocBool => Bool.False
-		RocDec => Bool.False
-		RocF32 => Bool.False
-		RocF64 => Bool.False
-		RocI128 => Bool.False
-		RocI16 => Bool.False
-		RocI32 => Bool.False
-		RocI64 => Bool.False
-		RocI8 => Bool.False
-		RocU128 => Bool.False
-		RocU16 => Bool.False
-		RocU32 => Bool.False
-		RocU64 => Bool.False
-		RocU8 => Bool.False
-		RocUnit => Bool.False
-		RocUnknown(_) => Bool.False
-	}
-}
+is_repr_refcounted = |type_table, type_repr| TypeTable.repr_is_refcounted(TypeTable.from_list(type_table), type_repr)
 
 ## Resolve a tag union to a Zig type. Single-variant unions are unwrapped to their payload.
 ## Multi-variant unions with a name return a generated struct name.
 resolve_tag_union_type = |type_table, tu| {
-	if List.len(tu.tags) == 1 {
-		match List.first(tu.tags) {
-			Ok(tag) =>
-				match List.first(tag.payload) {
-					Ok(payload_id) => type_id_to_zig(type_table, payload_id)
-					_ => "*anyopaque"
-				}
-			_ => "*anyopaque"
-		}
-	} else if tu.name != "" {
-		name_to_struct_name(tu.name)
-	} else {
-		"*anyopaque"
+	match TypeTable.single_variant_payload(tu) {
+		SinglePayload(payload_id) => type_id_to_zig(type_table, payload_id)
+		SingleNoPayload => "*anyopaque"
+		NotSingleVariant =>
+			if tu.name != "" {
+				name_to_struct_name(tu.name)
+			} else {
+				"*anyopaque"
+			}
 	}
 }
 
@@ -456,10 +422,8 @@ align_forward_u64 = |offset, alignment| {
 
 type_layout_64 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
 type_layout_64 = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => repr_layout_64(type_table, type_repr)
-		Err(_) => { size: 8, alignment: 8 }
-	}
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	repr_layout_64(type_table, type_repr)
 }
 
 repr_layout_64 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
@@ -480,17 +444,10 @@ repr_layout_64 = |type_table, type_repr| {
 		RocRecord(rec) => record_layout_from_fields(type_table, rec.fields)
 		RocStr => { size: 24, alignment: 8 }
 		RocTagUnion(tu) =>
-			if List.len(tu.tags) == 1 {
-				match List.first(tu.tags) {
-					Ok(tag) =>
-						match List.first(tag.payload) {
-							Ok(payload_id) => type_layout_64(type_table, payload_id)
-							_ => { size: 0, alignment: 1 }
-						}
-					_ => { size: 0, alignment: 1 }
-				}
-			} else {
-				{ size: tu.size, alignment: tu.alignment }
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => type_layout_64(type_table, payload_id)
+				SingleNoPayload => { size: 0, alignment: 1 }
+				NotSingleVariant => { size: tu.size, alignment: tu.alignment }
 			}
 		RocU128 => { size: 16, alignment: 16 }
 		RocU16 => { size: 2, alignment: 2 }
@@ -504,10 +461,8 @@ repr_layout_64 = |type_table, type_repr| {
 
 type_layout_32 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
 type_layout_32 = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => repr_layout_32(type_table, type_repr)
-		Err(_) => { size: 4, alignment: 4 }
-	}
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	repr_layout_32(type_table, type_repr)
 }
 
 repr_layout_32 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
@@ -603,77 +558,71 @@ record_field_layout_32 = |type_table, field| {
 
 tag_union_layout_32 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
 tag_union_layout_32 = |type_table, tu| {
-	if List.len(tu.tags) == 1 {
-		payload_layout = match List.first(tu.tags) {
-			Ok(tag) =>
-				match List.first(tag.payload) {
-					Ok(payload_id) => type_layout_32(type_table, payload_id)
-					_ => { size: 0, alignment: 1 }
+	match TypeTable.single_variant_payload(tu) {
+		SinglePayload(payload_id) => {
+			payload_layout = type_layout_32(type_table, payload_id)
+			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
+		}
+		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
+		NotSingleVariant => {
+			var $max_payload_size = 0
+			var $max_payload_alignment = 1
+
+			for tag in tu.tags {
+				payload_layout = tag_payload_layout_32(type_table, tag.payload)
+				if payload_layout.size > $max_payload_size {
+					$max_payload_size = payload_layout.size
 				}
-			_ => { size: 0, alignment: 1 }
-		}
-		{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
-	} else {
-		var $max_payload_size = 0
-		var $max_payload_alignment = 1
-
-		for tag in tu.tags {
-			payload_layout = tag_payload_layout_32(type_table, tag.payload)
-			if payload_layout.size > $max_payload_size {
-				$max_payload_size = payload_layout.size
+				if payload_layout.alignment > $max_payload_alignment {
+					$max_payload_alignment = payload_layout.alignment
+				}
 			}
-			if payload_layout.alignment > $max_payload_alignment {
-				$max_payload_alignment = payload_layout.alignment
-			}
-		}
 
-		disc = disc_layout_for_count(List.len(tu.tags))
-		disc_offset = align_forward_u64($max_payload_size, disc.alignment)
-		total_alignment = if $max_payload_alignment > disc.alignment {
-			$max_payload_alignment
-		} else {
-			disc.alignment
+			disc = disc_layout_for_count(List.len(tu.tags))
+			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
+			total_alignment = if $max_payload_alignment > disc.alignment {
+				$max_payload_alignment
+			} else {
+				disc.alignment
+			}
+			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
+			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
 		}
-		total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
-		{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
 	}
 }
 
 tag_union_layout_64 : List(TypeRepr), TagUnionRepr -> { alignment : U64, discriminant_offset : U64, size : U64 }
 tag_union_layout_64 = |type_table, tu| {
-	if List.len(tu.tags) == 1 {
-		payload_layout = match List.first(tu.tags) {
-			Ok(tag) =>
-				match List.first(tag.payload) {
-					Ok(payload_id) => type_layout_64(type_table, payload_id)
-					_ => { size: 0, alignment: 1 }
+	match TypeTable.single_variant_payload(tu) {
+		SinglePayload(payload_id) => {
+			payload_layout = type_layout_64(type_table, payload_id)
+			{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
+		}
+		SingleNoPayload => { size: 0, alignment: 1, discriminant_offset: 0 }
+		NotSingleVariant => {
+			var $max_payload_size = 0
+			var $max_payload_alignment = 1
+
+			for tag in tu.tags {
+				payload_layout = tag_payload_layout_64(type_table, tag.payload)
+				if payload_layout.size > $max_payload_size {
+					$max_payload_size = payload_layout.size
 				}
-			_ => { size: 0, alignment: 1 }
-		}
-		{ size: payload_layout.size, alignment: payload_layout.alignment, discriminant_offset: payload_layout.size }
-	} else {
-		var $max_payload_size = 0
-		var $max_payload_alignment = 1
-
-		for tag in tu.tags {
-			payload_layout = tag_payload_layout_64(type_table, tag.payload)
-			if payload_layout.size > $max_payload_size {
-				$max_payload_size = payload_layout.size
+				if payload_layout.alignment > $max_payload_alignment {
+					$max_payload_alignment = payload_layout.alignment
+				}
 			}
-			if payload_layout.alignment > $max_payload_alignment {
-				$max_payload_alignment = payload_layout.alignment
-			}
-		}
 
-		disc = disc_layout_for_count(List.len(tu.tags))
-		disc_offset = align_forward_u64($max_payload_size, disc.alignment)
-		total_alignment = if $max_payload_alignment > disc.alignment {
-			$max_payload_alignment
-		} else {
-			disc.alignment
+			disc = disc_layout_for_count(List.len(tu.tags))
+			disc_offset = align_forward_u64($max_payload_size, disc.alignment)
+			total_alignment = if $max_payload_alignment > disc.alignment {
+				$max_payload_alignment
+			} else {
+				disc.alignment
+			}
+			total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
+			{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
 		}
-		total_size = align_forward_u64(disc_offset + disc.size, total_alignment)
-		{ size: total_size, alignment: total_alignment, discriminant_offset: disc_offset }
 	}
 }
 
@@ -997,10 +946,6 @@ indent_lines = |text, prefix| {
 
 box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
 
-missing_type_compile_error = |type_id, mode| {
-	"    comptime { @compileError(\"missing glue type information for recursive ${mode} of type id ${U64.to_str(type_id)}\"); }\n"
-}
-
 decref_helper_name_from_repr = |type_repr| {
 	match type_repr {
 		RocRecord(rec) =>
@@ -1038,10 +983,8 @@ incref_helper_name_from_repr = |type_repr| {
 }
 
 decref_stmt_for_type_id = |type_table, type_id, expr| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => decref_stmt_for_repr(type_table, type_repr, expr)
-		Err(_) => missing_type_compile_error(type_id, "decref")
-	}
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	decref_stmt_for_repr(type_table, type_repr, expr)
 }
 
 decref_stmt_for_repr = |type_table, type_repr, expr| {
@@ -1060,9 +1003,9 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 			}
 		}
 		RocBox(inner_id) =>
-			match List.get(type_table, inner_id) {
-				Ok(RocFunction(_)) => "    decrefErasedCallable(${expr}, roc_host);\n"
-				Ok(_) => {
+			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
+				RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
+				_ => {
 					inner_zig = type_id_to_zig(type_table, inner_id)
 					if inner_zig == "*anyopaque" {
 						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
@@ -1072,7 +1015,6 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), false, null, roc_host);\n"
 					}
 				}
-				Err(_) => missing_type_compile_error(inner_id, "boxed-payload decref")
 			}
 		RocRecord(_) => {
 			helper = decref_helper_name_from_repr(type_repr)
@@ -1083,21 +1025,16 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 			}
 		}
 		RocTagUnion(tu) =>
-			if List.len(tu.tags) == 1 {
-				match List.first(tu.tags) {
-					Ok(tag) =>
-						match List.first(tag.payload) {
-							Ok(payload_id) => decref_stmt_for_type_id(type_table, payload_id, expr)
-							_ => ""
-						}
-					_ => ""
-				}
-			} else {
-				helper = decref_helper_name_from_repr(type_repr)
-				if helper == "" {
-					""
-				} else {
-					"    ${helper}(${expr}, roc_host);\n"
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => decref_stmt_for_type_id(type_table, payload_id, expr)
+				SingleNoPayload => ""
+				NotSingleVariant => {
+					helper = decref_helper_name_from_repr(type_repr)
+					if helper == "" {
+						""
+					} else {
+						"    ${helper}(${expr}, roc_host);\n"
+					}
 				}
 			}
 		_ => ""
@@ -1105,10 +1042,8 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 }
 
 incref_stmt_for_type_id = |type_table, type_id, expr| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => incref_stmt_for_repr(type_table, type_repr, expr)
-		Err(_) => missing_type_compile_error(type_id, "incref")
-	}
+	type_repr = TypeTable.get(TypeTable.from_list(type_table), type_id)
+	incref_stmt_for_repr(type_table, type_repr, expr)
 }
 
 incref_stmt_for_repr = |type_table, type_repr, expr| {
@@ -1116,10 +1051,9 @@ incref_stmt_for_repr = |type_table, type_repr, expr| {
 		RocStr => "    ${expr}.incref(amount);\n"
 		RocList(_) => "    ${expr}.incref(amount);\n"
 		RocBox(inner_id) =>
-			match List.get(type_table, inner_id) {
-				Ok(RocFunction(_)) => "    increfErasedCallable(${expr}, amount);\n"
-				Ok(_) => "    increfBox(@ptrCast(${expr}), amount);\n"
-				Err(_) => missing_type_compile_error(inner_id, "boxed-payload incref")
+			match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
+				RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
+				_ => "    increfBox(@ptrCast(${expr}), amount);\n"
 			}
 		RocRecord(_) => {
 			helper = incref_helper_name_from_repr(type_repr)
@@ -1238,9 +1172,9 @@ generate_box_payload_decref_helpers = |type_table| {
 			RocBox(inner_id) => {
 				if !(List.contains($seen_inner_ids, inner_id)) {
 					$seen_inner_ids = $seen_inner_ids.append(inner_id)
-					match List.get(type_table, inner_id) {
-						Ok(RocFunction(_)) => {}
-						Ok(_) => {
+					match TypeTable.get(TypeTable.from_list(type_table), inner_id) {
+						RocFunction(_) => {}
+						_ => {
 							inner_zig = type_id_to_zig(type_table, inner_id)
 							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) {
 								stmt = decref_stmt_for_type_id(type_table, inner_id, "payload.*")
@@ -1249,12 +1183,6 @@ generate_box_payload_decref_helpers = |type_table| {
 									"fn ${box_payload_decref_name(inner_id)}(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c) void {\n    const payload: *${inner_zig} = @ptrCast(@alignCast(data_ptr orelse return));\n${stmt}}\n\n",
 								)
 							}
-						}
-						Err(_) => {
-							$helpers = Str.concat(
-								$helpers,
-								"fn ${box_payload_decref_name(inner_id)}(_: ?*anyopaque, _: *RocHost) callconv(.c) void {\n    comptime { @compileError(\"missing glue type information for boxed payload type id ${U64.to_str(inner_id)}\"); }\n}\n\n",
-							)
 						}
 					}
 				}
@@ -1295,10 +1223,7 @@ generate_refcount_helpers = |type_table| {
 
 ## Replace all occurrences of a substring
 str_replace_all : Str, Str, Str -> Str
-str_replace_all = |s, from, to| {
-	parts = Str.split_on(s, from)
-	Str.join_with(parts, to)
-}
+str_replace_all = |s, from, to| RocName.replace_all(s, from, to)
 
 expect str_replace_all("a.b.c", ".", "_") == "a_b_c"
 expect str_replace_all("hello!", "!", "") == "hello"
@@ -1311,29 +1236,7 @@ to_lowercase = |ch| ch + 32
 
 ## Convert a string to lower_snake_case
 to_lower_snake_case : Str -> Str
-to_lower_snake_case = |s| {
-	bytes = Str.to_utf8(s)
-	var $output = []
-	var $prev_was_lower = Bool.False
-
-	for byte in bytes {
-		is_upper = byte >= 'A' and byte <= 'Z'
-		is_lower = byte >= 'a' and byte <= 'z'
-
-		new_byte = if is_upper to_lowercase(byte) else byte
-
-		if is_upper and $prev_was_lower {
-			$output = $output.append('_')
-		}
-		$output = $output.append(new_byte)
-		$prev_was_lower = is_lower
-	}
-
-	match Str.from_utf8($output) {
-		Ok(str) => str
-		Err(_) => s
-	}
-}
+to_lower_snake_case = |s| RocName.lower_snake_ascii(s)
 
 expect to_lower_snake_case("FooBar") == "foo_bar"
 expect to_lower_snake_case("fooBar") == "foo_bar"
@@ -1343,25 +1246,7 @@ expect to_lower_snake_case("Stdout_line") == "stdout_line"
 
 ## Capitalize the first character of a string
 capitalize_first : Str -> Str
-capitalize_first = |s| {
-	bytes = Str.to_utf8(s)
-	if List.is_empty(bytes) {
-		return ""
-	}
-
-	first = match List.first(bytes) {
-		Ok(b) => b
-		Err(_) => 0
-	}
-	first_is_lower = first >= 'a' and first <= 'z'
-	new_first = if first_is_lower to_uppercase(first) else first
-	rest = List.drop_first(bytes, 1)
-	new_bytes = List.concat([new_first], rest)
-	match Str.from_utf8(new_bytes) {
-		Ok(str) => str
-		Err(_) => s
-	}
-}
+capitalize_first = |s| RocName.capitalize_first(s)
 
 expect capitalize_first("hello") == "Hello"
 expect capitalize_first("Hello") == "Hello"
@@ -1373,19 +1258,7 @@ expect capitalize_first("") == ""
 
 ## Convert function name to PascalCase struct name (e.g., "Stdout.line!" -> "StdoutLine")
 name_to_struct_name : Str -> Str
-name_to_struct_name = |name| {
-	parts = Str.split_on(name, ".")
-
-	var $result = ""
-	for part in parts {
-		capitalized = part
-			->str_replace_all("!", "")
-			->capitalize_first()
-		$result = Str.concat($result, capitalized)
-	}
-
-	$result
-}
+name_to_struct_name = |name| RocName.to_pascal(RocName.from_str(name))
 
 expect name_to_struct_name("Stdout.line!") == "StdoutLine"
 expect name_to_struct_name("line!") == "Line"
@@ -1393,12 +1266,7 @@ expect name_to_struct_name("Foo.bar.baz!") == "FooBarBaz"
 
 ## Convert function name to snake_case (e.g., "Stdout.line!" -> "stdout_line")
 name_to_snake : Str -> Str
-name_to_snake = |name| {
-	name
-		->str_replace_all(".", "_")
-		->str_replace_all("!", "")
-		->to_lower_snake_case()
-}
+name_to_snake = |name| RocName.to_lower_snake(RocName.from_str(name))
 
 expect name_to_snake("Stdout.line!") == "stdout_line"
 expect name_to_snake("line!") == "line"
@@ -1407,23 +1275,7 @@ expect name_to_snake("PartDef.Idx.get!") == "part_def_idx_get"
 
 ## Convert function name to camelCase for Zig function names (e.g., "Stdout.line!" -> "hostedStdoutLine")
 name_to_camel : Str -> Str
-name_to_camel = |name| {
-	parts = Str.split_on(name, ".")
-
-	var $result = ""
-	var $first = Bool.True
-	for part in parts {
-		cleaned = str_replace_all(part, "!", "")
-		if $first {
-			$result = Str.concat($result, lowercase_first(cleaned))
-			$first = Bool.False
-		} else {
-			$result = Str.concat($result, capitalize_first(cleaned))
-		}
-	}
-
-	$result
-}
+name_to_camel = |name| RocName.to_camel(RocName.from_str(name))
 
 expect name_to_camel("Stdout.line!") == "stdoutLine"
 expect name_to_camel("Echo.line!") == "echoLine"
@@ -1439,25 +1291,7 @@ expect name_to_zig_quoted_ident("answer") == "@\"answer\""
 
 ## Lowercase the first character of a string
 lowercase_first : Str -> Str
-lowercase_first = |s| {
-	bytes = Str.to_utf8(s)
-	if List.is_empty(bytes) {
-		return ""
-	}
-
-	first = match List.first(bytes) {
-		Ok(b) => b
-		Err(_) => 0
-	}
-	first_is_upper = first >= 'A' and first <= 'Z'
-	new_first = if first_is_upper to_lowercase(first) else first
-	rest = List.drop_first(bytes, 1)
-	new_bytes = List.concat([new_first], rest)
-	match Str.from_utf8(new_bytes) {
-		Ok(str) => str
-		Err(_) => s
-	}
-}
+lowercase_first = |s| RocName.lowercase_first(s)
 
 expect lowercase_first("Hello") == "hello"
 expect lowercase_first("hello") == "hello"
@@ -1472,9 +1306,9 @@ expect lowercase_first("") == ""
 ## Type annotation ensures the interpreter uses the full TypeRepr layout.
 lookup_record_in_type_table : List(TypeRepr), U64 -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
 lookup_record_in_type_table = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => lookup_record_from_repr(type_table, type_repr)
-		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+	match TypeTable.record_layout(TypeTable.from_list(type_table), type_id) {
+		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment }
+		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 	}
 }
 
@@ -1482,47 +1316,9 @@ lookup_record_in_type_table = |type_table, type_id| {
 ## Type annotation ensures the interpreter uses the full 21-variant TypeRepr layout.
 lookup_record_from_repr : List(TypeRepr), TypeRepr -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
 lookup_record_from_repr = |type_table, type_repr| {
-	match type_repr {
-		RocRecord(rec) =>
-			if List.len(rec.fields) > 0 {
-				{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
-			} else {
-				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-			}
-		RocTagUnion(tu) =>
-			# Follow single-variant tag unions to their payload
-			if List.len(tu.tags) == 1 {
-				match List.first(tu.tags) {
-					Ok(tag) =>
-						match List.first(tag.payload) {
-							Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
-							_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-						}
-					_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-				}
-			} else {
-				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-			}
-		RocBox(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocBool => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocDec => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocF32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocF64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocFunction(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocList(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocStr => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocUnit => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocUnknown(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+	match TypeTable.record_layout_from_repr(TypeTable.from_list(type_table), type_repr) {
+		RecordFound(layout) => { found: Bool.True, fields: layout.fields, size: layout.size, alignment: layout.alignment }
+		NotRecord => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 	}
 }
 
@@ -2008,38 +1804,16 @@ generate_args_struct = |func, type_table| {
 
 ## Check whether a type is the zero-sized Roc unit type.
 is_unit_type_id = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(RocUnit) => Bool.True
-		_ => Bool.False
-	}
+	TypeTable.is_unit(TypeTable.from_list(type_table), type_id)
 }
 
 ## Check whether a type is an explicitly anonymous record shape.
 is_anonymous_record_type_id = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => is_anonymous_record_repr(type_table, type_repr)
-		Err(_) => Bool.False
-	}
+	TypeTable.is_anonymous_record(TypeTable.from_list(type_table), type_id)
 }
 
 is_anonymous_record_repr = |type_table, type_repr| {
-	match type_repr {
-		RocRecord(rec) => rec.anonymous
-		RocTagUnion(tu) =>
-			if List.len(tu.tags) == 1 {
-				match List.first(tu.tags) {
-					Ok(tag) =>
-						match List.first(tag.payload) {
-							Ok(payload_id) => is_anonymous_record_type_id(type_table, payload_id)
-							_ => Bool.False
-						}
-					_ => Bool.False
-				}
-			} else {
-				Bool.False
-			}
-		_ => Bool.False
-	}
+	TypeTable.is_anonymous_record_repr(TypeTable.from_list(type_table), type_repr)
 }
 
 ## Build a natural C ABI parameter list from Roc function argument type IDs.
@@ -2308,11 +2082,7 @@ has_meaningful_args = |func, type_table| {
 		Bool.False
 	} else if List.len(func.arg_type_ids) == 1 {
 		match List.first(func.arg_type_ids) {
-			Ok(id) =>
-				match List.get(type_table, id) {
-					Ok(RocUnit) => Bool.False
-					_ => Bool.True
-				}
+			Ok(id) => !(TypeTable.is_unit(TypeTable.from_list(type_table), id))
 			_ => Bool.False
 		}
 	} else {
@@ -2347,14 +2117,8 @@ generate_entrypoint_externs = |provides_list, type_table| {
 	var $result = "// =============================================================================\n// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n// =============================================================================\n\n"
 
 	for entry in provides_list {
-		match List.get(type_table, entry.type_id) {
-			Ok(type_repr) => {
-				$result = Str.concat($result, generate_provided_decl(entry, type_table, type_repr))
-			}
-			Err(_) => {
-				$result = Str.concat($result, "comptime { @compileError(\"missing glue type information for provided symbol ${entry.ffi_symbol}\"); }\n\n")
-			}
-		}
+		type_repr = TypeTable.get(TypeTable.from_list(type_table), entry.type_id)
+		$result = Str.concat($result, generate_provided_decl(entry, type_table, type_repr))
 	}
 
 	$result
