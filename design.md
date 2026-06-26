@@ -1447,16 +1447,21 @@ adapter or consumer introduces one. Consumers such as `for`, `Iter.fold`, and
 Roc computations according to the source iterator they consume.
 
 The `Public(iter_value)` plan is the materialization boundary. It represents an
-iterator value whose public record/step representation must be preserved
-because the compiler has no explicit plan for the producer or because the value
-is being observed in a way that requires the public API. Examples include:
+iterator value whose public representation must be preserved because the
+compiler has no explicit plan for the producer or because the value is being
+observed in a way that requires the public API. Examples include:
 
-- calling the `.step` field directly
+- calling public `Iter.next` outside an optimized consumer
 - storing or returning an iterator value as an ordinary Roc value
 - passing an iterator to code that is not being specialized with an internal
   iterator plan
 - matching on the exact result of public `Iter.next` outside an optimized
   consumer
+
+Direct `.step` field access is not a public materialization boundary. `Iter` is
+opaque outside the builtin module, so ordinary Roc code cannot observe that
+field. The builtin module can access the backing record field internally, but
+iterator producer plans are disabled while lowering the builtin module.
 
 Materialization is a semantic operation, not a size cleanup. When a known plan
 crosses this boundary, lowering constructs the ordinary public `Iter` value and

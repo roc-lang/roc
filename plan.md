@@ -255,10 +255,13 @@ types. A user method with the same spelling is never a builtin producer.
 
 Iterator plans are handled by the existing lowering paths that already own the
 relevant semantic decision. A source `for` that receives a known plan consumes
-it directly. A public `.step` access, function return, aggregate storage, or
+it directly. Public `Iter.next`, function return, aggregate storage, or
 unspecialized call argument materializes the plan at that boundary. This is not
 a standalone pass whose job is to walk around after the fact and clean up
-leftover plans.
+leftover plans. Direct `.step` field access is not a public boundary because
+`Iter` is opaque to ordinary Roc code; only the builtin module can access that
+field, and iterator producer plans are disabled while lowering the builtin
+module.
 
 For every plan value it sees, the rewrite must choose exactly one outcome:
 
@@ -323,7 +326,6 @@ a semantic operation, not a cleanup pass.
 
 Materialization is required when:
 
-- `.step` is accessed directly
 - `Iter.next` is used outside a specialized consumer
 - a value is stored in an aggregate that is observed publicly
 - a value is returned from unspecialized code
@@ -603,7 +605,9 @@ Tasks:
   - [x] Recognized non-list producer plans (`Single`, finite `Range`,
     `Custom`, `Append`, `Concat`, `Map`, and `Filter`) materialize to public
     `Iter.next` behavior at unspecialized public boundaries.
-- [ ] Public `.step` access materializes.
+- [x] Direct `.step` field access is not a public materialization boundary:
+  external access is rejected because `Iter` is opaque, and builtin-internal
+  access is lowered with iterator producer plans disabled.
 - [ ] Public `Iter.next` materializes when not specialized.
   - [x] Direct `Iter.next(List.iter(...))` materializes before Lambda and
     preserves public iterator behavior.
