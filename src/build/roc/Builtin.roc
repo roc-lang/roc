@@ -514,7 +514,7 @@ Builtin :: [].{
 	Iter(item) :: {
 		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
 		len_if_known : [Known(U64), Unknown],
-		step : () -> [Append({ before : Iter(item), after : item }), One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
+		step : () -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
 	}.{
 		# The general unfold. `advance` maps a seed to either the next item paired with the
 		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
@@ -664,13 +664,7 @@ Builtin :: [].{
 					},
 					||
 						match Iter.next(remaining_first) {
-							Done => match Iter.next(remaining_second) {
-								Done => Done
-								Append({ before, after }) => Skip({ rest: make(before, Iter.single(after)) })
-								Skip({ rest }) => Skip({ rest: make(range_done(), rest) })
-								One({ item, rest }) => One({ item, rest: make(range_done(), rest) })
-							}
-							Append({ before, after }) => Skip({ rest: make(before, Iter.prepended(remaining_second, after)) })
+							Done => Iter.next(remaining_second)
 							Skip({ rest }) => Skip({ rest: make(rest, remaining_second) })
 							One({ item, rest }) => One({ item, rest: make(rest, remaining_second) })
 						},
@@ -696,17 +690,16 @@ Builtin :: [].{
 						}
 					Unknown => Unknown
 				},
-				|| Append({ before: iterator, after: last }),
+				||
+					match Iter.next(iterator) {
+						Done => One({ item: last, rest: range_done() })
+						Skip({ rest }) => Skip({ rest: Iter.append(rest, last) })
+						One({ item, rest }) => One({ item, rest: Iter.append(rest, last) })
+					},
 			)
 
-		next : Iter(item) -> [Append({ before : Iter(item), after : item }), One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
-		next = |iterator|
-			match (iterator.step)() {
-				Done => Done
-				Append({ before, after }) => Append({ before: before, after: after })
-				Skip({ rest }) => Skip({ rest: rest })
-				One({ item, rest }) => One({ item: item, rest: rest })
-			}
+		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
+		next = |iterator| (iterator.step)()
 
 		map : Iter(a), (a -> b) -> Iter(b)
 		map = |iterator, transform|
@@ -717,7 +710,6 @@ Builtin :: [].{
 						||
 							match Iter.next(iterator) {
 								Done => Done
-								Append({ before, after }) => Skip({ rest: Iter.concat(Iter.map(before, transform), Iter.map(Iter.single(after), transform)) })
 								Skip({ rest }) => Skip({ rest: Iter.map(rest, transform) })
 								One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
 							},
@@ -731,7 +723,6 @@ Builtin :: [].{
 				||
 					match Iter.next(iterator) {
 						Done => Done
-						Append({ before, after }) => Skip({ rest: Iter.keep_if(Iter.concat(before, Iter.single(after)), predicate) })
 						Skip({ rest }) => Skip({ rest: Iter.keep_if(rest, predicate) })
 						One({ item, rest }) =>
 							if predicate(item) {
@@ -749,7 +740,6 @@ Builtin :: [].{
 				||
 					match Iter.next(iterator) {
 						Done => Done
-						Append({ before, after }) => Skip({ rest: Iter.drop_if(Iter.concat(before, Iter.single(after)), predicate) })
 						Skip({ rest }) => Skip({ rest: Iter.drop_if(rest, predicate) })
 						One({ item, rest }) =>
 							if predicate(item) {
@@ -764,7 +754,6 @@ Builtin :: [].{
 		fold = |iterator, acc, step|
 			match Iter.next(iterator) {
 				Done => acc
-				Append({ before, after }) => step(Iter.fold(before, acc, step), after)
 				Skip({ rest }) => Iter.fold(rest, acc, step)
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
@@ -817,7 +806,6 @@ Builtin :: [].{
 							||
 								match Iter.next(iterator) {
 									Done => Done
-									Append({ before, after }) => Skip({ rest: Iter.take_first(Iter.concat(before, Iter.single(after)), n) })
 									Skip({ rest }) => Skip({ rest: Iter.take_first(rest, n) })
 									One({ item, rest }) => One({ item, rest: Iter.take_first(rest, n - 1) })
 								},
@@ -853,7 +841,6 @@ Builtin :: [].{
 							||
 								match Iter.next(iterator) {
 									Done => Done
-									Append({ before, after }) => Skip({ rest: Iter.drop_first(Iter.concat(before, Iter.single(after)), n) })
 									Skip({ rest }) => Skip({ rest: Iter.drop_first(rest, n) })
 									One({ item: _, rest }) => Skip({ rest: Iter.drop_first(rest, n - 1) })
 								},
@@ -938,7 +925,6 @@ Builtin :: [].{
 							||
 								match Iter.next(iterator) {
 									Done => Done
-									Append({ before, after }) => Skip({ rest: Iter.step_by(Iter.concat(before, Iter.single(after)), n) })
 									Skip({ rest }) => Skip({ rest: Iter.step_by(rest, n) })
 									One({ item, rest }) => One({ item, rest: Iter.step_by(Iter.drop_first(rest, n - 1), n) })
 								},
@@ -980,7 +966,6 @@ Builtin :: [].{
 				step!: ||
 					match Iter.next(iterator) {
 						Done => Done
-						Append({ before, after }) => Skip({ rest: Stream.from_iter(Iter.concat(before, Iter.single(after))) })
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
 					},
@@ -1126,9 +1111,6 @@ Builtin :: [].{
 				match Iter.next($rest) {
 					Done => {
 						break
-					}
-					Append({ before, after }) => {
-						$rest = Iter.concat(before, Iter.single(after))
 					}
 					Skip({ rest }) => {
 						$rest = rest
@@ -14098,7 +14080,7 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 
 numeric_compare : item, item -> [LT, EQ, GT]
 
-iter_from_step : [Known(U64), Unknown], (() -> [Append({ before : Iter(item), after : item }), One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
+iter_from_step : [Known(U64), Unknown], (() -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
 iter_from_step = |len_if_known, step| {
 	len_if_known,
 	step,

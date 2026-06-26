@@ -4495,20 +4495,8 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const before_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("before"));
-    const after_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("after"));
     const item_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("item"));
     const rest_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
-    const append_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
-    const append_record_fields = [_]types_mod.RecordField{
-        .{ .name = before_ident, .var_ = iter_var },
-        .{ .name = after_ident, .var_ = item_var },
-    };
-    const append_record_fields_range = try self.types.appendRecordFields(&append_record_fields);
-    const append_payload_record = try self.freshFromContent(.{ .structure = .{ .record = .{
-        .fields = append_record_fields_range,
-        .ext = append_record_ext,
-    } } }, env, Region.zero());
 
     const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const record_fields = [_]types_mod.RecordField{
@@ -4531,13 +4519,11 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
         .ext = skip_record_ext,
     } } }, env, Region.zero());
 
-    const append_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Append"));
     const done_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Done"));
     const one_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("One"));
     const skip_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Skip"));
 
     const tags = [_]types_mod.Tag{
-        try self.types.mkTag(append_ident, &.{append_payload_record}),
         try self.types.mkTag(one_ident, &.{payload_record}),
         try self.types.mkTag(skip_ident, &.{skip_payload_record}),
         try self.types.mkTag(done_ident, &.{}),

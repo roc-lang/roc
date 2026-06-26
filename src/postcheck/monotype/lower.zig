@@ -16392,12 +16392,10 @@ const BodyContext = struct {
         const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
         const iterator_ty = self.builder.program.exprs.items[@intFromEnum(initial_iterator)].ty;
         try self.constrainTypeToMono(plan.iterator_ty, iterator_ty);
-        try self.constrainTypeToMono(step.append_before.ty, iterator_ty);
         try self.constrainTypeToMono(step.one_rest.ty, iterator_ty);
         try self.constrainTypeToMono(step.skip_rest.ty, iterator_ty);
         const item_ty = try self.lowerType(step.one_item.ty);
         try self.constrainTypeToMono(plan.item_ty, item_ty);
-        try self.constrainTypeToMono(step.append_after.ty, item_ty);
         const step_expected_ty = try self.lowerType(plan.step_ty);
         const iterator_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), iterator_ty);
         const iterator_param = Ast.TypedLocal{ .local = iterator_local, .ty = iterator_ty };
@@ -16420,14 +16418,13 @@ const BodyContext = struct {
         else
             try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .break_ = try self.loopStateExpr(result_ty, carries) } });
 
-        var branches: [4]Ast.Branch = undefined;
+        var branches: [3]Ast.Branch = undefined;
         branches[0] = .{
             .pat = try self.iteratorDonePattern(step),
             .body = done_body,
         };
-        branches[1] = try self.iteratorAppendBranch(result_ty, step, iterator_ty, item_ty, carries);
-        branches[2] = try self.iteratorOneBranch(for_, result_ty, step, iterator_ty, carries);
-        branches[3] = try self.iteratorSkipBranch(result_ty, step, iterator_ty, carries);
+        branches[1] = try self.iteratorOneBranch(for_, result_ty, step, iterator_ty, carries);
+        branches[2] = try self.iteratorSkipBranch(result_ty, step, iterator_ty, carries);
 
         const match_expr = try self.builder.program.addExpr(.{
             .ty = result_ty,
@@ -20806,32 +20803,6 @@ const BodyContext = struct {
         return .{ .pat = tag_pat, .body = block };
     }
 
-    fn iteratorAppendBranch(
-        self: *BodyContext,
-        result_ty: Type.TypeId,
-        step: IterStepShape,
-        iterator_ty: Type.TypeId,
-        item_ty: Type.TypeId,
-        carries: []const LoopCarry,
-    ) Allocator.Error!Ast.Branch {
-        const before_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), iterator_ty);
-        const after_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
-        const record_pat = try self.iteratorAppendPayloadPattern(step, iterator_ty, item_ty, before_local, after_local);
-        const tag_pat = try self.builder.program.addPat(.{ .ty = try self.lowerType(step.step_ty), .data = .{ .tag = .{
-            .name = try self.builder.tagName(self.view, step.append_tag),
-            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{record_pat}),
-        } } });
-
-        const before_expr = try self.builder.localExpr(before_local, iterator_ty);
-        const after_expr = try self.builder.localExpr(after_local, item_ty);
-        const rest_expr = try self.iterAppendRestExpr(iterator_ty, item_ty, before_expr, after_expr);
-
-        return .{
-            .pat = tag_pat,
-            .body = try self.continueWithState(result_ty, rest_expr, carries),
-        };
-    }
-
     fn lowerIteratorBodyThenContinue(
         self: *BodyContext,
         body: checked.CheckedExprId,
@@ -20945,71 +20916,6 @@ const BodyContext = struct {
         };
     }
 
-    fn iterAppendRestExpr(
-        self: *BodyContext,
-        iterator_ty: Type.TypeId,
-        item_ty: Type.TypeId,
-        first_expr: Ast.ExprId,
-        after_expr: Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const single_after = try self.iterSingleExpr(iterator_ty, item_ty, after_expr);
-        return try self.iterConcatExpr(iterator_ty, first_expr, single_after);
-    }
-
-    fn iterSingleExpr(
-        self: *BodyContext,
-        iterator_ty: Type.TypeId,
-        item_ty: Type.TypeId,
-        item_expr: Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse
-            Common.invariant("iterator Single lowering could not find Iter method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, "single") orelse
-            Common.invariant("checked method registry is missing Iter.single");
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(lookup, 0, item_ty, iterator_ty);
-        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.single target had a non-function type");
-        const arg_tys = self.builder.program.types.span(fn_data.args);
-        if (arg_tys.len != 1) Common.invariant("Iter.single target arity changed");
-        if (!self.sameType(arg_tys[0], item_ty)) Common.invariant("Iter.single argument type differed from iterator item type");
-        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.single return type differed from iterator type");
-
-        return try self.builder.program.addExpr(.{
-            .ty = fn_data.ret,
-            .data = .{ .call_proc = .{
-                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{item_expr}),
-            } },
-        });
-    }
-
-    fn iterConcatExpr(
-        self: *BodyContext,
-        iterator_ty: Type.TypeId,
-        first_expr: Ast.ExprId,
-        second_expr: Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const owner = methodOwnerFromType(&self.builder.program.types, iterator_ty) orelse
-            Common.invariant("iterator Concat lowering could not find Iter method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, "concat") orelse
-            Common.invariant("checked method registry is missing Iter.concat");
-        const arg_tys_wanted = [_]Type.TypeId{ iterator_ty, iterator_ty };
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys_wanted, iterator_ty);
-        const fn_data = self.builder.functionShape(callable_mono_ty, "Iter.concat target had a non-function type");
-        const arg_tys = self.builder.program.types.span(fn_data.args);
-        if (arg_tys.len != 2) Common.invariant("Iter.concat target arity changed");
-        if (!self.sameType(arg_tys[0], iterator_ty)) Common.invariant("Iter.concat first argument type differed from iterator type");
-        if (!self.sameType(arg_tys[1], iterator_ty)) Common.invariant("Iter.concat second argument type differed from iterator type");
-        if (!self.sameType(fn_data.ret, iterator_ty)) Common.invariant("Iter.concat return type differed from iterator type");
-
-        return try self.builder.program.addExpr(.{
-            .ty = fn_data.ret,
-            .data = .{ .call_proc = .{
-                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ first_expr, second_expr }),
-            } },
-        });
-    }
-
     fn iteratorOnePayloadPattern(
         self: *BodyContext,
         item_pattern: checked.CheckedPatternId,
@@ -21028,23 +20934,6 @@ const BodyContext = struct {
         const fields = [_]Ast.RecordDestruct{ item_field, rest_field };
         return try self.builder.program.addPat(.{
             .ty = try self.lowerType(step.one_payload_ty),
-            .data = .{ .record = try self.builder.program.addRecordDestructSpan(&fields) },
-        });
-    }
-
-    fn iteratorAppendPayloadPattern(
-        self: *BodyContext,
-        step: IterStepShape,
-        iterator_ty: Type.TypeId,
-        item_ty: Type.TypeId,
-        before_local: Ast.LocalId,
-        after_local: Ast.LocalId,
-    ) Allocator.Error!Ast.PatId {
-        const before_field = try self.iteratorRecordDestruct(step.append_before.name, try self.builder.bindPat(before_local, iterator_ty));
-        const after_field = try self.iteratorRecordDestruct(step.append_after.name, try self.builder.bindPat(after_local, item_ty));
-        const fields = [_]Ast.RecordDestruct{ before_field, after_field };
-        return try self.builder.program.addPat(.{
-            .ty = try self.lowerType(step.append_payload_ty),
             .data = .{ .record = try self.builder.program.addRecordDestructSpan(&fields) },
         });
     }
@@ -21378,14 +21267,10 @@ const BodyContext = struct {
     const IterStepShape = struct {
         step_ty: checked.CheckedTypeId,
         done_tag: names.TagNameId,
-        append_tag: names.TagNameId,
         one_tag: names.TagNameId,
         skip_tag: names.TagNameId,
-        append_payload_ty: checked.CheckedTypeId,
         one_payload_ty: checked.CheckedTypeId,
         skip_payload_ty: checked.CheckedTypeId,
-        append_before: checked.CheckedRecordField,
-        append_after: checked.CheckedRecordField,
         one_item: checked.CheckedRecordField,
         one_rest: checked.CheckedRecordField,
         skip_rest: checked.CheckedRecordField,
@@ -21399,10 +21284,8 @@ const BodyContext = struct {
         };
 
         var done_tag: ?names.TagNameId = null;
-        var append_tag: ?names.TagNameId = null;
         var one_tag: ?names.TagNameId = null;
         var skip_tag: ?names.TagNameId = null;
-        var append_payload_ty: ?checked.CheckedTypeId = null;
         var one_payload_ty: ?checked.CheckedTypeId = null;
         var skip_payload_ty: ?checked.CheckedTypeId = null;
 
@@ -21419,11 +21302,6 @@ const BodyContext = struct {
                     if (tag_args.len != 0) Common.invariant("iterator Done step carried payloads");
                     if (done_tag != null) Common.invariant("iterator step type had duplicate Done tags");
                     done_tag = tag.name;
-                } else if (Ident.textEql(tag_text, "Append")) {
-                    if (tag_args.len != 1) Common.invariant("iterator Append step did not carry one payload");
-                    if (append_tag != null) Common.invariant("iterator step type had duplicate Append tags");
-                    append_tag = tag.name;
-                    append_payload_ty = tag_args[0];
                 } else if (Ident.textEql(tag_text, "One")) {
                     if (tag_args.len != 1) Common.invariant("iterator One step did not carry one payload");
                     if (one_tag != null) Common.invariant("iterator step type had duplicate One tags");
@@ -21459,21 +21337,16 @@ const BodyContext = struct {
             }
         }
 
-        const append_payload = append_payload_ty orelse Common.invariant("iterator step type was missing Append");
         const one_payload = one_payload_ty orelse Common.invariant("iterator step type was missing One");
         const skip_payload = skip_payload_ty orelse Common.invariant("iterator step type was missing Skip");
 
         return .{
             .step_ty = step_ty,
             .done_tag = done_tag orelse Common.invariant("iterator step type was missing Done"),
-            .append_tag = append_tag orelse Common.invariant("iterator step type was missing Append"),
             .one_tag = one_tag orelse Common.invariant("iterator step type was missing One"),
             .skip_tag = skip_tag orelse Common.invariant("iterator step type was missing Skip"),
-            .append_payload_ty = append_payload,
             .one_payload_ty = one_payload,
             .skip_payload_ty = skip_payload,
-            .append_before = checkedRecordFieldByName(self.view, append_payload, "before"),
-            .append_after = checkedRecordFieldByName(self.view, append_payload, "after"),
             .one_item = checkedRecordFieldByName(self.view, one_payload, "item"),
             .one_rest = checkedRecordFieldByName(self.view, one_payload, "rest"),
             .skip_rest = checkedRecordFieldByName(self.view, skip_payload, "rest"),
