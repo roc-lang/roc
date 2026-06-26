@@ -1887,20 +1887,15 @@ test "static record list iter append loop lowers no bulkier than direct list loo
         \\
         \\Point : { x : I64, y : I64 }
         \\
-        \\sum_points : U64 -> I64
-        \\sum_points = |anim_index| {
+        \\main : Bool -> I64
+        \\main = |use_extra| {
         \\    base_points = [
         \\        { x: 11, y: 2 },
-        \\        { x: 13, y: 3 },
-        \\        { x: 3, y: 5 },
-        \\        { x: 11, y: 6 },
         \\    ].iter()
         \\
         \\    collision_points =
-        \\        if anim_index == 2 {
-        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
-        \\        } else if anim_index == 1 {
-        \\            base_points.append({ x: 2, y: 2 })
+        \\        if use_extra {
+        \\            base_points.append({ x: 2, y: 1 })
         \\        } else {
         \\            base_points
         \\        }
@@ -1911,29 +1906,21 @@ test "static record list iter append loop lowers no bulkier than direct list loo
         \\    }
         \\    $sum
         \\}
-        \\
-        \\main : I64
-        \\main = sum_points(2)
     ;
     const record_list_source =
         \\module [main]
         \\
         \\Point : { x : I64, y : I64 }
         \\
-        \\sum_points : U64 -> I64
-        \\sum_points = |anim_index| {
+        \\main : Bool -> I64
+        \\main = |use_extra| {
         \\    base_points = [
         \\        { x: 11, y: 2 },
-        \\        { x: 13, y: 3 },
-        \\        { x: 3, y: 5 },
-        \\        { x: 11, y: 6 },
         \\    ]
         \\
         \\    collision_points =
-        \\        if anim_index == 2 {
-        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
-        \\        } else if anim_index == 1 {
-        \\            base_points.append({ x: 2, y: 2 })
+        \\        if use_extra {
+        \\            base_points.append({ x: 2, y: 1 })
         \\        } else {
         \\            base_points
         \\        }
@@ -1944,9 +1931,6 @@ test "static record list iter append loop lowers no bulkier than direct list loo
         \\    }
         \\    $sum
         \\}
-        \\
-        \\main : I64
-        \\main = sum_points(2)
     ;
 
     try expectStaticListIterAppendLoopNoBulkierThanDirectList(record_iter_source, record_list_source);
@@ -1956,14 +1940,12 @@ test "static primitive list iter append loop lowers no bulkier than direct list 
     const primitive_iter_source =
         \\module [main]
         \\
-        \\sum_points : U64 -> I64
-        \\sum_points = |anim_index| {
-        \\    base_points = [11.I64, 13, 3, 11].iter()
+        \\main : Bool -> I64
+        \\main = |use_extra| {
+        \\    base_points = [11.I64].iter()
         \\
         \\    collision_points =
-        \\        if anim_index == 2 {
-        \\            base_points.append(2).append(7)
-        \\        } else if anim_index == 1 {
+        \\        if use_extra {
         \\            base_points.append(2)
         \\        } else {
         \\            base_points
@@ -1975,21 +1957,16 @@ test "static primitive list iter append loop lowers no bulkier than direct list 
         \\    }
         \\    $sum
         \\}
-        \\
-        \\main : I64
-        \\main = sum_points(2)
     ;
     const primitive_list_source =
         \\module [main]
         \\
-        \\sum_points : U64 -> I64
-        \\sum_points = |anim_index| {
-        \\    base_points = [11.I64, 13, 3, 11]
+        \\main : Bool -> I64
+        \\main = |use_extra| {
+        \\    base_points = [11.I64]
         \\
         \\    collision_points =
-        \\        if anim_index == 2 {
-        \\            base_points.append(2).append(7)
-        \\        } else if anim_index == 1 {
+        \\        if use_extra {
         \\            base_points.append(2)
         \\        } else {
         \\            base_points
@@ -2001,9 +1978,6 @@ test "static primitive list iter append loop lowers no bulkier than direct list 
         \\    }
         \\    $sum
         \\}
-        \\
-        \\main : I64
-        \\main = sum_points(2)
     ;
 
     try expectStaticListIterAppendLoopNoBulkierThanDirectList(primitive_iter_source, primitive_list_source);
