@@ -245,7 +245,6 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
         &lowered.lir_result,
-        lowered.target_usize,
         entrypoints,
     ) catch |err| {
         diag.step("LirImage.fillHeaderInBuffer", err);
@@ -256,6 +255,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
+        lowered.target_usize,
     ) catch |err| {
         diag.step("LirImage.viewMappedImage", err);
         return err;

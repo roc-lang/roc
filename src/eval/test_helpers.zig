@@ -1406,12 +1406,11 @@ fn lowerCheckedRootWithViews(
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
-        lowered.target_usize,
         &.{},
     );
     shm.updateHeader();
 
-    const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize());
+    const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize(), lowered.target_usize);
     return .{
         .shm = shm,
         .image_header = image_header,

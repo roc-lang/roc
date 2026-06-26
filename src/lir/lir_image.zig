@@ -24,7 +24,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v6: string-pattern captures are explicit borrowed Str views.
 /// v7: string-pattern match sets add grouped arm storage.
 /// v8: LIR statements carry explicit checked source regions for diagnostics.
-pub const FORMAT_VERSION: u32 = 8;
+/// v9: image is pointer-width independent; the target is supplied at view time
+///     rather than recorded in the header.
+pub const FORMAT_VERSION: u32 = 9;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -50,12 +52,16 @@ pub const ArrayRef = extern struct {
 };
 
 /// Header stored as the first user allocation after `SharedMemoryAllocator.Header`.
+///
+/// The image is pointer-width independent: the layout store carries both widths'
+/// sizes and offsets and the LIR op stream makes no width-dependent decisions,
+/// so the recorded bytes do not encode a target. The consumer supplies the
+/// width it is resolving for when it views the image (see `viewMappedImage`).
 pub const Header = extern struct {
     magic: u32,
     format_version: u32,
     image_size: u64,
-    target_usize: u8,
-    _padding: [7]u8 = [_]u8{0} ** 7,
+    _padding: [8]u8 = [_]u8{0} ** 8,
     root_procs: ArrayRef,
     platform_entrypoints: ArrayRef,
     store: LirStoreImage,
@@ -222,14 +228,12 @@ pub fn fillHeaderInBuffer(
     base_ptr: [*]align(1) const u8,
     image_size: usize,
     lowered: *const Program.Result,
-    target_usize: base.target.TargetUsize,
     platform_entrypoints: []const PlatformEntrypoint,
 ) ImageError!void {
     header.* = .{
         .magic = MAGIC,
         .format_version = FORMAT_VERSION,
         .image_size = image_size,
-        .target_usize = @intFromEnum(target_usize),
         .root_procs = try arrayRef(base_ptr, image_size, lowered.root_procs.items),
         .platform_entrypoints = try arrayRef(base_ptr, image_size, platform_entrypoints),
         .store = try LirStoreImage.fromStore(base_ptr, image_size, &lowered.store),
@@ -248,10 +252,9 @@ pub fn fillHeaderInSharedMemory(
     base_ptr: [*]align(1) const u8,
     image_size: usize,
     lowered: *const Program.Result,
-    target_usize: base.target.TargetUsize,
     platform_entrypoints: []const PlatformEntrypoint,
 ) ImageError!void {
-    return fillHeaderInBuffer(header, base_ptr, image_size, lowered, target_usize, platform_entrypoints);
+    return fillHeaderInBuffer(header, base_ptr, image_size, lowered, platform_entrypoints);
 }
 
 /// View an ARC-inserted LIR program in place from a mapped buffer.
@@ -262,39 +265,19 @@ pub fn fillHeaderInSharedMemory(
 /// hold the buffer behind a `const` pointer (e.g. a `FixedBufferAllocator`
 /// backed by `gpa.alignedAlloc` whose owning slice is `const`) pass it
 /// directly without a manual `@constCast`.
-pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, mapped_size: usize) ImageError!ProgramView {
-    return viewMappedImageWithAllocator(header, base_ptr, mapped_size, base.defaultGpa());
+pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, mapped_size: usize, target_usize: base.target.TargetUsize) ImageError!ProgramView {
+    return viewMappedImageWithAllocator(header, base_ptr, mapped_size, target_usize, base.defaultGpa());
 }
 
 /// View an ARC-inserted LIR program in place from a mapped buffer using the
 /// provided allocator for any scratch data owned by reconstructed stores.
 ///
 /// The image contents (LIR op stream and layout store) are pointer-width
-/// independent, so the target is resolved from the header here only as the
-/// width the image was built for. To load the same image for a different
-/// width — e.g. a cross-width cache reused by both the native interpreter and
-/// a 32-bit codegen backend — call `viewMappedImageForTargetWithAllocator`.
+/// independent, so the caller supplies the width to resolve layout sizes,
+/// offsets, and alignments for. The same image bytes can be viewed for either
+/// width — e.g. a cross-width cache reused by both a native interpreter and a
+/// 32-bit codegen backend.
 pub fn viewMappedImageWithAllocator(
-    header: *const Header,
-    base_ptr: [*]align(1) const u8,
-    mapped_size: usize,
-    allocator: std.mem.Allocator,
-) ImageError!ProgramView {
-    const target_usize: base.target.TargetUsize = switch (header.target_usize) {
-        0 => .u32,
-        1 => .u64,
-        else => return error.InvalidLirImage,
-    };
-    return viewMappedImageForTargetWithAllocator(header, base_ptr, mapped_size, target_usize, allocator);
-}
-
-/// View an LIR program in place, resolving layout sizes/offsets for an
-/// explicitly supplied pointer width rather than the one recorded in the
-/// header. The serialized contents are width-independent, so the same image
-/// bytes can be viewed for either width; the supplied `target_usize` only
-/// selects which precomputed size/offset/alignment is read out of the layout
-/// store at query time.
-pub fn viewMappedImageForTargetWithAllocator(
     header: *const Header,
     base_ptr: [*]align(1) const u8,
     mapped_size: usize,
