@@ -216,6 +216,33 @@ test "check - repro - issue 9129 - control no closure" {
     try test_env.assertNoErrors();
 }
 
+test "check - repro - issue 9817 - delayed top-level parser recursion" {
+    const src =
+        \\Parser(a) : { run : {} -> a }
+        \\
+        \\lazy : ({} -> Parser(a)) -> Parser(a)
+        \\lazy = |thunk| {
+        \\    { run: |_| (thunk({}).run)({}) }
+        \\}
+        \\
+        \\map : Parser(a) -> Parser(a)
+        \\map = |parser| {
+        \\    { run: |_| (parser.run)({}) }
+        \\}
+        \\
+        \\p : Parser(I64)
+        \\p = lazy(|_| q)
+        \\
+        \\q : Parser(I64)
+        \\q = map(p)
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - issue 9693 - polymorphic helper method constraints are not defaulted at def site" {
     const src =
         \\is_valid : Str -> U64
