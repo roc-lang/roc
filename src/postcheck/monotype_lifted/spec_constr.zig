@@ -1181,6 +1181,9 @@ const Cloner = struct {
             .nominal,
             .fn_ref,
             => (try self.pass.constructorFact(expr_id)) != null,
+            .list => true,
+            .static_data => true,
+            .static_data_candidate => true,
             .field_access => |field| blk: {
                 const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk false;
                 const receiver = self.subst.get(receiver_local) orelse break :blk false;

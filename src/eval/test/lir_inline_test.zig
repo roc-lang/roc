@@ -888,6 +888,33 @@ fn reachableProcShapeCount(
     return count;
 }
 
+fn reachableProcDebugName(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: []const u8,
+) anyerror!bool {
+    var work = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, try rootProc(lowered));
+
+    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+
+    while (work.pop()) |proc_id| {
+        const visited_entry = try visited.getOrPut(proc_id);
+        if (visited_entry.found_existing) continue;
+
+        if (lowered.lir_result.store.procDebugName(proc_id)) |name| {
+            if (std.mem.eql(u8, name, expected_name)) return true;
+        }
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try work.append(allocator, call);
+    }
+    return false;
+}
+
 fn reachableProcShapeFieldTotal(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -1006,6 +1033,13 @@ fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
     return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 1 and
+        shape.jump_count >= 2;
+}
+
+fn localLoopStateIsSplitToTwoLeaves(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 2 and
         shape.jump_count >= 2;
 }
 
@@ -1731,6 +1765,86 @@ test "imported iterator producer keeps finite step callables" {
     try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
 }
 
+test "static list iter append loop eliminates public iter adapters" {
+    const allocator = std.testing.allocator;
+    const iter_source =
+        \\module [main]
+        \\
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+    const list_source =
+        \\module [main]
+        \\
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ]
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+
+    var iter_optimized = try lowerModuleWithProcDebugNames(allocator, iter_source, .wrappers, true);
+    defer iter_optimized.deinit(allocator);
+    var list_optimized = try lowerModuleWithProcDebugNames(allocator, list_source, .wrappers, true);
+    defer list_optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.List.iter"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.Iter.append"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "iter_from_step"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &list_optimized.lowered, "Builtin.Iter.append"));
+}
+
 test "stream from iterator collect keeps finite step callables" {
     const allocator = std.testing.allocator;
     const source =
@@ -2204,6 +2318,57 @@ test "spec constr specializes primitive-start record state carried by while loop
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr does not require single-field record wrapper for local loop splitting" {
+    const allocator = std.testing.allocator;
+    const wrapped_source =
+        \\module [main]
+        \\
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : Start -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start.n, acc: 0 }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from({ n: 4 })
+    ;
+    const primitive_source =
+        \\module [main]
+        \\
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : I64 -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start, acc: 0 }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4)
+    ;
+
+    var wrapped_optimized = try lowerModule(allocator, wrapped_source, .wrappers);
+    defer wrapped_optimized.deinit(allocator);
+    var primitive_optimized = try lowerModule(allocator, primitive_source, .wrappers);
+    defer primitive_optimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &wrapped_optimized.lowered, localLoopStateIsSplitToTwoLeaves));
+    try std.testing.expect(try reachableProcShape(allocator, &primitive_optimized.lowered, localLoopStateIsSplitToTwoLeaves));
 }
 
 test "spec constr splits loop record state with opaque callable field" {
