@@ -2611,15 +2611,31 @@ const Builder = struct {
                 context_ty: bool = false,
             };
             const capture_type: CaptureType = switch (capture_value) {
-                .fn_value => blk: {
-                    const intrinsic_ty = (try self.constNodeIntrinsicMonoType(store_view, capture.value)) orelse
-                        Common.invariant("stored function capture had no function monotype");
-                    break :blk .{
-                        .view = store_view,
-                        .checked_ty = undefined,
-                        .static_data_checked_ty = null,
-                        .intrinsic_ty = intrinsic_ty,
-                    };
+                .fn_value => |captured_fn_id| blk: {
+                    const captured_fn = store_view.const_store.getFn(captured_fn_id);
+                    switch (captured_fn.fn_def) {
+                        .parser_runtime,
+                        .encode_to_runtime,
+                        => {
+                            const checked_ty = checkedBinderType(fn_view, binder);
+                            break :blk .{
+                                .view = fn_view,
+                                .checked_ty = checked_ty,
+                                .static_data_checked_ty = null,
+                                .context_ty = true,
+                            };
+                        },
+                        else => {
+                            const intrinsic_ty = (try self.constNodeIntrinsicMonoType(store_view, capture.value)) orelse
+                                Common.invariant("stored function capture had no function monotype");
+                            break :blk .{
+                                .view = store_view,
+                                .checked_ty = undefined,
+                                .static_data_checked_ty = null,
+                                .intrinsic_ty = intrinsic_ty,
+                            };
+                        },
+                    }
                 },
                 else => blk: {
                     if (try self.constNodeIntrinsicMonoType(store_view, capture.value)) |intrinsic_ty| {

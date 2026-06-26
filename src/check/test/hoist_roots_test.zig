@@ -75,6 +75,50 @@ test "hoist roots selected for closed local block with internal locals" {
     try expectExprTag(&test_env, roots[0].expr, .e_block);
 }
 
+test "hoist roots do not select local function dependency call" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    make = || Ok(1.I64)
+        \\    parsed = make()?
+        \\    Ok(parsed)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "hoist roots do not select parent over unavailable contextual local" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    make = || 41.I64
+        \\    x = make()
+        \\    y = x + 1.I64
+        \\    y + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_dispatch_call));
+}
+
+test "hoist roots keep deferred local dependencies from interpolation children" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    config = { host: "localhost", port: "8080" }
+        \\    msg = "host=${config.host}, port=${config.port}"
+        \\    Str.count_utf8_bytes(msg).to_i64_wrap() + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countBindingRootsWithDependencies(&test_env));
+}
+
 test "hoist roots selected for direct closed ordinary call function body" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
@@ -1038,6 +1082,16 @@ fn countExprRootsByTag(test_env: *const TestEnv, tag: std.meta.Tag(CIR.Expr)) us
     var count: usize = 0;
     for (test_env.checker.selectedHoistedRoots()) |root| {
         if (std.meta.activeTag(test_env.checker.cir.store.getExpr(root.expr)) == tag) count += 1;
+    }
+    return count;
+}
+
+fn countBindingRootsWithDependencies(test_env: *const TestEnv) usize {
+    var count: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (root.pattern != null and root.dependencies.len != 0) {
+            count += 1;
+        }
     }
     return count;
 }

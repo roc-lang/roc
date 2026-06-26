@@ -1741,11 +1741,8 @@ fn capturePatternIsCompileTimeKnownForHoist(self: *Self, pattern_idx: CIR.Patter
         }
     }
 
-    if (self.markHoistContextualDependencyForLookup(pattern_idx)) {
-        return summary_says_compile_time_known;
-    }
-
-    if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(pattern_idx)) {
+    const contextual_owner_frame_index = self.hoistContextualOwnerFrameIndexForLookup(pattern_idx);
+    if (self.shouldDeferHoistedBindingSelectionAfterOwner(contextual_owner_frame_index) and self.hoistKnownBindingAvailable(pattern_idx)) {
         try self.hoist_deferred_binding_dependencies.append(self.gpa, pattern_idx);
         return true;
     }
@@ -1753,6 +1750,11 @@ fn capturePatternIsCompileTimeKnownForHoist(self: *Self, pattern_idx: CIR.Patter
     if (try self.ensureHoistedBindingRootIndex(pattern_idx)) |root_index| {
         try self.appendCurrentHoistDependencyRoot(root_index);
         return true;
+    }
+
+    if (contextual_owner_frame_index) |owner_frame_index| {
+        self.markHoistContextualDependencyFromOwner(owner_frame_index);
+        return summary_says_compile_time_known;
     }
 
     if (summary_says_compile_time_known) return true;
@@ -2152,7 +2154,11 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, check_result: ExprCheckResu
     self.hoist_root_dependencies.shrinkRetainingCapacity(frame.dependency_start);
     self.hoist_required_concrete_patterns.shrinkRetainingCapacity(frame.required_concrete_start);
 
-    if (frame.binding_rhs) {
+    // Deferred binding dependencies live in one stack so parent binding RHS
+    // frames can see dependencies discovered by nested child frames, such as
+    // string interpolation segments. Nested frames may store their own metadata,
+    // but only the outermost active frame may truncate the shared stack.
+    if (frame_index == 0) {
         self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
     }
 
@@ -2255,10 +2261,7 @@ fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.
     if (self.hoist_suppressed_depth != 0 or self.hoist_selection_suppressed_depth != 0) return;
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
-    if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
-    if (!self.exprCanBeBindingConstRoot(expr)) return;
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
+    if (!self.hoistBindingCandidateCanOwnStoredRoot(pattern, expr)) return;
 
     const entry = try self.hoist_binding_candidates.getOrPut(self.gpa, pattern);
     const had_existing = entry.found_existing;
@@ -2281,6 +2284,14 @@ fn recordHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.
         }
         return err;
     };
+}
+
+fn hoistBindingCandidateCanOwnStoredRoot(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) bool {
+    if (!self.patternCanOwnHoistedBindingRoot(pattern)) return false;
+    if (!self.exprCanBeBindingConstRoot(expr)) return false;
+    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return false;
+    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
+    return true;
 }
 
 fn recordHoistPatternProvenance(self: *Self, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) Allocator.Error!void {
@@ -2601,17 +2612,19 @@ fn popHoistContextualBindingScope(self: *Self, start: usize) void {
     self.hoist_contextual_binding_scope_patterns.shrinkRetainingCapacity(start);
 }
 
-fn markHoistContextualDependencyForLookup(self: *Self, pattern: CIR.Pattern.Idx) bool {
-    const owner_frame_index = self.hoist_contextual_bindings.get(pattern) orelse return false;
+fn hoistContextualOwnerFrameIndexForLookup(self: *Self, pattern: CIR.Pattern.Idx) ?usize {
+    const owner_frame_index = self.hoist_contextual_bindings.get(pattern) orelse return null;
     if (owner_frame_index >= self.hoist_frames.items.len) {
         std.debug.panic("check invariant violated: contextual hoist binding outlived its owner frame", .{});
     }
+    return owner_frame_index;
+}
 
+fn markHoistContextualDependencyFromOwner(self: *Self, owner_frame_index: usize) void {
     var frame_index = owner_frame_index + 1;
     while (frame_index < self.hoist_frames.items.len) : (frame_index += 1) {
         self.hoist_frames.items[frame_index].has_contextual_dependency = true;
     }
-    return true;
 }
 
 fn currentHoistFrameIndexForExpr(self: *const Self, expr: CIR.Expr.Idx) usize {
@@ -2755,10 +2768,13 @@ fn hoistKnownBindingAvailable(self: *Self, pattern: CIR.Pattern.Idx) bool {
     };
 }
 
-fn shouldDeferHoistedBindingSelection(self: *const Self) bool {
-    for (self.hoist_frames.items) |frame| {
+fn shouldDeferHoistedBindingSelectionAfterOwner(self: *Self, owner_frame_index: ?usize) bool {
+    const start = if (owner_frame_index) |index| index + 1 else 0;
+    for (self.hoist_frames.items[start..]) |frame| {
         if (!frame.binding_rhs) continue;
         if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(frame.expr))) continue;
+        const pattern = frame.binding_pattern orelse continue;
+        if (!self.hoistBindingCandidateCanOwnStoredRoot(pattern, frame.expr)) continue;
         return true;
     }
     return false;
@@ -10127,17 +10143,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     }
                 }
-                if (self.markHoistContextualDependencyForLookup(lookup.pattern_idx)) {
-                    if (summary_says_compile_time_known) break :known true;
-                    lookup_has_runtime_dependency = true;
-                    break :known true;
-                }
-                if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(lookup.pattern_idx)) {
+                const contextual_owner_frame_index = self.hoistContextualOwnerFrameIndexForLookup(lookup.pattern_idx);
+                const should_defer_binding = self.shouldDeferHoistedBindingSelectionAfterOwner(contextual_owner_frame_index);
+                const known_binding_available = self.hoistKnownBindingAvailable(lookup.pattern_idx);
+                if (should_defer_binding and known_binding_available) {
                     try self.hoist_deferred_binding_dependencies.append(self.gpa, lookup.pattern_idx);
                     break :known true;
                 }
                 if (try self.ensureHoistedBindingRootIndex(lookup.pattern_idx)) |root_index| {
                     try self.appendCurrentHoistDependencyRoot(root_index);
+                    break :known true;
+                }
+                if (contextual_owner_frame_index) |owner_frame_index| {
+                    self.markHoistContextualDependencyFromOwner(owner_frame_index);
+                    if (summary_says_compile_time_known) break :known true;
+                    lookup_has_runtime_dependency = true;
                     break :known true;
                 }
                 if (summary_says_compile_time_known) break :known true;
@@ -10204,10 +10224,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check all statements in the block
             const block_frame = self.currentHoistFrame();
-            const contextual_owner_frame_index = if (block_frame.binding_rhs or self.shouldDeferHoistedBindingSelection())
-                self.currentHoistFrameIndexForExpr(expr_idx)
-            else
-                null;
+            const contextual_owner_frame_index = self.currentHoistFrameIndexForExpr(expr_idx);
             const stmt_result = try self.checkBlockStatements(
                 block.stmts,
                 env,
@@ -12126,12 +12143,13 @@ fn checkBlockStatements(
                 else
                     try self.checkExpr(decl_stmt.expr, env, expectation);
                 check_result.include(decl_expr_result);
+                const binding_can_own_stored_root = self.hoistBindingCandidateCanOwnStoredRoot(decl_stmt.pattern, decl_stmt.expr);
                 try self.recordLocalCheckSummary(decl_stmt.pattern, decl_expr_result);
                 if (contextual_owner_frame_index) |owner_frame_index| {
                     try self.recordHoistContextualPatternBindings(decl_stmt.pattern, owner_frame_index);
                 }
                 try self.appendCurrentHoistRequiredConcretePatternBinders(decl_stmt.pattern);
-                if (!suppress_contextual_decl_roots) {
+                if (!suppress_contextual_decl_roots and binding_can_own_stored_root) {
                     try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
                 }
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
