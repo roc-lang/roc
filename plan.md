@@ -98,11 +98,11 @@ Current branch status:
 - Plan values that may cross a public observation boundary carry the
   already-lowered public materialization expression needed at that boundary;
   private consumer-owned plans do not need one.
-- Lambda solving currently owns the conservative materialization boundary used
-  when an ordinary value path observes a plan. This is temporary scaffolding
-  inside the existing lowering pipeline, not a separate plan-elimination pass:
-  each semantics-owning lowering path must either consume a plan or materialize
-  it at the boundary where the value is observed.
+- Ordinary call boundaries in Monotype now materialize iterator-plan arguments
+  after optimized iterator consumers and producers get first refusal. Lambda
+  solving still enforces the invariant for any remaining public value path that
+  observes a plan, but that is temporary boundary logic inside the existing
+  lowering pipeline, not a separate plan-elimination pass.
 - `List.iter` can emit a `ListIter` plan behind an explicit producer-plan flag;
   recognition checks the resolved builtin method target, and the normal
   pipeline keeps that flag off until private consumers through locals and
@@ -600,10 +600,10 @@ Tasks:
 - [x] `Iter.keep_if` and `Iter.drop_if` produce filter plans.
 - [x] `Iter.custom` produces `Custom`.
 - [x] `Public(iter_value)` exists for unknown iterator values.
-- [ ] Iterator-aware lowering consumes common plans privately before ordinary
+- [x] Iterator-aware lowering consumes common plans privately before ordinary
   lowering.
-- [ ] Iterator-aware lowering preserves producer-site evaluation order.
-- [ ] Iterator-aware lowering never replays checked expressions.
+- [x] Iterator-aware lowering preserves producer-site evaluation order.
+- [x] Iterator-aware lowering never replays checked expressions.
 - [x] Private plan state can cross locals.
   - [x] Direct `ListIter` private state can cross an immutable local when every
     later use is the exact iterable in a `for`.
@@ -631,20 +631,29 @@ Tasks:
     cross an immutable local and are consumed with private phase state.
   - [x] Direct `Custom` plans can cross an immutable local and are consumed
     with private custom state.
-- [ ] Private plan state can cross `if`.
+- [x] Private plan state can cross `if`.
   - [x] Direct `for` over an `if` whose branches are known `Map(ListIter |
     Append(ListIter, item...), fn)` plans avoids public iterator step tags.
-- [ ] Private plan state can cross `match`.
+  - [x] Direct `for` over an `if` whose selected branch is a known
+    `Filter(ListIter | Append(ListIter, item...), predicate)` plan preserves
+    unselected-branch `crash` behavior and avoids public iterator step tags.
+- [x] Private plan state can cross `match`.
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans lowers each selected branch to a private
     cursor loop while preserving scrutinee and producer operand order.
   - [x] Direct `for` over a `match` whose branches are known
     `Filter(ListIter | Append(ListIter, item...), predicate)` plans avoids
     public iterator step tags.
-- [ ] Materialization is implemented for every plan.
+  - [x] Direct `for` over a `match` whose selected branch is a known
+    `Map(ListIter | Append(ListIter, item...), fn)` plan preserves selected
+    `expect` behavior, unselected-branch `crash` behavior, and avoids public
+    iterator step tags.
+- [x] Materialization is implemented for every plan.
   - [x] Recognized non-list producer plans (`Single`, finite `Range`,
     `Custom`, `Append`, `Concat`, `Map`, and `Filter`) materialize to public
     `Iter.next` behavior at unspecialized public boundaries.
+  - [x] Public `Iter.next` over materialized `ListIter`, `Map`, and `Filter`
+    rests advances through returned `rest` values correctly.
 - [x] Direct `.step` field access is not a public materialization boundary:
   external access is rejected because `Iter` is opaque, and builtin-internal
   access is lowered with iterator producer plans disabled.
@@ -671,7 +680,7 @@ Tasks:
     materializes before Lambda.
 - [x] Raw plan expressions cannot reach Lambda-to-LIR lowering.
 - [x] Raw plan expressions cannot reach LIR.
-- [ ] Optimized `for` consumes plan values directly.
+- [x] Optimized `for` consumes plan values directly.
 - [x] Optimized `for` through locals avoids public step values.
   - [x] Direct local `List.iter` avoids public step values when all uses are
     private `for` consumers.
@@ -699,26 +708,32 @@ Tasks:
     avoids public step values when consumed by a private `for`.
   - [x] Direct local `Custom` avoids public iterator materialization when
     consumed by a private `for`.
-- [ ] Optimized `for` through `if` avoids public step values.
+- [x] Optimized `for` through `if` avoids public step values.
   - [x] Direct `for` over an `if` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans lowers to branch-local private cursor
     loops instead of public iterator steps.
   - [x] Direct `for` over an `if` whose branches are known `Map(ListIter |
     Append(ListIter, item...), fn)` plans lowers to branch-local private cursor
     loops instead of public iterator steps.
-- [ ] Optimized `for` through `match` avoids public step values.
+  - [x] Direct `for` over an `if` whose selected branch is a known
+    `Filter(ListIter | Append(ListIter, item...), predicate)` plan avoids
+    public iterator step tags.
+- [x] Optimized `for` through `match` avoids public step values.
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans avoids public iterator step tags.
   - [x] Direct `for` over a `match` whose branches are known
     `Filter(ListIter | Append(ListIter, item...), predicate)` plans avoids
     public iterator step tags.
+  - [x] Direct `for` over a `match` whose selected branch is a known
+    `Map(ListIter | Append(ListIter, item...), fn)` plan avoids public
+    iterator step tags.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
 - [x] Optimized `for` over direct `Iter.iter` forwards and consumes the known
   plan value.
 - [x] Optimized `for` over direct `Single` consumes the plan value.
 - [x] Optimized `for` over direct `Append(ListIter, item...)` consumes plan
   values.
-- [ ] Optimized `for` over `Append` and `Concat` uses explicit phase state.
+- [x] Optimized `for` over `Append` and `Concat` uses explicit phase state.
   - [x] Direct `Concat` of list-backed/list-append-backed plans uses one
     private phase cursor and preserves source `break` as a whole-loop break.
   - [x] Local `Concat` of list-backed/list-append-backed plans uses one private
@@ -726,7 +741,7 @@ Tasks:
   - [x] Direct and local `Prepended(item, ListIter | Append(ListIter, item...))`
     consume the generated `Concat(Single(item), rest)` plan with one private
     phase cursor and no public iterator step values.
-- [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
+- [x] Optimized `for` over `Map` and `Filter` uses child plan state.
 - [x] Optimized `for` over direct `Map(ListIter | Append(ListIter, item...), fn)`
   uses child plan state.
 - [x] Optimized `for` over local `Map(ListIter | Append(ListIter, item...), fn)`
@@ -740,7 +755,7 @@ Tasks:
 - [x] Optimized `for` over ranges uses direct numeric state.
 - [x] Optimized `for` over direct `Iter.custom` uses private custom state.
 - [x] Optimized `for` over local `Iter.custom` uses private custom state.
-- [ ] Optimized `Iter.fold` consumes plan values directly.
+- [x] Optimized `Iter.fold` consumes plan values directly.
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     direct-call `Iter.fold` as accumulator loop parameters without public
     iterator step values.
@@ -761,7 +776,7 @@ Tasks:
     without public iterator step values.
   - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
     are consumed by direct-call `Iter.fold` without public iterator step values.
-- [ ] Optimized `List.from_iter` consumes plan values directly.
+- [x] Optimized `List.from_iter` consumes plan values directly.
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     `List.from_iter` and list-result `Iter.collect` as exact-capacity list
     loops using list low-level operations.
@@ -781,12 +796,16 @@ Tasks:
   - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
     are consumed by `List.from_iter` and list-result `Iter.collect` without
     public collect-worker specialization.
-- [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public
+- [x] `saved = iter; for item in iter { ... }; use(saved)` preserves public
   behavior.
   - [x] Local `List.iter` with a public alias preserves public iterator behavior.
   - [x] Local `Append(ListIter, item...)` with a public alias preserves public
     iterator behavior.
-- [ ] `dbg`, `expect`, and `crash` in producer operands are not duplicated or
+  - [x] Local `Map(ListIter, fn)` with a public alias preserves public iterator
+    behavior.
+  - [x] Local `Filter(ListIter, predicate)` with a public alias preserves public
+    iterator behavior.
+- [x] `dbg`, `expect`, and `crash` in producer operands are not duplicated or
   moved.
   - [x] Direct append operands consumed by `List.from_iter` preserve `dbg`
     ordering relative to collection and following expressions.
@@ -830,6 +849,12 @@ Tasks:
   - [x] Match-selected filtered append operands consumed by optimized `for`
     preserve `dbg` ordering relative to scrutinee evaluation, predicate calls,
     loop body, and following expressions.
+  - [x] If-selected filtered append operands consumed by optimized `for`
+    preserve selected condition/body behavior and do not evaluate an
+    unselected-branch `crash`.
+  - [x] Match-selected mapped append operands consumed by optimized `for`
+    preserve selected `expect` ordering and do not evaluate an
+    unselected-branch `crash`.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
   - [x] Direct `List.from_iter(List(Str).iter().append(...))` passes optimized
     LIR interpretation with the expected string list.
@@ -867,6 +892,7 @@ Run these before marking the checklist complete:
 zig build run-test-zig-module-postcheck
 zig build run-test-zig-module-lir
 zig build run-test-zig-lir-inline
+zig build run-test-zig-builtin-doc
 zig build minici
 ```
 
