@@ -13867,6 +13867,7 @@ const BodyContext = struct {
         if (try self.listIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.appendIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.concatIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.mapIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         return null;
     }
 
@@ -13988,6 +13989,72 @@ const BodyContext = struct {
                 .before = before_plan,
                 .after = after_expr,
                 .phase = phase_expr,
+            } },
+        });
+    }
+
+    fn mapIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        if (!self.methodNameIs(plan.method, "map")) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.map dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.map dispatch plan had an unexpected argument shape");
+        }
+        const mapping_index: usize = if (receiver_index == 0) 1 else 0;
+
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
+        defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+
+        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, expr.ty, plan_args, iterator_ty);
+        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked Iter.map dispatch plan had a non-function type");
+        const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
+        defer self.allocator.free(plan_arg_tys);
+        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+
+        const original_statement_len = lowered.len;
+        const source_plan = (try self.iteratorPlanForPrivateProducerOperand(plan_args[receiver_index], dispatcher_ty, lowered)) orelse {
+            lowered.len = original_statement_len;
+            return null;
+        };
+        const source = self.builder.program.iterPlan(source_plan);
+
+        const mapping_fn_ty = plan_arg_tys[mapping_index];
+        const mapping_fn_value = try self.lowerDispatchOperandAtType(plan_args[mapping_index], mapping_fn_ty);
+        const mapping_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), mapping_fn_ty);
+        const mapping_fn_expr = try self.builder.localExpr(mapping_fn_local, mapping_fn_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(mapping_fn_local, mapping_fn_ty),
+            .value = mapping_fn_value,
+        } }));
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(iterator_ty),
+            .length = source.length,
+            .steps = source.steps,
+            .done = source.done,
+            .materialized = null,
+            .data = .{ .map = .{
+                .source = source_plan,
+                .mapping_fn = mapping_fn_expr,
             } },
         });
     }
@@ -15949,6 +16016,7 @@ const BodyContext = struct {
                 return try self.lowerRangeIteratorFor(for_, result_ty, carries, range, iter_plan_value.item_ty);
             },
             .concat => |concat| return try self.lowerConcatListIteratorPlanFor(for_, result_ty, carries, concat, iter_plan_value.item_ty),
+            .map => |map| return try self.lowerMapIteratorPlanFor(for_, result_ty, carries, map, iter_plan_value.item_ty),
             .custom => |custom| return try self.lowerCustomIteratorFor(for_, result_ty, carries, custom, iter_plan_value.item_ty),
             else => return null,
         }
@@ -17950,6 +18018,17 @@ const BodyContext = struct {
             .map => |map| map,
             else => Common.invariant("checked Iter.map expression lowered to a non-map iterator plan"),
         };
+        return try self.lowerMapIteratorPlanFor(for_, result_ty, carries, map, iter_plan_value.item_ty);
+    }
+
+    fn lowerMapIteratorPlanFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        map: Ast.IterPlan.MapIter,
+        result_item_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprData {
         const source = (try self.listAppendIteratorPlanFromPlan(map.source)) orelse return null;
         defer source.deinit(self.allocator);
 
@@ -17966,12 +18045,12 @@ const BodyContext = struct {
                     carries,
                     source.list,
                     source.item_ty,
-                    iter_plan_value.item_ty,
+                    result_item_ty,
                     source.append_items,
                     .{ .map = .{
                         .mapping_fn = mapping_fn,
                         .mapping_fn_ty = mapping_fn_ty,
-                        .result_ty = iter_plan_value.item_ty,
+                        .result_ty = result_item_ty,
                     } },
                 );
             },
@@ -17988,12 +18067,12 @@ const BodyContext = struct {
                 carries,
                 source.list,
                 source.item_ty,
-                iter_plan_value.item_ty,
+                result_item_ty,
                 source.append_items,
                 .{ .map = .{
                     .mapping_fn = .{ .value = mapping_fn_expr },
                     .mapping_fn_ty = mapping_fn_ty,
-                    .result_ty = iter_plan_value.item_ty,
+                    .result_ty = result_item_ty,
                 } },
             ),
         });
