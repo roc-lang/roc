@@ -34,8 +34,8 @@ extern "C" {
 /**
  * RocStr - Roc string type
  *
- * A 24-byte structure representing a string. Small strings (up to 23 bytes
- * on 64-bit systems) are stored inline. Larger strings store a pointer to
+ * A three-word structure representing a string. Small strings are stored inline
+ * with capacity determined by the target pointer width. Larger strings store a pointer to
  * heap-allocated data. The bytes field is always an untagged pointer
  * for non-small strings. Big-string capacity is stored shifted left by
  * one bit, so max capacity is essentially the max signed pointer-sized
@@ -47,13 +47,13 @@ typedef struct {
     size_t length;
 } RocStr;
 
-_Static_assert(sizeof(RocStr) == 24, "RocStr must be 24 bytes");
-_Static_assert(_Alignof(RocStr) == 8, "RocStr must be 8-byte aligned");
+_Static_assert(sizeof(RocStr) == 3 * sizeof(size_t), "RocStr must be three pointer-sized words");
+_Static_assert(_Alignof(RocStr) == _Alignof(size_t), "RocStr must be pointer-word aligned");
 
 /**
  * RocList - Roc list type
  *
- * A 24-byte structure representing a list. Similar to RocStr, but for
+ * A three-word structure representing a list. Similar to RocStr, but for
  * arbitrary element types.
  */
 typedef struct {
@@ -62,8 +62,8 @@ typedef struct {
     size_t capacity;
 } RocList;
 
-_Static_assert(sizeof(RocList) == 24, "RocList must be 24 bytes");
-_Static_assert(_Alignof(RocList) == 8, "RocList must be 8-byte aligned");
+_Static_assert(sizeof(RocList) == 3 * sizeof(size_t), "RocList must be three pointer-sized words");
+_Static_assert(_Alignof(RocList) == _Alignof(size_t), "RocList must be pointer-word aligned");
 
 /**
  * RocErasedCallable - Box(function) erased callable payload pointer

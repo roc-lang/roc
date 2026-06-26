@@ -570,26 +570,26 @@ core_types_section = {
 		[
 			"RocStr - Roc string type",
 			"",
-			"A 24-byte structure representing a string. Small strings (up to 23 bytes",
-			"on 64-bit systems) are stored inline. Larger strings store a pointer to",
+			"A three-word structure representing a string. Small strings are stored inline",
+			"with capacity determined by the target pointer width. Larger strings store a pointer to",
 			"heap-allocated data. The bytes field is always an untagged pointer",
 			"for non-small strings. Big-string capacity is stored shifted left by",
 			"one bit, so max capacity is essentially the max signed pointer-sized",
 			"integer.",
 		],
 	)
-	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t capacity_or_alloc_ptr;\n    size_t length;\n} RocStr;\n\n_Static_assert(sizeof(RocStr) == 24, \"RocStr must be 24 bytes\");\n_Static_assert(_Alignof(RocStr) == 8, \"RocStr must be 8-byte aligned\");\n\n"
+	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t capacity_or_alloc_ptr;\n    size_t length;\n} RocStr;\n\n_Static_assert(sizeof(RocStr) == 3 * sizeof(size_t), \"RocStr must be three pointer-sized words\");\n_Static_assert(_Alignof(RocStr) == _Alignof(size_t), \"RocStr must be pointer-word aligned\");\n\n"
 
 	roc_list_doc = doc_comment(
 		[
 			"RocList - Roc list type",
 			"",
-			"A 24-byte structure representing a list. Similar to RocStr, but for",
+			"A three-word structure representing a list. Similar to RocStr, but for",
 			"arbitrary element types.",
 		],
 	)
 	roc_list_def = 
-		"typedef struct {\n    void* elements;\n    size_t len;\n    size_t capacity;\n} RocList;\n\n_Static_assert(sizeof(RocList) == 24, \"RocList must be 24 bytes\");\n_Static_assert(_Alignof(RocList) == 8, \"RocList must be 8-byte aligned\");\n\n"
+		"typedef struct {\n    void* elements;\n    size_t len;\n    size_t capacity;\n} RocList;\n\n_Static_assert(sizeof(RocList) == 3 * sizeof(size_t), \"RocList must be three pointer-sized words\");\n_Static_assert(_Alignof(RocList) == _Alignof(size_t), \"RocList must be pointer-word aligned\");\n\n"
 
 	erased_callable_doc = doc_comment(
 		[

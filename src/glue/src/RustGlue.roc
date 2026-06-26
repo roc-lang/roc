@@ -588,7 +588,13 @@ add_tag_union_aliases_rust = |state, alias, target, tu| {
 	}
 }
 
-collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_names, type_id, alias_base, module_base| {
+collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_names, type_id, alias_base, module_base, visited_type_ids| {
+	if List.contains(visited_type_ids, type_id) {
+		return state
+	}
+
+	next_visited = visited_type_ids.append(type_id)
+
 	match List.get(type_table, type_id) {
 		Ok(type_repr) =>
 			match type_repr {
@@ -611,6 +617,7 @@ collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_n
 										payload_id,
 										alias_base,
 										module_base,
+										next_visited,
 									)
 								}
 								$next
@@ -639,6 +646,7 @@ collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_n
 									payload_id,
 									child_base,
 									module_base,
+									next_visited,
 								)
 							}
 						}
@@ -646,8 +654,8 @@ collect_semantic_type_aliases_for_type_id_rust = |state, type_table, duplicate_n
 					} else {
 						state
 					}
-				RocList(elem_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, elem_id, alias_base, module_base)
-				RocBox(inner_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, inner_id, alias_base, module_base)
+				RocList(elem_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, elem_id, alias_base, module_base, next_visited)
+				RocBox(inner_id) => collect_semantic_type_aliases_for_type_id_rust(state, type_table, duplicate_names, inner_id, alias_base, module_base, next_visited)
 				_ => state
 			}
 		Err(_) => state
@@ -667,6 +675,7 @@ generate_semantic_type_aliases_rust = |hosted_functions, type_table, duplicate_n
 			func.ret_type_id,
 			alias_base,
 			module_base,
+			[],
 		)
 	}
 
@@ -1099,7 +1108,7 @@ generate_roc_box_helpers_rust =
 	\\
 	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
 	\\pub fn decref_box(data_ptr: RocBox, roc_host: &RocHost) {
-	\\    decref_box_with(data_ptr, core::mem::align_of::<usize>(), None, roc_host);
+	\\    decref_box_with(data_ptr, core::mem::align_of::<usize>(), false, None, roc_host);
 	\\}
 	\\
 	\\/// Increment a boxed function closure.
@@ -1112,6 +1121,7 @@ generate_roc_box_helpers_rust =
 	\\    decref_box_with(
 	\\        callable as RocBox,
 	\\        ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT,
+	\\        false,
 	\\        Some(drop_erased_callable_payload),
 	\\        roc_host,
 	\\    );
@@ -1131,9 +1141,16 @@ generate_roc_box_helpers_rust =
 	\\}
 	\\
 	\\/// Decrement a boxed payload and run payload teardown when this is the final ref.
+	\\///
+	\\/// `payload_contains_refcounted` must match the value passed to `allocate_box`:
+	\\/// it determines the box header size, and is independent of whether a
+	\\/// `payload_decref` teardown callback is supplied. A host resource handle such
+	\\/// as `Box(U64)` holding a raw pointer has `payload_contains_refcounted: false`
+	\\/// even when it provides a teardown callback to free the underlying resource.
 	\\pub fn decref_box_with(
 	\\    data_ptr: RocBox,
 	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
 	\\    payload_decref: Option<RocBoxPayloadDecref>,
 	\\    roc_host: &RocHost,
 	\\) {
@@ -1151,15 +1168,18 @@ generate_roc_box_helpers_rust =
 	\\            if let Some(callback) = payload_decref {
 	\\                callback(data_ptr, roc_host as *const RocHost as *mut RocHost);
 	\\            }
-	\\            free_box_allocation(data, payload_alignment, payload_decref.is_some(), roc_host);
+	\\            free_box_allocation(data, payload_alignment, payload_contains_refcounted, roc_host);
 	\\        }
 	\\    }
 	\\}
 	\\
 	\\/// Free a boxed payload allocation immediately after running payload teardown.
+	\\///
+	\\/// See `decref_box_with` for the meaning of `payload_contains_refcounted`.
 	\\pub fn free_box_with(
 	\\    data_ptr: RocBox,
 	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
 	\\    payload_decref: Option<RocBoxPayloadDecref>,
 	\\    roc_host: &RocHost,
 	\\) {
@@ -1170,7 +1190,7 @@ generate_roc_box_helpers_rust =
 	\\    if let Some(callback) = payload_decref {
 	\\        callback(data_ptr, roc_host as *const RocHost as *mut RocHost);
 	\\    }
-	\\    free_box_allocation(data, payload_alignment, payload_decref.is_some(), roc_host);
+	\\    free_box_allocation(data, payload_alignment, payload_contains_refcounted, roc_host);
 	\\}
 	\\
 	\\/// Return true when a boxed payload data pointer has exactly one live ref.
@@ -1944,11 +1964,15 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
-			elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, elem_id, "(*item)")
-			if elem_stmt == "" {
-				"    {\n        let list = ${expr};\n        list.decref(roc_host);\n    }\n"
+			if is_type_refcounted(type_table, elem_id) {
+				elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, elem_id, "item")
+				if elem_stmt == "" {
+					"    compile_error!(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\");\n"
+				} else {
+					"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item_ref in list.allocation_items() {\n                let item = *item_ref;\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+				}
 			} else {
-				"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item in list.allocation_items() {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+				"    ${expr}.decref(roc_host);\n"
 			}
 		}
 		RocBox(inner_id) =>
@@ -1959,9 +1983,9 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, type_id, type_repr, ex
 					if inner_rust == "RocBox" or inner_rust == "*mut c_void" {
 						"    decref_box(${expr} as RocBox, roc_host);\n"
 					} else if is_type_refcounted(type_table, inner_id) {
-						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), Some(${box_payload_decref_name_rust(inner_id)}), roc_host);\n"
+						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), true, Some(${box_payload_decref_name_rust(inner_id)}), roc_host);\n"
 					} else {
-						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), None, roc_host);\n"
+						"    decref_box_with(${expr} as RocBox, core::mem::align_of::<${inner_rust}>(), false, None, roc_host);\n"
 					}
 				}
 				Err(_) => missing_type_compile_error_rust(inner_id, "boxed-payload decref")

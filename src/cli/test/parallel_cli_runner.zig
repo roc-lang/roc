@@ -12,6 +12,9 @@
 //!   --threads <N>        Max concurrent child processes (default: CPU count)
 //!   --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
 //!   --include-llvm       Include size and speed LLVM backend jobs
+//!   --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
+//!   --glue-opt <opt>     Glue execution mode; supported value: interpreter
+//!   --glue-full-targets  Run opt-in non-default glue compile targets
 //!   --verbose            Print PASS results and timing details
 
 const std = @import("std");
@@ -131,6 +134,124 @@ const OptMode = enum(u8) {
 const base_test_opts = [_]OptMode{ .interpreter, .dev };
 const llvm_test_opts = [_]OptMode{ .size, .speed };
 
+const GlueExecutionMode = enum(u8) {
+    default,
+    interpreter,
+
+    fn cliName(self: GlueExecutionMode) []const u8 {
+        return switch (self) {
+            .default => "default",
+            .interpreter => "interpreter",
+        };
+    }
+
+    fn optArg(self: GlueExecutionMode) ?[]const u8 {
+        return switch (self) {
+            .default => null,
+            .interpreter => "--opt=interpreter",
+        };
+    }
+};
+
+const GlueLanguage = enum(u8) {
+    zig,
+    rust,
+    c,
+
+    fn displayName(self: GlueLanguage) []const u8 {
+        return switch (self) {
+            .zig => "ZigGlue",
+            .rust => "RustGlue",
+            .c => "CGlue",
+        };
+    }
+
+    fn glueSpec(self: GlueLanguage) []const u8 {
+        return switch (self) {
+            .zig => "src/glue/src/ZigGlue.roc",
+            .rust => "src/glue/src/RustGlue.roc",
+            .c => "src/glue/src/CGlue.roc",
+        };
+    }
+
+    fn generatedFileName(self: GlueLanguage) []const u8 {
+        return switch (self) {
+            .zig => "roc_platform_abi.zig",
+            .rust => "roc_platform_abi.rs",
+            .c => "roc_platform_abi.h",
+        };
+    }
+};
+
+const GlueTarget = enum(u8) {
+    native,
+    wasm32,
+    x86_64_linux_musl,
+    aarch64_linux_musl,
+    x86_64_macos,
+    aarch64_macos,
+    x86_64_windows,
+    aarch64_windows,
+
+    fn displayName(self: GlueTarget) []const u8 {
+        return switch (self) {
+            .native => "native",
+            .wasm32 => "wasm32",
+            .x86_64_linux_musl => "x86_64-linux-musl",
+            .aarch64_linux_musl => "aarch64-linux-musl",
+            .x86_64_macos => "x86_64-macos",
+            .aarch64_macos => "aarch64-macos",
+            .x86_64_windows => "x86_64-windows",
+            .aarch64_windows => "aarch64-windows",
+        };
+    }
+
+    fn zigTargetArg(self: GlueTarget) ?[]const u8 {
+        return switch (self) {
+            .native => null,
+            .wasm32 => "wasm32-freestanding-none",
+            .x86_64_linux_musl => "x86_64-linux-musl",
+            .aarch64_linux_musl => "aarch64-linux-musl",
+            .x86_64_macos => "x86_64-macos",
+            .aarch64_macos => "aarch64-macos",
+            .x86_64_windows => "x86_64-windows",
+            .aarch64_windows => "aarch64-windows",
+        };
+    }
+};
+
+const GlueRunnerOptions = struct {
+    execution_mode: GlueExecutionMode = .default,
+    full_targets: bool = false,
+};
+
+const GluePlatformShapeFixture = struct {
+    name: []const u8,
+    platform_path: []const u8,
+};
+
+const glue_platform_shape_fixtures = [_]GluePlatformShapeFixture{
+    .{ .name = "cli-main", .platform_path = "test/glue/platform-shapes/cli-main/main.roc" },
+    .{ .name = "app-model", .platform_path = "test/glue/platform-shapes/app-model/main.roc" },
+    .{ .name = "type-catalog", .platform_path = "test/glue/platform-shapes/type-catalog/main.roc" },
+};
+
+const default_zig_glue_targets = [_]GlueTarget{ .native, .wasm32 };
+const default_c_glue_targets = [_]GlueTarget{ .native, .wasm32 };
+const default_rust_glue_targets = [_]GlueTarget{.native};
+
+const full_zig_glue_targets = [_]GlueTarget{
+    .native,
+    .wasm32,
+    .x86_64_linux_musl,
+    .aarch64_linux_musl,
+    .x86_64_macos,
+    .aarch64_macos,
+    .x86_64_windows,
+    .aarch64_windows,
+};
+const full_c_glue_targets = full_zig_glue_targets;
+
 const Stream = enum {
     stdout,
     stderr,
@@ -194,6 +315,13 @@ const PlatformCase = struct {
         /// Build natively, run with --test <spec>; check exit code 0
         io_spec: []const u8,
     };
+};
+
+const GlueMatrixCase = struct {
+    language: GlueLanguage,
+    fixture: GluePlatformShapeFixture,
+    target: GlueTarget,
+    execution_mode: GlueExecutionMode,
 };
 
 const CustomCase = enum {
@@ -287,12 +415,19 @@ const CliCase = struct {
         platform: PlatformCase,
         command: CommandCase,
         custom: CustomCase,
+        glue_matrix: GlueMatrixCase,
     };
 };
 
 // Spec generation
 
-fn buildCases(allocator: Allocator, filters: []const []const u8, include_llvm: bool, suites: SuiteSelection) CliRunnerError![]const CliCase {
+fn buildCases(
+    allocator: Allocator,
+    filters: []const []const u8,
+    include_llvm: bool,
+    suites: SuiteSelection,
+    glue_options: GlueRunnerOptions,
+) CliRunnerError![]const CliCase {
     var cases: std.ArrayListUnmanaged(CliCase) = .empty;
 
     if (suites.includes(.platforms)) {
@@ -313,12 +448,61 @@ fn buildCases(allocator: Allocator, filters: []const []const u8, include_llvm: b
     }
     if (suites.includes(.glue)) {
         try appendStaticCases(allocator, &cases, &glue_cases, filters);
+        try appendGlueMatrixCases(allocator, &cases, filters, glue_options);
     }
     if (suites.includes(.subcommands)) {
         try appendStaticCases(allocator, &cases, &subcommand_cases, filters);
     }
 
     return try cases.toOwnedSlice(allocator);
+}
+
+fn appendGlueMatrixCases(
+    allocator: Allocator,
+    cases: *std.ArrayListUnmanaged(CliCase),
+    filters: []const []const u8,
+    glue_options: GlueRunnerOptions,
+) CliRunnerError!void {
+    const zig_targets = if (glue_options.full_targets) full_zig_glue_targets[0..] else default_zig_glue_targets[0..];
+    const c_targets = if (glue_options.full_targets) full_c_glue_targets[0..] else default_c_glue_targets[0..];
+
+    for (glue_platform_shape_fixtures) |fixture| {
+        try appendGlueLanguageMatrixCases(allocator, cases, filters, glue_options, .zig, fixture, zig_targets);
+        try appendGlueLanguageMatrixCases(allocator, cases, filters, glue_options, .rust, fixture, default_rust_glue_targets[0..]);
+        try appendGlueLanguageMatrixCases(allocator, cases, filters, glue_options, .c, fixture, c_targets);
+    }
+}
+
+fn appendGlueLanguageMatrixCases(
+    allocator: Allocator,
+    cases: *std.ArrayListUnmanaged(CliCase),
+    filters: []const []const u8,
+    glue_options: GlueRunnerOptions,
+    language: GlueLanguage,
+    fixture: GluePlatformShapeFixture,
+    targets: []const GlueTarget,
+) CliRunnerError!void {
+    for (targets) |target| {
+        const name = try std.fmt.allocPrint(
+            allocator,
+            "glue matrix: {s} {s} [{s}, glue-opt={s}]",
+            .{ language.displayName(), fixture.name, target.displayName(), glue_options.execution_mode.cliName() },
+        );
+        const case = CliCase{
+            .id = cases.items.len,
+            .suite = .glue,
+            .name = name,
+            .body = .{ .glue_matrix = .{
+                .language = language,
+                .fixture = fixture,
+                .target = target,
+                .execution_mode = glue_options.execution_mode,
+            } },
+        };
+        if (matchesFilters(case, filters)) {
+            try cases.append(allocator, case);
+        }
+    }
 }
 
 fn appendStaticCases(
@@ -418,6 +602,7 @@ fn caseRocFile(case: CliCase) ?[]const u8 {
         .platform => |platform| platform.roc_file,
         .command => |command| command.roc_file,
         .custom => null,
+        .glue_matrix => |matrix| matrix.fixture.platform_path,
     };
 }
 
@@ -978,6 +1163,8 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 // Child test execution
 
 var roc_binary_path: []const u8 = "";
+var glue_roc_binary_path: []const u8 = "";
+var glue_execution_mode: GlueExecutionMode = .default;
 var project_root_path: []const u8 = "";
 
 const CaseEnv = struct {
@@ -1059,6 +1246,7 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u6
         .platform => runPlatformCase(io, allocator, spec, timeout_ms),
         .command => |command| runCommandCase(io, allocator, command, timeout_ms),
         .custom => |custom| runCustomCase(io, allocator, spec, custom, timeout_ms),
+        .glue_matrix => |matrix| runGlueMatrixCase(io, allocator, matrix, timeout_ms),
     };
 }
 
@@ -1470,8 +1658,18 @@ fn buildRocArgv(
     file_path_mode: FilePathMode,
 ) CliRunnerError![]const []const u8 {
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    try argv.append(allocator, roc_binary_path);
-    try argv.appendSlice(allocator, args);
+    const is_glue_command = args.len > 0 and std.mem.eql(u8, args[0], "glue");
+    try argv.append(allocator, if (is_glue_command) glue_roc_binary_path else roc_binary_path);
+    for (args, 0..) |arg, idx| {
+        try argv.append(allocator, arg);
+        if (idx == 0 and is_glue_command) {
+            if (glue_execution_mode.optArg()) |opt_arg| {
+                if (!glueArgsContainOpt(args)) {
+                    try argv.append(allocator, opt_arg);
+                }
+            }
+        }
+    }
     if (roc_file) |path| {
         const resolved = switch (file_path_mode) {
             .absolute => try absoluteFromProjectRoot(allocator, path),
@@ -1480,6 +1678,13 @@ fn buildRocArgv(
         try argv.append(allocator, resolved);
     }
     return try argv.toOwnedSlice(allocator);
+}
+
+fn glueArgsContainOpt(args: []const []const u8) bool {
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "--opt")) return true;
+    }
+    return false;
 }
 
 fn checkCommandExpectation(
@@ -4213,6 +4418,227 @@ fn runGlueCommandInEnv(
     return null;
 }
 
+fn runGlueMatrixCase(
+    io: std.Io,
+    allocator: Allocator,
+    matrix: GlueMatrixCase,
+    timeout_ms: u64,
+) TestResult {
+    var timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .setup, .message = "no clock" };
+    var env = buildCaseEnv(io, allocator) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test environment" };
+    defer env.deinit(allocator);
+
+    const output_dir_name = std.fmt.allocPrint(
+        allocator,
+        "glue-matrix-{s}-{s}-{s}",
+        .{ matrix.language.displayName(), matrix.fixture.name, matrix.target.displayName() },
+    ) catch |err|
+        return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to allocate glue output dir name: {}", .{err}), env.dirs.work_dir);
+    const output_dir = createWorkSubdir(io, allocator, &env, output_dir_name) catch |err|
+        return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to create glue output dir: {}", .{err}), env.dirs.work_dir);
+
+    if (runGlueMatrixCommand(io, allocator, &env, &timer, timeout_ms, matrix, output_dir)) |failure| {
+        return addPreservedWorkDirMessage(allocator, failure, env.dirs.work_dir);
+    }
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, matrix.language.generatedFileName() }) catch |err|
+        return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to allocate generated glue path: {}", .{err}), env.dirs.work_dir);
+
+    const compile_failure = switch (matrix.language) {
+        .zig => compileGeneratedZigGlue(io, allocator, &env, &timer, timeout_ms, matrix, output_dir, generated_path),
+        .rust => compileGeneratedRustGlue(io, allocator, &env, &timer, timeout_ms, matrix, output_dir, generated_path),
+        .c => compileGeneratedCGlue(io, allocator, &env, &timer, timeout_ms, matrix, output_dir, generated_path),
+    };
+    if (compile_failure) |failure| {
+        return addPreservedWorkDirMessage(allocator, failure, env.dirs.work_dir);
+    }
+
+    util.cleanupTestWorkDir(io, env.dirs.work_dir);
+    const elapsed = timer.read();
+    return .{ .status = .pass, .phase = .run, .duration_ns = elapsed, .run_ns = elapsed };
+}
+
+fn runGlueMatrixCommand(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    matrix: GlueMatrixCase,
+    output_dir: []const u8,
+) ?TestResult {
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    args.append(allocator, "glue") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate glue command args: {}", .{err});
+    if (matrix.execution_mode.optArg()) |opt_arg| {
+        args.append(allocator, opt_arg) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate glue command args: {}", .{err});
+    }
+    args.append(allocator, matrix.language.glueSpec()) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate glue command args: {}", .{err});
+    args.append(allocator, output_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate glue command args: {}", .{err});
+    args.append(allocator, matrix.fixture.platform_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate glue command args: {}", .{err});
+
+    const owned_args = args.toOwnedSlice(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate glue command args: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = owned_args,
+        .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    return null;
+}
+
+fn compileGeneratedZigGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    matrix: GlueMatrixCase,
+    output_dir: []const u8,
+    _: []const u8,
+) ?TestResult {
+    const test_zig_content = std.fmt.allocPrint(allocator,
+        \\const abi = @import("{s}");
+        \\
+        \\comptime {{
+        \\    _ = abi.RocStr;
+        \\    _ = abi.RocList;
+        \\    _ = abi.RocBox;
+        \\    _ = abi.RocHost;
+        \\}}
+        \\
+        \\export fn _roc_glue_matrix_check() void {{
+        \\    var host: abi.RocHost = undefined;
+        \\    var str: abi.RocStr = undefined;
+        \\    var list: abi.RocList(abi.RocStr) = undefined;
+        \\    var box: abi.RocBox = null;
+        \\    _ = &host;
+        \\    _ = &str;
+        \\    _ = &list;
+        \\    _ = &box;
+        \\}}
+    , .{matrix.language.generatedFileName()}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render Zig matrix stub: {}", .{err});
+
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "matrix_check.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig matrix stub path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_content }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Zig matrix stub: {}", .{err});
+
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "matrix_check.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig matrix object path: {}", .{err});
+    const emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{test_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig emit flag: {}", .{err});
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    argv.appendSlice(allocator, &.{ "zig", "build-obj" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig compile args: {}", .{err});
+    if (matrix.target.zigTargetArg()) |target_arg| {
+        argv.appendSlice(allocator, &.{ "-target", target_arg }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate Zig compile args: {}", .{err});
+    }
+    argv.appendSlice(allocator, &.{ test_zig_path, emit_flag }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig compile args: {}", .{err});
+
+    const owned_argv = argv.toOwnedSlice(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig compile args: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, owned_argv, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn compileGeneratedRustGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    matrix: GlueMatrixCase,
+    output_dir: []const u8,
+    generated_path: []const u8,
+) ?TestResult {
+    if (matrix.target != .native) {
+        return customInfraFailure(allocator, timer, "Rust glue matrix target {s} is not configured; install-aware cross-target checks should add it explicitly", .{matrix.target.displayName()});
+    }
+
+    const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust matrix rlib path: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "rustc",
+        "--edition=2021",
+        "-D",
+        "warnings",
+        "--crate-type",
+        "lib",
+        generated_path,
+        "-o",
+        test_rlib_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn compileGeneratedCGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    matrix: GlueMatrixCase,
+    output_dir: []const u8,
+    _: []const u8,
+) ?TestResult {
+    const test_c_content =
+        \\#include "roc_platform_abi.h"
+        \\
+        \\void _roc_glue_matrix_check(void) {
+        \\    RocStr str = {0};
+        \\    RocList list = {0};
+        \\    HostedFunctions *funcs = 0;
+        \\    (void)str;
+        \\    (void)list;
+        \\    (void)funcs;
+        \\}
+    ;
+    const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "matrix_check.c" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate C matrix stub path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = test_c_content }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write C matrix stub: {}", .{err});
+
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "matrix_check.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate C matrix object path: {}", .{err});
+    const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate C include flag: {}", .{err});
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    argv.appendSlice(allocator, &.{ "zig", "cc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate C compile args: {}", .{err});
+    if (matrix.target.zigTargetArg()) |target_arg| {
+        argv.appendSlice(allocator, &.{ "-target", target_arg }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate C compile args: {}", .{err});
+    }
+    argv.appendSlice(allocator, &.{
+        "-std=c11",
+        "-Wall",
+        "-Werror",
+        "-c",
+        include_flag,
+        test_c_path,
+        "-o",
+        test_o_path,
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate C compile args: {}", .{err});
+
+    const owned_argv = argv.toOwnedSlice(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate C compile args: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, owned_argv, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
 fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
@@ -4269,7 +4695,7 @@ fn customGlueCHeaderCompiles(io: std.Io, allocator: Allocator, env: *const CaseE
         \\void test_types(void) {
         \\    RocStr str = {0};
         \\    RocList list = {0};
-        \\    HostedFunctions funcs = {0};
+        \\    HostedFunctions *funcs = 0;
         \\    (void)str;
         \\    (void)list;
         \\    (void)funcs;
@@ -4418,8 +4844,8 @@ fn customGlueRustBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *con
         return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
 
     for ([_][]const u8{
-        "decref_box_with(payload._0 as RocBox, core::mem::align_of::<i64>(), None, roc_host);",
-        "decref_box_with(payload._1 as RocBox, core::mem::align_of::<i64>(), None, roc_host);",
+        "decref_box_with(payload._0 as RocBox, core::mem::align_of::<i64>(), false, None, roc_host);",
+        "decref_box_with(payload._1 as RocBox, core::mem::align_of::<i64>(), false, None, roc_host);",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Rust file missing payload-aligned box decref {s}", .{needle});
@@ -4431,6 +4857,17 @@ fn customGlueRustBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *con
     // pointer alignment instead of the payload's own alignment.
     if (std.mem.find(u8, generated, "decref_box(payload") != null) {
         return customFailure(allocator, timer, "generated Rust file uses pointer-aligned decref_box(payload...) for a known boxed payload", .{});
+    }
+    // The box header size must come from an explicit `payload_contains_refcounted`
+    // flag, NOT inferred from whether a teardown callback exists. Conflating the
+    // two (`payload_decref.is_some()`) frees a `Box(U64)` host handle (non-
+    // refcounted payload + teardown) from the wrong allocation base. Guard against
+    // the inference creeping back into the emitted helper.
+    if (std.mem.find(u8, generated, "payload_decref.is_some()") != null) {
+        return customFailure(allocator, timer, "generated Rust glue infers box header size from payload_decref.is_some() instead of an explicit payload_contains_refcounted flag", .{});
+    }
+    if (std.mem.find(u8, generated, "free_box_allocation(data, payload_alignment, payload_contains_refcounted, roc_host)") == null) {
+        return customFailure(allocator, timer, "generated Rust glue decref_box_with does not thread payload_contains_refcounted into free_box_allocation", .{});
     }
 
     const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
@@ -4700,8 +5137,8 @@ fn customGlueZigBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *cons
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
     for ([_][]const u8{
-        "decrefBoxWith(@ptrCast(payload._0), @alignOf(i64), null, roc_host);",
-        "decrefBoxWith(@ptrCast(payload._1), @alignOf(i64), null, roc_host);",
+        "decrefBoxWith(@ptrCast(payload._0), @alignOf(i64), false, null, roc_host);",
+        "decrefBoxWith(@ptrCast(payload._1), @alignOf(i64), false, null, roc_host);",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig file missing payload-aligned box decref {s}", .{needle});
@@ -4713,6 +5150,17 @@ fn customGlueZigBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *cons
     // instead of the payload's own alignment.
     if (std.mem.find(u8, generated, "decrefBox(@ptrCast(") != null) {
         return customFailure(allocator, timer, "generated Zig file uses pointer-aligned decrefBox(@ptrCast(...)) for a known boxed payload", .{});
+    }
+    // The box header size must come from an explicit `payload_contains_refcounted`
+    // flag, NOT inferred from whether a teardown callback exists. Conflating the
+    // two (`payload_decref != null`) frees a `Box(U64)` host handle (non-
+    // refcounted payload + teardown) from the wrong allocation base. Guard against
+    // the inference creeping back into the emitted helper.
+    if (std.mem.find(u8, generated, "payload_decref != null") != null) {
+        return customFailure(allocator, timer, "generated Zig glue infers box header size from `payload_decref != null` instead of an explicit payload_contains_refcounted flag", .{});
+    }
+    if (std.mem.find(u8, generated, "freeBoxAllocation(data, payload_alignment, payload_contains_refcounted, roc_host)") == null) {
+        return customFailure(allocator, timer, "generated Zig glue decrefBoxWith does not thread payload_contains_refcounted into freeBoxAllocation", .{});
     }
     return null;
 }
@@ -4808,13 +5256,36 @@ fn customGlueZigBoxHelperTest(
         \\    const ptr = dataPtr(true, &backing);
         \\
         \\    refcountPtr(ptr).* = 1;
-        \\    abi.decrefBoxWith(ptr, @alignOf(usize), &payloadDrop, &host);
+        \\    abi.decrefBoxWith(ptr, @alignOf(usize), true, &payloadDrop, &host);
         \\
         \\    try std.testing.expectEqual(@as(usize, 1), env_value.callback_count);
         \\    try std.testing.expectEqual(@as(isize, 0), env_value.callback_rc);
         \\    try std.testing.expectEqual(@as(usize, 1), env_value.dealloc_count);
         \\    try std.testing.expectEqual(@intFromPtr(&backing), env_value.dealloc_ptr);
         \\    try std.testing.expectEqual(@as(usize, @alignOf(usize)), env_value.dealloc_alignment);
+        \\}
+        \\
+        \\// Regression test for a `Box(U64)`-style host resource handle: the box's
+        \\// payload is NOT Roc-refcounted (header = one pointer word) but it carries a
+        \\// teardown callback to free the underlying resource. The box header size must
+        \\// come from the explicit `payload_contains_refcounted = false` argument, not
+        \\// from "is there a teardown callback?". A previous version inferred the header
+        \\// size from `payload_decref != null`, so this exact shape (non-refcounted
+        \\// payload + teardown) was freed from `base - @sizeOf(usize)` instead of `base`,
+        \\// corrupting the host allocator. dataPtr(false, ...) lays out a one-word header,
+        \\// so the freed pointer must equal &backing.
+        \\test "decrefBoxWith frees non-refcounted payload+teardown at the allocation base" {
+        \\    var env_value = Env{};
+        \\    var host = makeHost(&env_value);
+        \\    var backing: [64]u8 align(16) = undefined;
+        \\    const ptr = dataPtr(false, &backing);
+        \\
+        \\    refcountPtr(ptr).* = 1;
+        \\    abi.decrefBoxWith(ptr, @alignOf(usize), false, &payloadDrop, &host);
+        \\
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.callback_count);
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.dealloc_count);
+        \\    try std.testing.expectEqual(@intFromPtr(&backing), env_value.dealloc_ptr);
         \\}
         \\
         \\test "allocateBox uses Roc box header layout" {
@@ -5364,6 +5835,9 @@ fn printUsage() void {
         \\  --threads <N>        Max concurrent workers (default: CPU count)
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
         \\  --include-llvm       Include size and speed LLVM backend jobs
+        \\  --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
+        \\  --glue-opt <opt>     Glue execution mode; supported value: interpreter
+        \\  --glue-full-targets  Run opt-in non-default glue compile targets
         \\  --verbose            Show PASS results with timing
         \\
     , .{});
@@ -5372,12 +5846,19 @@ fn printUsage() void {
 const ParsedRunnerArgs = struct {
     standard: harness.StandardArgs,
     suites: SuiteSelection,
+    glue_options: GlueRunnerOptions,
+    glue_roc: ?[]const u8 = null,
 };
 
 fn parseSuiteName(value: []const u8) ?Suite {
     for (all_suites) |suite| {
         if (std.mem.eql(u8, value, suite.cliName())) return suite;
     }
+    return null;
+}
+
+fn parseGlueExecutionMode(value: []const u8) ?GlueExecutionMode {
+    if (std.mem.eql(u8, value, "interpreter")) return .interpreter;
     return null;
 }
 
@@ -5389,6 +5870,8 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
     try standard_args.append(allocator, raw_args[0]);
 
     var suites = SuiteSelection{};
+    var glue_options = GlueRunnerOptions{};
+    var glue_roc: ?[]const u8 = null;
     var saw_suite = false;
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
@@ -5411,6 +5894,44 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
             }
             continue;
         }
+        if (std.mem.eql(u8, arg, "--glue-roc")) {
+            i += 1;
+            if (i >= raw_args.len) {
+                std.debug.print("missing value for --glue-roc\n", .{});
+                return error.InvalidArgs;
+            }
+            glue_roc = raw_args[i];
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--glue-roc=")) {
+            glue_roc = arg["--glue-roc=".len..];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--glue-opt")) {
+            i += 1;
+            if (i >= raw_args.len) {
+                std.debug.print("missing value for --glue-opt\n", .{});
+                return error.InvalidArgs;
+            }
+            const value = raw_args[i];
+            glue_options.execution_mode = parseGlueExecutionMode(value) orelse {
+                std.debug.print("unknown glue opt: {s}\n", .{value});
+                return error.InvalidArgs;
+            };
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--glue-opt=")) {
+            const value = arg["--glue-opt=".len..];
+            glue_options.execution_mode = parseGlueExecutionMode(value) orelse {
+                std.debug.print("unknown glue opt: {s}\n", .{value});
+                return error.InvalidArgs;
+            };
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--glue-full-targets")) {
+            glue_options.full_targets = true;
+            continue;
+        }
         try standard_args.append(allocator, arg);
     }
 
@@ -5421,6 +5942,8 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
     return .{
         .standard = try harness.parseStandardArgsFromSlice(try standard_args.toOwnedSlice(allocator), allocator),
         .suites = suites,
+        .glue_options = glue_options,
+        .glue_roc = glue_roc,
     };
 }
 
@@ -5475,8 +5998,16 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
         args.positional[0]
     else
         try std.fs.path.join(spec_arena.allocator(), &.{ project_root_path, args.positional[0] });
+    glue_roc_binary_path = if (parsed.glue_roc) |path|
+        if (std.fs.path.isAbsolute(path))
+            path
+        else
+            try std.fs.path.join(spec_arena.allocator(), &.{ project_root_path, path })
+    else
+        roc_binary_path;
+    glue_execution_mode = parsed.glue_options.execution_mode;
 
-    const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites);
+    const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options);
     if (tests.len == 0) return;
     const timeout_ms = effectiveTimeoutMs(args, parsed.suites);
 
@@ -5534,6 +6065,13 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
         std.debug.print(", backends: interpreter, dev, size, speed\n\n", .{});
     } else {
         std.debug.print(", backends: interpreter, dev\n\n", .{});
+    }
+    if (parsed.suites.includes(.glue)) {
+        std.debug.print("Glue generator: {s}, glue-opt={s}, full-targets={}\n\n", .{
+            glue_roc_binary_path,
+            parsed.glue_options.execution_mode.cliName(),
+            parsed.glue_options.full_targets,
+        });
     }
 
     const results = try gpa.alloc(TestResult, tests.len);

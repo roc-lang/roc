@@ -1048,8 +1048,16 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
-			elem_stmt = decref_stmt_for_type_id(type_table, elem_id, "item")
-			"    {\n        const list = ${expr};\n        if (list.hasOneRef()) {\n            for (list.allocationItems()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+			if is_type_refcounted(type_table, elem_id) {
+				elem_stmt = decref_stmt_for_type_id(type_table, elem_id, "item")
+				if elem_stmt == "" {
+					"    comptime { @compileError(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\"); }\n"
+				} else {
+					"    {\n        const list = ${expr};\n        if (list.hasOneRef()) {\n            for (list.allocationItems()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+				}
+			} else {
+				"    ${expr}.decref(roc_host);\n"
+			}
 		}
 		RocBox(inner_id) =>
 			match List.get(type_table, inner_id) {
@@ -1059,9 +1067,9 @@ decref_stmt_for_repr = |type_table, type_repr, expr| {
 					if inner_zig == "*anyopaque" {
 						"    decrefBox(@ptrCast(${expr}), roc_host);\n"
 					} else if is_type_refcounted(type_table, inner_id) {
-						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), &${box_payload_decref_name(inner_id)}, roc_host);\n"
+						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), true, &${box_payload_decref_name(inner_id)}, roc_host);\n"
 					} else {
-						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), null, roc_host);\n"
+						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), false, null, roc_host);\n"
 					}
 				}
 				Err(_) => missing_type_compile_error(inner_id, "boxed-payload decref")
@@ -1674,7 +1682,7 @@ generate_roc_box_helpers =
 	\\
 	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
 	\\pub fn decrefBox(data_ptr: ?*anyopaque, roc_host: *RocHost) void {
-	\\    decrefBoxWith(data_ptr, @alignOf(usize), null, roc_host);
+	\\    decrefBoxWith(data_ptr, @alignOf(usize), false, null, roc_host);
 	\\}
 	\\
 	\\/// Increment a boxed function closure.
@@ -1686,7 +1694,7 @@ generate_roc_box_helpers =
 	\\/// Decrement a boxed function closure and run its capture drop callback on final release.
 	\\pub fn decrefErasedCallable(callable: RocErasedCallable, roc_host: *RocHost) void {
 	\\    const data = callable orelse return;
-	\\    decrefBoxWith(@ptrCast(data), roc_erased_callable_payload_alignment, &dropErasedCallablePayload, roc_host);
+	\\    decrefBoxWith(@ptrCast(data), roc_erased_callable_payload_alignment, false, &dropErasedCallablePayload, roc_host);
 	\\}
 	\\
 	\\fn dropErasedCallablePayload(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c) void {
@@ -1699,9 +1707,16 @@ generate_roc_box_helpers =
 	\\}
 	\\
 	\\/// Decrement a boxed payload and run payload teardown when this is the final ref.
+	\\///
+	\\/// `payload_contains_refcounted` must match the value passed to `allocateBox`:
+	\\/// it determines the box header size, and is independent of whether a
+	\\/// `payload_decref` teardown callback is supplied. A host resource handle such
+	\\/// as `Box(U64)` holding a raw pointer has `payload_contains_refcounted = false`
+	\\/// even when it provides a teardown callback to free the underlying resource.
 	\\pub fn decrefBoxWith(
 	\\    data_ptr: ?*anyopaque,
 	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
 	\\    payload_decref: ?RocBoxPayloadDecref,
 	\\    roc_host: *RocHost,
 	\\) void {
@@ -1712,20 +1727,23 @@ generate_roc_box_helpers =
 	\\    const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\    if (prev == 1) {
 	\\        if (payload_decref) |callback| callback(data_ptr, roc_host);
-	\\        freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_host);
+	\\        freeBoxAllocation(data, payload_alignment, payload_contains_refcounted, roc_host);
 	\\    }
 	\\}
 	\\
 	\\/// Free a boxed payload allocation immediately after running payload teardown.
+	\\///
+	\\/// See `decrefBoxWith` for the meaning of `payload_contains_refcounted`.
 	\\pub fn freeBoxWith(
 	\\    data_ptr: ?*anyopaque,
 	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
 	\\    payload_decref: ?RocBoxPayloadDecref,
 	\\    roc_host: *RocHost,
 	\\) void {
 	\\    const data = boxDataPtr(data_ptr) orelse return;
 	\\    if (payload_decref) |callback| callback(data_ptr, roc_host);
-	\\    freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_host);
+	\\    freeBoxAllocation(data, payload_alignment, payload_contains_refcounted, roc_host);
 	\\}
 	\\
 	\\/// Return true when a boxed payload data pointer has exactly one live ref.
