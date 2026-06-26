@@ -23,18 +23,20 @@ main = {
 # EXPECTED
 MODULE HEADER DEPRECATED - shorthand_polymorphic_method.md:1:1:1:14
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
 
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+┌──────────────────────────┐
+│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
+└┬─────────────────────────┘                                                  │
+ │                                                                            │
+ │  module [main]                                                             │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
+ └─────────────────────────────────────── shorthand_polymorphic_method.md:1:1 ┘
 
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**shorthand_polymorphic_method.md:1:1:1:14:**
-```roc
-module [main]
-```
-^^^^^^^^^^^^^
+    Type modules (headerless files with a top-level type matching the filename)
+    are now the preferred way to define modules.
 
+    Remove the `module` header and ensure your file defines a type that matches
+    the filename.
 
 # TOKENS
 ~~~zig

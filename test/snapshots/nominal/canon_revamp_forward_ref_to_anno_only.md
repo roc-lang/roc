@@ -16,27 +16,28 @@ Foo := [Whatever].{
 UNDEFINED VARIABLE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `absent` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**canon_revamp_forward_ref_to_anno_only.md:3:14:3:20:**
-```roc
-    callMe = absent
-```
-             ^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `absent` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  callMe = absent                                                           │
+ │           ‾‾‾‾‾‾                                                           │
+ └───────────────────────────── canon_revamp_forward_ref_to_anno_only.md:3:14 ┘
 
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**canon_revamp_forward_ref_to_anno_only.md:5:5:5:17:**
-```roc
-    absent : Foo
-```
-    ^^^^^^^^^^^^
+    Is there an `import` or `exposing` missing up-top?
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  absent : Foo                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └────────────────────────────── canon_revamp_forward_ref_to_anno_only.md:5:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

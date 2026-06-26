@@ -10,16 +10,17 @@ x : { ..a, }
 # EXPECTED
 DECLARATION HAS NO VALUE - fmt_record_type_extension_trailing_comma_issue_9374.md:1:1:1:13
 # PROBLEMS
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fmt_record_type_extension_trailing_comma_issue_9374.md:1:1:1:13:**
-```roc
-x : { ..a, }
-```
-^^^^^^^^^^^^
 
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  x : { ..a, }                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └──────────────── fmt_record_type_extension_trailing_comma_issue_9374.md:1:1 ┘
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

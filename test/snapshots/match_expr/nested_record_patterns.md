@@ -16,13 +16,14 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - nested_record_patterns.md:1:1:1:1
 # PROBLEMS
-**UNCONDITIONAL CONDITION**
-This match value is known at compile time, so this match will always inspect the same value:
-**nested_record_patterns.md:1:1:1:1:**
-```roc
-match ... {
-```
-^
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match ... {                                                               │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────── nested_record_patterns.md:1:1 ┘
 
 
 # TOKENS

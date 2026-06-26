@@ -25,88 +25,85 @@ DUPLICATE DEFINITION - type_shadowing_across_scopes.md:1:1:1:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_type_field_name`
-This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:9:5:9:8:**
-```roc
-    Try : [Success, Failure]
-```
-    ^^^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_type_field_name ──────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────── type_shadowing_across_scopes.md:9:5 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_shadowing_across_scopes.md:9:21:9:28:**
-```roc
-    Try : [Success, Failure]
-```
-                    ^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_ty_close_curly_or_comma ──┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │                  ‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
 
-**type_shadowing_across_scopes.md:9:28:9:29:**
-```roc
-    Try : [Success, Failure]
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_shadowing_across_scopes.md:10:1:10:2:**
-```roc
-}
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**DUPLICATE DEFINITION**
-The name `Try` is being redeclared in this scope.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │                         ‾                                                  │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:9:28 ┘
 
-The redeclaration is here:
-**type_shadowing_across_scopes.md:1:1:1:28:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Try` was already defined here:
-**type_shadowing_across_scopes.md:1:1:1:1:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**UNUSED VARIABLE**
-Variable `data` is not used anywhere in your code.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  }                                                                         │
+ │  ‾                                                                         │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:10:1 ┘
 
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
-**type_shadowing_across_scopes.md:4:16:4:20:**
-```roc
-processData = |data|
-```
-               ^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  Try(a, b) : [Ok(a), Err(b)]                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+ └─────────────────────────────────────── type_shadowing_across_scopes.md:1:1 ┘
 
-**type_shadowing_across_scopes.md:9:21:9:28:**
-```roc
-    Try : [Success, Failure]
-```
-                    ^^^^^^^
+    In this scope, `Try` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  Try(a, b) : [Ok(a), Err(b)]                                          │
+      │  ‾                                                                    │
+      └────────────────────────────────── type_shadowing_across_scopes.md:1:1 ┘
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `data` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processData = |data|                                                      │
+ │                 ‾‾‾‾                                                       │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:4:16 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_data`
+    to suppress this warning.
+
+
+┌────────────────┐
+│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
+└┬───────────────┘  syntax.                                                   │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │                  ‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
 
 
 # TOKENS

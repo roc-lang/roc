@@ -10,21 +10,24 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - float_invalid.md:1:1:1:8
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**float_invalid.md:1:1:1:8:**
-```roc
-3.14.15
-```
-^^^^^^^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  3.14.15                                                                   │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────────────────────────── float_invalid.md:1:1 ┘
 
-    (_field, _field2, _field3, _field4, _field5, _field6, _field7, _field8, _field9, _field10, _field11, _field12, _field13, _field14, _field15, _field16)
+    It has the type:
 
-But you are trying to use it as:
+        (_field, _field2, _field3, _field4, _field5, _field6, _field7, _field8,
+        _field9, _field10, _field11, _field12, _field13, _field14, _field15,
+        _field16)
 
-    Dec
+    But you are trying to use it as:
+
+        Dec
 
 # TOKENS
 ~~~zig

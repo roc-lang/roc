@@ -17,17 +17,18 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:38:8:41
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**generalize_alias_assoc_fn_record.md:8:38:8:41:**
-```roc
-main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
-```
-                                     ^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))                          │
+ │                                       ‾‾‾                                  │
+ └────────────────────────────────── generalize_alias_assoc_fn_record.md:8:38 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

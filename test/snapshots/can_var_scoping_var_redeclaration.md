@@ -18,23 +18,20 @@ result = redeclareTest({})
 # EXPECTED
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `x_` is being redeclared in this scope.
 
-The redeclaration is here:
-**can_var_scoping_var_redeclaration.md:4:2:4:13:**
-```roc
-	var x_ = 10 # Redeclare var - should warn but proceed
-```
-	^^^^^^^^^^^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `x_` is being redeclared here. ────────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  var x_ = 10 # Redeclare var - should warn but proceed                     │
+ │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
+ └────────────────────────────────── can_var_scoping_var_redeclaration.md:4:2 ┘
 
-But `x_` was already defined here:
-**can_var_scoping_var_redeclaration.md:3:2:3:12:**
-```roc
-	var x_ = 5
-```
-	^^^^^^^^^^
-
+    In this scope, `x_` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    3 │   var x_ = 5                                                          │
+      │   ‾‾‾‾‾‾‾‾‾‾                                                          │
+      └───────────────────────────── can_var_scoping_var_redeclaration.md:3:2 ┘
 
 # TOKENS
 ~~~zig

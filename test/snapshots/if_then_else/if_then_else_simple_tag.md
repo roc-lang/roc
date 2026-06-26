@@ -10,13 +10,15 @@ if Bool.True Ok(0) else Err(1)
 # EXPECTED
 UNCONDITIONAL CONDITION - if_then_else_simple_tag.md:1:4:1:13
 # PROBLEMS
-**UNCONDITIONAL CONDITION**
-This if condition is known at compile time, so this conditional will always make the same choice:
-**if_then_else_simple_tag.md:1:4:1:13:**
-```roc
-if Bool.True Ok(0) else Err(1)
-```
-   ^^^^^^^^^
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
+└┬────────────────────────┘  this conditional will always make the same       │
+ │                           choice.                                          │
+ │                                                                            │
+ │  if Bool.True Ok(0) else Err(1)                                            │
+ │     ‾‾‾‾‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────── if_then_else_simple_tag.md:1:4 ┘
 
 
 # TOKENS

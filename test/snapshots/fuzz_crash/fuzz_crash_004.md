@@ -10,28 +10,28 @@ F
 # EXPECTED
 PARSE ERROR - fuzz_crash_004.md:2:1:2:1
 # PROBLEMS
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_004.md:2:1 ┘
 
-Instead of:
-    **List U8**
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
 
-Use:
-    **List(U8)**
+    Instead of:
+        List U8
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+    Use:
+        List(U8)
 
-**fuzz_crash_004.md:2:1:2:1:**
-```roc
-
-```
-^
-
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
 
 # TOKENS
 ~~~zig

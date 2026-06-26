@@ -22,28 +22,28 @@ main! = |_| {
 UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**hello_world_with_block.md:11:2:11:14:**
-```roc
-	Stdout.line!("Hello, world!")
-```
-	^^^^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  Stdout.line!("Hello, world!")                                             │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
+
+    Is there an `import` or `exposing` missing up-top?
 
 
-**UNUSED VARIABLE**
-Variable `world` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `world` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  world = "World"                                                           │
+ │  ‾‾‾‾‾                                                                     │
+ └───────────────────────────────────────────── hello_world_with_block.md:9:2 ┘
 
-If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
-The unused variable is declared here:
-**hello_world_with_block.md:9:2:9:7:**
-```roc
-	world = "World"
-```
-	^^^^^
-
+    If you don't need this variable, prefix it with an underscore like `_world`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig

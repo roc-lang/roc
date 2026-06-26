@@ -17,13 +17,14 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - pattern_alternatives_mixed.md:1:1:1:1
 # PROBLEMS
-**UNCONDITIONAL CONDITION**
-This match value is known at compile time, so this match will always inspect the same value:
-**pattern_alternatives_mixed.md:1:1:1:1:**
-```roc
-match ... {
-```
-^
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match ... {                                                               │
+ │  ‾                                                                         │
+ └───────────────────────────────────────── pattern_alternatives_mixed.md:1:1 ┘
 
 
 # TOKENS

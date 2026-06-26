@@ -14,16 +14,16 @@ main! = |_| Stdout.line!("Hello, world!")
 # EXPECTED
 UNDEFINED VARIABLE - hello_world.md:5:13:5:25
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**hello_world.md:5:13:5:25:**
-```roc
-main! = |_| Stdout.line!("Hello, world!")
-```
-            ^^^^^^^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  main! = |_| Stdout.line!("Hello, world!")                                 │
+ │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+ └─────────────────────────────────────────────────────── hello_world.md:5:13 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

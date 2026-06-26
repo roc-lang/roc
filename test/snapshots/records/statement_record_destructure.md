@@ -10,16 +10,16 @@ type=snippet
 # EXPECTED
 UNDEFINED VARIABLE - statement_record_destructure.md:1:24:1:30
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**statement_record_destructure.md:1:24:1:30:**
-```roc
-{ name, age, email } = person
-```
-                       ^^^^^^
+┌────────────────────┐
+│ UNDEFINED VARIABLE ├─ Nothing is named `person` in this scope. ─────────────┐
+└┬───────────────────┘                                                        │
+ │                                                                            │
+ │  { name, age, email } = person                                             │
+ │                         ‾‾‾‾‾‾                                             │
+ └────────────────────────────────────── statement_record_destructure.md:1:24 ┘
 
+    Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

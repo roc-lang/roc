@@ -107,12 +107,9 @@ pub fn validatePlatformHeader(
 
 /// Render a file read error report to stderr.
 fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "FILE READ ERROR", .fatal);
+    var report = try reporting.Report.init(allocator, "File Read Error", "Failed to read platform source file.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to read platform source file:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
     try report.document.addLineBreak();
@@ -130,12 +127,9 @@ fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.A
 
 /// Render a parse error report to stderr.
 fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "PARSE ERROR", .fatal);
+    var report = try reporting.Report.init(allocator, "Parse Error", "Failed to parse platform header.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to parse platform header:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
     try report.document.addLineBreak();
@@ -153,14 +147,11 @@ fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allo
 
 /// Render a missing targets section error report to stderr.
 fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "MISSING TARGETS SECTION", .fatal);
+    const headline = try std.fmt.allocPrint(allocator, "Platform at {s} does not have a 'targets:' section.", .{path});
+    defer allocator.free(headline);
+    var report = try reporting.Report.init(allocator, "Missing Targets Section", headline, .fatal);
     defer report.deinit();
 
-    try report.document.addText("Platform at ");
-    try report.document.addAnnotated(path, .path);
-    try report.document.addText(" does not have a 'targets:' section.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Platform headers must declare supported targets. Example:");
     try report.document.addLineBreak();
     try report.document.addLineBreak();

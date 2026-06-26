@@ -43,214 +43,215 @@ PARSE ERROR - fuzz_crash_029.md:17:3:17:4
 MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 # PROBLEMS
-**EXPECTED OPENING BRACE**
-Platform headers must have a `packages` section that lists package dependencies.
-For example:     packages { base: "../base/main.roc" }
 
-**fuzz_crash_029.md:11:3:11:8:**
-```roc
-		vides # Cd
-```
-		^^^^^
+┌────────────────────────┐
+│ EXPECTED OPENING BRACE ├─ Platform headers must have a packages section ────┐
+└┬───────────────────────┘  that lists package dependencies.                  │
+ │                                                                            │
+ │  vides # Cd                                                                │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:11:3 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `expected_provides`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:12:3:12:4:**
-```roc
-		{ # pen
-```
-		^
+    For example:     packages { base: "../base/main.roc" }
 
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_provides ─────────────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  { # pen                                                                   │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:12:3 ┘
 
-**fuzz_crash_029.md:13:6:13:7:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:7:13:10:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-      ^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token " is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │       ‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
 
-**fuzz_crash_029.md:13:10:13:11:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:11:13:12:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-          ^
+    Type annotations should contain types like Str, Num a, or List U64.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │        ‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:13:7 ┘
 
-**fuzz_crash_029.md:13:13:13:17:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-            ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:19:13:20:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-                		^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │           ‾                                                                │
+ └─────────────────────────────────────────────────── fuzz_crash_029.md:13:10 ┘
 
-**fuzz_crash_029.md:14:2:14:10:**
-```roc
-	provides # Cd
-```
-	^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:15:3:15:4:**
-```roc
-		[ Ok(world), (n # pen
-```
-		^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │            ‾                                                               │
+ └─────────────────────────────────────────────────── fuzz_crash_029.md:13:11 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_029.md:15:14:15:15:**
-```roc
-		[ Ok(world), (n # pen
-```
-		           ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │              ‾‾‾‾                                                          │
+ └─────────────────────────────────────────────────── fuzz_crash_029.md:13:13 ┘
 
-**fuzz_crash_029.md:15:16:15:17:**
-```roc
-		[ Ok(world), (n # pen
-```
-		             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:15:17:15:18:**
-```roc
-		[ Ok(world), (n # pen
-```
-		              ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │                    ‾                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_029.md:13:19 ┘
 
-**fuzz_crash_029.md:16:1:16:3:**
-```roc
-ar,
-```
-^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:16:3:16:4:**
-```roc
-ar,
-```
-  ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  provides # Cd                                                             │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:14:2 ┘
 
-**fuzz_crash_029.md:17:3:17:4:**
-```roc
-		]
-```
-		^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_029.md:13:6:13:7:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-     ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_029.md:13:1:13:7:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-^^^^^^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [ Ok(world), (n # pen                                                     │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:15:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  [ Ok(world), (n # pen                                                     │
+ │             ‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_029.md:15:14 ┘
+
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [ Ok(world), (n # pen                                                     │
+ │               ‾                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_029.md:15:16 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [ Ok(world), (n # pen                                                     │
+ │                ‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_029.md:15:17 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ar,                                                                       │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:16:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ar,                                                                       │
+ │    ‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:16:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ]                                                                         │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:17:3 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌────────────────┐
+│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
+└┬───────────────┘  syntax.                                                   │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │       ‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
+
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  pkg: "..l", mmen  } # Cose                                                │
+ │  ‾‾‾‾‾‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_029.md:13:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

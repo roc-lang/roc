@@ -25,60 +25,60 @@ DEPRECATED NUMBER SUFFIX - issue_8899.md:11:20:11:25
 DEPRECATED NUMBER SUFFIX - issue_8899.md:11:27:11:32
 DEPRECATED NUMBER SUFFIX - issue_8899.md:11:34:11:39
 # PROBLEMS
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
 
-**issue_8899.md:3:22:3:26:**
-```roc
-        var $total = 0i64
-```
-                     ^^^^
+┌──────────────────────────┐
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
+└┬─────────────────────────┘  syntax.                                         │
+ │                                                                            │
+ │  var $total = 0i64                                                         │
+ │               ‾‾‾‾                                                         │
+ └──────────────────────────────────────────────────────── issue_8899.md:3:22 ┘
 
-The `i64` suffix is deprecated. Use `0.I64` instead.
+    The `i64` suffix is deprecated. Use `0.I64` instead.
 
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
 
-**issue_8899.md:4:21:4:25:**
-```roc
-        var $acc = [0i64]
-```
-                    ^^^^
+┌──────────────────────────┐
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
+└┬─────────────────────────┘  syntax.                                         │
+ │                                                                            │
+ │  var $acc = [0i64]                                                         │
+ │              ‾‾‾‾                                                          │
+ └──────────────────────────────────────────────────────── issue_8899.md:4:21 ┘
 
-The `i64` suffix is deprecated. Use `0.I64` instead.
+    The `i64` suffix is deprecated. Use `0.I64` instead.
 
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
 
-**issue_8899.md:11:20:11:25:**
-```roc
-    sum_with_last([10i64, 20i64, 30i64])
-```
-                   ^^^^^
+┌──────────────────────────┐
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
+└┬─────────────────────────┘  syntax.                                         │
+ │                                                                            │
+ │  sum_with_last([10i64, 20i64, 30i64])                                      │
+ │                 ‾‾‾‾‾                                                      │
+ └─────────────────────────────────────────────────────── issue_8899.md:11:20 ┘
 
-The `i64` suffix is deprecated. Use `10.I64` instead.
+    The `i64` suffix is deprecated. Use `10.I64` instead.
 
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
 
-**issue_8899.md:11:27:11:32:**
-```roc
-    sum_with_last([10i64, 20i64, 30i64])
-```
-                          ^^^^^
+┌──────────────────────────┐
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
+└┬─────────────────────────┘  syntax.                                         │
+ │                                                                            │
+ │  sum_with_last([10i64, 20i64, 30i64])                                      │
+ │                        ‾‾‾‾‾                                               │
+ └─────────────────────────────────────────────────────── issue_8899.md:11:27 ┘
 
-The `i64` suffix is deprecated. Use `20.I64` instead.
+    The `i64` suffix is deprecated. Use `20.I64` instead.
 
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
 
-**issue_8899.md:11:34:11:39:**
-```roc
-    sum_with_last([10i64, 20i64, 30i64])
-```
-                                 ^^^^^
+┌──────────────────────────┐
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
+└┬─────────────────────────┘  syntax.                                         │
+ │                                                                            │
+ │  sum_with_last([10i64, 20i64, 30i64])                                      │
+ │                               ‾‾‾‾‾                                        │
+ └─────────────────────────────────────────────────────── issue_8899.md:11:34 ┘
 
-The `i64` suffix is deprecated. Use `30.I64` instead.
+    The `i64` suffix is deprecated. Use `30.I64` instead.
 
 # TOKENS
 ~~~zig

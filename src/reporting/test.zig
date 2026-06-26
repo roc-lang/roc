@@ -18,7 +18,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     defer writer.deinit();
 
     // Create a Report
-    var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error);
+    var r = try Report.init(gpa, "Syntax Problem", "", .runtime_error);
     defer r.deinit();
 
     // Add the document which describes the problem
@@ -30,7 +30,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try reporting.renderReportToMarkdown(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
 
     const expected =
-        \\**SYNTAX PROBLEM**
+        \\**Syntax Problem**
         \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped.
         \\**example.roc:1:10:1:20:**
         \\```roc
@@ -83,6 +83,42 @@ test "SYNTAX_PROBLEM report along with all four render types" {
 
     // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
     // we'll have to QA the old fashioned way.
+
+    // Plain-text box (the layout used for snapshots and non-color output).
+    // Assert the alignment invariant: every row that reaches the main box's
+    // right wall has the same display width, so the wall lines up vertically.
+    // The label box in the upper-left pokes out past the main box's left wall,
+    // and its short top edge (`┌──┐`) does not reach the right wall, so it is
+    // excluded.
+    writer.clearRetainingCapacity();
+    try reporting.renderReportToBoxPlain(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
+    const box = writer.written();
+    try testing.expect(std.mem.find(u8, box, "SYNTAX PROBLEM") != null);
+    try testing.expect(std.mem.find(u8, box, "example.roc:1:10") != null);
+    var box_lines = std.mem.splitScalar(u8, box, '\n');
+    var wall_width: ?usize = null;
+    var box_rows: usize = 0;
+    var seen_label_top = false;
+    while (box_lines.next()) |line| {
+        const reaches_edge = std.mem.endsWith(u8, line, "│") or
+            std.mem.endsWith(u8, line, "┐") or
+            std.mem.endsWith(u8, line, "┘");
+        if (!reaches_edge) continue;
+        if (!seen_label_top and std.mem.endsWith(u8, line, "┐")) {
+            // The label box's top edge — short, doesn't reach the right wall.
+            seen_label_top = true;
+            continue;
+        }
+        const w = reporting.source_region.displayWidth(line);
+        if (wall_width) |ww| {
+            try testing.expectEqual(ww, w);
+        } else {
+            wall_width = w;
+        }
+        box_rows += 1;
+    }
+    // title-box bottom, blank, source line, underline, bottom edge
+    try testing.expect(box_rows >= 5);
 }
 
 fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {

@@ -19,50 +19,55 @@ TYPE MISMATCH - if_then_else_9.md:3:11:3:13
 MISSING METHOD - if_then_else_9.md:2:2:2:3
 MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
-**UNCONDITIONAL CONDITION**
-This if condition is known at compile time, so this conditional will always make the same choice:
-**if_then_else_9.md:3:11:3:13:**
-```roc
-} else if 10 { # Comment after else open
-```
-          ^^
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
+└┬────────────────────────┘  this conditional will always make the same       │
+ │                           choice.                                          │
+ │                                                                            │
+ │  } else if 10 { # Comment after else open                                  │
+ │            ‾‾                                                              │
+ └──────────────────────────────────────────────────── if_then_else_9.md:3:11 ┘
 
 
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**if_then_else_9.md:3:11:3:13:**
-```roc
-} else if 10 { # Comment after else open
-```
-          ^^
 
-Other code expects this to have the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  } else if 10 { # Comment after else open                                  │
+ │            ‾‾                                                              │
+ └──────────────────────────────────────────────────── if_then_else_9.md:3:11 ┘
 
-    Bool
+    Other code expects this to have the type:
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**if_then_else_9.md:2:2:2:3:**
-```roc
-	1
-```
-	^
+        Bool
 
-The value's type, which does not have a method named **from_numeral**, is:
 
-    [A, ..]
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  1                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── if_then_else_9.md:2:2 ┘
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**if_then_else_9.md:6:2:6:3:**
-```roc
-	3
-```
-	^
+    The value's type, which does not have a method named `from_numeral`, is:
 
-The value's type, which does not have a method named **from_numeral**, is:
+        [A, ..]
 
-    [A, ..]
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  3                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── if_then_else_9.md:6:2 ┘
+
+    The value's type, which does not have a method named `from_numeral`, is:
+
+        [A, ..]
 
 # TOKENS
 ~~~zig

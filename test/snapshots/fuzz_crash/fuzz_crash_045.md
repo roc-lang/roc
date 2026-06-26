@@ -10,16 +10,16 @@ platform""requires{}{}exposes[]packages{}provides[
 # EXPECTED
 PARSE ERROR - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_provides_open_curly`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_045.md:1:50:1:51:**
-```roc
-platform""requires{}{}exposes[]packages{}provides[
-```
-                                                 ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_provides_open_curly ──────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  platform""requires{}{}exposes[]packages{}provides[                        │
+ │                                                   ‾                        │
+ └──────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
 
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

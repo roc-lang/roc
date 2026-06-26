@@ -1221,19 +1221,17 @@ pub const BuildEnv = struct {
         const source_read = self.readHeaderSourceFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
-                    var report = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
-                    try report.document.addText("I could not find the file ");
-                    try report.document.addAnnotated(file_abs, .path);
-                    try report.document.addLineBreak();
+                    const headline = try std.fmt.allocPrint(self.gpa, "I could not find the file {s}.", .{file_abs});
+                    defer self.gpa.free(headline);
+                    var report = try Report.init(self.gpa, "File Not Found", headline, .fatal);
                     try report.document.addText("Make sure the file exists and you do not have any typos in its name or path.");
                     break :blk report;
                 },
 
                 else => {
-                    var report = Report.init(self.gpa, "COULD NOT READ FILE", .fatal);
-                    try report.document.addText("I could not read the file ");
-                    try report.document.addAnnotated(file_abs, .path);
-                    try report.document.addLineBreak();
+                    const headline = try std.fmt.allocPrint(self.gpa, "I could not read the file {s}.", .{file_abs});
+                    defer self.gpa.free(headline);
+                    var report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
                     try report.document.addText("I did get the following error: ");
                     try report.addErrorMessage(@errorName(err));
                     try report.document.addText("Make sure the file can be read.");
@@ -1948,9 +1946,7 @@ pub const BuildEnv = struct {
     }
 
     fn emitWorkspaceReport(self: *BuildEnv, title: []const u8, msg: []const u8) Allocator.Error!void {
-        var rep = Report.init(self.gpa, title, .runtime_error);
-        const owned = try rep.addOwnedString(msg);
-        try rep.addErrorMessage(owned);
+        const rep = try Report.init(self.gpa, title, msg, .runtime_error);
         // Route through OrderedSink with a stable fully-qualified identity so it participates in ordering.
         // We use "workspace:root" as the fq module identity.
         try self.sink.emitReport("workspace", "root", rep);
@@ -1990,7 +1986,7 @@ pub const BuildEnv = struct {
             },
         );
         defer self.gpa.free(msg);
-        try self.emitWorkspaceReport("INVALID TARGET CONFIGURATION", msg);
+        try self.emitWorkspaceReport("Invalid Target Configuration", msg);
     }
 
     // Compute global deterministic emission of accumulated reports:

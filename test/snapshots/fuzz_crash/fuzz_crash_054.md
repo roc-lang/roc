@@ -11,15 +11,15 @@ f]
 # EXPECTED
 MODULE NOT FOUND - fuzz_crash_054.md:1:20:2:3
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `S` was not found in this Roc project.
 
-You're attempting to use this module here:
-**fuzz_crash_054.md:1:20:2:3:**
-```roc
-app[]{f:platform""}import S exposing[c as
-f]
-```
+┌──────────────────┐
+│ MODULE NOT FOUND ├─ The module `S` was not found in this Roc project. ──────┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  app[]{f:platform""}import S exposing[c as                                 │
+ │  f]                                                                        │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_054.md:1:20 ┘
 
 
 # TOKENS

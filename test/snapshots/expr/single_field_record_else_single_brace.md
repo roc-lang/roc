@@ -17,13 +17,15 @@ type=expr
 # EXPECTED
 UNCONDITIONAL CONDITION - single_field_record_else_single_brace.md:3:5:3:9
 # PROBLEMS
-**UNCONDITIONAL CONDITION**
-This if condition is known at compile time, so this conditional will always make the same choice:
-**single_field_record_else_single_brace.md:3:5:3:9:**
-```roc
-	if True {
-```
-	   ^^^^
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
+└┬────────────────────────┘  this conditional will always make the same       │
+ │                           choice.                                          │
+ │                                                                            │
+ │  if True {                                                                 │
+ │     ‾‾‾‾                                                                   │
+ └────────────────────────────── single_field_record_else_single_brace.md:3:5 ┘
 
 
 # TOKENS

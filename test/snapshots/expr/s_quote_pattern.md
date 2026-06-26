@@ -14,13 +14,14 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - s_quote_pattern.md:1:1:1:1
 # PROBLEMS
-**UNCONDITIONAL CONDITION**
-This match value is known at compile time, so this match will always inspect the same value:
-**s_quote_pattern.md:1:1:1:1:**
-```roc
-match ... {
-```
-^
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match ... {                                                               │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── s_quote_pattern.md:1:1 ┘
 
 
 # TOKENS

@@ -11,17 +11,17 @@ x }
 # EXPECTED
 EXPRESSION IN ASSOCIATED ITEMS - nominal_associated_with_final_expression.md:2:1:2:2
 # PROBLEMS
-**EXPRESSION IN ASSOCIATED ITEMS**
-Associated items (such as types or methods) can only have associated types and values, not plain expressions.
 
-To fix this, remove the expression at the very end.
+┌────────────────────────────────┐
+│ EXPRESSION IN ASSOCIATED ITEMS ├─ Associated items (such as types or ───────┐
+└┬───────────────────────────────┘  methods) can only have associated types   │
+ │                                  and values, not plain expressions.        │
+ │                                                                            │
+ │  x }                                                                       │
+ │  ‾                                                                         │
+ └─────────────────────────── nominal_associated_with_final_expression.md:2:1 ┘
 
-**nominal_associated_with_final_expression.md:2:1:2:2:**
-```roc
-x }
-```
-^
-
+    To fix this, remove the expression at the very end.
 
 # TOKENS
 ~~~zig

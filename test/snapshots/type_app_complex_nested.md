@@ -34,71 +34,66 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
 UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
 
-This type is referenced here:
-**type_app_complex_nested.md:4:27:4:32:**
-```roc
-processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                          ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:4:48:4:53:**
-```roc
-processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                                               ^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)     │
+ │                            ‾‾‾‾‾                                           │
+ └─────────────────────────────────────────── type_app_complex_nested.md:4:27 ┘
 
 
-**UNUSED VARIABLE**
-Variable `maybeList` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_maybeList` to suppress this warning.
-The unused variable is declared here:
-**type_app_complex_nested.md:7:12:7:21:**
-```roc
-        Ok(maybeList) => []
-```
-           ^^^^^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)     │
+ │                                                 ‾‾‾‾‾                      │
+ └─────────────────────────────────────────── type_app_complex_nested.md:4:48 ┘
 
 
-**UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
 
-This type is referenced here:
-**type_app_complex_nested.md:12:14:12:19:**
-```roc
-deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
-```
-             ^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `maybeList` is defined here and then never ─────┐
+└┬────────────────┘  used.                                                    │
+ │                                                                            │
+ │  Ok(maybeList) => []                                                       │
+ │     ‾‾‾‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────── type_app_complex_nested.md:7:12 ┘
 
-
-**UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:18:30:18:35:**
-```roc
-ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                             ^^^^^
+    If you don't need this variable, prefix it with an underscore like
+    `_maybeList` to suppress this warning.
 
 
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a                      │
+ │               ‾‾‾‾‾                                                        │
+ └────────────────────────────────────────── type_app_complex_nested.md:12:14 ┘
 
-This type is referenced here:
-**type_app_complex_nested.md:18:51:18:56:**
-```roc
-ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                                                  ^^^^^
+
+
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))              │
+ │                               ‾‾‾‾‾                                        │
+ └────────────────────────────────────────── type_app_complex_nested.md:18:30 ┘
+
+
+
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))              │
+ │                                                    ‾‾‾‾‾                   │
+ └────────────────────────────────────────── type_app_complex_nested.md:18:51 ┘
 
 
 # TOKENS

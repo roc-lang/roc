@@ -12,13 +12,14 @@ match [] {
 # EXPECTED
 UNCONDITIONAL CONDITION - let_polymorphism_expr.md:1:7:1:9
 # PROBLEMS
-**UNCONDITIONAL CONDITION**
-This match value is known at compile time, so this match will always inspect the same value:
-**let_polymorphism_expr.md:1:7:1:9:**
-```roc
-match [] {
-```
-      ^^
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match [] {                                                                │
+ │        ‾‾                                                                  │
+ └────────────────────────────────────────────── let_polymorphism_expr.md:1:7 ┘
 
 
 # TOKENS

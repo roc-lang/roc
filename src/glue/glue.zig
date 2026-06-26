@@ -9,7 +9,7 @@
 //! 3. Collect hosted functions and module type info from checked artifacts
 //! 4. Build the glue input type table from artifact-owned checked type data
 //! 5. Materialize the glue input as Roc C-ABI values
-//! 6. Compile the glue spec through checked artifacts, lower to LIR, and run the LIR interpreter
+//! 6. Compile the glue spec through checked artifacts, lower to LIR, and run it with the requested backend
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -19,7 +19,7 @@ const parse = @import("parse");
 const compile = @import("compile");
 const check = @import("check");
 const can = @import("can");
-const echo_platform = @import("echo_platform");
+const backend = @import("backend");
 const roc_target = @import("roc_target");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -37,11 +37,18 @@ const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
 
+/// Backend used to execute the glue spec.
+pub const GlueOpt = enum {
+    dev,
+    interpreter,
+};
+
 /// Arguments for glue code generation.
 pub const GlueArgs = struct {
     glue_spec: []const u8,
     output_dir: []const u8,
     platform_path: []const u8,
+    opt: GlueOpt = .dev,
 };
 
 /// Error types for glue generation operations.
@@ -55,6 +62,7 @@ pub const GlueError = error{
     SyntheticAppWrite,
     BuildEnvInit,
     CompilationFailed,
+    DevBackendUnavailable,
     ModuleRetrieval,
     OutOfMemory,
     WriteFailed,
@@ -77,6 +85,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.SyntheticAppWrite => stderr.print("Error: Could not write synthetic app\n", .{}),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
+            error.DevBackendUnavailable => stderr.print("Error: The dev backend is not available for this host. Use `roc glue --opt=interpreter ...`.\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
             error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
@@ -352,26 +361,15 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         glueInvariant("make_glue expected one List(Types) argument, got {d}", .{arg_layouts.len});
     }
 
-    // 6. Construct List(Types) using the exact committed LIR layout and invoke the LIR interpreter.
-    const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
-    var echo_env = echo_platform.EchoEnv{ .std_io = std_io };
-    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, @constCast(&hosted_function_ptrs));
+    // 6. Construct List(Types) using the exact committed LIR layout and invoke the requested backend.
+    var runtime_env = eval_mod.RuntimeHostEnv.init(gpa);
+    defer runtime_env.deinit();
     const glue_writer = GlueRocValueWriter{
         .layouts = &lowered.lir_result.layouts,
         .schemas = &lowered.runtime_value_schemas,
-        .roc_ops = &roc_ops,
+        .roc_ops = runtime_env.get_ops(),
     };
     var types_list = constructTypesRocList(&glue_writer, collected_modules.items, &platform_info, provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, arg_layouts[0]);
-
-    var interpreter = eval_mod.LirInterpreter.init(
-        gpa,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        &roc_ops,
-    ) catch {
-        return error.OutOfMemory;
-    };
-    defer interpreter.deinit();
 
     const proc = lowered.lir_result.store.getProcSpec(glue_proc);
     const ret_size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(proc.ret_layout));
@@ -383,16 +381,11 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
     if (result_buf.len > 0) @memset(result_buf, 0);
 
-    _ = interpreter.eval(.{
-        .proc_id = glue_proc,
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
-        .arg_ptr = @ptrCast(&types_list),
-        .ret_ptr = @ptrCast(result_buf.ptr),
-    }) catch |err| {
-        stderr.print("Error running glue spec: {}\n", .{err}) catch {};
-        return error.CompilationFailed;
-    };
+    switch (args.opt) {
+        .dev => try runGlueSpecDev(gpa, stderr, &lowered, glue_proc, arg_layouts, &types_list, result_buf.ptr, &runtime_env),
+        .interpreter => try runGlueSpecInterpreter(gpa, stderr, &lowered, glue_proc, arg_layouts, &types_list, result_buf.ptr, runtime_env.get_ops()),
+    }
+    try writeHostEvents(stderr, &runtime_env);
 
     const glue_result = try extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
     defer glue_result.deinit();
@@ -429,6 +422,110 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         };
 
         stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
+    }
+}
+
+fn runGlueSpecInterpreter(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    glue_proc: lir.LirProcSpecId,
+    arg_layouts: []const layout.Idx,
+    types_list: *RocList,
+    result_ptr: [*]u8,
+    roc_ops: *builtins.host_abi.RocOps,
+) GlueError!void {
+    var interpreter = eval_mod.LirInterpreter.init(
+        gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        roc_ops,
+    ) catch return error.OutOfMemory;
+    defer interpreter.deinit();
+
+    const proc = lowered.lir_result.store.getProcSpec(glue_proc);
+    _ = interpreter.eval(.{
+        .proc_id = glue_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = @ptrCast(types_list),
+        .ret_ptr = @ptrCast(result_ptr),
+    }) catch |err| {
+        stderr.print("Error running glue spec: {}\n", .{err}) catch {};
+        return error.CompilationFailed;
+    };
+}
+
+fn runGlueSpecDev(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    glue_proc: lir.LirProcSpecId,
+    arg_layouts: []const layout.Idx,
+    types_list: *RocList,
+    result_ptr: [*]u8,
+    runtime_env: *eval_mod.RuntimeHostEnv,
+) GlueError!void {
+    if (comptime !backend.host_lir_codegen_available) {
+        return error.DevBackendUnavailable;
+    } else {
+        var codegen = backend.HostLirCodeGen.init(
+            gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            &.{},
+        ) catch return error.OutOfMemory;
+        defer codegen.deinit();
+
+        codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs()) catch return error.OutOfMemory;
+
+        const proc = lowered.lir_result.store.getProcSpec(glue_proc);
+        const entrypoint = codegen.generateEntrypointWrapper(
+            "roc_make_glue",
+            glue_proc,
+            arg_layouts,
+            proc.ret_layout,
+        ) catch return error.OutOfMemory;
+
+        var executable = backend.ExecutableMemory.initWithEntryOffset(
+            codegen.getGeneratedCode(),
+            entrypoint.offset,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.CompilationFailed,
+        };
+        defer executable.deinit();
+
+        runtime_env.resetObservation();
+        var crash_boundary = runtime_env.enterCrashBoundary();
+        defer crash_boundary.deinit();
+
+        const sj = crash_boundary.set();
+        if (sj == 0) {
+            executable.callRocABI(
+                @ptrCast(runtime_env.get_ops()),
+                @ptrCast(result_ptr),
+                @ptrCast(types_list),
+            );
+        }
+
+        switch (runtime_env.crashState()) {
+            .did_not_crash => {},
+            .crashed => |message| {
+                stderr.print("Error running glue spec: crashed with message: {s}\n", .{message}) catch {};
+                return error.CompilationFailed;
+            },
+        }
+    }
+}
+
+fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeHostEnv) GlueError!void {
+    for (runtime_env.events.items) |event| {
+        switch (event) {
+            .dbg => |msg| try stderr.print("[dbg] {s}\n", .{msg}),
+            .expect_failed => |msg| try stderr.print("Expect failed: {s}\n", .{msg}),
+            .crashed => {},
+        }
     }
 }
 

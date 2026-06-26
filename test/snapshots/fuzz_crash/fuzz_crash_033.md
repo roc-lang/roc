@@ -11,27 +11,27 @@ type=expr
 PARSE ERROR - fuzz_crash_033.md:1:6:1:14
 PARSE ERROR - fuzz_crash_033.md:1:14:1:15
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_033.md:1:6:1:14:**
-```roc
-{ i, Complete]
-```
-     ^^^^^^^^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_expr_record_field_name ───┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  { i, Complete]                                                            │
+ │       ‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────────────────── fuzz_crash_033.md:1:6 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_expr_close_curly_or_comma                           │
+ │                                                                            │
+ │  { i, Complete]                                                            │
+ │               ‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_033.md:1:14 ┘
 
-**fuzz_crash_033.md:1:14:1:15:**
-```roc
-{ i, Complete]
-```
-             ^
-
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
