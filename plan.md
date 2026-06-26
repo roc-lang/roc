@@ -729,10 +729,10 @@ direct-list source.
 - [x] No late `rewriteExistingCalls` cleanup pass remains.
 - [x] Primitive function arguments get the same local loop-state
       specialization as equivalent single-field-record arguments.
-- [x] Known-value specialization handles direct-call results in demanded
+- [ ] Known-value specialization handles direct-call results in demanded
       contexts.
 - [x] Known-value specialization handles `if` and `match` joins.
-- [x] Loop-state splitting handles iterator records and step callables.
+- [ ] Loop-state splitting handles iterator records and step callables.
 - [x] Lambda solving keeps known step callables finite where bodies are
       available.
 - [x] Public iterator reuse tests pass.
@@ -746,8 +746,40 @@ direct-list source.
 - [ ] Rocci Bird `.iter()` collision source and direct-list collision source
       have equivalent optimized loop shape.
 - [ ] Final Rocci Bird wasm size is recorded and compared to the Rust port.
-- [x] `zig build test` or the agreed focused compiler test set passes.
+- [ ] `zig build test` or the agreed focused compiler test set passes.
 - [x] Changes are committed in small checkpoints.
+
+## Current Failing Regression
+
+The focused regression command is:
+
+```sh
+zig build run-test-zig-lir-inline -- --test-filter "static primitive list iter append loop lowers no bulkier"
+```
+
+It currently fails because the iterator form lowers to substantially more
+reachable LIR than the direct-list form:
+
+```text
+direct_call_count: iter form has 77, direct-list form has 2
+```
+
+The minimized record variant fails for the same reason.
+
+The latest investigation found two concrete gaps:
+
+- Source `for` lowering calls `.iter` on the iterable. For an `Iter`, this is
+  the identity function `Iter.iter`, but the current direct-call demand logic
+  only demands facts for arguments that the callee immediately destructures.
+  Because `Iter.iter` returns its argument without destructuring it, the demand
+  for known iterator facts does not propagate to the inner
+  `[...].iter().append(...)` expression.
+- Forcing result demand through all direct-call arguments exposes
+  `Iter.append`, but it is not sufficient: the source list/iterator setup is
+  duplicated, and the loop still carries public `Iter` record/step callable
+  churn instead of private cursor leaves. The real fix needs precise
+  result-demand propagation plus sharing/splitting of known callable captures,
+  not an over-broad "demand every argument" rule.
 
 ## Non-Negotiable Invariants
 
