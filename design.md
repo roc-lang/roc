@@ -1353,24 +1353,39 @@ Stream(item) :: {
 
 `Iter.next` and `Stream.next!` return only `One`, `Skip`, or `Done`. There is no
 public `Append` step, and there is no private step variant with different
-public meaning. Adapters such as `append`, `concat`, `map`, and filters are
-ordinary Roc functions that build another record containing a step callable.
+public meaning. The public shape is deliberately boring: a length hint and a
+zero-argument step function. Adapters such as `append`, `concat`, `map`, and
+filters are ordinary Roc functions that build another record containing a step
+callable.
 
 The optimized target is the same useful code shape Rust gets from iterators:
 private cursor state with a direct `next` operation. Rust reaches that by
 representing each adapter chain in concrete iterator types and then
 monomorphizing/inlining calls to `Iterator::next(&mut state)`. Roc must not copy
-that typing model. Roc keeps the concrete public type `Iter(item)`, and
-different branches that produce different adapter chains still unify as one
-`Iter(item)`.
+that typing model. Roc keeps the concrete public type `Iter(item)` and the
+concrete public type `Stream(item)`, and different branches that produce
+different adapter chains still unify as one `Iter(item)` or `Stream(item)`.
 
 Roc carries the adapter shape through ordinary function values instead. The
 step field is a normal callable, and lambda-set solving records the finite set
 of possible step functions plus their captures. The optimizer uses those
 ordinary record, tag, tuple, nominal, and callable shapes to produce private
-cursor state. This is how Roc avoids heap allocation for iterator wrappers
-without exposing adapter chains in user-facing types and without relying on
-reference-count uniqueness of an `Iter` value.
+cursor state. This is how Roc aims for the same optimized result as Rust's
+`Iterator` lowering while keeping Roc's public API purely functional and
+concrete. The adapter chain is neither represented in the user-facing type
+system nor erased into an opaque closure before optimization has had a chance
+to see it.
+
+The lambda set is the key difference from both obvious alternatives. It carries
+the exact callable targets and capture shapes that Rust carries in concrete
+iterator adapter types, but it does so behind the ordinary Roc type
+`Iter(item)`/`Stream(item)`. It also avoids the allocation-heavy erased-closure
+model: when a consumer can see a finite lambda set, the optimizer can split the
+captures into private loop state instead of building a heap wrapper and
+indirectly calling through it. If a value crosses a true materialization
+boundary and only an erased callable remains, the compiler lowers the ordinary
+public value; it must not recover shape later by recognizing builtin names or
+backend artifacts.
 
 The post-check pipeline must not add a separate builtin iterator-plan IR as the
 long-term solution. There is no `iter_plan` expression, no iterator-plan side
