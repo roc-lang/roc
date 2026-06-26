@@ -1312,7 +1312,7 @@ const Cloner = struct {
                 .callee = try self.cloneExpr(call.callee),
                 .args = try self.cloneExprSpan(call.args),
             } },
-            .call_proc => |call| try self.cloneCallProc(call),
+            .call_proc => |call| return try self.cloneCallProcExpr(expr.ty, call),
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = try self.cloneExprSpan(call.args),
@@ -1990,7 +1990,17 @@ const Cloner = struct {
         return try self.pass.program.addExprSpan(exprs);
     }
 
-    fn cloneCallProc(self: *Cloner, call: @import("../monotype/ast.zig").CallProc) Common.LowerError!Ast.ExprData {
+    fn cloneCallProcExpr(self: *Cloner, ty: Type.TypeId, call: @import("../monotype/ast.zig").CallProc) Common.LowerError!Ast.ExprId {
+        const data = try self.cloneCallProcData(call);
+        const cloned_call = switch (data) {
+            .call_proc => |cloned| cloned,
+            else => Common.invariant("direct call cloning produced a non-call expression"),
+        };
+        const call_expr = try self.addExpr(.{ .ty = ty, .data = data });
+        return try self.wrapDirectCallCaptureLets(ty, Ast.callProcCallee(cloned_call), call_expr);
+    }
+
+    fn cloneCallProcData(self: *Cloner, call: @import("../monotype/ast.zig").CallProc) Common.LowerError!Ast.ExprData {
         if (call.is_cold) {
             return .{ .call_proc = .{
                 .callee = call.callee,
@@ -2035,6 +2045,41 @@ const Cloner = struct {
             .args = try self.cloneExprSpan(call.args),
             .is_cold = call.is_cold,
         } };
+    }
+
+    fn wrapDirectCallCaptureLets(self: *Cloner, ty: Type.TypeId, callee: Ast.FnId, call_expr: Ast.ExprId) Common.LowerError!Ast.ExprId {
+        const callee_fn = self.pass.program.fns.items[@intFromEnum(callee)];
+        const captures = self.pass.program.typedLocalSpan(callee_fn.captures);
+        if (captures.len == 0) return call_expr;
+
+        const values = try self.pass.allocator.alloc(?Ast.ExprId, captures.len);
+        defer self.pass.allocator.free(values);
+        for (captures, 0..) |capture, index| {
+            const value = self.subst.get(capture.local) orelse {
+                values[index] = null;
+                continue;
+            };
+            const value_expr = try self.materialize(value);
+            const value_local = localExpr(self.pass.program, value_expr);
+            values[index] = if (value_local != null and value_local.? == capture.local) null else value_expr;
+        }
+
+        var result = call_expr;
+        var index = values.len;
+        while (index > 0) {
+            index -= 1;
+            const value_expr = values[index] orelse continue;
+            const pat = try self.pass.program.addPat(.{
+                .ty = captures[index].ty,
+                .data = .{ .bind = captures[index].local },
+            });
+            result = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
+                .bind = pat,
+                .value = value_expr,
+                .rest = result,
+            } } });
+        }
+        return result;
     }
 
     fn appendClonedCallArgs(

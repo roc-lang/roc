@@ -1755,6 +1755,25 @@ test "stream from iterator collect keeps finite step callables" {
     try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
 }
 
+test "spec constr list filter-map loop does not produce unbound ARC locals" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\main : List(I32)
+        \\main = {
+        \\    var $out = []
+        \\    for item in [] {
+        \\        $out = $out.append(item)
+        \\    }
+        \\    $out
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+}
+
 test "spec constr does not duplicate opaque let-bound direct calls" {
     const allocator = std.testing.allocator;
     const source =
