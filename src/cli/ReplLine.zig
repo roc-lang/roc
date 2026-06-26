@@ -30,6 +30,8 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
 pub const InputEvent = union(enum) {
     /// A single byte to be processed normally (typed character, control key, etc.).
     byte: u8,
+    /// A 2-byte ESC sequence (ESC X) — typically Alt-key combinations.
+    esc2: [2]u8,
     /// A 3-byte CSI sequence (ESC [ X) — typically arrow keys.
     csi3: [3]u8,
     /// A bracketed paste began (consumed an `ESC[200~` marker).
@@ -143,6 +145,10 @@ pub const InputParser = struct {
 
                 try events.append(gpa, .{ .csi3 = .{ buf[i], buf[i + 1], buf[i + 2] } });
                 i += 3;
+            } else if (key == control_code.esc and i + 1 < total and buf[i + 1] != '[') {
+                // 2-byte ESC sequence (ESC X)
+                try events.append(gpa, .{ .esc2 = .{ buf[i], buf[i + 1] } });
+                i += 2;
             } else if (key == control_code.esc and i + 1 >= total) {
                 // Lone ESC at the end of the buffer — could be the start of a
                 // longer sequence whose tail is in the next chunk.
@@ -214,13 +220,21 @@ const ReplLine = @This();
 
 allocator: Allocator,
 history: History,
+kill_ring: ?[]const u8,
 
 pub fn init(allocator: Allocator) ReplLine {
-    return ReplLine{ .allocator = allocator, .history = History.init(allocator) };
+    return ReplLine{
+        .allocator = allocator,
+        .history = History.init(allocator),
+        .kill_ring = null,
+    };
 }
 
 pub fn deinit(self: *ReplLine) void {
     self.history.deinit();
+    if (self.kill_ring) |k| {
+        self.allocator.free(k);
+    }
 }
 
 const CommandError =
@@ -244,6 +258,8 @@ const LineState = struct {
     in_buffer: [8]u8,
     history: *History,
     history_index: ?usize,
+    transient_line: ?[]const u8,
+    kill_ring: *?[]const u8,
     /// Set after a Ctrl-C so that a second consecutive Ctrl-C quits. Any other
     /// input event clears it, so the two presses must be back-to-back.
     ctrl_c_armed: bool,
@@ -325,6 +341,142 @@ fn moveCursorLeft(state: *LineState) CommandError!void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
+fn moveCursorToStart(state: *LineState) CommandError!void {
+    state.col_offset = 0;
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+}
+
+fn moveCursorToEnd(state: *LineState) CommandError!void {
+    state.col_offset = state.line_buffer.items.len;
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn killLineToEnd(state: *LineState) CommandError!void {
+    const cut_text = state.line_buffer.items[state.col_offset..];
+    if (cut_text.len > 0) {
+        if (state.kill_ring.*) |prev| {
+            state.outlive.free(prev);
+        }
+        state.kill_ring.* = try state.outlive.dupe(u8, cut_text);
+    }
+    state.line_buffer.shrinkAndFree(state.temp, state.col_offset);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+}
+
+fn isWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+fn findWordStartBackward(buf: []const u8, start: usize) usize {
+    var i = start;
+    while (i > 0 and !isWordChar(buf[i - 1])) : (i -= 1) {}
+    while (i > 0 and isWordChar(buf[i - 1])) : (i -= 1) {}
+    return i;
+}
+
+fn deleteToStart(state: *LineState) CommandError!void {
+    if (state.col_offset == 0) return;
+
+    const cut_text = state.line_buffer.items[0..state.col_offset];
+    if (state.kill_ring.*) |prev| {
+        state.outlive.free(prev);
+    }
+    state.kill_ring.* = try state.outlive.dupe(u8, cut_text);
+
+    const remaining_len = state.line_buffer.items.len - state.col_offset;
+    std.mem.copyForwards(u8, state.line_buffer.items[0..remaining_len], state.line_buffer.items[state.col_offset..]);
+    state.line_buffer.shrinkRetainingCapacity(remaining_len);
+    state.col_offset = 0;
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+}
+
+fn deleteWordBackward(state: *LineState) CommandError!void {
+    if (state.col_offset == 0) return;
+
+    const word_start = findWordStartBackward(state.line_buffer.items, state.col_offset);
+    if (word_start == state.col_offset) return;
+
+    const cut_text = state.line_buffer.items[word_start..state.col_offset];
+    if (state.kill_ring.*) |prev| {
+        state.outlive.free(prev);
+    }
+    state.kill_ring.* = try state.outlive.dupe(u8, cut_text);
+
+    const remaining_len = state.line_buffer.items.len - (state.col_offset - word_start);
+    std.mem.copyForwards(
+        u8,
+        state.line_buffer.items[word_start..remaining_len],
+        state.line_buffer.items[state.col_offset..],
+    );
+    state.line_buffer.shrinkRetainingCapacity(remaining_len);
+    state.col_offset = word_start;
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn yank(state: *LineState) CommandError!void {
+    const text = state.kill_ring.* orelse return;
+    if (text.len == 0) return;
+
+    try state.line_buffer.insertSlice(state.temp, state.col_offset, text);
+    state.col_offset += text.len;
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn findWordEndForward(buf: []const u8, start: usize) usize {
+    var i = start;
+    const len = buf.len;
+    while (i < len and !isWordChar(buf[i])) : (i += 1) {}
+    while (i < len and isWordChar(buf[i])) : (i += 1) {}
+    return i;
+}
+
+fn moveWordLeft(state: *LineState) CommandError!void {
+    state.col_offset = findWordStartBackward(state.line_buffer.items, state.col_offset);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn moveWordRight(state: *LineState) CommandError!void {
+    state.col_offset = findWordEndForward(state.line_buffer.items, state.col_offset);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn killWordForward(state: *LineState) CommandError!void {
+    const word_end = findWordEndForward(state.line_buffer.items, state.col_offset);
+    if (word_end == state.col_offset) return;
+
+    const cut_text = state.line_buffer.items[state.col_offset..word_end];
+    if (state.kill_ring.*) |prev| {
+        state.outlive.free(prev);
+    }
+    state.kill_ring.* = try state.outlive.dupe(u8, cut_text);
+
+    const cut_len = word_end - state.col_offset;
+    const remaining_len = state.line_buffer.items.len - cut_len;
+    std.mem.copyForwards(
+        u8,
+        state.line_buffer.items[state.col_offset..remaining_len],
+        state.line_buffer.items[word_end..],
+    );
+    state.line_buffer.shrinkRetainingCapacity(remaining_len);
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
 fn historyBackward(state: *LineState) CommandError!void {
     const hist_len = state.history.entries.items.len;
     if (hist_len == 0) return;
@@ -377,6 +529,15 @@ fn findCommandFn(state: *LineState) CommandFn {
         ansi_term.ctrlKey('D') => exitRepl,
         ansi_term.ctrlKey('L') => clearScreen,
         ansi_term.ctrlKey('C') => handleCtrlC,
+        ansi_term.ctrlKey('A') => moveCursorToStart,
+        ansi_term.ctrlKey('E') => moveCursorToEnd,
+        ansi_term.ctrlKey('K') => killLineToEnd,
+        ansi_term.ctrlKey('U') => deleteToStart,
+        ansi_term.ctrlKey('W') => deleteWordBackward,
+        ansi_term.ctrlKey('Y') => yank,
+        ansi_term.ctrlKey('B') => moveCursorLeft,
+        ansi_term.ctrlKey('F') => moveCursorRight,
+        ansi_term.ctrlKey('H') => deleteBefore,
         control_code.lf, control_code.cr => acceptLine,
         control_code.esc => {
             if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
@@ -385,6 +546,13 @@ fn findCommandFn(state: *LineState) CommandFn {
                     ansi_term.RIGHT => moveCursorRight,
                     ansi_term.UP => historyBackward,
                     ansi_term.DOWN => historyForward,
+                    else => doNothing,
+                };
+            } else if (state.bytes_read == 2) {
+                return switch (state.in_buffer[1]) {
+                    'b', 'B' => moveWordLeft,
+                    'f', 'F' => moveWordRight,
+                    'd', 'D' => killWordForward,
                     else => doNothing,
                 };
             } else {
@@ -494,6 +662,8 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         .in_buffer = undefined,
         .history = &self.history,
         .history_index = null,
+        .transient_line = null,
+        .kill_ring = &self.kill_ring,
         .ctrl_c_armed = false,
     };
 
@@ -549,6 +719,11 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                 .byte => |b| {
                     state.in_buffer[0] = b;
                     state.bytes_read = 1;
+                },
+                .esc2 => |seq| {
+                    state.in_buffer[0] = seq[0];
+                    state.in_buffer[1] = seq[1];
+                    state.bytes_read = 2;
                 },
                 .csi3 => |seq| {
                     state.in_buffer[0] = seq[0];
@@ -669,16 +844,13 @@ test "InputParser: 3-byte CSI split as ESC then [A" {
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
 }
 
-test "InputParser: bare ESC followed by non-[ bytes is flushed as bytes" {
-    // Once a non-`[` byte appears after ESC, ESC and the trailing bytes are
-    // emitted as plain `byte` events (the existing 3-byte CSI path is the
-    // only one that consumes ESC specially).
+test "InputParser: bare ESC followed by non-[ bytes is parsed as a 2-byte ESC sequence" {
+    // Once a non-`[` byte appears after ESC, it is parsed as a 2-byte ESC sequence.
     var parser = InputParser{};
     var events = try collectEvents(&parser, &.{"\x1bOP"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .byte = 0x1b },
-        .{ .byte = 'O' },
+        .{ .esc2 = .{ 0x1b, 'O' } },
         .{ .byte = 'P' },
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
@@ -967,4 +1139,136 @@ test "writeAlignedToPrompt: original indentation is preserved on top of prompt i
 
 test "writeAlignedToPrompt: trailing newline still emits indent for empty next line" {
     try expectAlignedOutput("z = 5\n", 2, "z = 5\n  ");
+}
+
+test "Keyboard commands: advanced bindings" {
+    var line_buffer = std.ArrayList(u8).empty;
+    defer line_buffer.deinit(testing.allocator);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |k| testing.allocator.free(k);
+
+    var state = LineState{
+        .outlive = testing.allocator,
+        .temp = testing.allocator,
+        .prompt = "» ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = line_buffer,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = undefined,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .ctrl_c_armed = false,
+    };
+    defer state.line_buffer.deinit(testing.allocator);
+
+    // Simulate typing "hello world"
+    try state.line_buffer.appendSlice(testing.allocator, "hello world");
+    state.col_offset = 11;
+
+    // Ctrl-A: move cursor to start
+    try moveCursorToStart(&state);
+    try testing.expectEqual(@as(usize, 0), state.col_offset);
+
+    // Ctrl-E: move cursor to end
+    try moveCursorToEnd(&state);
+    try testing.expectEqual(@as(usize, 11), state.col_offset);
+
+    // Ctrl-B: move cursor left (backward)
+    try moveCursorLeft(&state);
+    try testing.expectEqual(@as(usize, 10), state.col_offset);
+
+    // Ctrl-F: move cursor right (forward)
+    try moveCursorRight(&state);
+    try testing.expectEqual(@as(usize, 11), state.col_offset);
+
+    // Ctrl-H / Backspace: delete character before cursor
+    try deleteBefore(&state); // deletes 'd'
+    try testing.expectEqualStrings("hello worl", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 10), state.col_offset);
+
+    // Move cursor back to 5 (after "hello")
+    state.col_offset = 5;
+
+    // Ctrl-K: kill line to end (kills " worl")
+    try killLineToEnd(&state);
+    try testing.expectEqualStrings("hello", state.line_buffer.items);
+    try testing.expectEqualStrings(" worl", kill_ring.?);
+
+    // Ctrl-Y: yank/paste at cursor
+    try yank(&state);
+    try testing.expectEqualStrings("hello worl", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 10), state.col_offset);
+
+    // Ctrl-W: delete word backward (deletes "worl")
+    try deleteWordBackward(&state);
+    try testing.expectEqualStrings("hello ", state.line_buffer.items);
+    try testing.expectEqualStrings("worl", kill_ring.?);
+
+    // Test that Ctrl-W stops at parentheses and punctuation
+    try state.line_buffer.appendSlice(testing.allocator, "foo(bar_baz)");
+    state.col_offset = 18; // pointing to end of line: "hello foo(bar_baz)"
+
+    // Ctrl-W: should delete "bar_baz)" (word: "bar_baz", non-word: ")")
+    try deleteWordBackward(&state);
+    try testing.expectEqualStrings("hello foo(", state.line_buffer.items);
+    try testing.expectEqualStrings("bar_baz)", kill_ring.?);
+
+    // Ctrl-W: should delete "foo(" (word: "foo", non-word: "(")
+    try deleteWordBackward(&state);
+    try testing.expectEqualStrings("hello ", state.line_buffer.items);
+    try testing.expectEqualStrings("foo(", kill_ring.?);
+
+    // Ctrl-U: delete to start (deletes "hello ")
+    try deleteToStart(&state);
+    try testing.expectEqualStrings("", state.line_buffer.items);
+    try testing.expectEqualStrings("hello ", kill_ring.?);
+
+    // Reset buffer to "hello foo(bar_baz)" for Alt-B, Alt-F, Alt-D testing
+    state.line_buffer.clearRetainingCapacity();
+    try state.line_buffer.appendSlice(testing.allocator, "hello foo(bar_baz)");
+    state.col_offset = 0;
+
+    // Alt-F (moveWordRight)
+    try moveWordRight(&state); // moves past "hello" -> 5 (space before foo)
+    try testing.expectEqual(@as(usize, 5), state.col_offset);
+
+    try moveWordRight(&state); // moves past "foo" -> 9 (parenthesis '(')
+    try testing.expectEqual(@as(usize, 9), state.col_offset);
+
+    try moveWordRight(&state); // moves past "bar_baz" -> 17 (parenthesis ')')
+    try testing.expectEqual(@as(usize, 17), state.col_offset);
+
+    // Alt-B (moveWordLeft)
+    try moveWordLeft(&state); // moves to start of "bar_baz" -> 10
+    try testing.expectEqual(@as(usize, 10), state.col_offset);
+
+    try moveWordLeft(&state); // moves to start of "foo" -> 6
+    try testing.expectEqual(@as(usize, 6), state.col_offset);
+
+    // Alt-D (killWordForward)
+    // currently at "hello foo(bar_baz)" with col_offset at 6 (start of "foo")
+    try killWordForward(&state); // should delete "foo" (word: "foo", non-word: "(" stops it)
+    try testing.expectEqualStrings("hello (bar_baz)", state.line_buffer.items);
+    try testing.expectEqualStrings("foo", kill_ring.?);
+    try testing.expectEqual(@as(usize, 6), state.col_offset);
+}
+
+test "InputParser: 2-byte ESC sequence" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1bb\x1bf\x1bd"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .esc2 = .{ 0x1b, 'b' } },
+        .{ .esc2 = .{ 0x1b, 'f' } },
+        .{ .esc2 = .{ 0x1b, 'd' } },
+    }, events.items);
 }
