@@ -140,12 +140,18 @@ Current branch status:
 - direct `Filter(ListIter | Append(ListIter, item...), predicate)` source `for`
   loops consume child plan state directly and bind each produced item once
   before the predicate/body branch.
+- direct `Prepended(item, ListIter | Append(ListIter, item...))` source `for`
+  loops consume the generated `Concat(Single(item), rest)` plan with private
+  phase state.
 - direct private `ListIter` state can cross an immutable local when the local's
   only later observations are exact `for` iterable uses in the same lowering
   scope. Other uses still keep the public iterator value.
 - direct private `ListIter` state can feed a private `.append(...)` local when
   that produced local is itself only observed by private iterator consumers; the
   appended item is evaluated at the append declaration site.
+- direct private `Prepended(item, ListIter | Append(ListIter, item...))` state
+  can cross an immutable local and preserves receiver-before-item producer-site
+  evaluation order.
 - direct private `Custom` state can cross an immutable local when the local's
   only later observations are exact `for` iterable uses in the same lowering
   scope.
@@ -609,6 +615,8 @@ Tasks:
     an immutable local and are consumed with private child state.
   - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
     can cross an immutable local and are consumed with private child state.
+  - [x] Direct `Prepended(item, ListIter | Append(ListIter, item...))` plans can
+    cross an immutable local and are consumed with private phase state.
   - [x] Direct `Custom` plans can cross an immutable local and are consumed
     with private custom state.
 - [ ] Private plan state can cross `if`.
@@ -654,6 +662,8 @@ Tasks:
     public step values when consumed by a private `for`.
   - [x] Direct local `Filter(ListIter | Append(ListIter, item...), predicate)`
     avoids public step values when consumed by a private `for`.
+  - [x] Direct local `Prepended(item, ListIter | Append(ListIter, item...))`
+    avoids public step values when consumed by a private `for`.
   - [x] Direct local `Custom` avoids public iterator materialization when
     consumed by a private `for`.
 - [ ] Optimized `for` through `if` avoids public step values.
@@ -672,6 +682,9 @@ Tasks:
     private phase cursor and preserves source `break` as a whole-loop break.
   - [x] Local `Concat` of list-backed/list-append-backed plans uses one private
     phase cursor and preserves producer-site operand order.
+  - [x] Direct and local `Prepended(item, ListIter | Append(ListIter, item...))`
+    consume the generated `Concat(Single(item), rest)` plan with one private
+    phase cursor and no public iterator step values.
 - [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
 - [x] Optimized `for` over direct `Map(ListIter | Append(ListIter, item...), fn)`
   uses child plan state.
