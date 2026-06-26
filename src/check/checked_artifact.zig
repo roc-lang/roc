@@ -11062,6 +11062,7 @@ pub const ResolvedValueRefTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         imports: []const PublishImportArtifact,
         templates: *const CheckedProcedureTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
         hosted_procs: *const HostedProcTable,
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -11075,7 +11076,7 @@ pub const ResolvedValueRefTable = struct {
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
 
-        var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module, templates, checked_bodies);
+        var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module, templates, entry_wrappers, checked_bodies);
         defer local_pattern_roles.deinit(allocator);
 
         const by_checked_expr = try allocator.alloc(?ResolvedValueRefId, checked_bodies.exprCount());
@@ -11801,6 +11802,7 @@ const LocalPatternRoleIndex = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         templates: *const CheckedProcedureTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
         checked_bodies: *const CheckedBodyStore,
     ) Allocator.Error!LocalPatternRoleIndex {
         const node_count = module.nodeCount();
@@ -11827,7 +11829,7 @@ const LocalPatternRoleIndex = struct {
                             checkedArtifactInvariant("checked local procedure declaration has no checked expression", .{});
                         break :blk .{ .local_proc = .{
                             .expr = expr,
-                            .owner_template = ownerTemplateForCheckedLocalProc(checked_bodies, templates, expr) orelse
+                            .owner_template = ownerTemplateForCheckedLocalProc(checked_bodies, templates, entry_wrappers, expr) orelse
                                 checkedArtifactInvariant("checked local procedure declaration has no owning procedure template", .{}),
                         } };
                     } else .local_value;
@@ -11970,17 +11972,21 @@ fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
 fn ownerTemplateForCheckedLocalProc(
     checked_bodies: *const CheckedBodyStore,
     templates: *const CheckedProcedureTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
     expr: CheckedExprId,
 ) ?canonical.ProcedureTemplateRef {
     for (templates.templates) |template| {
-        const body_id = switch (template.body) {
-            .checked_body => |body_id| body_id,
-            .entry_wrapper,
-            .intrinsic_wrapper,
-            => continue,
-        };
-        const body = checked_bodies.body(body_id);
-        if (checkedExprContainsExpr(checked_bodies, body.root_expr, expr)) return body.owner_template;
+        switch (template.body) {
+            .checked_body => |body_id| {
+                const body = checked_bodies.body(body_id);
+                if (checkedExprContainsExpr(checked_bodies, body.root_expr, expr)) return body.owner_template;
+            },
+            .entry_wrapper => |wrapper_id| {
+                const wrapper = entry_wrappers.get(wrapper_id);
+                if (checkedExprContainsExpr(checked_bodies, wrapper.body_expr, expr)) return wrapper.template;
+            },
+            .intrinsic_wrapper => {},
+        }
     }
     return null;
 }
@@ -25007,6 +25013,7 @@ pub fn publishFromTypedModule(
         artifact_key,
         inputs.imports,
         &checked_procedure_templates,
+        &entry_wrappers,
         &hosted_procs,
         &platform_required_declarations,
         &platform_required_bindings,
@@ -25525,6 +25532,7 @@ fn expectProvidedExportKind(
         artifact_key,
         &builtin_imports,
         &checked_procedure_templates,
+        &entry_wrappers,
         &hosted_procs,
         &platform_required_declarations,
         &platform_required_bindings,
@@ -26655,8 +26663,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x9A, 0xA1, 0xE1, 0xBE, 0xD2, 0xE9, 0x57, 0xE6, 0x15, 0x6E, 0xF8, 0x5F, 0x3D, 0x26, 0xEF, 0x62,
-        0x16, 0x52, 0x25, 0x30, 0xC2, 0x0A, 0x1B, 0x6C, 0xD6, 0xBB, 0x93, 0x35, 0xD6, 0x22, 0x42, 0xAA,
+        0xCE, 0x84, 0xCD, 0x6C, 0xAF, 0x9F, 0xDC, 0xC4, 0xF5, 0xBE, 0xC1, 0xDF, 0x83, 0x27, 0x7C, 0x90,
+        0x09, 0x0C, 0x05, 0x73, 0xC4, 0x06, 0x66, 0x08, 0xEE, 0xEE, 0x14, 0xE0, 0xDD, 0x49, 0x60, 0xE4,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

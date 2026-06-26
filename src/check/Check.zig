@@ -1741,6 +1741,10 @@ fn capturePatternIsCompileTimeKnownForHoist(self: *Self, pattern_idx: CIR.Patter
         }
     }
 
+    if (self.markHoistContextualDependencyForLookup(pattern_idx)) {
+        return summary_says_compile_time_known;
+    }
+
     if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(pattern_idx)) {
         try self.hoist_deferred_binding_dependencies.append(self.gpa, pattern_idx);
         return true;
@@ -1751,9 +1755,7 @@ fn capturePatternIsCompileTimeKnownForHoist(self: *Self, pattern_idx: CIR.Patter
         return true;
     }
 
-    if (self.markHoistContextualDependencyForLookup(pattern_idx)) {
-        return summary_says_compile_time_known;
-    }
+    if (summary_says_compile_time_known) return true;
 
     return false;
 }
@@ -10125,6 +10127,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     }
                 }
+                if (self.markHoistContextualDependencyForLookup(lookup.pattern_idx)) {
+                    if (summary_says_compile_time_known) break :known true;
+                    lookup_has_runtime_dependency = true;
+                    break :known true;
+                }
                 if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(lookup.pattern_idx)) {
                     try self.hoist_deferred_binding_dependencies.append(self.gpa, lookup.pattern_idx);
                     break :known true;
@@ -10133,11 +10140,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     try self.appendCurrentHoistDependencyRoot(root_index);
                     break :known true;
                 }
-                if (self.markHoistContextualDependencyForLookup(lookup.pattern_idx)) {
-                    if (summary_says_compile_time_known) break :known true;
-                    lookup_has_runtime_dependency = true;
-                    break :known true;
-                }
+                if (summary_says_compile_time_known) break :known true;
                 break :known false;
             };
             if (!compile_time_known_binding) {
@@ -10200,7 +10203,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             defer self.endHoistLexicalScope(hoist_scope);
 
             // Check all statements in the block
-            const stmt_result = try self.checkBlockStatements(block.stmts, env, expr_region);
+            const block_frame = self.currentHoistFrame();
+            const contextual_owner_frame_index = if (block_frame.binding_rhs or self.shouldDeferHoistedBindingSelection())
+                self.currentHoistFrameIndexForExpr(expr_idx)
+            else
+                null;
+            const stmt_result = try self.checkBlockStatements(
+                block.stmts,
+                env,
+                expr_region,
+                contextual_owner_frame_index,
+                block_frame.binding_rhs,
+            );
             var block_check = ExprCheckResult{};
             block_check.include(stmt_result.check);
 
@@ -12037,7 +12051,14 @@ const BlockStatementsResult = struct {
 
 /// Given a slice of stmts, type check each one
 /// Returns whether any statement has effects and whether the block diverges (return/crash)
-fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, _: Region) std.mem.Allocator.Error!BlockStatementsResult {
+fn checkBlockStatements(
+    self: *Self,
+    statements: CIR.Statement.Span,
+    env: *Env,
+    _: Region,
+    contextual_owner_frame_index: ?usize,
+    suppress_contextual_decl_roots: bool,
+) std.mem.Allocator.Error!BlockStatementsResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -12100,11 +12121,19 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
-                const decl_expr_result = try self.checkExpr(decl_stmt.expr, env, expectation);
+                const decl_expr_result = if (suppress_contextual_decl_roots)
+                    try self.checkExprWithHoistSelectionSuppressed(decl_stmt.expr, env, expectation)
+                else
+                    try self.checkExpr(decl_stmt.expr, env, expectation);
                 check_result.include(decl_expr_result);
                 try self.recordLocalCheckSummary(decl_stmt.pattern, decl_expr_result);
+                if (contextual_owner_frame_index) |owner_frame_index| {
+                    try self.recordHoistContextualPatternBindings(decl_stmt.pattern, owner_frame_index);
+                }
                 try self.appendCurrentHoistRequiredConcretePatternBinders(decl_stmt.pattern);
-                try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
+                if (!suppress_contextual_decl_roots) {
+                    try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr);
+                }
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
                 }
@@ -12121,7 +12150,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 if (decl_pattern_result.isOk()) {
                     try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
-                    try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr);
+                    if (!suppress_contextual_decl_roots) {
+                        try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr);
+                    }
                 }
 
                 if (decl_is_fn) {

@@ -2612,11 +2612,13 @@ const Builder = struct {
             };
             const capture_type: CaptureType = switch (capture_value) {
                 .fn_value => blk: {
+                    const intrinsic_ty = (try self.constNodeIntrinsicMonoType(store_view, capture.value)) orelse
+                        Common.invariant("stored function capture had no function monotype");
                     break :blk .{
-                        .view = fn_view,
-                        .checked_ty = checkedBinderType(fn_view, binder),
+                        .view = store_view,
+                        .checked_ty = undefined,
                         .static_data_checked_ty = null,
-                        .context_ty = true,
+                        .intrinsic_ty = intrinsic_ty,
                     };
                 },
                 else => blk: {
@@ -2628,10 +2630,11 @@ const Builder = struct {
                             .intrinsic_ty = intrinsic_ty,
                         };
                     }
+                    const checked_ty = checkedBinderType(fn_view, binder);
                     break :blk .{
                         .view = fn_view,
-                        .checked_ty = checkedBinderType(fn_view, binder),
-                        .static_data_checked_ty = null,
+                        .checked_ty = checked_ty,
+                        .static_data_checked_ty = checked_ty,
                         .context_ty = true,
                     };
                 },
