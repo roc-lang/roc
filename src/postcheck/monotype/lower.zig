@@ -13866,6 +13866,7 @@ const BodyContext = struct {
     ) Allocator.Error!?Ast.IterPlanId {
         if (try self.listIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.appendIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.concatIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         return null;
     }
 
@@ -13986,6 +13987,76 @@ const BodyContext = struct {
             .data = .{ .append = .{
                 .before = before_plan,
                 .after = after_expr,
+                .phase = phase_expr,
+            } },
+        });
+    }
+
+    fn concatIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        if (!self.methodNameIs(plan.method, "concat")) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.concat dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.concat dispatch plan had an unexpected argument shape");
+        }
+        const second_index: usize = if (receiver_index == 0) 1 else 0;
+
+        const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
+        const original_statement_len = lowered.len;
+        const first_plan = (try self.iteratorPlanForPrivateProducerOperand(plan_args[receiver_index], dispatcher_ty, lowered)) orelse {
+            lowered.len = original_statement_len;
+            return null;
+        };
+        const second_plan = (try self.iteratorPlanForPrivateProducerOperand(plan_args[second_index], dispatcher_ty, lowered)) orelse {
+            lowered.len = original_statement_len;
+            return null;
+        };
+        const first = self.builder.program.iterPlan(first_plan);
+        const second = self.builder.program.iterPlan(second_plan);
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const phase_expr = try self.boolLiteral(false, bool_ty);
+
+        var steps = first.steps;
+        if (first.done == .reachable) {
+            steps.append = steps.append or second.steps.append;
+            steps.one = steps.one or second.steps.one;
+            steps.skip = steps.skip or second.steps.skip;
+            steps.done = second.steps.done;
+        }
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(iterator_ty),
+            .length = switch (first.length) {
+                .known => |first_len| switch (second.length) {
+                    .known => |second_len| .{ .known = try self.builder.lowLevelExpr(.num_plus, &.{ first_len, second_len }, u64_ty) },
+                    .unknown => .unknown,
+                },
+                .unknown => .unknown,
+            },
+            .steps = steps,
+            .done = if (first.done == .reachable) second.done else .never,
+            .materialized = null,
+            .data = .{ .concat = .{
+                .first = first_plan,
+                .second = second_plan,
                 .phase = phase_expr,
             } },
         });
@@ -15895,21 +15966,7 @@ const BodyContext = struct {
         const iter_plan_value = self.builder.program.iterPlan(plan_id);
         try self.constrainTypeToMono(for_plan.item_ty, iter_plan_value.item_ty);
 
-        if (try self.listAppendIteratorPlanFromPlan(plan_id)) |append_plan| {
-            defer append_plan.deinit(self.allocator);
-            return try self.lowerListIteratorPlanFor(
-                for_,
-                result_ty,
-                carries,
-                append_plan.list,
-                append_plan.item_ty,
-                append_plan.item_ty,
-                append_plan.append_items,
-                .none,
-            );
-        }
-
-        return null;
+        return try self.iteratorPlanIdFor(plan_id, for_, result_ty, carries, for_plan);
     }
 
     fn listIteratorSourceFromPlan(

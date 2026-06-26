@@ -596,6 +596,8 @@ Tasks:
     later use is the exact iterable in a `for`.
   - [x] Direct `ListIter` private state can feed a local `.append(...)` producer
     whose result is consumed privately.
+  - [x] Direct `Concat` of list-backed/list-append-backed plans can cross an
+    immutable local and is consumed with private phase state.
 - [ ] Private plan state can cross `if`.
 - [ ] Private plan state can cross `match`.
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
@@ -629,6 +631,8 @@ Tasks:
     private `for` consumers.
   - [x] Direct local `List.iter` plus local `.append(...)` avoids public step
     values when the append result is consumed privately.
+  - [x] Direct local `Concat` of list-backed/list-append-backed plans avoids
+    public step values when consumed by a private `for`.
 - [ ] Optimized `for` through `if` avoids public step values.
   - [x] Direct `for` over an `if` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans lowers to branch-local private cursor
@@ -643,6 +647,8 @@ Tasks:
 - [ ] Optimized `for` over `Append` and `Concat` uses explicit phase state.
   - [x] Direct `Concat` of list-backed/list-append-backed plans uses one
     private phase cursor and preserves source `break` as a whole-loop break.
+  - [x] Local `Concat` of list-backed/list-append-backed plans uses one private
+    phase cursor and preserves producer-site operand order.
 - [ ] Optimized `for` over `Map` and `Filter` uses child plan state.
 - [x] Optimized `for` over direct `Map(ListIter | Append(ListIter, item...), fn)`
   uses child plan state.
