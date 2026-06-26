@@ -160,7 +160,7 @@ const WasmSink = struct {
         appendCommand(.cancel_task, toU32(request_id), 0, 0, 0, 0);
     }
 
-    pub fn debugAssertNode(_: WasmSink, _: u64, _: bool, _: ?[]const u8, _: ?u64, _: []const u64, _: ?u64, _: ?u64, _: ?u64) void {}
+    pub fn debugAssertNode(_: WasmSink, _: u64, _: bool, _: ?[]const u8, _: ?u64, _: []const u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64) void {}
 };
 
 fn emitAppendChildren(parent_elem_id: u64, next_child_ids: []const u64) void {

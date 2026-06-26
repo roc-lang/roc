@@ -59,6 +59,19 @@ routes click/input/check events back through `roc_ui_event`. It records the
 records drained by the most recent host call in `lastCommands` so guards can
 inspect the command-buffer codec.
 
+The browser app shell enables telemetry by default. Disable it with
+`?telemetry=0`, or persist that setting with:
+
+```js
+localStorage.setItem("signals:telemetry", "0")
+```
+
+Telemetry is emitted as one JSON object per console line with the `[signals]`
+prefix. It records host calls, command batches, event binding/clearing, DOM
+events, marshalled payloads, task lifecycle events, and a capture-phase pointer
+probe. `window.signalsRuntime` is also exposed for inspecting `lastCommands`
+after a manual interaction.
+
 `dom_double.mjs` is a dependency-free DOM stand-in implementing exactly the
 surface `runtime.mjs` touches, so the executor can be driven under `node --test`
 without jsdom.

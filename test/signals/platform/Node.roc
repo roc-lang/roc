@@ -117,6 +117,18 @@ import HostValue exposing [HostValue]
 	event_kind_check : U64
 	event_kind_check = 3
 
+	event_kind_pointer_down : U64
+	event_kind_pointer_down = 4
+
+	event_kind_pointer_up : U64
+	event_kind_pointer_up = 5
+
+	event_kind_pointer_enter : U64
+	event_kind_pointer_enter = 6
+
+	event_kind_pointer_leave : U64
+	event_kind_pointer_leave = 7
+
 	unit_payload_kind : U64
 	unit_payload_kind = 1
 

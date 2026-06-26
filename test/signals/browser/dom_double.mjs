@@ -85,6 +85,7 @@ export class FakeElement extends FakeNode {
     this.tagName = String(tag).toUpperCase();
     this.attributes = new Map();
     this.dataset = {};
+    this.style = {};
     this.value = "";
     this.checked = false;
     this.disabled = false;
@@ -202,7 +203,10 @@ export function fireEvent(node, type, init = {}) {
     type,
     target: node,
     currentTarget: node,
-    preventDefault() {},
+    defaultPrevented: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
     stopPropagation() {},
     ...init,
   };

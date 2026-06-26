@@ -31,6 +31,8 @@ pub const EventPayloadAccessor = render.EventPayloadAccessor;
 pub const HostValue = u64;
 pub const HostValueList = abi.RocListWith(HostValue, false);
 
+const render_event_kinds = [_]RenderEventKind{ .click, .input, .check, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave };
+
 const RenderScalarNodeCache = struct {
     active: bool = false,
     tag: ?[]const u8 = null,
@@ -42,6 +44,14 @@ const RenderScalarNodeCache = struct {
     bound_input_accessor: ?EventPayloadAccessor = null,
     bound_check_event: ?u64 = null,
     bound_check_accessor: ?EventPayloadAccessor = null,
+    bound_pointer_down_event: ?u64 = null,
+    bound_pointer_down_accessor: ?EventPayloadAccessor = null,
+    bound_pointer_up_event: ?u64 = null,
+    bound_pointer_up_accessor: ?EventPayloadAccessor = null,
+    bound_pointer_enter_event: ?u64 = null,
+    bound_pointer_enter_accessor: ?EventPayloadAccessor = null,
+    bound_pointer_leave_event: ?u64 = null,
+    bound_pointer_leave_accessor: ?EventPayloadAccessor = null,
     text: ?[]const u8 = null,
     role: ?[]const u8 = null,
     label: ?[]const u8 = null,
@@ -93,6 +103,10 @@ const RenderScalarNodeCache = struct {
             .click => &self.bound_click_event,
             .input => &self.bound_input_event,
             .check => &self.bound_check_event,
+            .pointer_down => &self.bound_pointer_down_event,
+            .pointer_up => &self.bound_pointer_up_event,
+            .pointer_enter => &self.bound_pointer_enter_event,
+            .pointer_leave => &self.bound_pointer_leave_event,
         };
     }
 
@@ -101,6 +115,10 @@ const RenderScalarNodeCache = struct {
             .click => &self.bound_click_accessor,
             .input => &self.bound_input_accessor,
             .check => &self.bound_check_accessor,
+            .pointer_down => &self.bound_pointer_down_accessor,
+            .pointer_up => &self.bound_pointer_up_accessor,
+            .pointer_enter => &self.bound_pointer_enter_accessor,
+            .pointer_leave => &self.bound_pointer_leave_accessor,
         };
     }
 };
@@ -258,7 +276,7 @@ pub fn verifySink(comptime Sink: type) void {
     verifyDeclFn("engine Sink", Sink, "cancelInterval", .{ Sink, u64 }, void);
     verifyDeclFn("engine Sink", Sink, "startTask", .{ Sink, u64, []const u8, []const u8 }, void);
     verifyDeclFn("engine Sink", Sink, "cancelTask", .{ Sink, u64 }, void);
-    verifyDeclFn("engine Sink", Sink, "debugAssertNode", .{ Sink, u64, bool, ?[]const u8, ?u64, []const u64, ?u64, ?u64, ?u64 }, void);
+    verifyDeclFn("engine Sink", Sink, "debugAssertNode", .{ Sink, u64, bool, ?[]const u8, ?u64, []const u64, ?u64, ?u64, ?u64, ?u64, ?u64, ?u64, ?u64 }, void);
 }
 
 pub fn verifyMetrics(comptime Metrics: type) void {
@@ -942,6 +960,10 @@ pub const HostRequiredEventBindings = struct {
     click: ?HostRequiredEventBinding = null,
     input: ?HostRequiredEventBinding = null,
     check: ?HostRequiredEventBinding = null,
+    pointer_down: ?HostRequiredEventBinding = null,
+    pointer_up: ?HostRequiredEventBinding = null,
+    pointer_enter: ?HostRequiredEventBinding = null,
+    pointer_leave: ?HostRequiredEventBinding = null,
 };
 
 pub fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: RenderEventKind) *?HostRequiredEventBinding {
@@ -949,6 +971,10 @@ pub fn requiredEventBindingSlot(bindings: *HostRequiredEventBindings, kind: Rend
         .click => &bindings.click,
         .input => &bindings.input,
         .check => &bindings.check,
+        .pointer_down => &bindings.pointer_down,
+        .pointer_up => &bindings.pointer_up,
+        .pointer_enter => &bindings.pointer_enter,
+        .pointer_leave => &bindings.pointer_leave,
     };
 }
 
@@ -1157,12 +1183,20 @@ pub const HostEventDescriptorIndexes = struct {
     click: ?usize = null,
     input: ?usize = null,
     check: ?usize = null,
+    pointer_down: ?usize = null,
+    pointer_up: ?usize = null,
+    pointer_enter: ?usize = null,
+    pointer_leave: ?usize = null,
 
     pub fn get(self: HostEventDescriptorIndexes, kind: RenderEventKind) ?usize {
         return switch (kind) {
             .click => self.click,
             .input => self.input,
             .check => self.check,
+            .pointer_down => self.pointer_down,
+            .pointer_up => self.pointer_up,
+            .pointer_enter => self.pointer_enter,
+            .pointer_leave => self.pointer_leave,
         };
     }
 
@@ -1171,6 +1205,10 @@ pub const HostEventDescriptorIndexes = struct {
             .click => &self.click,
             .input => &self.input,
             .check => &self.check,
+            .pointer_down => &self.pointer_down,
+            .pointer_up => &self.pointer_up,
+            .pointer_enter => &self.pointer_enter,
+            .pointer_leave => &self.pointer_leave,
         };
     }
 };
@@ -1966,6 +2004,10 @@ pub fn renderEventKindFromAbi(kind: u64) RenderEventKind {
         @intFromEnum(RenderEventKind.click) => .click,
         @intFromEnum(RenderEventKind.input) => .input,
         @intFromEnum(RenderEventKind.check) => .check,
+        @intFromEnum(RenderEventKind.pointer_down) => .pointer_down,
+        @intFromEnum(RenderEventKind.pointer_up) => .pointer_up,
+        @intFromEnum(RenderEventKind.pointer_enter) => .pointer_enter,
+        @intFromEnum(RenderEventKind.pointer_leave) => .pointer_leave,
         else => @panic("Roc render event descriptor used an unknown event kind"),
     };
 }
@@ -2474,6 +2516,10 @@ pub fn Engine(comptime Ctx: type) type {
                     cached.bound_click_event,
                     cached.bound_input_event,
                     cached.bound_check_event,
+                    cached.bound_pointer_down_event,
+                    cached.bound_pointer_up_event,
+                    cached.bound_pointer_enter_event,
+                    cached.bound_pointer_leave_event,
                 );
             }
         }
@@ -5642,11 +5688,10 @@ pub fn Engine(comptime Ctx: type) type {
                 slot.* = .{ .event_id = event_id, .payload_accessor = desc.payload_accessor };
             }
 
-            const kinds = [_]RenderEventKind{ .click, .input, .check };
             for (seen, 0..) |is_seen, index| {
                 if (index == 0 or !is_seen) continue;
 
-                for (kinds) |kind| {
+                for (render_event_kinds) |kind| {
                     const next_binding = requiredEventBindingSlot(&required[index], kind).*;
                     self.applyRenderEventBinding(ctx, @intCast(index), kind, next_binding, counts);
                 }
@@ -5668,11 +5713,10 @@ pub fn Engine(comptime Ctx: type) type {
                 slot.* = .{ .event_id = event_id, .payload_accessor = desc.payload_accessor };
             }
 
-            const kinds = [_]RenderEventKind{ .click, .input, .check };
             for (seen, 0..) |is_seen, index| {
                 if (index == 0 or !is_seen) continue;
 
-                for (kinds) |kind| {
+                for (render_event_kinds) |kind| {
                     const next_binding = requiredEventBindingSlot(&required[index], kind).*;
                     self.applyRenderEventBinding(ctx, @intCast(index), kind, next_binding, counts);
                 }
@@ -5689,10 +5733,17 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn applyStructuralEventBindingsForElem(self: *Self, ctx: Ctx.Handle, elem_id: u64, counts: *render.Counts) void {
-            const kinds = [_]RenderEventKind{ .click, .input, .check };
-            for (kinds) |kind| {
+            for (render_event_kinds) |kind| {
                 const next_binding = self.activeEventBindingForElemKind(elem_id, kind);
                 self.applyRenderEventBinding(ctx, elem_id, kind, next_binding, counts);
+            }
+        }
+
+        pub fn applyActiveStreamEventBindings(self: *Self, ctx: Ctx.Handle, counts: *render.Counts) void {
+            self.recordStreamNodesScanned(self.active_stream.render_nodes.items.len);
+            for (self.active_stream.render_nodes.items) |node| {
+                if (node.kind != .element) continue;
+                self.applyStructuralEventBindingsForElem(ctx, node.elem_id, counts);
             }
         }
 
@@ -6013,8 +6064,8 @@ pub fn Engine(comptime Ctx: type) type {
 
             for (splice.replacement_elem_ids) |elem_id| {
                 self.applyActiveStreamFieldsForElem(ctx, roc_host, elem_id, &counts, dirty_source_node_ids, dirty_generation);
-                self.applyStructuralEventBindingsForElem(ctx, elem_id, &counts);
             }
+            self.applyActiveStreamEventBindings(ctx, &counts);
 
             self.recordStreamNodesScanned(splice.replacement_on_change_indices.len);
             for (splice.replacement_on_change_indices) |on_change_index| {
@@ -6543,7 +6594,7 @@ const VerifySink = struct {
     pub fn cancelInterval(_: VerifySink, _: u64) void {}
     pub fn startTask(_: VerifySink, _: u64, _: []const u8, _: []const u8) void {}
     pub fn cancelTask(_: VerifySink, _: u64) void {}
-    pub fn debugAssertNode(_: VerifySink, _: u64, _: bool, _: ?[]const u8, _: ?u64, _: []const u64, _: ?u64, _: ?u64, _: ?u64) void {}
+    pub fn debugAssertNode(_: VerifySink, _: u64, _: bool, _: ?[]const u8, _: ?u64, _: []const u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64) void {}
 };
 
 const VerifyCtx = struct {

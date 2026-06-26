@@ -20,6 +20,18 @@ Html := [].{
 		Node.Attr.SignalText({ field: Node.field_class, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } })
 	}
 
+	on_pointer_down : Node.Msg -> Node.Attr
+	on_pointer_down = |msg| Node.Attr.OnEvent({ kind: Node.event_kind_pointer_down, msg })
+
+	on_pointer_up : Node.Msg -> Node.Attr
+	on_pointer_up = |msg| Node.Attr.OnEvent({ kind: Node.event_kind_pointer_up, msg })
+
+	on_pointer_enter : Node.Msg -> Node.Attr
+	on_pointer_enter = |msg| Node.Attr.OnEvent({ kind: Node.event_kind_pointer_enter, msg })
+
+	on_pointer_leave : Node.Msg -> Node.Attr
+	on_pointer_leave = |msg| Node.Attr.OnEvent({ kind: Node.event_kind_pointer_leave, msg })
+
 	div : List(Node.Attr), List(Elem) -> Elem
 	div = |attrs, children| Elem.Element({ tag: "div", attrs, children })
 
@@ -91,6 +103,26 @@ Html := [].{
 				tag: "p",
 				attrs: [
 					Node.Attr.StaticText({ field: Node.field_text, value: text_value }),
+					class_attr(classes),
+				],
+				children: [],
+			},
+		)
+	}
+
+	paragraph_s : Signal(Str) -> Elem
+	paragraph_s = |signal| paragraph_s_c(signal, "")
+
+	paragraph_s_c : Signal(Str), Str -> Elem
+	paragraph_s_c = |signal, classes| {
+		cap = signal.cap
+		read : HostValue -> Str
+		read = |value| Box.unbox(Capability.get(value, cap))
+		Elem.Element(
+			{
+				tag: "p",
+				attrs: [
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } }),
 					class_attr(classes),
 				],
 				children: [],

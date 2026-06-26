@@ -19,15 +19,21 @@
     </main>
 
     <script type="module">
-      import { mountSignalsApp, opsApiTextTaskHandler } from "./runtime.mjs";
-
       const params = new URLSearchParams(window.location.search);
       const wasmUrl = params.get("wasm") || "./counter.wasm";
       const appName = params.get("app") || "Signals App";
+      const telemetrySetting = params.get("telemetry") ?? window.localStorage.getItem("signals:telemetry");
+      const telemetry = telemetrySetting !== "0";
       const title = document.getElementById("title");
       const error = document.getElementById("error");
+      const log = (kind, detail = {}) => {
+        if (telemetry) {
+          console.log(`[signals] ${JSON.stringify({ source: "signals-app", kind, ...detail })}`);
+        }
+      };
 
       const showError = (err) => {
+        log("error", { message: String(err?.message || err) });
         error.hidden = false;
         error.classList.remove("hidden");
         error.textContent = String(err?.message || err);
@@ -35,13 +41,24 @@
 
       document.title = appName;
       title.textContent = appName;
+      window.signalsTelemetryEnabled = telemetry;
+      log("boot", { appName, wasmUrl, telemetry });
 
       try {
-        await mountSignalsApp({
+        const { mountSignalsApp, opsApiTextTaskHandler } = await import("./runtime.mjs?v=signals-telemetry-2");
+        log("runtime_imported", {});
+        const runtime = await mountSignalsApp({
           wasmUrl,
           root: document.getElementById("app"),
           taskHandler: opsApiTextTaskHandler,
           onError: showError,
+          telemetry,
+        });
+        window.signalsRuntime = runtime;
+        log("mounted", {
+          domNodes: runtime.nodes.size,
+          eventListeners: runtime.eventCleanups.size,
+          commandCount: runtime.lastCommands.length,
         });
       } catch (err) {
         showError(err);

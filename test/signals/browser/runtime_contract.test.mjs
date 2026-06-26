@@ -138,11 +138,11 @@ class MockHost {
 }
 
 function mountWith(mountScript, options = {}) {
-  const { taskHandler, onError, ...hostOptions } = options;
+  const { taskHandler, onError, telemetry, ...hostOptions } = options;
   const host = new MockHost(hostOptions);
   host.mountScript = mountScript;
   const root = installDomDouble();
-  const runtime = new SignalsRuntime(host.exports, root, { taskHandler, onError });
+  const runtime = new SignalsRuntime(host.exports, root, { taskHandler, onError, telemetry });
   runtime.mount();
   return { host, root, runtime };
 }
@@ -203,6 +203,13 @@ test("event payloads round-trip through the wasm memory boundary", () => {
     { op: Op.setRole, a: 3, s: "checkbox" },
     { op: Op.bindCheck, a: 3, b: 12, c: PayloadAccessor.targetChecked },
     { op: Op.appendChild, a: 0, b: 3 },
+    { op: Op.createElement, a: 4, s: "section" },
+    { op: Op.setText, a: 4, s: "drop-zone" },
+    { op: Op.bindPointerDown, a: 4, b: 13, c: PayloadAccessor.none },
+    { op: Op.bindPointerEnter, a: 4, b: 14, c: PayloadAccessor.none },
+    { op: Op.bindPointerUp, a: 4, b: 15, c: PayloadAccessor.none },
+    { op: Op.bindPointerLeave, a: 4, b: 16, c: PayloadAccessor.none },
+    { op: Op.appendChild, a: 0, b: 4 },
   ]);
 
   fireEvent(findByText(root, "button", "click"), "click");
@@ -212,11 +219,24 @@ test("event payloads round-trip through the wasm memory boundary", () => {
   const checkbox = findAll(root, (node) => node.tagName === "INPUT")[1];
   checkbox.checked = true;
   fireEvent(checkbox, "change");
+  const dropZone = findByText(root, "section", "drop-zone");
+  assert.equal(dropZone.dataset.rocPointerDrag, "true");
+  assert.equal(dropZone.draggable, false);
+  assert.equal(dropZone.style.userSelect, "none");
+  assert.equal(dropZone.style.touchAction, "none");
+  assert.equal(fireEvent(dropZone, "pointerdown").defaultPrevented, true);
+  assert.equal(fireEvent(dropZone, "pointerenter").defaultPrevented, true);
+  assert.equal(fireEvent(dropZone, "pointerup").defaultPrevented, true);
+  assert.equal(fireEvent(dropZone, "pointerleave").defaultPrevented, true);
 
   assert.deepEqual(host.dispatches, [
     { eventId: 10, kind: PayloadKind.unit },
     { eventId: 11, kind: PayloadKind.str, payload: "typed text" },
     { eventId: 12, kind: PayloadKind.bool, payload: true },
+    { eventId: 13, kind: PayloadKind.unit },
+    { eventId: 14, kind: PayloadKind.unit },
+    { eventId: 15, kind: PayloadKind.unit },
+    { eventId: 16, kind: PayloadKind.unit },
   ]);
 });
 
@@ -245,6 +265,62 @@ test("clear_event and remove_node release DOM listeners", () => {
   runtime.applyCommand({ op: Op.removeNode, a: 1, b: 0, c: 0, d: 0, e: 0 });
   fireEvent(button, "click");
   assert.deepEqual(host.dispatches, []);
+});
+
+test("telemetry records command batches DOM events and event payload dispatches", () => {
+  const telemetry = [];
+  const { host, root } = mountWith(
+    [
+      { op: Op.resetDom },
+      { op: Op.createElement, a: 1, s: "button" },
+      { op: Op.setText, a: 1, s: "click" },
+      { op: Op.bindClick, a: 1, b: 17, c: PayloadAccessor.none },
+      { op: Op.appendChild, a: 0, b: 1 },
+    ],
+    { telemetry: (entry) => telemetry.push(entry) },
+  );
+  host.eventResponses.set(17, () => [{ op: Op.setText, a: 1, s: "clicked" }]);
+
+  fireEvent(findByText(root, "button", "click"), "click");
+
+  assert.equal(findByText(root, "button", "clicked").textContent, "clicked");
+  assert.ok(
+    telemetry.some(
+      (entry) =>
+        entry.kind === "commands" &&
+        entry.phase === "mount" &&
+        entry.opCounts.create_element === 1 &&
+        entry.opCounts.bind_click === 1,
+    ),
+  );
+  assert.ok(
+    telemetry.some(
+      (entry) =>
+        entry.kind === "dom_event" &&
+        entry.domEvent === "click" &&
+        entry.eventId === 17 &&
+        entry.currentTarget.tag === "button",
+    ),
+  );
+  assert.ok(
+    telemetry.some(
+      (entry) =>
+        entry.kind === "event_payload" &&
+        entry.eventId === 17 &&
+        entry.payloadKind === "unit" &&
+        entry.payloadAccessor === "none",
+    ),
+  );
+  assert.ok(
+    telemetry.some(
+      (entry) =>
+        entry.kind === "commands" &&
+        entry.phase === "event:17" &&
+        entry.count === 1 &&
+        entry.commands[0].op === "set_text" &&
+        entry.commands[0].text === "clicked",
+    ),
+  );
 });
 
 test("memory growth during dispatch keeps the response command stream readable", () => {

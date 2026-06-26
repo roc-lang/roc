@@ -23,16 +23,61 @@ export const Op = Object.freeze({
   startTask: 20,
   cancelTask: 21,
   setClass: 22,
+  bindPointerDown: 23,
+  bindPointerUp: 24,
+  bindPointerEnter: 25,
+  bindPointerLeave: 26,
 });
 
 // RenderEventKind enum (render_commands.zig) -> DOM event name. The host emits
 // `clearEvent` with the kind in operand `b`; JS maps it back to the listener it
 // bound so it can run the matching cleanup.
-const EventKind = Object.freeze({ click: 1, input: 2, check: 3 });
+const EventKind = Object.freeze({
+  click: 1,
+  input: 2,
+  check: 3,
+  pointerDown: 4,
+  pointerUp: 5,
+  pointerEnter: 6,
+  pointerLeave: 7,
+});
 const domEventForKind = Object.freeze({
   [EventKind.click]: "click",
   [EventKind.input]: "input",
   [EventKind.check]: "change",
+  [EventKind.pointerDown]: "pointerdown",
+  [EventKind.pointerUp]: "pointerup",
+  [EventKind.pointerEnter]: "pointerenter",
+  [EventKind.pointerLeave]: "pointerleave",
+});
+
+const opNames = Object.freeze({
+  [Op.resetDom]: "reset_dom",
+  [Op.createElement]: "create_element",
+  [Op.createText]: "create_text",
+  [Op.appendChild]: "append_child",
+  [Op.removeNode]: "remove_node",
+  [Op.moveBefore]: "move_before",
+  [Op.setText]: "set_text",
+  [Op.setValue]: "set_value",
+  [Op.setChecked]: "set_checked",
+  [Op.setDisabled]: "set_disabled",
+  [Op.setRole]: "set_role",
+  [Op.setLabel]: "set_label",
+  [Op.setTestId]: "set_test_id",
+  [Op.bindClick]: "bind_click",
+  [Op.bindInput]: "bind_input",
+  [Op.bindCheck]: "bind_check",
+  [Op.clearEvent]: "clear_event",
+  [Op.startInterval]: "start_interval",
+  [Op.cancelInterval]: "cancel_interval",
+  [Op.startTask]: "start_task",
+  [Op.cancelTask]: "cancel_task",
+  [Op.setClass]: "set_class",
+  [Op.bindPointerDown]: "bind_pointer_down",
+  [Op.bindPointerUp]: "bind_pointer_up",
+  [Op.bindPointerEnter]: "bind_pointer_enter",
+  [Op.bindPointerLeave]: "bind_pointer_leave",
 });
 
 export const PayloadKind = Object.freeze({
@@ -46,6 +91,29 @@ export const PayloadAccessor = Object.freeze({
   targetValue: 2,
   targetChecked: 3,
 });
+
+const payloadKindNames = Object.freeze({
+  [PayloadKind.unit]: "unit",
+  [PayloadKind.str]: "str",
+  [PayloadKind.bool]: "bool",
+});
+
+const payloadAccessorNames = Object.freeze({
+  [PayloadAccessor.none]: "none",
+  [PayloadAccessor.targetValue]: "target_value",
+  [PayloadAccessor.targetChecked]: "target_checked",
+});
+
+const pointerProbeEvents = Object.freeze([
+  "pointerdown",
+  "pointermove",
+  "pointerup",
+  "pointercancel",
+  "pointerover",
+  "pointerout",
+  "pointerenter",
+  "pointerleave",
+]);
 
 export const HttpTextTask = Object.freeze({
   namePrefix: "http:get-text:",
@@ -94,9 +162,9 @@ export async function instantiateSignalsWasm(url) {
   return instance;
 }
 
-export async function mountSignalsApp({ wasmUrl, root, taskHandler, onError }) {
+export async function mountSignalsApp({ wasmUrl, root, taskHandler, onError, telemetry }) {
   const instance = await instantiateSignalsWasm(wasmUrl);
-  const runtime = new SignalsRuntime(instance.exports, root, { taskHandler, onError });
+  const runtime = new SignalsRuntime(instance.exports, root, { taskHandler, onError, telemetry });
   runtime.mount();
   return runtime;
 }
@@ -111,6 +179,9 @@ export class SignalsRuntime {
     this.intervals = new Map();
     this.tasks = new Map();
     this.taskHandler = options.taskHandler ?? null;
+    this.telemetryLog = normalizeTelemetry(options.telemetry);
+    this.telemetrySeq = 0;
+    this.pointerProbeCleanups = [];
     this.onError = options.onError ?? ((err) => {
       setTimeout(() => {
         throw err;
@@ -120,6 +191,9 @@ export class SignalsRuntime {
     // by the most recent host call so guards can assert the per-event patch
     // budget (mirrors the native host's `patches_emitted` discipline).
     this.lastCommands = [];
+    if (this.telemetryLog) {
+      this.installPointerProbe();
+    }
   }
 
   liveHostValues() {
@@ -127,13 +201,16 @@ export class SignalsRuntime {
   }
 
   mount() {
+    this.emitTelemetry("host_call", { call: "mount" });
     this.views.callHost(this.exports.roc_ui_mount);
-    this.applyPendingCommands();
+    this.applyPendingCommands("mount");
   }
 
   unmount() {
+    this.emitTelemetry("host_call", { call: "unmount" });
     this.views.callHost(this.exports.roc_ui_unmount);
-    this.applyPendingCommands();
+    this.applyPendingCommands("unmount");
+    this.clearPointerProbe();
     this.clearDom();
   }
 
@@ -154,6 +231,13 @@ export class SignalsRuntime {
   }
 
   dispatch(eventId, payloadKind, payloadPtr, payloadLen, boolValue) {
+    this.emitTelemetry("host_call", {
+      call: "event",
+      eventId,
+      payloadKind: payloadKindName(payloadKind),
+      payloadLen,
+      boolValue: boolValue !== 0,
+    });
     this.views.callHost(
       this.exports.roc_ui_event,
       eventId,
@@ -162,27 +246,34 @@ export class SignalsRuntime {
       payloadLen,
       boolValue,
     );
-    this.applyPendingCommands();
+    this.applyPendingCommands(`event:${eventId}`);
   }
 
   tickTimer(token) {
+    this.emitTelemetry("host_call", { call: "timer", token });
     this.views.callHost(this.exports.roc_ui_timer, token);
-    this.applyPendingCommands();
+    this.applyPendingCommands(`timer:${token}`);
   }
 
   resolveTask(requestId, value, failed = false) {
     const bytes = textEncoder.encode(value);
     const ptr = this.views.callHost(this.exports.roc_alloc, bytes.length, 1).result;
     try {
-      this.views.u8.set(bytes, ptr);
-      this.views.callHost(this.exports.roc_ui_resolve, requestId, ptr, bytes.length, failed ? 1 : 0);
+        this.views.u8.set(bytes, ptr);
+        this.emitTelemetry("host_call", {
+          call: "resolve_task",
+          requestId,
+          failed: failed !== false,
+          payloadLen: bytes.length,
+        });
+        this.views.callHost(this.exports.roc_ui_resolve, requestId, ptr, bytes.length, failed ? 1 : 0);
     } catch (err) {
       throw this.runtimeError(err);
     } finally {
       this.views.callHost(this.exports.roc_dealloc, ptr, 1);
     }
     this.tasks.delete(requestId);
-    this.applyPendingCommands();
+    this.applyPendingCommands(`resolve:${requestId}`);
   }
 
   runtimeError(err) {
@@ -246,12 +337,20 @@ export class SignalsRuntime {
     return textDecoder.decode(bytes);
   }
 
-  applyPendingCommands() {
+  applyPendingCommands(phase = "host-call") {
     const records = this.readPendingCommands();
     this.lastCommands = records;
+    this.emitCommandTelemetry(phase, records);
     for (const record of records) {
       this.applyCommand(record);
     }
+    this.emitTelemetry("commands_applied", {
+      phase,
+      count: records.length,
+      domNodes: this.nodes.size,
+      eventListeners: this.eventCleanups.size,
+      liveHostValues: this.liveHostValues(),
+    });
     return records;
   }
 
@@ -337,6 +436,22 @@ export class SignalsRuntime {
         this.bindEvent(record.a, "change", record.b, record.c);
         return;
 
+      case Op.bindPointerDown:
+        this.bindEvent(record.a, "pointerdown", record.b, record.c);
+        return;
+
+      case Op.bindPointerUp:
+        this.bindEvent(record.a, "pointerup", record.b, record.c);
+        return;
+
+      case Op.bindPointerEnter:
+        this.bindEvent(record.a, "pointerenter", record.b, record.c);
+        return;
+
+      case Op.bindPointerLeave:
+        this.bindEvent(record.a, "pointerleave", record.b, record.c);
+        return;
+
       case Op.clearEvent: {
         const domEvent = domEventForKind[record.b];
         if (domEvent === undefined) {
@@ -375,23 +490,68 @@ export class SignalsRuntime {
     const key = `${elemId}:${domEvent}`;
     this.eventCleanups.get(key)?.();
     const elem = this.node(elemId);
-    const listener = (event) => this.dispatchEventPayload(eventId, payloadAccessor, event);
+    const listener = (event) => {
+      const preventedDefault = preventDefaultForRocEvent(domEvent, event);
+      this.emitTelemetry("dom_event", {
+        domEvent,
+        eventId,
+        payloadAccessor: payloadAccessorName(payloadAccessor),
+        preventedDefault,
+        currentTarget: describeDomNode(event.currentTarget, elemId),
+        target: describeDomNode(event.target),
+        pointer: describePointerEvent(event),
+      });
+      this.dispatchEventPayload(eventId, payloadAccessor, event);
+    };
     elem.addEventListener(domEvent, listener);
     this.eventCleanups.set(key, () => elem.removeEventListener(domEvent, listener));
     elem.dataset.rocEventId = String(eventId);
+    if (domEvent === "pointerdown") {
+      elem.dataset.rocPointerDrag = "true";
+      elem.draggable = false;
+      if (elem.style) {
+        elem.style.userSelect = "none";
+        elem.style.webkitUserSelect = "none";
+        elem.style.touchAction = "none";
+      }
+    }
+    this.emitTelemetry("bind_event", {
+      elemId,
+      domEvent,
+      eventId,
+      payloadAccessor: payloadAccessorName(payloadAccessor),
+      elem: describeDomNode(elem, elemId),
+    });
   }
 
   dispatchEventPayload(eventId, payloadAccessor, event) {
     switch (payloadAccessor) {
       case PayloadAccessor.none:
+        this.emitTelemetry("event_payload", {
+          eventId,
+          payloadKind: "unit",
+          payloadAccessor: payloadAccessorName(payloadAccessor),
+        });
         this.dispatchUnit(eventId);
         return;
 
       case PayloadAccessor.targetValue:
+        this.emitTelemetry("event_payload", {
+          eventId,
+          payloadKind: "str",
+          payloadAccessor: payloadAccessorName(payloadAccessor),
+          value: event.currentTarget.value,
+        });
         this.dispatchString(eventId, event.currentTarget.value);
         return;
 
       case PayloadAccessor.targetChecked:
+        this.emitTelemetry("event_payload", {
+          eventId,
+          payloadKind: "bool",
+          payloadAccessor: payloadAccessorName(payloadAccessor),
+          value: event.currentTarget.checked,
+        });
         this.dispatchBool(eventId, event.currentTarget.checked);
         return;
 
@@ -411,7 +571,20 @@ export class SignalsRuntime {
     const elem = this.nodes.get(elemId);
     if (elem && elem.dataset) {
       delete elem.dataset.rocEventId;
+      if (domEvent === "pointerdown") {
+        delete elem.dataset.rocPointerDrag;
+      }
     }
+    if (elem && domEvent === "pointerdown" && elem.style) {
+      elem.style.userSelect = "";
+      elem.style.webkitUserSelect = "";
+      elem.style.touchAction = "";
+    }
+    this.emitTelemetry("clear_event", {
+      elemId,
+      domEvent,
+      elem: describeDomNode(elem, elemId),
+    });
   }
 
   clearElemListeners(elemId) {
@@ -443,6 +616,7 @@ export class SignalsRuntime {
     this.cancelTask(requestId);
     const controller = new AbortController();
     this.tasks.set(requestId, { name, request, controller });
+    this.emitTelemetry("start_task", { requestId, name, request });
     if (!this.taskHandler) {
       return;
     }
@@ -486,6 +660,11 @@ export class SignalsRuntime {
     }
     task.controller.abort();
     this.tasks.delete(requestId);
+    this.emitTelemetry("cancel_task", {
+      requestId,
+      name: task.name,
+      request: task.request,
+    });
   }
 
   clearAsyncResources() {
@@ -506,6 +685,12 @@ export class SignalsRuntime {
   }
 
   clearDom() {
+    this.emitTelemetry("clear_dom", {
+      domNodes: this.nodes.size,
+      eventListeners: this.eventCleanups.size,
+      intervals: this.intervals.size,
+      tasks: this.tasks.size,
+    });
     this.clearAsyncResources();
     for (const cleanup of this.eventCleanups.values()) {
       cleanup();
@@ -515,6 +700,213 @@ export class SignalsRuntime {
     this.nodes.set(0, this.root);
     this.root.replaceChildren();
   }
+
+  emitTelemetry(kind, detail = {}) {
+    if (!this.telemetryLog) {
+      return;
+    }
+    this.telemetryLog({
+      source: "signals-runtime",
+      seq: ++this.telemetrySeq,
+      timeMs: Date.now(),
+      kind,
+      ...detail,
+    });
+  }
+
+  emitCommandTelemetry(phase, records) {
+    if (!this.telemetryLog) {
+      return;
+    }
+    const commands = records.map((record) => this.describeCommand(record));
+    const opCounts = {};
+    for (const command of commands) {
+      opCounts[command.op] = (opCounts[command.op] ?? 0) + 1;
+    }
+    this.emitTelemetry("commands", {
+      phase,
+      count: records.length,
+      opCounts,
+      commands,
+    });
+  }
+
+  describeCommand(record) {
+    const op = opName(record.op);
+    switch (record.op) {
+      case Op.resetDom:
+        return { op };
+
+      case Op.createElement:
+        return { op, elemId: record.a, tag: this.readString(record.b, record.c) };
+
+      case Op.createText:
+        return { op, nodeId: record.a, text: this.readString(record.b, record.c) };
+
+      case Op.appendChild:
+        return { op, parentId: record.a, childId: record.b };
+
+      case Op.removeNode:
+        return { op, nodeId: record.a, node: describeDomNode(this.nodes.get(record.a), record.a) };
+
+      case Op.moveBefore:
+        return { op, parentId: record.a, childId: record.b, beforeId: record.c };
+
+      case Op.setText:
+        return { op, nodeId: record.a, text: this.readString(record.b, record.c) };
+
+      case Op.setValue:
+        return { op, elemId: record.a, value: this.readString(record.b, record.c) };
+
+      case Op.setChecked:
+        return { op, elemId: record.a, checked: record.b !== 0 };
+
+      case Op.setDisabled:
+        return { op, elemId: record.a, disabled: record.b !== 0 };
+
+      case Op.setRole:
+        return { op, elemId: record.a, role: this.readString(record.b, record.c) };
+
+      case Op.setLabel:
+        return { op, elemId: record.a, label: this.readString(record.b, record.c) };
+
+      case Op.setTestId:
+        return { op, elemId: record.a, testId: this.readString(record.b, record.c) };
+
+      case Op.setClass:
+        return { op, elemId: record.a, className: this.readString(record.b, record.c) };
+
+      case Op.bindClick:
+        return this.describeBindCommand(op, record, "click");
+
+      case Op.bindInput:
+        return this.describeBindCommand(op, record, "input");
+
+      case Op.bindCheck:
+        return this.describeBindCommand(op, record, "change");
+
+      case Op.bindPointerDown:
+        return this.describeBindCommand(op, record, "pointerdown");
+
+      case Op.bindPointerUp:
+        return this.describeBindCommand(op, record, "pointerup");
+
+      case Op.bindPointerEnter:
+        return this.describeBindCommand(op, record, "pointerenter");
+
+      case Op.bindPointerLeave:
+        return this.describeBindCommand(op, record, "pointerleave");
+
+      case Op.clearEvent:
+        return {
+          op,
+          elemId: record.a,
+          domEvent: domEventForKind[record.b],
+          eventKind: record.b,
+        };
+
+      case Op.startInterval:
+        return { op, token: record.a, periodMs: record.b };
+
+      case Op.cancelInterval:
+        return { op, token: record.a };
+
+      case Op.startTask:
+        return {
+          op,
+          requestId: record.a,
+          name: this.readString(record.b, record.c),
+          request: this.readString(record.d, record.e),
+        };
+
+      case Op.cancelTask:
+        return { op, requestId: record.a };
+
+      default:
+        return { op, raw: { ...record } };
+    }
+  }
+
+  describeBindCommand(op, record, domEvent) {
+    return {
+      op,
+      elemId: record.a,
+      domEvent,
+      eventId: record.b,
+      payloadAccessor: payloadAccessorName(record.c),
+    };
+  }
+
+  installPointerProbe() {
+    if (typeof globalThis.document?.addEventListener !== "function") {
+      return;
+    }
+    for (const domEvent of pointerProbeEvents) {
+      const listener = (event) => {
+        this.emitTelemetry("pointer_probe", {
+          domEvent,
+          target: describeDomNode(event.target),
+          currentTarget: describeDomNode(event.currentTarget),
+          pointer: describePointerEvent(event),
+        });
+      };
+      globalThis.document.addEventListener(domEvent, listener, true);
+      this.pointerProbeCleanups.push(() =>
+        globalThis.document.removeEventListener(domEvent, listener, true),
+      );
+    }
+    this.emitTelemetry("pointer_probe_installed", { events: [...pointerProbeEvents] });
+  }
+
+  clearPointerProbe() {
+    for (const cleanup of this.pointerProbeCleanups) {
+      cleanup();
+    }
+    this.pointerProbeCleanups = [];
+  }
+}
+
+function normalizeTelemetry(telemetry) {
+  if (telemetry === undefined || telemetry === null || telemetry === false) {
+    return null;
+  }
+  if (telemetry === true) {
+    return consoleTelemetry;
+  }
+  if (typeof telemetry === "function") {
+    return telemetry;
+  }
+  if (typeof telemetry.log === "function") {
+    return (entry) => telemetry.log(entry);
+  }
+  throw new TypeError("SignalsRuntime telemetry must be true, a function, or an object with log(entry)");
+}
+
+function consoleTelemetry(entry) {
+  console.log(`[signals] ${JSON.stringify(entry)}`);
+}
+
+function opName(op) {
+  return opNames[op] ?? `unknown:${op}`;
+}
+
+function payloadKindName(kind) {
+  return payloadKindNames[kind] ?? `unknown:${kind}`;
+}
+
+function payloadAccessorName(accessor) {
+  return payloadAccessorNames[accessor] ?? `unknown:${accessor}`;
+}
+
+function preventDefaultForRocEvent(domEvent, event) {
+  if (!domEvent.startsWith("pointer")) {
+    return false;
+  }
+  if (typeof event?.preventDefault !== "function") {
+    return false;
+  }
+  event.preventDefault();
+  return true;
 }
 
 function setNodeText(node, value) {
@@ -523,6 +915,66 @@ function setNodeText(node, value) {
   } else {
     node.textContent = value;
   }
+}
+
+function describeDomNode(node, id = undefined) {
+  if (!node) {
+    return null;
+  }
+  if (node.nodeType === Node.TEXT_NODE) {
+    return compactObject({
+      id,
+      type: "text",
+      text: compactText(node.nodeValue),
+    });
+  }
+
+  return compactObject({
+    id,
+    type: "element",
+    tag: node.tagName?.toLowerCase(),
+    role: node.getAttribute?.("role"),
+    label: node.getAttribute?.("aria-label"),
+    testId: node.getAttribute?.("data-testid"),
+    className: node.getAttribute?.("class"),
+    rocEventId: node.dataset?.rocEventId,
+    text: compactText(node.textContent),
+  });
+}
+
+function describePointerEvent(event) {
+  if (!event || !event.type?.startsWith("pointer")) {
+    return null;
+  }
+  return compactObject({
+    pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    isPrimary: event.isPrimary,
+    button: event.button,
+    buttons: event.buttons,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    pageX: event.pageX,
+    pageY: event.pageY,
+  });
+}
+
+function compactObject(input) {
+  const out = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== null && value !== "") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function compactText(value) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  const text = String(value).replace(/\s+/g, " ").trim();
+  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
 }
 
 function setRole(node, value) {

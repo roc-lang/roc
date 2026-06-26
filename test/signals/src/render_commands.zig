@@ -23,6 +23,10 @@ pub const Op = enum(u32) {
     start_task = 20,
     cancel_task = 21,
     set_class = 22,
+    bind_pointer_down = 23,
+    bind_pointer_up = 24,
+    bind_pointer_enter = 25,
+    bind_pointer_leave = 26,
 };
 
 pub const Record = extern struct {
@@ -109,12 +113,20 @@ pub const EventKind = enum(u64) {
     click = 1,
     input = 2,
     check = 3,
+    pointer_down = 4,
+    pointer_up = 5,
+    pointer_enter = 6,
+    pointer_leave = 7,
 
     pub fn bindOp(self: EventKind) Op {
         return switch (self) {
             .click => .bind_click,
             .input => .bind_input,
             .check => .bind_check,
+            .pointer_down => .bind_pointer_down,
+            .pointer_up => .bind_pointer_up,
+            .pointer_enter => .bind_pointer_enter,
+            .pointer_leave => .bind_pointer_leave,
         };
     }
 };
@@ -152,7 +164,7 @@ pub const Counts = struct {
             .set_checked => self.set_checked += 1,
             .set_disabled => self.set_disabled += 1,
             .set_role, .set_label, .set_test_id, .set_class => self.set_metadata += 1,
-            .bind_click, .bind_input, .bind_check => self.bind_event += 1,
+            .bind_click, .bind_input, .bind_check, .bind_pointer_down, .bind_pointer_up, .bind_pointer_enter, .bind_pointer_leave => self.bind_event += 1,
             // Event-unbinding is counted through `addEventBinding` alongside the
             // bind it supersedes, so the raw wire op never reaches this counter.
             .clear_event => self.bind_event += 1,
@@ -261,8 +273,12 @@ test "render command counts group detailed host-independent ops" {
     counts.addEventBindingKind(.click);
     counts.addEventBindingKind(.input);
     counts.addEventBindingKind(.check);
+    counts.addEventBindingKind(.pointer_down);
+    counts.addEventBindingKind(.pointer_up);
+    counts.addEventBindingKind(.pointer_enter);
+    counts.addEventBindingKind(.pointer_leave);
 
-    try std.testing.expectEqual(@as(u64, 17), counts.total);
+    try std.testing.expectEqual(@as(u64, 21), counts.total);
     try std.testing.expectEqual(@as(u64, 1), counts.reset_dom);
     try std.testing.expectEqual(@as(u64, 2), counts.create_element);
     try std.testing.expectEqual(@as(u64, 1), counts.append_child);
@@ -273,7 +289,7 @@ test "render command counts group detailed host-independent ops" {
     try std.testing.expectEqual(@as(u64, 1), counts.set_checked);
     try std.testing.expectEqual(@as(u64, 1), counts.set_disabled);
     try std.testing.expectEqual(@as(u64, 4), counts.set_metadata);
-    try std.testing.expectEqual(@as(u64, 3), counts.bind_event);
+    try std.testing.expectEqual(@as(u64, 7), counts.bind_event);
 }
 
 test "render command buffer stores fixed-width records" {

@@ -82,8 +82,8 @@ pub fn DomSink(comptime Host: type) type {
             self.host.sinkCancelTask(request_id);
         }
 
-        pub fn debugAssertNode(self: @This(), elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64) void {
-            self.host.sinkDebugAssertNode(elem_id, active, tag, parent_id, children, click_event, input_event, check_event);
+        pub fn debugAssertNode(self: @This(), elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64, pointer_down_event: ?u64, pointer_up_event: ?u64, pointer_enter_event: ?u64, pointer_leave_event: ?u64) void {
+            self.host.sinkDebugAssertNode(elem_id, active, tag, parent_id, children, click_event, input_event, check_event, pointer_down_event, pointer_up_event, pointer_enter_event, pointer_leave_event);
         }
     };
 }
@@ -169,7 +169,7 @@ test "DomSink forwards every render seam method to the host" {
             self.mark(15);
         }
 
-        pub fn sinkDebugAssertNode(self: *@This(), _: u64, _: bool, _: ?[]const u8, _: ?u64, children: []const u64, _: ?u64, _: ?u64, _: ?u64) void {
+        pub fn sinkDebugAssertNode(self: *@This(), _: u64, _: bool, _: ?[]const u8, _: ?u64, children: []const u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64, _: ?u64) void {
             self.mark(16);
             self.last_debug_children_len = children.len;
         }
@@ -195,7 +195,7 @@ test "DomSink forwards every render seam method to the host" {
     sink.cancelInterval(8);
     sink.startTask(9, "lookup", "roc");
     sink.cancelTask(9);
-    sink.debugAssertNode(1, true, "div", 0, &children, 7, null, null);
+    sink.debugAssertNode(1, true, "div", 0, &children, 7, null, null, null, null, null, null);
 
     try std.testing.expectEqual((@as(u32, 1) << 17) - 1, host.seen);
     try std.testing.expectEqual(@as(usize, 2), host.last_children_len);

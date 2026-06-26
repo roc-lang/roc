@@ -258,6 +258,10 @@ const DomElement = struct {
     bound_click_event: ?u64,
     bound_input_event: ?u64,
     bound_check_event: ?u64,
+    bound_pointer_down_event: ?u64,
+    bound_pointer_up_event: ?u64,
+    bound_pointer_enter_event: ?u64,
+    bound_pointer_leave_event: ?u64,
     active: bool,
     text_update_count: u64,
     value_update_count: u64,
@@ -281,6 +285,10 @@ const DomElement = struct {
             .bound_click_event = null,
             .bound_input_event = null,
             .bound_check_event = null,
+            .bound_pointer_down_event = null,
+            .bound_pointer_up_event = null,
+            .bound_pointer_enter_event = null,
+            .bound_pointer_leave_event = null,
             .active = true,
             .text_update_count = 0,
             .value_update_count = 0,
@@ -303,6 +311,10 @@ const DomElement = struct {
 
 const SpecCommandType = enum {
     click,
+    pointer_down,
+    pointer_up,
+    pointer_enter,
+    pointer_leave,
     fill,
     check,
     uncheck,
@@ -525,6 +537,14 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
 
         if (std.mem.startsWith(u8, trimmed, "click ")) {
             try appendSpecCommand(&commands, allocator, .click, try parseLocator(allocator, trimmed[6..]), null, null, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "pointer_down ")) {
+            try appendSpecCommand(&commands, allocator, .pointer_down, try parseLocator(allocator, trimmed["pointer_down ".len..]), null, null, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "pointer_up ")) {
+            try appendSpecCommand(&commands, allocator, .pointer_up, try parseLocator(allocator, trimmed["pointer_up ".len..]), null, null, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "pointer_enter ")) {
+            try appendSpecCommand(&commands, allocator, .pointer_enter, try parseLocator(allocator, trimmed["pointer_enter ".len..]), null, null, null, line_num);
+        } else if (std.mem.startsWith(u8, trimmed, "pointer_leave ")) {
+            try appendSpecCommand(&commands, allocator, .pointer_leave, try parseLocator(allocator, trimmed["pointer_leave ".len..]), null, null, null, line_num);
         } else if (std.mem.eql(u8, trimmed, "mark_metrics")) {
             try appendSpecCommand(&commands, allocator, .mark_metrics, emptyLocator(), null, null, null, line_num);
         } else if (std.mem.startsWith(u8, trimmed, "fill ")) {
@@ -785,7 +805,7 @@ const HostEnv = struct {
 
     pub fn sinkCancelTask(_: *HostEnv, _: u64) void {}
 
-    pub fn sinkDebugAssertNode(self: *HostEnv, elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64) void {
+    pub fn sinkDebugAssertNode(self: *HostEnv, elem_id: u64, active: bool, tag: ?[]const u8, parent_id: ?u64, children: []const u64, click_event: ?u64, input_event: ?u64, check_event: ?u64, pointer_down_event: ?u64, pointer_up_event: ?u64, pointer_enter_event: ?u64, pointer_leave_event: ?u64) void {
         if (elem_id >= self.dom_elements.items.len) {
             if (!active) return;
             failHost("render cache active node was missing from simulated DOM");
@@ -802,6 +822,10 @@ const HostEnv = struct {
         if (elem.bound_click_event != click_event) failHost("render cache click binding disagreed with simulated DOM");
         if (elem.bound_input_event != input_event) failHost("render cache input binding disagreed with simulated DOM");
         if (elem.bound_check_event != check_event) failHost("render cache check binding disagreed with simulated DOM");
+        if (elem.bound_pointer_down_event != pointer_down_event) failHost("render cache pointer-down binding disagreed with simulated DOM");
+        if (elem.bound_pointer_up_event != pointer_up_event) failHost("render cache pointer-up binding disagreed with simulated DOM");
+        if (elem.bound_pointer_enter_event != pointer_enter_event) failHost("render cache pointer-enter binding disagreed with simulated DOM");
+        if (elem.bound_pointer_leave_event != pointer_leave_event) failHost("render cache pointer-leave binding disagreed with simulated DOM");
     }
 
     fn activeRocHost(self: *HostEnv) *abi.RocHost {
@@ -2062,6 +2086,10 @@ fn bindNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind, event_
         .click => elem.bound_click_event = event_id,
         .input => elem.bound_input_event = event_id,
         .check => elem.bound_check_event = event_id,
+        .pointer_down => elem.bound_pointer_down_event = event_id,
+        .pointer_up => elem.bound_pointer_up_event = event_id,
+        .pointer_enter => elem.bound_pointer_enter_event = event_id,
+        .pointer_leave => elem.bound_pointer_leave_event = event_id,
     }
 }
 
@@ -2071,6 +2099,10 @@ fn clearNodeEventKind(host: *HostEnv, elem_id: u64, kind: RenderEventKind) void 
         .click => elem.bound_click_event = null,
         .input => elem.bound_input_event = null,
         .check => elem.bound_check_event = null,
+        .pointer_down => elem.bound_pointer_down_event = null,
+        .pointer_up => elem.bound_pointer_up_event = null,
+        .pointer_enter => elem.bound_pointer_enter_event = null,
+        .pointer_leave => elem.bound_pointer_leave_event = null,
     }
 }
 
@@ -2103,6 +2135,10 @@ fn removeDomNode(host: *HostEnv, elem_id: u64) void {
     elem.bound_click_event = null;
     elem.bound_input_event = null;
     elem.bound_check_event = null;
+    elem.bound_pointer_down_event = null;
+    elem.bound_pointer_up_event = null;
+    elem.bound_pointer_enter_event = null;
+    elem.bound_pointer_leave_event = null;
     elem.children.deinit(allocator);
     elem.children = .empty;
 }
@@ -2366,9 +2402,19 @@ fn makeSignalsRocHost(host: *HostEnv) abi.RocHost {
     };
 }
 
+fn pointerEventIdForCommand(elem: *const DomElement, cmd_type: SpecCommandType) ?u64 {
+    return switch (cmd_type) {
+        .pointer_down => elem.bound_pointer_down_event,
+        .pointer_up => elem.bound_pointer_up_event,
+        .pointer_enter => elem.bound_pointer_enter_event,
+        .pointer_leave => elem.bound_pointer_leave_event,
+        else => null,
+    };
+}
+
 fn commandIsAction(cmd: SpecCommand) bool {
     return switch (cmd.cmd_type) {
-        .click, .fill, .check, .uncheck, .resolve_task, .reject_task, .tick_interval => true,
+        .click, .pointer_down, .pointer_up, .pointer_enter, .pointer_leave, .fill, .check, .uncheck, .resolve_task, .reject_task, .tick_interval => true,
         else => false,
     };
 }
@@ -2379,6 +2425,13 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
             if (elem.disabled) failHost("benchmark click target is disabled");
             const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
+            dispatchRocEventMeasured(host, roc_host, event_id, .unit, hostValueUnit(host, roc_host), stats);
+        },
+
+        .pointer_down, .pointer_up, .pointer_enter, .pointer_leave => {
+            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark pointer locator did not resolve");
+            if (elem.disabled) failHost("benchmark pointer target is disabled");
+            const event_id = pointerEventIdForCommand(elem, cmd.cmd_type) orelse failHost("benchmark pointer target has no binding");
             dispatchRocEventMeasured(host, roc_host, event_id, .unit, hostValueUnit(host, roc_host), stats);
         },
 
@@ -2717,6 +2770,22 @@ fn platform_main(spec_file: []const u8, verbose: bool) error{}!c_int {
                 }
                 const event_id = elem.bound_click_event orelse {
                     writeLocatorFailure(cmd.line_num, "target has no click binding");
+                    return 1;
+                };
+                dispatchRocEvent(&host_env, &roc_host, event_id, .unit, hostValueUnit(&host_env, &roc_host));
+            },
+
+            .pointer_down, .pointer_up, .pointer_enter, .pointer_leave => {
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    writeLocatorFailure(cmd.line_num, "locator did not resolve to one element");
+                    return 1;
+                };
+                if (elem.disabled) {
+                    writeLocatorFailure(cmd.line_num, "target is disabled");
+                    return 1;
+                }
+                const event_id = pointerEventIdForCommand(elem, cmd.cmd_type) orelse {
+                    writeLocatorFailure(cmd.line_num, "target has no pointer binding");
                     return 1;
                 };
                 dispatchRocEvent(&host_env, &roc_host, event_id, .unit, hostValueUnit(&host_env, &roc_host));
