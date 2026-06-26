@@ -9579,6 +9579,7 @@ const BodyContext = struct {
         const pair = TypePair{ .expected = expected, .actual = actual };
         if (visiting.contains(pair)) return true;
         visiting.put(pair, {}) catch Common.invariant("monotype equality could not record a recursive type pair");
+        defer _ = visiting.remove(pair);
 
         return self.sameTypeContent(expected, actual, visiting);
     }
@@ -14847,6 +14848,42 @@ const BodyContext = struct {
         };
     }
 };
+
+test "monotype sameType keeps failed alias alternatives out of recursion stack" {
+    var program = Ast.Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const module_name = try program.names.internModuleName("Test");
+    const type_name = try program.names.internTypeName("Alias");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const i64_ty = try program.types.add(.{ .primitive = .i64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const alias_i64 = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = i64_ty, .use = .inspectable },
+    } });
+    const alias_str = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = str_ty, .use = .inspectable },
+    } });
+
+    var builder: Builder = undefined;
+    builder.program = &program;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = std.testing.allocator;
+    ctx.builder = &builder;
+
+    try std.testing.expect(ctx.sameType(alias_i64, i64_ty));
+    try std.testing.expect(ctx.sameType(str_ty, alias_str));
+    try std.testing.expect(!ctx.sameType(alias_i64, alias_str));
+    try std.testing.expect(!ctx.sameType(alias_str, alias_i64));
+}
 
 /// Structural `is_eq` specifics for the generic derivation driver
 /// (`BodyContext.lowerDerivation`). Equality threads two operands, builds a

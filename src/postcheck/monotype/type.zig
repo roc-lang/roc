@@ -385,7 +385,7 @@ pub const Store = struct {
         writeBytes(hasher, "backing");
         if (backing) |named_backing| {
             writeBytes(hasher, @tagName(named_backing.use));
-            self.writeTypeDigest(name_store, hasher, named_backing.ty, visiting, .identity_only);
+            self.writeTypeDigest(name_store, hasher, named_backing.ty, visiting, .full);
         } else {
             writeBytes(hasher, "none");
         }
@@ -409,7 +409,7 @@ pub const Store = struct {
                 },
                 .padding => |padding_ty| {
                     writeBytes(hasher, "padding");
-                    self.writeTypeDigest(name_store, hasher, padding_ty, visiting, .identity_only);
+                    self.writeTypeDigest(name_store, hasher, padding_ty, visiting, .full);
                 },
             }
         }
@@ -643,6 +643,55 @@ test "monotype named type digest includes backing" {
     try std.testing.expect(std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
 }
 
+test "monotype named type digest includes nested named backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_name = try name_store.internModuleName("Test");
+    const outer_type_name = try name_store.internTypeName("Outer");
+    const inner_type_name = try name_store.internTypeName("Inner");
+    const outer_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const inner_checked_ty: checked.CheckedTypeId = @enumFromInt(2);
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str_ty = try store.add(.{ .primitive = .str });
+
+    const inner_i64 = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = inner_checked_ty },
+        .def = .{ .module_name = module_name, .type_name = inner_type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = i64_ty, .use = .inspectable },
+    } });
+    const inner_str = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = inner_checked_ty },
+        .def = .{ .module_name = module_name, .type_name = inner_type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = str_ty, .use = .inspectable },
+    } });
+    const outer_i64 = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = outer_checked_ty },
+        .def = .{ .module_name = module_name, .type_name = outer_type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = inner_i64, .use = .inspectable },
+    } });
+    const outer_str = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = outer_checked_ty },
+        .def = .{ .module_name = module_name, .type_name = outer_type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = inner_str, .use = .inspectable },
+    } });
+
+    const i64_digest = store.typeDigest(&name_store, outer_i64);
+    const str_digest = store.typeDigest(&name_store, outer_str);
+    try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
 test "monotype named type digest includes declared field order" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -690,4 +739,39 @@ test "monotype named type digest includes declared field order" {
     const ab_digest = store.typeDigest(&name_store, named_ab);
     const ba_digest = store.typeDigest(&name_store, named_ba);
     try std.testing.expect(!std.mem.eql(u8, ab_digest.bytes[0..], ba_digest.bytes[0..]));
+}
+
+test "monotype named type digest includes padding backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_name = try name_store.internModuleName("Test");
+    const type_name = try name_store.internTypeName("Padded");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str_ty = try store.add(.{ .primitive = .str });
+    const order_i64 = try store.addDeclaredFields(&.{.{ .padding = i64_ty }});
+    const order_str = try store.addDeclaredFields(&.{.{ .padding = str_ty }});
+
+    const named_i64 = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .declared_order = order_i64,
+    } });
+    const named_str = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .declared_order = order_str,
+    } });
+
+    const i64_digest = store.typeDigest(&name_store, named_i64);
+    const str_digest = store.typeDigest(&name_store, named_str);
+    try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
 }
