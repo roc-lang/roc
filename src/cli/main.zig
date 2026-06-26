@@ -11346,6 +11346,11 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
+        .opt = switch (args.opt) {
+            .dev => .dev,
+            .interpreter => .interpreter,
+            .size, .speed => unreachable,
+        },
     }, temp_dir, ctx.io.std_io);
 }
 

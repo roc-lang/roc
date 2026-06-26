@@ -248,6 +248,7 @@ const CustomCase = enum {
     build_issue_9435_hosted_nominal_return,
     bundle_complex_package,
     glue_debug,
+    glue_debug_interpreter,
     glue_c_header,
     glue_c_header_compiles,
     glue_zig,
@@ -511,6 +512,7 @@ const echo_cases = [_]CliCase{
 
 const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds", .body = .{ .custom = .glue_debug } },
+    .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds with --opt=interpreter", .body = .{ .custom = .glue_debug_interpreter } },
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
@@ -1649,6 +1651,7 @@ fn runCustomCase(
         .build_issue_9435_hosted_nominal_return => customBuildIssue9435(io, allocator, &env, &timer, timeout_ms),
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
         .glue_debug => customGlueDebug(io, allocator, &env, &timer, timeout_ms),
+        .glue_debug_interpreter => customGlueDebugInterpreter(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
@@ -4184,6 +4187,21 @@ fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer:
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "PANIC" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "name: \"\"" },
+        },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGlueDebugInterpreter(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--opt=interpreter", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
         .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "PANIC" },

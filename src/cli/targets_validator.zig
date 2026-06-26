@@ -351,18 +351,18 @@ pub fn createValidationReport(
         },
 
         .empty_targets => |info| {
-            var report = Report.init(allocator, "HOSTLESS PLATFORM", .runtime_error);
+            var report = Report.init(allocator, "EMPTY TARGETS SECTION", .runtime_error);
 
             try report.document.addText("The targets section in ");
             try report.document.addAnnotated(info.platform_path, .emphasized);
             try report.document.addLineBreak();
-            try report.document.addText("explicitly declares no compiler-built targets.");
+            try report.document.addText("is empty, so this platform does not declare any compiler-built targets.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addText("This is supported for tools that supply their own host, such as `roc glue` plugins.");
+            try report.document.addText("An empty targets section is only valid for tools that supply their own host, such as `roc glue`.");
             try report.document.addLineBreak();
-            try report.document.addText("Use that tool, or add target entries before running `roc build` or `roc` directly.");
+            try report.document.addText("Add target entries before running `roc build` or `roc` directly with this platform.");
             try report.document.addLineBreak();
 
             return report;
@@ -684,7 +684,7 @@ test "createValidationReport generates correct report for hostless platforms" {
     });
     defer report.deinit();
 
-    try std.testing.expectEqualStrings("HOSTLESS PLATFORM", report.title);
+    try std.testing.expectEqualStrings("EMPTY TARGETS SECTION", report.title);
     try std.testing.expectEqual(Severity.runtime_error, report.severity);
 }
 
