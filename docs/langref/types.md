@@ -133,6 +133,28 @@ uid : UserId
 uid = 0               # a bare U64 becomes a UserId here
 ```
 
+You can also construct a nominal value **explicitly** by naming the type. This is
+required when no expected type drives the conversion — for example, returning a
+nominal from a function whose argument is the plain backing value:
+
+```roc
+Distance := U64
+Pair := (U64, Str)
+
+d = Distance.(26)         # value backing
+pair = Pair.(1, "two")    # tuple backing
+p = Point.{ x: 1, y: 2 }  # record backing
+c = Color.Red             # tag backing (with a payload: `Color.Tag(payload)`)
+
+to_distance : U64 -> Distance
+to_distance = |n| Distance.(n)   # `|n| n` is a type error: a plain U64 is not a Distance
+```
+
+A *literal* (number, string, record, or tag) coerces into a nominal type
+implicitly when the expected type supplies the identity. A value that already has
+a concrete type — like the `U64` parameter `n` above — must be constructed
+explicitly; it does not silently become a different nominal.
+
 ### Destructuring Nominal Types
 
 Pattern can be destructured to access inner values.

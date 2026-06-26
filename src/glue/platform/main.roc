@@ -21,15 +21,7 @@ platform ""
     ]
     packages {}
     provides { "roc_make_glue": make_glue_for_host }
-    targets: {
-        inputs_dir: "targets/",
-        x64mac: { inputs: ["libhost.a", app] },
-        arm64mac: { inputs: ["libhost.a", app] },
-        x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
-        arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
-        x64win: { inputs: ["host.lib", app] },
-        arm64win: { inputs: ["host.lib", app] },
-    }
+    targets: {}
 
 import Types exposing [Types]
 import File exposing [File]
