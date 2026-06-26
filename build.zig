@@ -3998,7 +3998,7 @@ pub fn build(b: *std.Build) void {
     build_test_lsp_integration_runner_step.dependOn(&lsp_integration_runner_exe.step);
 
     const run_lsp_integration = b.addRunArtifact(lsp_integration_runner_exe);
-    run_lsp_integration.expectExitCode(0);
+    run_lsp_integration.stdio = .inherit;
     for (test_filters) |filter| {
         run_lsp_integration.addArg("--filter");
         run_lsp_integration.addArg(filter);
