@@ -99,9 +99,10 @@ Current branch status:
   already-lowered public materialization expression needed at that boundary;
   private consumer-owned plans do not need one.
 - Lambda solving currently owns the conservative materialization boundary used
-  when an ordinary value path observes a plan. This is temporary scaffolding;
-  the long-term shape is not a separate whole-body cleanup pass, but explicit
-  consumption/materialization decisions inside the existing lowering paths.
+  when an ordinary value path observes a plan. This is temporary scaffolding
+  inside the existing lowering pipeline, not a separate plan-elimination pass:
+  each semantics-owning lowering path must either consume a plan or materialize
+  it at the boundary where the value is observed.
 - `List.iter` can emit a `ListIter` plan behind an explicit producer-plan flag;
   recognition checks the resolved builtin method target, and the normal
   pipeline keeps that flag off until private consumers through locals and
@@ -417,12 +418,13 @@ Tests:
 
 Teach the existing post-check lowering decisions to handle plan values at the
 semantic boundary where each value is observed. This is not a new whole-body or
-whole-program pass. The code that lowers source `for`, public field access,
-returns, aggregate construction, and unspecialized calls already has to decide
-what representation it is producing; those are the places that must either
-consume a plan through a recognized optimized consumer or materialize it to
-ordinary public `Iter` IR before continuing. General post-check passes stay
-plan-opaque until a semantics-owning lowering path has produced ordinary IR.
+whole-program pass, and it must not become one. The code that lowers source
+`for`, public field access, returns, aggregate construction, and unspecialized
+calls already has to decide what representation it is producing; those are the
+places that must either consume a plan through a recognized optimized consumer
+or materialize it to ordinary public `Iter` IR before continuing. General
+post-check passes stay plan-opaque until a semantics-owning lowering path has
+produced ordinary IR.
 
 Tasks:
 
@@ -730,6 +732,10 @@ Tasks:
   - [x] Direct `Concat` of list-backed/list-append-backed plans is consumed by
     direct-call `Iter.fold` with a private phase cursor and without public
     iterator step values.
+  - [x] Direct `Prepended(item, ListIter | Append(ListIter, item...))` plans
+    are consumed by direct-call `Iter.fold` as a generated
+    `Concat(Single(item), rest)` state machine without public iterator step
+    values.
   - [x] Direct
     `Map(ListIter | Append(ListIter, item...) | Range | Single | Concat, fn)`
     plans with direct mapping functions are consumed by direct-call `Iter.fold`
@@ -743,6 +749,10 @@ Tasks:
   - [x] Direct `Concat` of list-backed/list-append-backed plans is consumed by
     `List.from_iter` and list-result `Iter.collect` with one exact-capacity
     output list and a private phase cursor.
+  - [x] Direct `Prepended(item, ListIter | Append(ListIter, item...))` plans
+    are consumed by `List.from_iter` and list-result `Iter.collect` as a
+    generated `Concat(Single(item), rest)` state machine without public
+    iterator step values.
   - [x] Direct
     `Map(ListIter | Append(ListIter, item...) | Range | Single | Concat, fn)`
     plans with direct mapping functions are consumed by `List.from_iter` and
@@ -777,6 +787,11 @@ Tasks:
   - [x] Direct concat operands and accumulator operands consumed by `Iter.fold`
     preserve `dbg` ordering relative to the fold result and following
     expressions.
+  - [x] Direct prepended receiver/item operands consumed by `List.from_iter`
+    preserve `dbg` ordering relative to collection.
+  - [x] Direct prepended receiver/item operands and accumulator operands
+    consumed by `Iter.fold` preserve `dbg` ordering relative to the fold
+    result.
   - [x] Local map producer operands consumed by optimized `for` preserve `dbg`
     ordering relative to the producer site, loop body, and following
     expressions.

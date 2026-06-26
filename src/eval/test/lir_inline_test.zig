@@ -2549,6 +2549,58 @@ test "optimized List.from_iter over direct concat keeps refcounted items" {
     , &.{"[\"a\", \"b\", \"c\", \"d\"]"});
 }
 
+test "optimized List.from_iter over direct prepended consumes iterator plan" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg List.from_iter([tap(1.I64), tap(2.I64)].iter().prepended(tap(0.I64)))
+        \\    {}
+        \\}
+    , &.{ "1", "2", "0", "[0, 1, 2]" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : List(I64)
+        \\main = List.from_iter([1.I64, 2.I64].iter().prepended(0.I64))
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &lowered_source.lowered, .specialized));
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &lowered_source.lowered, .generic));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_append_unsafe_count"));
+}
+
+test "optimized Iter.collect to List over direct prepended consumes iterator plan" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : List(I64)
+        \\main = Iter.collect([1.I64, 2.I64].iter().prepended(0.I64))
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &lowered_source.lowered, .specialized));
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &lowered_source.lowered, .generic));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_append_unsafe_count"));
+}
+
 test "optimized List.from_iter over direct single preserves producer effects" {
     try expectOptimizedDbgEvents(
         \\module [main]
@@ -2831,6 +2883,38 @@ test "optimized Iter.fold over direct concat preserves producer and accumulator 
         \\    {}
         \\}
     , &.{ "1", "2", "3", "4", "10", "20", "5" });
+}
+
+test "optimized Iter.fold over direct prepended consumes iterator plan" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold([tap(1.I64), tap(2.I64)].iter().prepended(tap(0.I64)), tap(4.I64), |acc, item| acc + item)
+        \\    {}
+        \\}
+    , &.{ "1", "2", "0", "4", "7" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = Iter.fold([1.I64, 2.I64].iter().prepended(0.I64), 0.I64, |acc, item| acc + item)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "tag_assign_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_tag_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
 }
 
 test "optimized Iter.fold over direct range consumes iterator plan" {
