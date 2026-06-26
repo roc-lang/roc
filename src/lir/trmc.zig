@@ -1110,6 +1110,7 @@ const Transform = struct {
         proc_ptr.args = fresh_span;
         proc_ptr.body = join_stmt;
         proc_ptr.frame_locals = frame_locals;
+        self.requireStackProbeIfNeeded(proc_ptr);
     }
 
     /// Plain TCE does not need a wrapper argument frame. The proc's existing
@@ -1129,6 +1130,13 @@ const Transform = struct {
 
         proc_ptr.body = join_stmt;
         proc_ptr.frame_locals = try self.rebuildFrameLocals();
+        self.requireStackProbeIfNeeded(proc_ptr);
+    }
+
+    fn requireStackProbeIfNeeded(self: *const Transform, proc: *LIR.LirProcSpec) void {
+        if (self.store.procNeedsStackProbe(self.layouts, proc.*)) {
+            proc.stack_probe = .required;
+        }
     }
 
     /// frame_locals must stay complete, unique, and sorted: the interpreter

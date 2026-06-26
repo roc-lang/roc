@@ -2701,6 +2701,8 @@ const Inserter = struct {
             .ret_layout = source_spec.ret_layout,
             .abi = source_spec.abi,
             .hosted = source_spec.hosted,
+            .tail_transform = source_spec.tail_transform,
+            .stack_probe = source_spec.stack_probe,
         });
         try self.store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;

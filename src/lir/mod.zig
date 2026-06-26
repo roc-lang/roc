@@ -64,6 +64,10 @@ pub const CFSwitchBranch = LIR.CFSwitchBranch;
 pub const CFSwitchBranchSpan = LIR.CFSwitchBranchSpan;
 /// Stored proc specification rooted at a statement body.
 pub const LirProcSpec = LIR.LirProcSpec;
+/// Explicit proc-level native stack probing contract.
+pub const StackProbe = LIR.StackProbe;
+/// Native stack probe page-size threshold used by LIR producers/consumers.
+pub const stack_probe_page_size = LIR.stack_probe_page_size;
 /// Identifier of a stored proc specification.
 pub const LirProcSpecId = LIR.LirProcSpecId;
 /// Builtin low-level operation identifier reused from `base`.

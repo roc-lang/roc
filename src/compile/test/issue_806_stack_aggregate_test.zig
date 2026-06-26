@@ -166,223 +166,174 @@ const issue806JoinMixedAppBody = issue806LargeAggregateDefinitions ++ issue806Mi
 ++ issue806MainSuffix;
 
 test "issue 806: large stack record writes are explicit before backend consumers" {
-    try harness.expectLirInspection(issue806StructAppBody, rejectConsumerOwnedLargeStackStructAssigns);
+    try harness.expectLirInspection(issue806StructAppBody, expectLargeStackStructAssignsAreFrameProbed);
 }
 
 test "issue 806: multi-variant large stack tag writes are explicit before backend consumers" {
-    try harness.expectLirInspection(issue806MultiTagAppBody, rejectConsumerOwnedLargeDiscriminatedStackTagAssigns);
+    try harness.expectLirInspection(issue806MultiTagAppBody, expectLargeDiscriminatedStackTagAssignsAreFrameProbed);
 }
 
 test "issue 806: large aggregate copy call and return paths are explicit before backend consumers" {
-    try harness.expectLirInspection(issue806CopyCallReturnAppBody, rejectCopyCallReturnLargeStackAggregateEdges);
+    try harness.expectLirInspection(issue806CopyCallReturnAppBody, expectCopyCallReturnLargeStackAggregateEdgesAreFrameProbed);
 }
 
 test "issue 806: large aggregate join and mixed-field paths are explicit before backend consumers" {
-    try harness.expectLirInspection(issue806JoinMixedAppBody, rejectJoinMixedLargeStackAggregateEdges);
+    try harness.expectLirInspection(issue806JoinMixedAppBody, expectJoinMixedLargeStackAggregateEdgesAreFrameProbed);
 }
 
 test "issue 806: large match payload extraction is explicit before backend consumers" {
-    try harness.expectLirInspection(issue806MatchPayloadAppBody, rejectConsumerOwnedLargeStackPatternPayloads);
+    try harness.expectLirInspection(issue806MatchPayloadAppBody, expectLargeMatchPayloadExtractionIsExplicitAndFrameProbed);
 }
 
 test "issue 806: large closure captures are explicit before backend consumers" {
-    try harness.expectLirInspection(issue806InlineClosureCaptureAppBody, rejectConsumerOwnedLargeStackClosureCaptures);
+    try harness.expectLirInspection(issue806InlineClosureCaptureAppBody, expectLargeClosureCapturesAreExplicitAndFrameProbed);
 }
 
-fn rejectConsumerOwnedLargeStackStructAssigns(
+fn expectLargeStackStructAssignsAreFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeAggregateLocal(store, layouts, .struct_));
-
-    for (store.cf_stmts.items) |stmt| {
-        switch (stmt) {
-            .assign_struct => |assign| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) {
-                    return error.Issue806UnsafeLargeStackStructAssign;
-                }
-            },
-            else => {},
-        }
-    }
+    try std.testing.expect(hasLargeStackStructAssign(store, layouts));
+    try expectLargeAggregateProcsRequireStackProbe(store, layouts);
 }
 
-fn rejectConsumerOwnedLargeMixedStackStructAssigns(
+fn expectLargeMixedStackStructAssignsAreFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeMixedStructLocal(store, layouts));
-    try rejectConsumerOwnedLargeStackStructAssigns(store, layouts);
+    try expectLargeStackStructAssignsAreFrameProbed(store, layouts);
 }
 
-fn rejectConsumerOwnedLargeStackTagAssigns(
+fn expectLargeStackTagAssignsAreFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeAggregateLocal(store, layouts, .tag_union));
-
-    for (store.cf_stmts.items) |stmt| {
-        switch (stmt) {
-            .assign_tag => |assign| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) {
-                    return error.Issue806UnsafeLargeStackTagAssign;
-                }
-            },
-            else => {},
-        }
-    }
+    try std.testing.expect(hasLargeStackTagAssign(store, layouts));
+    try expectLargeAggregateProcsRequireStackProbe(store, layouts);
 }
 
-fn rejectConsumerOwnedLargeDiscriminatedStackTagAssigns(
+fn expectLargeDiscriminatedStackTagAssignsAreFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeDiscriminatedTagLocal(store, layouts));
-    try rejectConsumerOwnedLargeStackTagAssigns(store, layouts);
+    try expectLargeStackTagAssignsAreFrameProbed(store, layouts);
 }
 
-fn rejectCopyCallReturnLargeStackAggregateEdges(
+fn expectCopyCallReturnLargeStackAggregateEdgesAreFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeAggregateLocal(store, layouts, .struct_));
 
-    try rejectConsumerOwnedLargeStackSetLocalCopies(store, layouts);
-    try rejectConsumerOwnedLargeStackCallReturns(store, layouts);
-    try rejectConsumerOwnedLargeStackCallArguments(store, layouts);
-    try rejectConsumerOwnedLargeStackReturns(store, layouts);
+    try std.testing.expect(hasLargeStackCallReturn(store, layouts));
+    try std.testing.expect(hasLargeStackCallArgument(store, layouts));
+    try std.testing.expect(hasLargeStackReturn(store, layouts));
+    try expectLargeAggregateProcsRequireStackProbe(store, layouts);
 }
 
-fn rejectJoinMixedLargeStackAggregateEdges(
+fn expectJoinMixedLargeStackAggregateEdgesAreFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeMixedStructLocal(store, layouts));
 
-    try rejectConsumerOwnedLargeStackJoinParams(store, layouts);
-    try rejectConsumerOwnedLargeMixedStackStructAssigns(store, layouts);
+    try expectLargeMixedStackStructAssignsAreFrameProbed(store, layouts);
+    try expectLargeAggregateProcsRequireStackProbe(store, layouts);
 }
 
-fn rejectConsumerOwnedLargeStackSetLocalCopies(
+fn hasLargeStackStructAssign(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
-) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(hasLargeAggregateLocal(store, layouts, .struct_));
-
+) bool {
     for (store.cf_stmts.items) |stmt| {
         switch (stmt) {
-            .set_local => |assign| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, assign.target) or
-                    isUnsafeLargeAggregateLocal(store, layouts, assign.value))
-                {
-                    return error.Issue806UnsafeLargeStackSetLocalCopy;
-                }
-            },
+            .assign_struct => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
             else => {},
         }
     }
+    return false;
 }
 
-fn rejectConsumerOwnedLargeStackCallReturns(
+fn hasLargeStackTagAssign(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
-) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(hasLargeAggregateLocal(store, layouts, .struct_));
-
+) bool {
     for (store.cf_stmts.items) |stmt| {
         switch (stmt) {
-            .assign_call => |assign| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) {
-                    return error.Issue806UnsafeLargeStackCallReturn;
-                }
-            },
-            .assign_call_erased => |assign| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) {
-                    return error.Issue806UnsafeLargeStackCallReturn;
-                }
-            },
+            .assign_tag => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
             else => {},
         }
     }
+    return false;
 }
 
-fn rejectConsumerOwnedLargeStackCallArguments(
+fn hasLargeStackCallReturn(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
-) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(hasLargeAggregateLocal(store, layouts, .struct_));
+) bool {
+    for (store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_call => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
+            .assign_call_erased => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
+            else => {},
+        }
+    }
+    return false;
+}
 
+fn hasLargeStackCallArgument(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) bool {
     for (store.proc_specs.items) |proc| {
-        if (spanHasUnsafeLargeAggregateLocal(store, layouts, proc.args)) {
-            return error.Issue806UnsafeLargeStackCallArgument;
-        }
+        if (spanHasUnsafeLargeAggregateLocal(store, layouts, proc.args)) return true;
     }
 
     for (store.cf_stmts.items) |stmt| {
         switch (stmt) {
-            .assign_call => |assign| {
-                if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) {
-                    return error.Issue806UnsafeLargeStackCallArgument;
-                }
-            },
-            .assign_call_erased => |assign| {
-                if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) {
-                    return error.Issue806UnsafeLargeStackCallArgument;
-                }
-            },
+            .assign_call => |assign| if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) return true,
+            .assign_call_erased => |assign| if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) return true,
             else => {},
         }
     }
+    return false;
 }
 
-fn rejectConsumerOwnedLargeStackReturns(
+fn hasLargeStackReturn(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
-) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(hasLargeAggregateLocal(store, layouts, .struct_));
-
+) bool {
     for (store.proc_specs.items) |proc| {
-        if (isUnsafeLargeAggregateLayoutIdx(layouts, proc.ret_layout)) {
-            return error.Issue806UnsafeLargeStackReturn;
-        }
+        if (isUnsafeLargeAggregateLayoutIdx(layouts, proc.ret_layout)) return true;
     }
 
     for (store.cf_stmts.items) |stmt| {
         switch (stmt) {
-            .ret => |ret| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, ret.value)) {
-                    return error.Issue806UnsafeLargeStackReturn;
-                }
-            },
+            .ret => |ret| if (isUnsafeLargeAggregateLocal(store, layouts, ret.value)) return true,
             else => {},
         }
     }
+    return false;
 }
 
-fn rejectConsumerOwnedLargeStackJoinParams(
+fn expectLargeClosureCapturesAreExplicitAndFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(hasLargeAggregateLocal(store, layouts, .struct_));
+    try rejectConsumerOwnedLargeStackClosureCaptures(store, layouts);
+    try expectLargeAggregateProcsRequireStackProbe(store, layouts);
+}
 
-    for (store.cf_stmts.items) |stmt| {
-        switch (stmt) {
-            .join => |join| {
-                if (spanHasUnsafeLargeAggregateLocal(store, layouts, join.params)) {
-                    return error.Issue806UnsafeLargeStackJoinParam;
-                }
-            },
-            .set_local => |assign| {
-                if (assign.mode == .initialize_join_param and
-                    (isUnsafeLargeAggregateLocal(store, layouts, assign.target) or
-                        isUnsafeLargeAggregateLocal(store, layouts, assign.value)))
-                {
-                    return error.Issue806UnsafeLargeStackJoinParam;
-                }
-            },
-            else => {},
-        }
-    }
+fn expectLargeMatchPayloadExtractionIsExplicitAndFrameProbed(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    try rejectConsumerOwnedLargeStackPatternPayloads(store, layouts);
+    try expectLargeAggregateProcsRequireStackProbe(store, layouts);
 }
 
 fn rejectConsumerOwnedLargeStackClosureCaptures(
@@ -442,6 +393,30 @@ fn rejectConsumerOwnedLargeStackPatternPayloads(
             else => {},
         }
     }
+}
+
+fn expectLargeAggregateProcsRequireStackProbe(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    for (store.proc_specs.items) |proc| {
+        if (!procHasUnsafeLargeAggregate(store, layouts, proc)) continue;
+
+        if (proc.stack_probe != .required) {
+            return error.Issue806MissingStackProbe;
+        }
+    }
+}
+
+fn procHasUnsafeLargeAggregate(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+    proc: lir.LirProcSpec,
+) bool {
+    if (spanHasUnsafeLargeAggregateLocal(store, layouts, proc.args)) return true;
+    if (spanHasUnsafeLargeAggregateLocal(store, layouts, proc.frame_locals)) return true;
+    if (isUnsafeLargeAggregateLayoutIdx(layouts, proc.ret_layout)) return true;
+    return false;
 }
 
 fn hasLargeAggregateLocal(

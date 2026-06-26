@@ -13340,6 +13340,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
             const key: u32 = @intFromEnum(proc_id);
+            const stack_probe_required = proc.stack_probe == .required;
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
@@ -13518,6 +13519,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var builder = CodeGen.DeferredFrameBuilder.init();
                 builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 builder.setStackSize(actual_locals);
+                builder.setStackProbeRequired(stack_probe_required);
                 try builder.emitEpilogue(&self.codegen.emit);
             }
 
@@ -13536,7 +13538,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Pass only the actual locals size — the builder adds callee-saved space internally.
                 const prologue_start = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
-                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
+                try self.codegen.emitPrologueWithAllocAndStackProbe(actual_locals_x86, stack_probe_required);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
@@ -13594,6 +13596,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
+                frame_builder.setStackProbeRequired(stack_probe_required);
                 if (self.uses_caller_stack_arg_base) {
                     frame_builder.setCallerStackArgBaseReg(caller_stack_arg_base_reg);
                 }

@@ -1152,6 +1152,7 @@ pub const MonoLlvmCodeGen = struct {
 
         var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs.deinit(builder);
+        try self.addGeneratedFunctionStackProbeAttrs(&attrs);
         try attrs.addFnAttr(.cold, builder);
         try attrs.addFnAttr(.@"noinline", builder);
         // Linux AArch64 eval tests return from crash callbacks to avoid
@@ -1220,9 +1221,10 @@ pub const MonoLlvmCodeGen = struct {
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
         func.setLinkage(if (self.proc_symbol_mode == .lir_symbol) .external else .internal, builder);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+        try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         if (self.enable_default_platform_runtime or self.enable_default_platform_diagnostics) {
-            var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
-            defer attrs_wip.deinit(builder);
             if (self.enable_default_platform_runtime) {
                 try attrs_wip.addFnAttr(.{ .string = .{
                     .kind = builder.string("frame-pointer") catch return error.OutOfMemory,
@@ -1236,9 +1238,31 @@ pub const MonoLlvmCodeGen = struct {
                     .value = builder.string("true") catch return error.OutOfMemory,
                 } }, builder);
             }
-            func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         }
+        func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         try self.proc_registry.put(@intFromEnum(proc_id), func);
+    }
+
+    fn addGeneratedFunctionStackProbeAttrs(
+        self: *MonoLlvmCodeGen,
+        attrs: *LlvmBuilder.FunctionAttributes.Wip,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        switch (self.target.cpu.arch) {
+            .x86_64, .aarch64 => {},
+            else => return,
+        }
+
+        if (self.target.os.tag != .windows) {
+            try attrs.addFnAttr(.{ .string = .{
+                .kind = builder.string("probe-stack") catch return error.OutOfMemory,
+                .value = builder.string("inline-asm") catch return error.OutOfMemory,
+            } }, builder);
+        }
+        try attrs.addFnAttr(.{ .string = .{
+            .kind = builder.string("stack-probe-size") catch return error.OutOfMemory,
+            .value = builder.string("4096") catch return error.OutOfMemory,
+        } }, builder);
     }
 
     fn procFunctionName(
@@ -1455,6 +1479,7 @@ pub const MonoLlvmCodeGen = struct {
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
         wrapper.setLinkage(.external, builder);
+        try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         self.configureExportCallConv(wrapper, builder);
 
@@ -1579,6 +1604,10 @@ pub const MonoLlvmCodeGen = struct {
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
         wrapper.setLinkage(.external, builder);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+        try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
+        wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         self.configureExportCallConv(wrapper, builder);
 
         const outer_wip = self.wip;
@@ -1626,6 +1655,10 @@ pub const MonoLlvmCodeGen = struct {
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
         wrapper.setLinkage(.external, builder);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+        try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
+        wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         self.configureExportCallConv(wrapper, builder);
 
         const outer_wip = self.wip;
@@ -6560,6 +6593,9 @@ pub const MonoLlvmCodeGen = struct {
         }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
+        var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs.deinit(builder);
+        try self.addGeneratedFunctionStackProbeAttrs(&attrs);
         switch (helper_key.op) {
             .incref => {},
             .decref, .free => {
@@ -6568,12 +6604,10 @@ pub const MonoLlvmCodeGen = struct {
                 // trees into hot callers such as generated parsers. This does not
                 // mark ordinary decrefs as cold; it only preserves the explicit RC
                 // helper boundary that LIR ARC already selected.
-                var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
-                defer attrs.deinit(builder);
                 try attrs.addFnAttr(.@"noinline", builder);
-                func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
             },
         }
+        func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
         try self.rc_helpers.put(cache_key, .{
             .key = helper_key,
             .atomicity = atomicity,

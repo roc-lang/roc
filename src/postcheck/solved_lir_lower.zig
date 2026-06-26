@@ -522,6 +522,7 @@ const Lowerer = struct {
                 const proc = self.result.store.getProcSpecPtr(proc_id);
                 proc.body = body;
                 proc.frame_locals = frame_locals;
+                proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
             },
             .hosted => {
                 if (self.result.store.getProcSpec(proc_id).hosted == null) {
@@ -682,13 +683,16 @@ const Lowerer = struct {
             .roc => |body_id| self.solved.lifted.exprRegion(body_id),
             .hosted => base.Region.zero(),
         };
+        const args_span = try self.result.store.addLocalSpan(arg_locals);
+        const ret_layout = try self.layoutOfType(entry.ret);
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
-            .args = try self.result.store.addLocalSpan(arg_locals),
+            .args = args_span,
             .body = null,
-            .ret_layout = try self.layoutOfType(entry.ret),
+            .ret_layout = ret_layout,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
+            .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
         if (self.proc_debug_names) {
             if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
@@ -1013,6 +1017,13 @@ const Lowerer = struct {
         }
         std.mem.sort(LIR.LocalId, sorted, {}, localIdLessThan);
         return try self.result.store.addLocalSpan(sorted);
+    }
+
+    fn stackProbeForProc(self: *Lowerer, args: LIR.LocalSpan, frame_locals: LIR.LocalSpan, ret_layout: layout.Idx) LIR.StackProbe {
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, args)) return .required;
+        if (self.result.store.localSpanNeedsStackProbe(&self.result.layouts, frame_locals)) return .required;
+        if (LIR.layoutNeedsStackProbe(&self.result.layouts, ret_layout)) return .required;
+        return .default;
     }
 
     fn localIdLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
