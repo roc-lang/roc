@@ -268,10 +268,37 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, ma
 
 /// View an ARC-inserted LIR program in place from a mapped buffer using the
 /// provided allocator for any scratch data owned by reconstructed stores.
+///
+/// The image contents (LIR op stream and layout store) are pointer-width
+/// independent, so the target is resolved from the header here only as the
+/// width the image was built for. To load the same image for a different
+/// width — e.g. a cross-width cache reused by both the native interpreter and
+/// a 32-bit codegen backend — call `viewMappedImageForTargetWithAllocator`.
 pub fn viewMappedImageWithAllocator(
     header: *const Header,
     base_ptr: [*]align(1) const u8,
     mapped_size: usize,
+    allocator: std.mem.Allocator,
+) ImageError!ProgramView {
+    const target_usize: base.target.TargetUsize = switch (header.target_usize) {
+        0 => .u32,
+        1 => .u64,
+        else => return error.InvalidLirImage,
+    };
+    return viewMappedImageForTargetWithAllocator(header, base_ptr, mapped_size, target_usize, allocator);
+}
+
+/// View an LIR program in place, resolving layout sizes/offsets for an
+/// explicitly supplied pointer width rather than the one recorded in the
+/// header. The serialized contents are width-independent, so the same image
+/// bytes can be viewed for either width; the supplied `target_usize` only
+/// selects which precomputed size/offset/alignment is read out of the layout
+/// store at query time.
+pub fn viewMappedImageForTargetWithAllocator(
+    header: *const Header,
+    base_ptr: [*]align(1) const u8,
+    mapped_size: usize,
+    target_usize: base.target.TargetUsize,
     allocator: std.mem.Allocator,
 ) ImageError!ProgramView {
     if (mapped_size < @sizeOf(Header)) return error.InvalidLirImage;
@@ -279,12 +306,6 @@ pub fn viewMappedImageWithAllocator(
     if (header.magic != MAGIC) return error.InvalidLirImage;
     if (header.format_version != FORMAT_VERSION) return error.UnsupportedLirImageVersion;
     if (header.image_size > mapped_size) return error.InvalidLirImage;
-
-    const target_usize: base.target.TargetUsize = switch (header.target_usize) {
-        0 => .u32,
-        1 => .u64,
-        else => return error.InvalidLirImage,
-    };
 
     // The view path constructs mutable container types (LirStore, Store)
     // whose slice fields are not const, even though the interpreter only
