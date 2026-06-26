@@ -10970,6 +10970,7 @@ pub const ProcedureUseTemplate = struct {
 pub const LocalProcedureBinding = struct {
     binder: PatternBinderId,
     expr: CheckedExprId,
+    owner_template: canonical.ProcedureTemplateRef,
 };
 
 /// Return the checked module id that owns a top-level procedure binding.
@@ -11074,7 +11075,7 @@ pub const ResolvedValueRefTable = struct {
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
 
-        var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module, checked_bodies);
+        var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module, templates, checked_bodies);
         defer local_pattern_roles.deinit(allocator);
 
         const by_checked_expr = try allocator.alloc(?ResolvedValueRefId, checked_bodies.exprCount());
@@ -11546,7 +11547,11 @@ fn categorizeLocalValueRef(
     if (local_pattern_roles.statementRole(pattern)) |role| {
         switch (role) {
             .mutable_version => return .{ .local_mutable_version = .{ .binder = binder } },
-            .local_proc => |expr| return .{ .local_proc = .{ .binder = binder, .expr = expr } },
+            .local_proc => |local_proc| return .{ .local_proc = .{
+                .binder = binder,
+                .expr = local_proc.expr,
+                .owner_template = local_proc.owner_template,
+            } },
             .local_value => return .{ .local_value = .{ .binder = binder } },
         }
     }
@@ -11781,7 +11786,10 @@ fn platformBindingForRequiredIndex(table: *const PlatformRequiredBindingTable, r
 
 const LocalPatternStatementRole = union(enum) {
     mutable_version,
-    local_proc: CheckedExprId,
+    local_proc: struct {
+        expr: CheckedExprId,
+        owner_template: canonical.ProcedureTemplateRef,
+    },
     local_value,
 };
 
@@ -11792,6 +11800,7 @@ const LocalPatternRoleIndex = struct {
     fn init(
         allocator: Allocator,
         module: TypedCIR.Module,
+        templates: *const CheckedProcedureTemplateTable,
         checked_bodies: *const CheckedBodyStore,
     ) Allocator.Error!LocalPatternRoleIndex {
         const node_count = module.nodeCount();
@@ -11813,11 +11822,15 @@ const LocalPatternRoleIndex = struct {
                         .s_decl => |decl| decl,
                         else => unreachable,
                     };
-                    const role: LocalPatternStatementRole = if (isLocalProcExpr(module, decl.expr))
-                        .{ .local_proc = checked_bodies.exprIdForSource(decl.expr) orelse
-                            checkedArtifactInvariant("checked local procedure declaration has no checked expression", .{}) }
-                    else
-                        .local_value;
+                    const role: LocalPatternStatementRole = if (isLocalProcExpr(module, decl.expr)) blk: {
+                        const expr = checked_bodies.exprIdForSource(decl.expr) orelse
+                            checkedArtifactInvariant("checked local procedure declaration has no checked expression", .{});
+                        break :blk .{ .local_proc = .{
+                            .expr = expr,
+                            .owner_template = ownerTemplateForCheckedLocalProc(checked_bodies, templates, expr) orelse
+                                checkedArtifactInvariant("checked local procedure declaration has no owning procedure template", .{}),
+                        } };
+                    } else .local_value;
                     putStatementRole(statement_roles, node_count, decl.pattern, role);
                 },
                 .statement_var => {
@@ -11891,7 +11904,8 @@ const LocalPatternRoleIndex = struct {
             .mutable_version,
             .local_value,
             => true,
-            .local_proc => |a_expr| a_expr == b.local_proc,
+            .local_proc => |a_proc| a_proc.expr == b.local_proc.expr and
+                canonical.procedureTemplateRefEql(a_proc.owner_template, b.local_proc.owner_template),
         };
     }
 
@@ -11951,6 +11965,24 @@ fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
         => true,
         else => false,
     };
+}
+
+fn ownerTemplateForCheckedLocalProc(
+    checked_bodies: *const CheckedBodyStore,
+    templates: *const CheckedProcedureTemplateTable,
+    expr: CheckedExprId,
+) ?canonical.ProcedureTemplateRef {
+    for (templates.templates) |template| {
+        const body_id = switch (template.body) {
+            .checked_body => |body_id| body_id,
+            .entry_wrapper,
+            .intrinsic_wrapper,
+            => continue,
+        };
+        const body = checked_bodies.body(body_id);
+        if (checkedExprContainsExpr(checked_bodies, body.root_expr, expr)) return body.owner_template;
+    }
+    return null;
 }
 
 fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {

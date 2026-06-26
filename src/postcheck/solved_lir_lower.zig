@@ -1393,44 +1393,93 @@ const Lowerer = struct {
             Common.invariant("erased function ConstStore output requires explicit erased function entries");
         }
 
-        const entries = try self.allocator.alloc(LirProgram.ErasedFn, members.len);
-        var initialized: usize = 0;
+        var entries = std.ArrayList(LirProgram.ErasedFn).empty;
         errdefer {
-            for (entries[0..initialized]) |entry| {
+            for (entries.items) |entry| {
                 if (entry.captures.len > 0) self.allocator.free(entry.captures);
                 if (entry.template.local_proc_contexts.len > 0) self.allocator.free(entry.template.local_proc_contexts);
             }
-            self.allocator.free(entries);
+            entries.deinit(self.allocator);
         }
 
-        for (members, 0..) |member, index| {
-            const captures = if (member.capture_ty) |capture_ty|
-                try self.captureSlotsForType(capture_ty)
-            else
-                &.{};
-            var captures_owned = captures.len > 0;
-            errdefer if (captures_owned) self.allocator.free(captures);
-            const template = try constFnTemplateFromMono(self, self.fnTemplateForFn(member.target));
-            var template_owned = true;
-            errdefer if (template_owned and template.local_proc_contexts.len > 0) self.allocator.free(template.local_proc_contexts);
-
-            entries[index] = .{
-                .entry = try self.markReachableFn(member.target),
-                .capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst,
-                .template = template,
-                .captures = captures,
-            };
-            template_owned = false;
-            captures_owned = false;
-            initialized += 1;
+        for (members) |member| {
+            try self.appendErasedFnConstEntries(&entries, member);
         }
 
         const id: LirProgram.ErasedFnsId = @enumFromInt(@as(u32, @intCast(self.result.erased_fns.items.len)));
+        const erased_layout = try self.layoutOfType(ty);
+        const owned_entries = try entries.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_entries) |entry| {
+                if (entry.captures.len > 0) self.allocator.free(entry.captures);
+                if (entry.template.local_proc_contexts.len > 0) self.allocator.free(entry.template.local_proc_contexts);
+            }
+            self.allocator.free(owned_entries);
+        }
         try self.result.erased_fns.append(self.allocator, .{
-            .layout = try self.layoutOfType(ty),
-            .entries = entries,
+            .layout = erased_layout,
+            .entries = owned_entries,
         });
         return id;
+    }
+
+    fn appendErasedFnConstEntries(
+        self: *Lowerer,
+        entries: *std.ArrayList(LirProgram.ErasedFn),
+        member: Type.FnVariant,
+    ) Common.LowerError!void {
+        try self.appendErasedFnConstEntry(entries, member.target, member.capture_ty);
+
+        const source_fn = self.sourceFnForSymbol(member.source);
+        const original_count = self.fn_specs.items.len;
+        for (self.fn_specs.items[0..original_count], 0..) |candidate, index| {
+            const candidate_fn: Type.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            if (candidate_fn == member.target) continue;
+            if (candidate.abi != .erased) continue;
+            if (candidate.source != source_fn) continue;
+            if (!sameOptionalType(candidate.capture_ty, member.capture_ty)) continue;
+            if (erasedConstEntriesContainFn(self, entries.items, candidate_fn)) continue;
+            try self.appendErasedFnConstEntry(entries, candidate_fn, candidate.capture_ty);
+        }
+    }
+
+    fn appendErasedFnConstEntry(
+        self: *Lowerer,
+        entries: *std.ArrayList(LirProgram.ErasedFn),
+        fn_id: Type.FnId,
+        capture_ty: ?Type.TypeId,
+    ) Common.LowerError!void {
+        const captures = if (capture_ty) |ty|
+            try self.captureSlotsForType(ty)
+        else
+            &.{};
+        var captures_owned = captures.len > 0;
+        errdefer if (captures_owned) self.allocator.free(captures);
+
+        const template = try constFnTemplateFromMono(self, self.fnTemplateForFn(fn_id));
+        var template_owned = true;
+        errdefer if (template_owned and template.local_proc_contexts.len > 0) self.allocator.free(template.local_proc_contexts);
+
+        try entries.append(self.allocator, .{
+            .entry = try self.markReachableFn(fn_id),
+            .capture_layout = if (capture_ty) |ty| try self.layoutOfType(ty) else .zst,
+            .template = template,
+            .captures = captures,
+        });
+        template_owned = false;
+        captures_owned = false;
+    }
+
+    fn erasedConstEntriesContainFn(self: *Lowerer, entries: []const LirProgram.ErasedFn, fn_id: Type.FnId) bool {
+        const proc = self.fn_entries.items[@intFromEnum(fn_id)].proc orelse return false;
+        for (entries) |entry| {
+            if (entry.entry == proc) return true;
+        }
+        return false;
+    }
+
+    fn sameOptionalType(lhs: ?Type.TypeId, rhs: ?Type.TypeId) bool {
+        return if (lhs) |left| if (rhs) |right| left == right else false else rhs == null;
     }
 
     fn callablePayloadLayout(

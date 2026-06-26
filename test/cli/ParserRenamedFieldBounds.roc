@@ -81,6 +81,10 @@ find_field = |fields, name| {
 				$remaining = rest
 			}
 
+			Append({ before, after }) => {
+				$remaining = Iter.concat(before, Iter.single(after))
+			}
+
 			Done =>
 				return Err(NotFound)
 		}
@@ -102,6 +106,10 @@ find_any_field = |fields, name| {
 
 			Skip({ rest }) => {
 				$remaining = rest
+			}
+
+			Append({ before, after }) => {
+				$remaining = Iter.concat(before, Iter.single(after))
 			}
 
 			Done =>

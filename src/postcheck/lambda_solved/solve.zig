@@ -1091,6 +1091,14 @@ const Solver = struct {
             self.program.types.set(b, .{ .link = self.program.types.root(backing) });
             return;
         }
+        if (emptyTagUnion(left)) {
+            self.program.types.set(a, .{ .link = b });
+            return;
+        }
+        if (emptyTagUnion(right)) {
+            self.program.types.set(b, .{ .link = a });
+            return;
+        }
 
         switch (left) {
             .primitive => |left_primitive| switch (right) {
@@ -1218,6 +1226,13 @@ const Solver = struct {
             else
                 null,
             else => null,
+        };
+    }
+
+    fn emptyTagUnion(content: Type.Content) bool {
+        return switch (content) {
+            .tag_union => |tags| tags.len == 0,
+            else => false,
         };
     }
 

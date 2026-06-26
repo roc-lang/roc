@@ -785,7 +785,7 @@ const HoistSelectionTransaction = struct {
         self: *HoistSelectionTransaction,
         expr: CIR.Expr.Idx,
         pattern: ?CIR.Pattern.Idx,
-    ) Allocator.Error!u32 {
+    ) Allocator.Error!?u32 {
         if (self.staged_exprs.get(expr)) |root_index| {
             if (pattern) |pattern_idx| {
                 try self.stageBindingAssociation(pattern_idx, root_index);
@@ -801,7 +801,9 @@ const HoistSelectionTransaction = struct {
 
         var root_metadata = RootMetadataScratch{};
         defer root_metadata.deinit(self.checker.gpa);
-        try self.stageStoredRootMetadata(expr, &root_metadata);
+        if (!try self.stageStoredRootMetadata(expr, &root_metadata)) {
+            return null;
+        }
         const dependencies = try root_metadata.cloneDependencies(self.checker.gpa);
         errdefer if (dependencies.len != 0) self.checker.gpa.free(dependencies);
         const required_concrete_patterns = try root_metadata.cloneRequiredConcretePatterns(self.checker.gpa);
@@ -876,10 +878,7 @@ const HoistSelectionTransaction = struct {
                 return true;
             },
             .e_lookup_external => return true,
-            else => {
-                try self.stageStoredRootMetadata(expr, root_metadata);
-                return true;
-            },
+            else => return try self.stageStoredRootMetadata(expr, root_metadata),
         }
     }
 
@@ -892,7 +891,7 @@ const HoistSelectionTransaction = struct {
         const known = self.checker.hoist_known_values.get(pattern) orelse return null;
         return switch (known) {
             .binding_rhs => |expr| {
-                const root_index = try self.stageExprRoot(expr, pattern);
+                const root_index = try self.stageExprRoot(expr, pattern) orelse return null;
                 try self.stageKnownUpdate(pattern, root_index);
                 return root_index;
             },
@@ -910,7 +909,7 @@ const HoistSelectionTransaction = struct {
         self: *HoistSelectionTransaction,
         expr: CIR.Expr.Idx,
         root_metadata: *RootMetadataScratch,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const stored = self.checker.hoist_root_metadata_by_expr.get(expr) orelse
             hoistSelectionInvariant("selected hoisted root was missing checker-produced metadata");
 
@@ -918,14 +917,14 @@ const HoistSelectionTransaction = struct {
             try root_metadata.appendDependencyRoot(self.checker.gpa, dependency);
         }
         for (stored.deferred_binding_dependencies) |dependency| {
-            if (try self.stageBindingRoot(dependency)) |root_index| {
-                try root_metadata.appendDependencyRoot(self.checker.gpa, root_index);
-            }
+            const root_index = try self.stageBindingRoot(dependency) orelse return false;
+            try root_metadata.appendDependencyRoot(self.checker.gpa, root_index);
         }
         for (stored.required_concrete_patterns) |pattern| {
             try root_metadata.appendRequiredConcretePattern(self.checker.gpa, pattern);
         }
         root_metadata.has_runtime_source = root_metadata.has_runtime_source or stored.has_runtime_source;
+        return true;
     }
 
     fn commit(self: *HoistSelectionTransaction) Allocator.Error!void {
@@ -1756,7 +1755,7 @@ fn capturePatternIsCompileTimeKnownForHoist(self: *Self, pattern_idx: CIR.Patter
         return summary_says_compile_time_known;
     }
 
-    return summary_says_compile_time_known;
+    return false;
 }
 
 fn recordDispatchRuntimeSourceIfNeeded(
@@ -2780,7 +2779,8 @@ fn ensureHoistedPatternExtractionRoot(
 fn ensureHoistedExprRoot(self: *Self, expr: CIR.Expr.Idx, pattern: ?CIR.Pattern.Idx) Allocator.Error!u32 {
     var transaction = HoistSelectionTransaction.init(self);
     defer transaction.deinit();
-    const root_index = try transaction.stageExprRoot(expr, pattern);
+    const root_index = try transaction.stageExprRoot(expr, pattern) orelse
+        hoistSelectionInvariant("explicit hoisted expression root could not stage all dependencies");
     try transaction.commit();
     return root_index;
 }
@@ -10138,7 +10138,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     lookup_has_runtime_dependency = true;
                     break :known true;
                 }
-                if (summary_says_compile_time_known) break :known true;
                 break :known false;
             };
             if (!compile_time_known_binding) {
