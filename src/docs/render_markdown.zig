@@ -64,10 +64,17 @@ pub const LangRef = struct {
 /// Maximum size of a single langref `.md` file we will read.
 const max_article_bytes = 8 * 1024 * 1024;
 
+/// Errors that can occur while loading a `LangRef` from disk.
+pub const LoadError = std.Io.Dir.OpenError ||
+    std.Io.Dir.Iterator.Error ||
+    std.Io.Dir.ReadFileAllocError ||
+    Allocator.Error ||
+    error{LangRefDirEmpty};
+
 /// Reads every `.md` file in `dir_path`, derives titles and ordering, and
 /// returns the resulting `LangRef`. The caller owns the result and must call
 /// `deinit`. Returns an error if the directory cannot be opened or is empty.
-pub fn load(gpa: Allocator, io: std.Io, dir_path: []const u8) anyerror!LangRef {
+pub fn load(gpa: Allocator, io: std.Io, dir_path: []const u8) LoadError!LangRef {
     var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
 
@@ -1140,7 +1147,7 @@ fn isAsciiPunct(c: u8) bool {
 
 const testing = std.testing;
 
-fn expectInline(gpa: Allocator, text: []const u8, expected: []const u8) anyerror!void {
+fn expectInline(gpa: Allocator, text: []const u8, expected: []const u8) (RenderError || error{TestExpectedEqual})!void {
     var aw = std.Io.Writer.Allocating.init(gpa);
     defer aw.deinit();
     var slugger = Slugger.init(gpa);
@@ -1155,7 +1162,7 @@ fn expectInline(gpa: Allocator, text: []const u8, expected: []const u8) anyerror
     try testing.expectEqualStrings(expected, aw.written());
 }
 
-fn expectBody(gpa: Allocator, article: *const Article, needle: []const u8) anyerror!void {
+fn expectBody(gpa: Allocator, article: *const Article, needle: []const u8) (RenderError || error{NeedleNotFound})!void {
     var aw = std.Io.Writer.Allocating.init(gpa);
     defer aw.deinit();
     try renderArticleBody(&aw.writer, gpa, &[_]Article{}, article);

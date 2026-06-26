@@ -73,13 +73,13 @@ const builtins_docs_base_url = "https://roc-lang.org/builtins/main/";
 /// of these resolves to `…/Num#U8`. Types not listed here are assumed to have
 /// their own page. Keep in sync with the builtins.
 const builtin_nested_type_owners = [_]struct { name: []const u8, owner: []const u8 }{
-    .{ .name = "U8", .owner = "Num" },    .{ .name = "U16", .owner = "Num" },
-    .{ .name = "U32", .owner = "Num" },   .{ .name = "U64", .owner = "Num" },
-    .{ .name = "U128", .owner = "Num" },  .{ .name = "I8", .owner = "Num" },
-    .{ .name = "I16", .owner = "Num" },   .{ .name = "I32", .owner = "Num" },
-    .{ .name = "I64", .owner = "Num" },   .{ .name = "I128", .owner = "Num" },
-    .{ .name = "F32", .owner = "Num" },   .{ .name = "F64", .owner = "Num" },
-    .{ .name = "Dec", .owner = "Num" },   .{ .name = "Numeral", .owner = "Num" },
+    .{ .name = "U8", .owner = "Num" },   .{ .name = "U16", .owner = "Num" },
+    .{ .name = "U32", .owner = "Num" },  .{ .name = "U64", .owner = "Num" },
+    .{ .name = "U128", .owner = "Num" }, .{ .name = "I8", .owner = "Num" },
+    .{ .name = "I16", .owner = "Num" },  .{ .name = "I32", .owner = "Num" },
+    .{ .name = "I64", .owner = "Num" },  .{ .name = "I128", .owner = "Num" },
+    .{ .name = "F32", .owner = "Num" },  .{ .name = "F64", .owner = "Num" },
+    .{ .name = "Dec", .owner = "Num" },  .{ .name = "Numeral", .owner = "Num" },
 };
 
 /// Writes the published URL for a builtin type referenced from another package's
@@ -394,7 +394,7 @@ fn collectBuiltinTypeOwners(
     module: []const u8,
 ) Allocator.Error!void {
     if (entry.kind != .value) {
-        const short = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |d| entry.name[d + 1 ..] else entry.name;
+        const short = if (std.mem.findScalarLast(u8, entry.name, '.')) |d| entry.name[d + 1 ..] else entry.name;
         const result = try map.getOrPut(gpa, short);
         if (!result.found_existing) result.value_ptr.* = module;
     }

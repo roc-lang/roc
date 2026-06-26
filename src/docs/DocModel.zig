@@ -117,7 +117,7 @@ pub const PackageDocs = struct {
 
 /// Short (final dotted segment) of a possibly-qualified name.
 fn shortTypeName(name: []const u8) []const u8 {
-    return if (std.mem.lastIndexOfScalar(u8, name, '.')) |d| name[d + 1 ..] else name;
+    return if (std.mem.findScalarLast(u8, name, '.')) |d| name[d + 1 ..] else name;
 }
 
 /// Record every type (not value) reachable from `entry` as belonging to
