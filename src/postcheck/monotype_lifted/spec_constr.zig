@@ -1138,6 +1138,7 @@ const Cloner = struct {
                     Ast.callProcCallee(call),
                     call.args,
                     expr_id,
+                    false,
                 );
             },
             else => return .{ .expr = try self.cloneExprPlain(expr_id) },
@@ -1154,6 +1155,7 @@ const Cloner = struct {
                     Ast.callProcCallee(call),
                     call.args,
                     expr_id,
+                    true,
                 );
             },
             .comptime_branch_taken => |taken| return try self.cloneExprValueDemandingFact(taken.body),
@@ -2504,7 +2506,7 @@ const Cloner = struct {
             }
             const body = try self.cloneExprValue(branch.body);
             self.restore(change_start);
-            return try self.wrapPendingLets(body, pending_lets.items);
+            return try self.wrapPendingLets(body, pending_lets.items, false);
         }
         Common.invariant("known constructor match had no matching branch");
     }
@@ -2763,9 +2765,10 @@ const Cloner = struct {
         };
     }
 
-    fn wrapPendingLets(self: *Cloner, body: Value, pending_lets: []const PendingLet) Common.LowerError!Value {
+    fn wrapPendingLets(self: *Cloner, body: Value, pending_lets: []const PendingLet, preserve_fact: bool) Common.LowerError!Value {
         if (pending_lets.len == 0) return body;
 
+        const fact = if (preserve_fact) try self.pass.factFromValue(body) else null;
         const ty = valueType(self.pass.program, body);
         var result = try self.materialize(body);
         var index = pending_lets.len;
@@ -2781,6 +2784,12 @@ const Cloner = struct {
                 .value = pending.value,
                 .rest = result,
             } } });
+        }
+        if (fact) |known| {
+            return .{ .expr_with_known_fact = .{
+                .expr = result,
+                .fact = known,
+            } };
         }
         return .{ .expr = result };
     }
@@ -2908,7 +2917,7 @@ const Cloner = struct {
             try self.putSubst(source_arg.local, arg_value);
         }
 
-        return try self.wrapPendingLets(try self.cloneExprValue(body), pending_lets.items);
+        return try self.wrapPendingLets(try self.cloneExprValue(body), pending_lets.items, false);
     }
 
     fn inlineDirectCallValue(
@@ -2916,6 +2925,7 @@ const Cloner = struct {
         callee: Ast.FnId,
         args_span: Ast.Span(Ast.ExprId),
         original_expr: Ast.ExprId,
+        demand_result_fact: bool,
     ) Common.LowerError!Value {
         for (self.inline_stack.items) |active| {
             if (active == callee) return .{ .expr = try self.cloneExprPlain(original_expr) };
@@ -2978,7 +2988,11 @@ const Cloner = struct {
             try self.putSubst(source_arg.local, arg_value);
         }
 
-        return try self.wrapPendingLets(try self.cloneExprValue(body), pending_lets.items);
+        const body_value = if (demand_result_fact)
+            try self.cloneExprValueDemandingFact(body)
+        else
+            try self.cloneExprValue(body);
+        return try self.wrapPendingLets(body_value, pending_lets.items, demand_result_fact);
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
