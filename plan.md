@@ -600,6 +600,8 @@ Tasks:
     immutable local and is consumed with private phase state.
   - [x] Direct `Map(ListIter | Append(ListIter, item...), fn)` plans can cross
     an immutable local and are consumed with private child state.
+  - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
+    can cross an immutable local and are consumed with private child state.
 - [ ] Private plan state can cross `if`.
 - [ ] Private plan state can cross `match`.
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
@@ -637,6 +639,8 @@ Tasks:
     public step values when consumed by a private `for`.
   - [x] Direct local `Map(ListIter | Append(ListIter, item...), fn)` avoids
     public step values when consumed by a private `for`.
+  - [x] Direct local `Filter(ListIter | Append(ListIter, item...), predicate)`
+    avoids public step values when consumed by a private `for`.
 - [ ] Optimized `for` through `if` avoids public step values.
   - [x] Direct `for` over an `if` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans lowers to branch-local private cursor
@@ -659,6 +663,9 @@ Tasks:
 - [x] Optimized `for` over local `Map(ListIter | Append(ListIter, item...), fn)`
   uses child plan state.
 - [x] Optimized `for` over direct
+  `Filter(ListIter | Append(ListIter, item...), predicate)` uses child plan
+  state.
+- [x] Optimized `for` over local
   `Filter(ListIter | Append(ListIter, item...), predicate)` uses child plan
   state.
 - [x] Optimized `for` over ranges uses direct numeric state.
@@ -723,6 +730,9 @@ Tasks:
     expressions.
   - [x] Local map producer operands consumed by optimized `for` preserve `dbg`
     ordering relative to the producer site, loop body, and following
+    expressions.
+  - [x] Local filter producer operands consumed by optimized `for` preserve
+    `dbg` ordering relative to the producer site, loop body, and following
     expressions.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
   - [x] Direct `List.from_iter(List(Str).iter().append(...))` passes optimized

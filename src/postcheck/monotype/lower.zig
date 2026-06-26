@@ -13868,6 +13868,7 @@ const BodyContext = struct {
         if (try self.appendIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.concatIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.mapIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.filterIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         return null;
     }
 
@@ -13989,6 +13990,83 @@ const BodyContext = struct {
                 .before = before_plan,
                 .after = after_expr,
                 .phase = phase_expr,
+            } },
+        });
+    }
+
+    fn filterIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        const kind: Ast.IterPlan.FilterKind = if (self.methodNameIs(plan.method, "keep_if"))
+            .keep_if
+        else if (self.methodNameIs(plan.method, "drop_if"))
+            .drop_if
+        else
+            return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter filter dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 2 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter filter dispatch plan had an unexpected argument shape");
+        }
+        const predicate_index: usize = if (receiver_index == 0) 1 else 0;
+
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
+        defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+
+        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, expr.ty, plan_args, iterator_ty);
+        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked Iter filter dispatch plan had a non-function type");
+        const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
+        defer self.allocator.free(plan_arg_tys);
+        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+
+        const original_statement_len = lowered.len;
+        const source_plan = (try self.iteratorPlanForPrivateProducerOperand(plan_args[receiver_index], dispatcher_ty, lowered)) orelse {
+            lowered.len = original_statement_len;
+            return null;
+        };
+        const source = self.builder.program.iterPlan(source_plan);
+
+        const predicate_fn_ty = plan_arg_tys[predicate_index];
+        const predicate_fn_value = try self.lowerDispatchOperandAtType(plan_args[predicate_index], predicate_fn_ty);
+        const predicate_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), predicate_fn_ty);
+        const predicate_fn_expr = try self.builder.localExpr(predicate_fn_local, predicate_fn_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(predicate_fn_local, predicate_fn_ty),
+            .value = predicate_fn_value,
+        } }));
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(iterator_ty),
+            .length = .unknown,
+            .steps = .{
+                .append = false,
+                .one = source.steps.one or source.steps.append,
+                .skip = source.steps.one or source.steps.append or source.steps.skip,
+                .done = source.steps.done,
+            },
+            .done = source.done,
+            .materialized = null,
+            .data = .{ .filter = .{
+                .source = source_plan,
+                .predicate_fn = predicate_fn_expr,
+                .kind = kind,
             } },
         });
     }
@@ -16017,6 +16095,7 @@ const BodyContext = struct {
             },
             .concat => |concat| return try self.lowerConcatListIteratorPlanFor(for_, result_ty, carries, concat, iter_plan_value.item_ty),
             .map => |map| return try self.lowerMapIteratorPlanFor(for_, result_ty, carries, map, iter_plan_value.item_ty),
+            .filter => |filter| return try self.lowerFilterIteratorPlanFor(for_, result_ty, carries, filter, iter_plan_value.item_ty),
             .custom => |custom| return try self.lowerCustomIteratorFor(for_, result_ty, carries, custom, iter_plan_value.item_ty),
             else => return null,
         }
@@ -18163,6 +18242,17 @@ const BodyContext = struct {
             .filter => |filter| filter,
             else => Common.invariant("checked Iter filter expression lowered to a non-filter iterator plan"),
         };
+        return try self.lowerFilterIteratorPlanFor(for_, result_ty, carries, filter, iter_plan_value.item_ty);
+    }
+
+    fn lowerFilterIteratorPlanFor(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        filter: Ast.IterPlan.FilterIter,
+        result_item_ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprData {
         const source = (try self.listAppendIteratorPlanFromPlan(filter.source)) orelse return null;
         defer source.deinit(self.allocator);
 
@@ -18177,7 +18267,7 @@ const BodyContext = struct {
                 carries,
                 source.list,
                 source.item_ty,
-                iter_plan_value.item_ty,
+                result_item_ty,
                 source.append_items,
                 .{ .filter = .{
                     .predicate_fn = predicate_fn_expr,
