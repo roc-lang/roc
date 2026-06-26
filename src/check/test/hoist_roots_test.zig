@@ -1064,7 +1064,7 @@ fn countDispatchRootsContaining(test_env: *const TestEnv, needle: []const u8) us
                 const source = test_env.checker.cir.common.source;
                 const start = region.start.offset;
                 const end = region.end.offset;
-                if (start < end and end <= source.len and std.mem.indexOf(u8, source[start..end], needle) != null) {
+                if (start < end and end <= source.len and std.mem.find(u8, source[start..end], needle) != null) {
                     count += 1;
                 }
             },
@@ -1089,14 +1089,14 @@ fn countBlockRootsEndingInCrash(test_env: *const TestEnv) usize {
 
 fn hoistRootPolicySource() []const u8 {
     const source = @embedFile("../Check.zig");
-    const start = std.mem.indexOf(u8, source, "fn exprCanBeStoredConstRoot") orelse
+    const start = std.mem.find(u8, source, "fn exprCanBeStoredConstRoot") orelse
         @panic("missing hoist root policy function");
-    const end = std.mem.indexOfPos(u8, source, start, "/// In debug builds") orelse
+    const end = std.mem.findPos(u8, source, start, "/// In debug builds") orelse
         @panic("missing hoist root policy function end marker");
     return source[start..end];
 }
 
-fn expectPolicyDoesNotMention(needle: []const u8) !void {
+fn expectPolicyDoesNotMention(needle: []const u8) anyerror!void {
     try std.testing.expect(!std.mem.containsAtLeast(u8, hoistRootPolicySource(), 1, needle));
 }
 

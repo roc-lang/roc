@@ -1365,36 +1365,6 @@ fn moduleBytesEqual(a: [32]u8, b: [32]u8) bool {
     return std.mem.eql(u8, a[0..], b[0..]);
 }
 
-fn payloadLayoutForTagArg(
-    layouts: *const layout.Store,
-    variant_layout_idx: layout.Idx,
-    arg_count: usize,
-    arg_index: u32,
-) layout.Idx {
-    if (arg_count == 0) return layout.Idx.zst;
-    const variant_layout = layouts.getLayout(variant_layout_idx);
-    if (arg_count == 1) {
-        if (variant_layout.tag == .struct_ and layouts.getStructInfo(variant_layout).fields.len == 1) {
-            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, 0);
-        }
-        return variant_layout_idx;
-    }
-    if (variant_layout.tag != .struct_) staticDataInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, arg_index);
-}
-
-fn payloadOffsetForTagArg(
-    layouts: *const layout.Store,
-    variant_layout_idx: layout.Idx,
-    arg_count: usize,
-    arg_index: u32,
-) u32 {
-    if (arg_count <= 1) return 0;
-    const variant_layout = layouts.getLayout(variant_layout_idx);
-    if (variant_layout.tag != .struct_) staticDataInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldOffsetByOriginalIndex(variant_layout.getStruct().idx, arg_index);
-}
-
 fn staticDataPtrOffset(word_size: u32, element_alignment: u32, contains_refcounted: bool) u32 {
     const required_space = if (contains_refcounted) word_size * 2 else word_size;
     return alignForwardU32(required_space, element_alignment);

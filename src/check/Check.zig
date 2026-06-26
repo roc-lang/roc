@@ -585,11 +585,6 @@ const HoistRootMetadata = struct {
         if (self.required_concrete_patterns.len == 0) return &.{};
         return try allocator.dupe(CIR.Pattern.Idx, self.required_concrete_patterns);
     }
-
-    fn cloneDeferredBindingDependencies(self: HoistRootMetadata, allocator: Allocator) Allocator.Error![]const CIR.Pattern.Idx {
-        if (self.deferred_binding_dependencies.len == 0) return &.{};
-        return try allocator.dupe(CIR.Pattern.Idx, self.deferred_binding_dependencies);
-    }
 };
 
 const HoistFrame = struct {
@@ -1773,13 +1768,6 @@ fn recordDispatchRuntimeSourceIfNeeded(
     if (defHasRuntimeSource(method_module, method_def)) {
         try self.dispatch_runtime_source_fn_vars.put(self.gpa, constraint_fn_var, {});
     }
-}
-
-fn dispatchHasRuntimeSource(self: *Self, fn_var: Var) bool {
-    if (self.dispatch_runtime_source_fn_vars.count() == 0) return false;
-    if (self.dispatch_runtime_source_fn_vars.contains(fn_var)) return true;
-    const resolved = self.types.resolveVar(fn_var).var_;
-    return resolved != fn_var and self.dispatch_runtime_source_fn_vars.contains(resolved);
 }
 
 fn recordDispatchEffectWatch(self: *Self, fn_var: Var) Allocator.Error!void {

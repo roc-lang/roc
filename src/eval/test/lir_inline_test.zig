@@ -1183,7 +1183,7 @@ fn markReachableLiftedExpr(
 fn expectNoReachableLiftedIterPlans(
     allocator: Allocator,
     program: *const postcheck.MonotypeLifted.Ast.Program,
-) !void {
+) anyerror!void {
     const reachable = try allocator.alloc(bool, program.exprs.items.len);
     defer allocator.free(reachable);
     @memset(reachable, false);
@@ -1402,22 +1402,6 @@ fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
 
 fn hasGroupedStrMatchSet(shape: ProcShape) bool {
     return shape.str_match_set_count == 1;
-}
-
-fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
-    const allocator = std.testing.allocator;
-
-    var optimized = try lowerModule(allocator, source, .wrappers);
-    defer optimized.deinit(allocator);
-
-    var unoptimized = try lowerModule(allocator, source, .none);
-    defer unoptimized.deinit(allocator);
-
-    try std.testing.expect(try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
-    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
-
-    try std.testing.expect(!try reachableIterCollectShape(allocator, &unoptimized.lowered, .specialized));
-    try std.testing.expect(try reachableIterCollectShape(allocator, &unoptimized.lowered, .generic));
 }
 
 fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_unsafe_count: usize) anyerror!void {

@@ -23,11 +23,6 @@ const RuntimeValueAddress = struct {
     layout: u32,
 };
 
-const TagBase = struct {
-    value: Value,
-    layout_idx: layout.Idx,
-};
-
 const ResolvedTagValue = struct {
     selected: LirProgram.ConstTagVariant,
     payload_layout: layout.Idx,
@@ -1050,23 +1045,6 @@ pub const Writer = struct {
         const raw = self.readPointerSizedInt(value);
         if (raw == 0) return null;
         return @ptrFromInt(raw);
-    }
-
-    fn resolveTagBase(self: *Writer, layout_idx: layout.Idx, value: Value) TagBase {
-        const layout_value = self.program.layouts.getLayout(layout_idx);
-        return switch (layout_value.tag) {
-            .zst, .tag_union => .{
-                .value = value,
-                .layout_idx = layout_idx,
-            },
-            .box => .{
-                .value = .{
-                    .ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed tag value had null payload pointer"),
-                },
-                .layout_idx = layout_value.getIdx(),
-            },
-            else => writerInvariant("tag value read had non-tag layout"),
-        };
     }
 
     fn readErasedCallablePointer(self: *Writer, value: Value) [*]u8 {
