@@ -2259,6 +2259,34 @@ test "local list.iter with public alias keeps public iterator semantics" {
     try expectOptimizedDbgEvents(source, &.{"(3, 1)"});
 }
 
+test "local appended iterator with public alias keeps public iterator semantics" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    iter = [1.I64, 2.I64].iter().append(3.I64)
+        \\    saved = iter
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\
+        \\    saved_step = match Iter.next(saved) {
+        \\        Append({ after, .. }) => after
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    dbg ($sum, saved_step)
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"(6, 3)"});
+}
+
 test "public Iter.next materializes iterator plan before Lambda" {
     try expectOptimizedDbgEvents(
         \\module [main]

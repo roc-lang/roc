@@ -670,6 +670,8 @@ Tasks:
 - [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public
   behavior.
   - [x] Local `List.iter` with a public alias preserves public iterator behavior.
+  - [x] Local `Append(ListIter, item...)` with a public alias preserves public
+    iterator behavior.
 - [ ] `dbg`, `expect`, and `crash` in producer operands are not duplicated or
   moved.
   - [x] Direct append operands consumed by `List.from_iter` preserve `dbg`
