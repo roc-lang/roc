@@ -689,9 +689,6 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, d
     try writeMainOpen(w, ctx, gpa, base);
     try w.writeAll("        <h1 class=\"module-name\">");
     try writeHtmlEscaped(w, mod.name);
-    if (mod.kind == .type_module) {
-        try w.writeAll(" <span class=\"module-kind-badge\">Type Module</span>");
-    }
     try w.writeAll("</h1>\n");
 
     // Build entry tree (automatically collapses redundant top-level node
@@ -1294,7 +1291,7 @@ fn renderSidebarModuleEntry(w: Writer, ctx: *const RenderContext, gpa: Allocator
         try w.writeAll(module_link_prefix.items);
     }
     try w.writeAll("\">");
-    try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
+    try w.writeAll("<button class=\"entry-toggle\"></button>");
     try w.writeAll("<span>");
     try writeHtmlEscaped(w, mod.name);
     try w.writeAll("</span></a>\n");
@@ -1351,7 +1348,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
             try w.writeAll("                    <a class=\"sidebar-module-link active prose-label\" data-module-name=\"__builtin_types__\" href=\"");
             try writeHtmlEscaped(w, base);
             try w.writeAll("\">");
-            try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
+            try w.writeAll("<button class=\"entry-toggle\"></button>");
             try w.writeAll("<span>Builtin Types</span></a>\n");
             try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
             for (ctx.package_docs.modules) |inner| {
@@ -1391,7 +1388,7 @@ fn renderLangRefSidebar(
     try w.writeAll("\" href=\"");
     try writeHtmlEscaped(w, base);
     try w.writeAll("langref/\">");
-    try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
+    try w.writeAll("<button class=\"entry-toggle\"></button>");
     try w.writeAll("<span>Language Reference</span></a>\n");
 
     try w.writeAll("                    <ul class=\"sidebar-sub-entries langref-articles\">\n");

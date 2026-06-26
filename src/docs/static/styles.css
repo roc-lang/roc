@@ -1,4 +1,9 @@
 :root {
+  /* Sidebar dropdown triangle, used as a mask on `.entry-toggle::before` so it
+     follows the toggle's color. Two back-to-back right triangles split along the
+     triangle's axis; the lower half is masked to ~55% alpha so it reads a touch
+     lighter than the upper half. */
+  --toggle-triangle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 1L1.5 4L7 4Z'/%3E%3Cpath d='M1.5 4L1.5 7L7 4Z' fill-opacity='.55'/%3E%3C/svg%3E");
   /* WCAG AAA Compliant colors - important that luminance (the l in hsl) is 18% for font colors against the bg's luminance of 96-97% when the font-size is at least 14pt */
   --code-bg: hsl(262 33% 96% / 1);
   --code-color: #000;
@@ -192,20 +197,6 @@ table tr td {
     color: var(--violet);
     padding: 8px 0;
     margin-top: 0;
-}
-
-/* Type module badge */
-.module-kind-badge {
-    display: inline-block;
-    font-size: var(--font-xs);
-    font-weight: var(--weight-medium);
-    font-family: var(--font-sans);
-    background-color: var(--violet-bg);
-    color: var(--violet);
-    border: 1px solid var(--violet-border-subtle);
-    padding: 2px 8px;
-    vertical-align: middle;
-    margin-left: 8px;
 }
 
 /* Hierarchical entry layout */
@@ -677,7 +668,7 @@ a.sidebar-module-link {
     appearance: none;
     border: none;
     color: transparent;
-    color: rgba(from var(--text-color) r g b / .6);
+    color: rgba(from var(--text-color) r g b / .5);
     transition: all 80ms linear;
     text-decoration: none;
     font-size: 0.8rem;
@@ -689,9 +680,30 @@ a.sidebar-module-link {
     }
 }
 
+/* The triangle itself: a single SVG (`--toggle-triangle`) masked by the toggle's
+   current color, so it tracks the gray/hover-violet transitions. */
+.entry-toggle::before {
+    content: "";
+    display: inline-block;
+    width: 0.85rem;
+    height: 0.85rem;
+    vertical-align: middle;
+    background-color: currentColor;
+    -webkit-mask: var(--toggle-triangle) center / contain no-repeat;
+    mask: var(--toggle-triangle) center / contain no-repeat;
+}
+
 .sidebar-entry:hover > a > .entry-toggle,
 .sidebar-module-link:hover > .entry-toggle {
     color: var(--text-color);
+}
+
+/* Nested module toggles (e.g. the builtin types under "Builtin Types") sit in a
+   smaller-font line and read a touch low; nudge them up to center on the label.
+   `top` offsets the box before the `rotate` spins it, so both states stay aligned. */
+.sidebar-sub-entries .entry-toggle {
+    position: relative;
+    top: -2px;
 }
 
 .active .entry-toggle {
@@ -926,6 +938,12 @@ pre>code {
       scrollbar-color: #8f8f8f #2f2f2f;
   }
 
+  /* In dark mode "lighter" means more of the near-white text color, i.e. a
+     higher alpha (the opposite of light mode, where lighter means fading toward
+     the light background). */
+  .sidebar-module-link > .entry-toggle {
+      color: rgba(from var(--text-color) r g b / .8);
+  }
 }
 
 @media only screen and (max-width: 768px) {
