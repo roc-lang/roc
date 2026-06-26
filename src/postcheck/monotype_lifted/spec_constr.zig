@@ -357,6 +357,7 @@ const PendingLet = struct {
 
 const LoopPattern = struct {
     values: []const Shape,
+    refinements: []?Shape,
 };
 
 const ActiveCallable = struct {
@@ -1048,7 +1049,7 @@ const Cloner = struct {
                 defer self.pass.allocator.free(payload_exprs);
                 const payloads = try self.pass.arena.allocator().alloc(Value, payload_exprs.len);
                 for (payload_exprs, 0..) |payload, index| {
-                    payloads[index] = try self.cloneExprValue(payload);
+                    payloads[index] = try self.cloneExprValueDemandingShape(payload);
                 }
                 return .{ .tag = .{
                     .ty = expr.ty,
@@ -1063,7 +1064,7 @@ const Cloner = struct {
                 for (source_fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
-                        .value = try self.cloneExprValue(field.value),
+                        .value = try self.cloneExprValueDemandingShape(field.value),
                     };
                 }
                 return .{ .record = .{
@@ -1076,7 +1077,7 @@ const Cloner = struct {
                 defer self.pass.allocator.free(source_items);
                 const items = try self.pass.arena.allocator().alloc(Value, source_items.len);
                 for (source_items, 0..) |item, index| {
-                    items[index] = try self.cloneExprValue(item);
+                    items[index] = try self.cloneExprValueDemandingShape(item);
                 }
                 return .{ .tuple = .{
                     .ty = expr.ty,
@@ -1084,7 +1085,7 @@ const Cloner = struct {
                 } };
             },
             .nominal => |backing| {
-                const backing_value = try self.cloneExprValue(backing);
+                const backing_value = try self.cloneExprValueDemandingShape(backing);
                 return .{ .nominal = .{
                     .ty = expr.ty,
                     .backing = try self.copyValue(backing_value),
@@ -1475,9 +1476,7 @@ const Cloner = struct {
                 var statements = std.ArrayList(Ast.StmtId).empty;
                 defer statements.deinit(self.pass.allocator);
                 for (source) |stmt| {
-                    if (try self.cloneStmt(stmt)) |cloned| {
-                        try statements.append(self.pass.allocator, cloned);
-                    }
+                    try self.cloneStmtInto(stmt, &statements);
                 }
 
                 const final_value = try self.cloneExprValue(block.final_expr);
@@ -1559,29 +1558,48 @@ const Cloner = struct {
             } } });
         }
 
-        const change_start = self.changes.items.len;
-        defer self.restore(change_start);
+        while (true) {
+            const change_start = self.changes.items.len;
+            defer self.restore(change_start);
 
-        var new_params = std.ArrayList(Ast.TypedLocal).empty;
-        defer new_params.deinit(self.pass.allocator);
+            var new_params = std.ArrayList(Ast.TypedLocal).empty;
+            defer new_params.deinit(self.pass.allocator);
 
-        var new_initials = std.ArrayList(Ast.ExprId).empty;
-        defer new_initials.deinit(self.pass.allocator);
+            var new_initials = std.ArrayList(Ast.ExprId).empty;
+            defer new_initials.deinit(self.pass.allocator);
 
-        for (params, shapes, values) |param, shape, value| {
-            const param_value = try self.valueFromShapeArgs(shape, &new_params);
-            try self.putSubst(param.local, param_value);
-            try self.appendExprsFromValue(shape, value, &new_initials);
+            for (params, shapes, values) |param, shape, value| {
+                const param_value = try self.valueFromShapeArgs(shape, &new_params);
+                try self.putSubst(param.local, param_value);
+                try self.appendExprsFromValue(shape, value, &new_initials);
+            }
+
+            const refinements = try self.pass.allocator.alloc(?Shape, shapes.len);
+            defer self.pass.allocator.free(refinements);
+            @memset(refinements, null);
+
+            try self.loop_stack.append(self.pass.allocator, .{
+                .values = shapes,
+                .refinements = refinements,
+            });
+            const body = try self.cloneExpr(loop.body);
+            _ = self.loop_stack.pop();
+
+            var refined = false;
+            for (shapes, refinements, 0..) |*shape, maybe_refinement, index| {
+                const refinement = maybe_refinement orelse continue;
+                if (shapeEql(self.pass.program, shape.*, refinement)) continue;
+                shapes[index] = refinement;
+                refined = true;
+            }
+            if (refined) continue;
+
+            return try self.addExpr(.{ .ty = ty, .data = .{ .loop_ = .{
+                .params = try self.pass.program.addTypedLocalSpan(new_params.items),
+                .initial_values = try self.pass.program.addExprSpan(new_initials.items),
+                .body = body,
+            } } });
         }
-
-        try self.loop_stack.append(self.pass.allocator, .{ .values = shapes });
-        defer _ = self.loop_stack.pop();
-
-        return try self.addExpr(.{ .ty = ty, .data = .{ .loop_ = .{
-            .params = try self.pass.program.addTypedLocalSpan(new_params.items),
-            .initial_values = try self.pass.program.addExprSpan(new_initials.items),
-            .body = try self.cloneExpr(loop.body),
-        } } });
     }
 
     fn projectableLoopShape(self: *Cloner, shape: Shape) Allocator.Error!?Shape {
@@ -1623,9 +1641,21 @@ const Cloner = struct {
                     .backing = stored,
                 } };
             },
-            .tag,
-            .callable,
-            => null,
+            .callable => |callable| blk: {
+                const captures = try self.pass.arena.allocator().alloc(Shape, callable.captures.len);
+                for (callable.captures, captures) |capture, *out| {
+                    out.* = if (shapeCanProjectFromExpr(capture))
+                        capture
+                    else
+                        .{ .any = shapeType(capture) };
+                }
+                break :blk Shape{ .callable = .{
+                    .ty = callable.ty,
+                    .fn_id = callable.fn_id,
+                    .captures = captures,
+                } };
+            },
+            .tag => null,
         };
     }
 
@@ -1639,9 +1669,7 @@ const Cloner = struct {
         var statements = std.ArrayList(Ast.StmtId).empty;
         defer statements.deinit(self.pass.allocator);
         for (source) |stmt| {
-            if (try self.cloneStmt(stmt)) |cloned| {
-                try statements.append(self.pass.allocator, cloned);
-            }
+            try self.cloneStmtInto(stmt, &statements);
         }
 
         return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
@@ -1660,9 +1688,7 @@ const Cloner = struct {
         var statements = std.ArrayList(Ast.StmtId).empty;
         defer statements.deinit(self.pass.allocator);
         for (source) |stmt| {
-            if (try self.cloneStmt(stmt)) |cloned| {
-                try statements.append(self.pass.allocator, cloned);
-            }
+            try self.cloneStmtInto(stmt, &statements);
         }
 
         const final_value = try self.cloneExprValue(block.final_expr);
@@ -1691,11 +1717,15 @@ const Cloner = struct {
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
 
-        for (loop.values, source_values) |shape, value_expr| {
-            const value = try self.cloneExprValue(value_expr);
+        for (loop.values, source_values, 0..) |shape, value_expr, index| {
+            const value = try self.cloneExprValueDemandingShape(value_expr);
             if (!shapeMatchesValue(self.pass.program, shape, value)) {
                 if (!try self.appendFieldReadExprsFromValue(shape, value, &new_values)) {
-                    Common.invariant("continue value did not match specialized loop state");
+                    const refined = try self.refineLoopShapeForValue(shape, value);
+                    try self.noteLoopRefinement(loop, index, refined);
+                    if (!try self.appendFieldReadExprsFromValue(refined, value, &new_values)) {
+                        Common.invariant("refined continue value did not match specialized loop state");
+                    }
                 }
                 continue;
             }
@@ -1705,6 +1735,183 @@ const Cloner = struct {
         return .{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(new_values.items),
         } };
+    }
+
+    fn noteLoopRefinement(self: *Cloner, loop: LoopPattern, index: usize, refinement: Shape) Allocator.Error!void {
+        if (index >= loop.refinements.len) Common.invariant("loop refinement index exceeded active loop state");
+        loop.refinements[index] = if (loop.refinements[index]) |existing|
+            try self.commonLoopShape(existing, refinement)
+        else
+            refinement;
+    }
+
+    fn refineLoopShapeForValue(self: *Cloner, shape: Shape, value: Value) Common.LowerError!Shape {
+        if (shapeMatchesValue(self.pass.program, shape, value)) return shape;
+
+        return switch (shape) {
+            .any => shape,
+            .record => |record| blk: {
+                const fields = try self.pass.arena.allocator().alloc(FieldShape, record.fields.len);
+                if (recordFromValue(value)) |record_value| {
+                    if (record.fields.len != record_value.fields.len) Common.invariant("record loop state changed field count");
+                    for (record.fields, record_value.fields, 0..) |field, field_value, index| {
+                        if (field.name != field_value.name) Common.invariant("record loop state changed field order");
+                        fields[index] = .{
+                            .name = field.name,
+                            .shape = try self.refineLoopShapeForValue(field.shape, field_value.value),
+                        };
+                    }
+                    break :blk Shape{ .record = .{ .ty = record.ty, .fields = fields } };
+                }
+
+                const receiver = projectableExprFromValue(value) orelse break :blk Shape{ .any = record.ty };
+                if (!canReadFieldsFromExpr(self.pass.program, receiver)) break :blk Shape{ .any = record.ty };
+                const actual_shape = switch (value) {
+                    .expr_with_known_shape => |known_shape_expr| known_shape_expr.shape,
+                    else => null,
+                };
+                for (record.fields, 0..) |field, index| {
+                    const actual_field = if (actual_shape) |actual|
+                        fieldShapeFromShape(actual, field.name)
+                    else
+                        null;
+                    const field_expr = try self.addExpr(.{ .ty = shapeType(field.shape), .data = .{ .field_access = .{
+                        .receiver = receiver,
+                        .field = field.name,
+                    } } });
+                    const field_value = if (actual_field) |actual|
+                        valueFromProjectedExpr(field_expr, actual)
+                    else
+                        Value{ .expr = field_expr };
+                    fields[index] = .{
+                        .name = field.name,
+                        .shape = try self.refineLoopShapeForValue(field.shape, field_value),
+                    };
+                }
+                break :blk Shape{ .record = .{ .ty = record.ty, .fields = fields } };
+            },
+            .tuple => |tuple| blk: {
+                const items = try self.pass.arena.allocator().alloc(Shape, tuple.items.len);
+                if (tupleFromValue(value)) |tuple_value| {
+                    if (tuple.items.len != tuple_value.items.len) Common.invariant("tuple loop state changed item count");
+                    for (tuple.items, tuple_value.items, 0..) |item, item_value, index| {
+                        items[index] = try self.refineLoopShapeForValue(item, item_value);
+                    }
+                    break :blk Shape{ .tuple = .{ .ty = tuple.ty, .items = items } };
+                }
+
+                const receiver = projectableExprFromValue(value) orelse break :blk Shape{ .any = tuple.ty };
+                if (!canReadFieldsFromExpr(self.pass.program, receiver)) break :blk Shape{ .any = tuple.ty };
+                const actual_shape = switch (value) {
+                    .expr_with_known_shape => |known_shape_expr| known_shape_expr.shape,
+                    else => null,
+                };
+                for (tuple.items, 0..) |item, index| {
+                    const actual_item = if (actual_shape) |actual|
+                        itemShapeFromShape(actual, @as(u32, @intCast(index)))
+                    else
+                        null;
+                    const item_expr = try self.addExpr(.{ .ty = shapeType(item), .data = .{ .tuple_access = .{
+                        .tuple = receiver,
+                        .elem_index = @as(u32, @intCast(index)),
+                    } } });
+                    const item_value = if (actual_item) |actual|
+                        valueFromProjectedExpr(item_expr, actual)
+                    else
+                        Value{ .expr = item_expr };
+                    items[index] = try self.refineLoopShapeForValue(item, item_value);
+                }
+                break :blk Shape{ .tuple = .{ .ty = tuple.ty, .items = items } };
+            },
+            .nominal => |nominal| blk: {
+                const value_nominal = switch (value) {
+                    .nominal => |nominal_value| nominal_value,
+                    else => break :blk Shape{ .any = nominal.ty },
+                };
+                const backing = try self.pass.arena.allocator().create(Shape);
+                backing.* = try self.refineLoopShapeForValue(nominal.backing.*, value_nominal.backing.*);
+                break :blk Shape{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+            },
+            .tag => |tag| if (tagFromValue(value) != null) shape else Shape{ .any = tag.ty },
+            .callable => |callable| blk: {
+                const callable_value = switch (value) {
+                    .callable => |callable_value| callable_value,
+                    else => break :blk Shape{ .any = callable.ty },
+                };
+                if (!sameType(self.pass.program, callable.ty, callable_value.ty) or
+                    !callableTargetMatches(self.pass.program, callable.fn_id, callable_value.fn_id) or
+                    callable.captures.len != callable_value.captures.len)
+                {
+                    break :blk Shape{ .any = callable.ty };
+                }
+                const captures = try self.pass.arena.allocator().alloc(Shape, callable.captures.len);
+                for (callable.captures, callable_value.captures, 0..) |capture, capture_value, index| {
+                    captures[index] = try self.refineLoopShapeForValue(capture, capture_value);
+                }
+                break :blk Shape{ .callable = .{
+                    .ty = callable.ty,
+                    .fn_id = callable.fn_id,
+                    .captures = captures,
+                } };
+            },
+        };
+    }
+
+    fn commonLoopShape(self: *Cloner, lhs: Shape, rhs: Shape) Allocator.Error!Shape {
+        if (shapeEql(self.pass.program, lhs, rhs)) return lhs;
+        const ty = shapeType(lhs);
+        if (!sameType(self.pass.program, ty, shapeType(rhs))) Common.invariant("loop state refinement changed type");
+        if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return .{ .any = ty };
+
+        return switch (lhs) {
+            .any => .{ .any = ty },
+            .record => |lhs_record| blk: {
+                const rhs_record = rhs.record;
+                if (lhs_record.fields.len != rhs_record.fields.len) break :blk Shape{ .any = ty };
+                const fields = try self.pass.arena.allocator().alloc(FieldShape, lhs_record.fields.len);
+                for (lhs_record.fields, rhs_record.fields, 0..) |lhs_field, rhs_field, index| {
+                    if (lhs_field.name != rhs_field.name) break :blk Shape{ .any = ty };
+                    fields[index] = .{
+                        .name = lhs_field.name,
+                        .shape = try self.commonLoopShape(lhs_field.shape, rhs_field.shape),
+                    };
+                }
+                break :blk Shape{ .record = .{ .ty = lhs_record.ty, .fields = fields } };
+            },
+            .tuple => |lhs_tuple| blk: {
+                const rhs_tuple = rhs.tuple;
+                if (lhs_tuple.items.len != rhs_tuple.items.len) break :blk Shape{ .any = ty };
+                const items = try self.pass.arena.allocator().alloc(Shape, lhs_tuple.items.len);
+                for (lhs_tuple.items, rhs_tuple.items, 0..) |lhs_item, rhs_item, index| {
+                    items[index] = try self.commonLoopShape(lhs_item, rhs_item);
+                }
+                break :blk Shape{ .tuple = .{ .ty = lhs_tuple.ty, .items = items } };
+            },
+            .nominal => |lhs_nominal| blk: {
+                const rhs_nominal = rhs.nominal;
+                const backing = try self.pass.arena.allocator().create(Shape);
+                backing.* = try self.commonLoopShape(lhs_nominal.backing.*, rhs_nominal.backing.*);
+                break :blk Shape{ .nominal = .{ .ty = lhs_nominal.ty, .backing = backing } };
+            },
+            .callable => |lhs_callable| blk: {
+                const rhs_callable = rhs.callable;
+                if (!callableTargetMatches(self.pass.program, lhs_callable.fn_id, rhs_callable.fn_id) or
+                    lhs_callable.captures.len != rhs_callable.captures.len)
+                {
+                    break :blk Shape{ .any = ty };
+                }
+                const captures = try self.pass.arena.allocator().alloc(Shape, lhs_callable.captures.len);
+                for (lhs_callable.captures, rhs_callable.captures, 0..) |lhs_capture, rhs_capture, index| {
+                    captures[index] = try self.commonLoopShape(lhs_capture, rhs_capture);
+                }
+                break :blk Shape{ .callable = .{
+                    .ty = lhs_callable.ty,
+                    .fn_id = lhs_callable.fn_id,
+                    .captures = captures,
+                } };
+            },
+            .tag => .{ .any = ty },
+        };
     }
 
     fn valuesToExprSpan(self: *Cloner, values: []const Value) Common.LowerError!Ast.Span(Ast.ExprId) {
@@ -2831,7 +3038,7 @@ const Cloner = struct {
         };
     }
 
-    fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!?Ast.StmtId {
+    fn cloneStmtInto(self: *Cloner, stmt_id: Ast.StmtId, out: *std.ArrayList(Ast.StmtId)) Common.LowerError!void {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -2844,9 +3051,21 @@ const Cloner = struct {
             .uninitialized => |pat| .{ .uninitialized = try self.clonePat(pat) },
             .let_ => |let_| blk: {
                 const value = try self.cloneExprValue(let_.value);
+                if (!let_.recursive) {
+                    var pending_lets = std.ArrayList(PendingLet).empty;
+                    defer pending_lets.deinit(self.pass.allocator);
+
+                    const reusable = try self.makeReusableForMatch(value, &pending_lets);
+                    const bind_change_start = self.changes.items.len;
+                    if (try self.bindPatToReusableValue(let_.pat, reusable)) {
+                        try self.appendPendingLetStmts(pending_lets.items, out);
+                        return;
+                    }
+                    self.restore(bind_change_start);
+                }
                 const value_expr = try self.materialize(value);
                 if (!let_.recursive and try self.bindPatToReusableValue(let_.pat, value)) {
-                    return null;
+                    return;
                 }
                 _ = try self.bindPatToMaterializedShape(let_.pat, value);
                 break :blk .{ .let_ = .{
@@ -2862,7 +3081,26 @@ const Cloner = struct {
             .return_ => |expr| .{ .return_ = try self.cloneExpr(expr) },
             .crash => |msg| .{ .crash = msg },
         };
-        return try self.addStmt(cloned);
+        try out.append(self.pass.allocator, try self.addStmt(cloned));
+    }
+
+    fn appendPendingLetStmts(
+        self: *Cloner,
+        pending_lets: []const PendingLet,
+        out: *std.ArrayList(Ast.StmtId),
+    ) Common.LowerError!void {
+        for (pending_lets) |pending| {
+            const pat = try self.pass.program.addPat(.{
+                .ty = pending.ty,
+                .data = .{ .bind = pending.local },
+            });
+            try out.append(self.pass.allocator, try self.addStmt(.{ .let_ = .{
+                .pat = pat,
+                .value = pending.value,
+                .recursive = false,
+                .comptime_site = null,
+            } }));
+        }
     }
 
     fn cloneExprSpan(self: *Cloner, span: Ast.Span(Ast.ExprId)) Common.LowerError!Ast.Span(Ast.ExprId) {
