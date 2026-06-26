@@ -13866,6 +13866,7 @@ const BodyContext = struct {
     ) Allocator.Error!?Ast.IterPlanId {
         if (try self.listIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.singleIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.rangeIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.appendIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.concatIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.mapIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
@@ -13991,6 +13992,94 @@ const BodyContext = struct {
                 .before = before_plan,
                 .after = after_expr,
                 .phase = phase_expr,
+            } },
+        });
+    }
+
+    fn rangeIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        switch (expr.data) {
+            .call => |call| {
+                const direct_target = call.direct_target orelse return null;
+                const inclusivity: RangeInclusivity = if (self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "exclusive_range"))
+                    .exclusive
+                else if (self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "inclusive_range"))
+                    .inclusive
+                else
+                    return null;
+                if (call.args.len != 2) {
+                    Common.invariant("checked direct Iter range call had an unexpected argument shape");
+                }
+                const item_ty = self.iterItemType(iterator_ty);
+                const start = try self.lowerExprAtType(call.args[0], item_ty);
+                const end = try self.lowerExprAtType(call.args[1], item_ty);
+                return try self.rangeIteratorPlanForPrivateLocalBounds(start, end, item_ty, inclusivity, lowered);
+            },
+            else => {},
+        }
+
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        const inclusivity: RangeInclusivity = if (self.methodNameIs(plan.method, "exclusive_range"))
+            .exclusive
+        else if (self.methodNameIs(plan.method, "inclusive_range"))
+            .inclusive
+        else
+            return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 2) {
+            Common.invariant("checked Iter range dispatch plan had an unexpected argument shape");
+        }
+
+        const item_ty = self.iterItemType(iterator_ty);
+        const start = try self.lowerDispatchOperandAtType(plan_args[0], item_ty);
+        const end = try self.lowerDispatchOperandAtType(plan_args[1], item_ty);
+        return try self.rangeIteratorPlanForPrivateLocalBounds(start, end, item_ty, inclusivity, lowered);
+    }
+
+    fn rangeIteratorPlanForPrivateLocalBounds(
+        self: *BodyContext,
+        start_value: Ast.ExprId,
+        end_value: Ast.ExprId,
+        item_ty: Type.TypeId,
+        inclusivity: RangeInclusivity,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!Ast.IterPlanId {
+        const start_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const start_expr = try self.builder.localExpr(start_local, item_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(start_local, item_ty),
+            .value = start_value,
+        } }));
+
+        const end_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const end_expr = try self.builder.localExpr(end_local, item_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(end_local, item_ty),
+            .value = end_value,
+        } }));
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = item_ty,
+            .length = .unknown,
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .materialized = null,
+            .data = .{ .range = .{
+                .current = start_expr,
+                .end = end_expr,
+                .step = try self.builder.intLiteralExpr(1, item_ty),
+                .inclusivity = inclusivity,
             } },
         });
     }

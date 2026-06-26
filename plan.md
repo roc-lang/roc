@@ -596,6 +596,8 @@ Tasks:
     later use is the exact iterable in a `for`.
   - [x] Direct `Single` private state can cross an immutable local when every
     later use is the exact iterable in a `for`.
+  - [x] Direct finite `Range` private state can cross an immutable local when
+    every later use is the exact iterable in a `for`.
   - [x] Direct `ListIter` private state can feed a local `.append(...)` producer
     whose result is consumed privately.
   - [x] Direct `Concat` of list-backed/list-append-backed plans can cross an
@@ -636,6 +638,8 @@ Tasks:
   - [x] Direct local `List.iter` avoids public step values when all uses are
     private `for` consumers.
   - [x] Direct local `Iter.single` avoids public step values when all uses are
+    private `for` consumers.
+  - [x] Direct local finite ranges avoid public step values when all uses are
     private `for` consumers.
   - [x] Direct local `List.iter` plus local `.append(...)` avoids public step
     values when the append result is consumed privately.

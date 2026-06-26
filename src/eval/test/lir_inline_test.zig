@@ -1627,6 +1627,56 @@ test "optimized for over local Iter.single uses private emitted cursor" {
     try std.testing.expectEqual(@as(usize, 0), shape.list_get_unsafe_count);
 }
 
+test "optimized for over local range uses private numeric cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    iter = tap(1.I64)..<tap(4.I64)
+        \\    dbg 5.I64
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "1", "4", "5", "6" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = {
+        \\    iter = 1.I64..<4.I64
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_get_unsafe_count);
+}
+
 test "optimized for over local list.iter append keeps producer-site evaluation order" {
     const source =
         \\module [main]
