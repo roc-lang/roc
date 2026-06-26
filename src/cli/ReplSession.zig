@@ -1086,23 +1086,23 @@ test "Repl - range_to" {
     try expectInterpreter("Iter.fold(1..=3, [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
 }
 
-test "Repl - list_sort_with lengths" {
-    try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))", "3");
-    try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))", "5");
+test "Repl - list_sort lengths" {
+    try expectAllNative("List.len(List.sort([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))", "3");
+    try expectAllNative("List.len(List.sort([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))", "5");
 }
 
-test "Repl - list_sort_with empty" {
+test "Repl - list_sort empty" {
     try expectAllNative(
         \\{
         \\    xs : List(I64)
         \\    xs = []
-        \\    List.len(List.sort_with(xs, |a, b| if a < b LT else if a > b GT else EQ))
+        \\    List.len(List.sort(xs, |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
         \\}
     , "0");
 }
 
-test "Repl - list_sort_with single" {
-    try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))", "1");
+test "Repl - list_sort single" {
+    try expectAllNative("List.len(List.sort([42], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))", "1");
 }
 
 test "Repl - list fold with concat" {
