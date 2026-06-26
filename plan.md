@@ -611,10 +611,16 @@ Tasks:
     whose result is consumed privately.
   - [x] Direct `Concat` of list-backed/list-append-backed plans can cross an
     immutable local and is consumed with private phase state.
+  - [x] Direct `ListIter` private state can feed a local `.concat(...)`
+    producer whose result is consumed privately.
   - [x] Direct `Map(ListIter | Append(ListIter, item...), fn)` plans can cross
     an immutable local and are consumed with private child state.
+  - [x] Direct `ListIter` private state can feed a local `.map(...)` producer
+    whose result is consumed privately.
   - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
     can cross an immutable local and are consumed with private child state.
+  - [x] Direct `ListIter` private state can feed local `.keep_if(...)` and
+    `.drop_if(...)` producers whose results are consumed privately.
   - [x] Direct `Prepended(item, ListIter | Append(ListIter, item...))` plans can
     cross an immutable local and are consumed with private phase state.
   - [x] Direct `Custom` plans can cross an immutable local and are consumed
@@ -658,10 +664,16 @@ Tasks:
     values when the append result is consumed privately.
   - [x] Direct local `Concat` of list-backed/list-append-backed plans avoids
     public step values when consumed by a private `for`.
+  - [x] Direct local `ListIter` feeding local `Concat` avoids public step values
+    when consumed by a private `for`.
   - [x] Direct local `Map(ListIter | Append(ListIter, item...), fn)` avoids
     public step values when consumed by a private `for`.
+  - [x] Direct local `ListIter` feeding local `Map` avoids public step values
+    when consumed by a private `for`.
   - [x] Direct local `Filter(ListIter | Append(ListIter, item...), predicate)`
     avoids public step values when consumed by a private `for`.
+  - [x] Direct local `ListIter` feeding local `Filter` avoids public step
+    values when consumed by a private `for`.
   - [x] Direct local `Prepended(item, ListIter | Append(ListIter, item...))`
     avoids public step values when consumed by a private `for`.
   - [x] Direct local `Custom` avoids public iterator materialization when

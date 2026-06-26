@@ -1893,6 +1893,151 @@ test "optimized for over local drop_if uses child plan cursor" {
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
+test "optimized for over local concat from local list.iter uses private phase cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    base = [tap(1.I64), tap(2.I64)].iter()
+        \\    iter = base.concat([tap(3.I64)].iter().append(tap(4.I64)))
+        \\    dbg 5.I64
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "1", "2", "3", "4", "5", "10" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 2), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 2), shape.list_get_unsafe_count);
+}
+
+test "optimized for over local map from local list.iter uses child plan cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    base = [tap(1.I64), tap(2.I64)].iter()
+        \\    iter = base.map(|n| tap(n + 10))
+        \\    dbg 3.I64
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "1", "2", "3", "11", "12", "23" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
+test "optimized for over local keep_if from local list.iter uses child plan cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    base = [1.I64, 2.I64, 3.I64].iter()
+        \\    iter = base.keep_if(|n| tap(n + 10) > 11)
+        \\    dbg 4.I64
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "4", "11", "12", "13", "5" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
+test "optimized for over local drop_if from local list.iter uses child plan cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    base = [1.I64, 2.I64, 3.I64, 4.I64].iter()
+        \\    iter = base.drop_if(|n| n > 2)
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"3"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
 test "optimized for over local Iter.custom uses private custom state" {
     const source =
         \\module [main]

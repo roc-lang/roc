@@ -9715,6 +9715,16 @@ const BodyContext = struct {
         };
     }
 
+    fn dispatchCheckedOperandType(
+        self: *BodyContext,
+        operand: static_dispatch.StaticDispatchOperand,
+    ) Allocator.Error!Type.TypeId {
+        return switch (operand) {
+            .checked_expr => |expr| try self.lowerType(self.view.bodies.expr(expr).ty),
+            else => Common.invariant("iterator adapter function operand was not a checked expression"),
+        };
+    }
+
     fn lowerGeneratedInterpolationIter(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -14221,17 +14231,7 @@ const BodyContext = struct {
         }
         const predicate_index: usize = if (receiver_index == 0) 1 else 0;
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
-        defer call_ctx.deinit();
-        self.inheritLoweringEntryWrapperRoot(&call_ctx);
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-
-        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, expr.ty, plan_args, iterator_ty);
-        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked Iter filter dispatch plan had a non-function type");
-        const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
-        defer self.allocator.free(plan_arg_tys);
-        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+        const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
 
         const original_statement_len = lowered.len;
         const source_plan = (try self.iteratorPlanForPrivateProducerOperand(plan_args[receiver_index], dispatcher_ty, lowered)) orelse {
@@ -14240,7 +14240,7 @@ const BodyContext = struct {
         };
         const source = self.builder.program.iterPlan(source_plan);
 
-        const predicate_fn_ty = plan_arg_tys[predicate_index];
+        const predicate_fn_ty = try self.dispatchCheckedOperandType(plan_args[predicate_index]);
         const predicate_fn_value = try self.lowerDispatchOperandAtType(plan_args[predicate_index], predicate_fn_ty);
         const predicate_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), predicate_fn_ty);
         const predicate_fn_expr = try self.builder.localExpr(predicate_fn_local, predicate_fn_ty);
@@ -14293,17 +14293,7 @@ const BodyContext = struct {
         }
         const mapping_index: usize = if (receiver_index == 0) 1 else 0;
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
-        defer call_ctx.deinit();
-        self.inheritLoweringEntryWrapperRoot(&call_ctx);
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-
-        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, expr.ty, plan_args, iterator_ty);
-        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked Iter.map dispatch plan had a non-function type");
-        const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
-        defer self.allocator.free(plan_arg_tys);
-        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+        const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
 
         const original_statement_len = lowered.len;
         const source_plan = (try self.iteratorPlanForPrivateProducerOperand(plan_args[receiver_index], dispatcher_ty, lowered)) orelse {
@@ -14312,7 +14302,7 @@ const BodyContext = struct {
         };
         const source = self.builder.program.iterPlan(source_plan);
 
-        const mapping_fn_ty = plan_arg_tys[mapping_index];
+        const mapping_fn_ty = try self.builder.oneArgFnType(source.item_ty, self.iterItemType(iterator_ty));
         const mapping_fn_value = try self.lowerDispatchOperandAtType(plan_args[mapping_index], mapping_fn_ty);
         const mapping_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), mapping_fn_ty);
         const mapping_fn_expr = try self.builder.localExpr(mapping_fn_local, mapping_fn_ty);
@@ -14823,7 +14813,11 @@ const BodyContext = struct {
         const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
         const method_is_private_receiver_producer =
             self.methodNameIs(plan.method, "append") or
-            self.methodNameIs(plan.method, "prepended");
+            self.methodNameIs(plan.method, "prepended") or
+            self.methodNameIs(plan.method, "concat") or
+            self.methodNameIs(plan.method, "map") or
+            self.methodNameIs(plan.method, "keep_if") or
+            self.methodNameIs(plan.method, "drop_if");
         if (!method_is_private_receiver_producer) return null;
         switch (plan.result_mode) {
             .value => {},
