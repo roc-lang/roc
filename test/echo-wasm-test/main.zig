@@ -37,7 +37,7 @@ fn hostJsStderr(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const byt
     capture_ctx.stderr.appendSlice(capture_ctx.gpa, mem[ptr .. ptr + len]) catch return;
 }
 
-fn invokeAlloc(instance: *bytebox.ModuleInstance, handle: bytebox.FunctionHandle, size: u32) Allocator.Error!u32 {
+fn invokeAlloc(instance: *bytebox.ModuleInstance, handle: bytebox.FunctionHandle, size: u32) anyerror!u32 {
     var params = [_]bytebox.Val{.{ .I32 = @intCast(size) }};
     var returns = [_]bytebox.Val{.{ .I32 = 0 }};
     try instance.invoke(handle, &params, &returns, .{});
@@ -46,7 +46,7 @@ fn invokeAlloc(instance: *bytebox.ModuleInstance, handle: bytebox.FunctionHandle
     return result;
 }
 
-fn writeBytesToWasm(instance: *bytebox.ModuleInstance, alloc_handle: bytebox.FunctionHandle, data: []const u8) Allocator.Error!struct { ptr: u32, len: u32 } {
+fn writeBytesToWasm(instance: *bytebox.ModuleInstance, alloc_handle: bytebox.FunctionHandle, data: []const u8) anyerror!struct { ptr: u32, len: u32 } {
     const ptr = try invokeAlloc(instance, alloc_handle, @intCast(data.len));
     const mem = memory_instance.buffer();
     if (@as(usize, ptr) + data.len > mem.len) return error.WasmBufferOutOfBounds;
@@ -54,8 +54,10 @@ fn writeBytesToWasm(instance: *bytebox.ModuleInstance, alloc_handle: bytebox.Fun
     return .{ .ptr = ptr, .len = @intCast(data.len) };
 }
 
-pub fn main() Allocator.Error!void {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) anyerror!void {
+    const io = init.io;
+
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
@@ -73,7 +75,7 @@ pub fn main() Allocator.Error!void {
 
     // Locate echo.wasm relative to repo root (cwd when run via `zig build`).
     const wasm_path = "zig-out/lib/echo.wasm";
-    const wasm_bytes = std.fs.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited) catch |err| {
         std.debug.print("FAIL: could not read {s}: {s}\n", .{ wasm_path, @errorName(err) });
         std.debug.print("(Did you run `zig build build-playground` first?)\n", .{});
         std.process.exit(2);

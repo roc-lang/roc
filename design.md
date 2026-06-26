@@ -1751,6 +1751,22 @@ attaches an `is_eq` constraint to the pattern's type so this lowering is
 total. Literal patterns on builtin types keep their direct literal-pattern
 encoding.
 
+### Constructing Nominal Values
+
+Nominal construction is expression-directed, not a unification side effect.
+Explicit construction syntax — `Type.(value)`, `Type.(a, b)`, `Type.{ field }`,
+`Type.Tag(payload)` — canonicalizes to a single `e_nominal` (or
+`e_nominal_external`) expression whose `backing_type` records the surface form
+(`value`, `tuple`, `record`, `tag`). Checking instantiates the nominal
+declaration, unifies the user-written backing expression against the
+declaration's backing variable, and gives the whole expression the nominal type.
+The backing variable is read **only** during this unification; nominal identity
+is defined by origin, name, and arguments, and two nominals of different identity
+never unify. A value already typed as a different nominal or primitive therefore
+does not silently lift into a nominal — the implicit path is reserved for
+literals, which convert through the `from_numeral` / `from_quote` mechanism above
+(walking transparent newtype chains to reach the builtin backing).
+
 ### String Interpolation
 
 An interpolated string literal is its own CIR expression. It is not

@@ -6829,6 +6829,12 @@ fn selectBuildPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             try ctx.io.stderr().print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
@@ -6865,6 +6871,12 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
@@ -7498,6 +7510,7 @@ fn rocBuildWasmSurgical(
     defer codegen.deinit();
     loaded_module = false;
     codegen.configureBuiltinRelocs(builtin_symbols);
+    codegen.configureStaticDataAddressTracking();
 
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
@@ -11327,6 +11340,11 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
+        .opt = switch (args.opt) {
+            .dev => .dev,
+            .interpreter => .interpreter,
+            .size, .speed => unreachable,
+        },
     }, temp_dir, ctx.io.std_io);
 }
 

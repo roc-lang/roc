@@ -2901,6 +2901,11 @@ pub const Expr = union(enum) {
         backing: Expr.Idx,
         region: TokenizedRegion,
     },
+    nominal_apply: struct {
+        mapper: Expr.Idx,
+        args: Expr.Span,
+        region: TokenizedRegion,
+    },
     ellipsis: struct {
         region: TokenizedRegion,
     },
@@ -2980,6 +2985,7 @@ pub const Expr = union(enum) {
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .nominal_record => |e| e.region,
+            .nominal_apply => |e| e.region,
             .ellipsis => |e| e.region,
             .@"break" => |e| e.region,
             .@"return" => |e| e.region,
@@ -3330,6 +3336,24 @@ pub const Expr = union(enum) {
                 try ast.store.getExpr(a.backing).pushToSExprTree(gpa, env, ast, tree);
                 const backing_attrs = tree.beginNode();
                 try tree.endNode(backing_wrapper, backing_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .nominal_apply => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-nominal-apply");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                const mapper_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("mapper");
+                try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
+                const mapper_attrs = tree.beginNode();
+                try tree.endNode(mapper_wrapper, mapper_attrs);
+
+                for (ast.store.exprSlice(a.args)) |arg_idx| {
+                    try ast.store.getExpr(arg_idx).pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 try tree.endNode(begin, attrs);
             },
