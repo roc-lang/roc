@@ -4,6 +4,7 @@
 //! - Platform headers have a targets section (required)
 //! - Files declared in the targets section exist in the filesystem
 //! - Files in the targets directory match what's declared in the targets section
+//! - `targets: {}` is accepted for hostless platforms consumed by tools such as `roc glue`
 //!
 //! This module is shared between bundle and unbundle operations.
 
@@ -63,7 +64,8 @@ pub const ValidationResult = union(enum) {
         file_path: []const u8,
     },
 
-    /// Targets section exists but has no target entries
+    /// Targets section exists but has no target entries, so `roc build` and the
+    /// default `roc` command cannot produce a host-linked output.
     empty_targets: struct {
         platform_path: []const u8,
     },
@@ -323,11 +325,13 @@ pub fn createValidationReport(
         },
 
         .empty_targets => |info| {
-            const headline = try std.fmt.allocPrint(allocator, "The targets section in {s} doesn't declare any targets.", .{info.platform_path});
+            const headline = try std.fmt.allocPrint(allocator, "The targets section in {s} is empty, so this platform does not declare any compiler-built targets.", .{info.platform_path});
             defer allocator.free(headline);
             var report = try Report.init(allocator, "Empty Targets Section", headline, .runtime_error);
 
-            try report.document.addText("Add at least one target to the exe, static_lib, or shared_lib section.");
+            try report.document.addText("An empty targets section is only valid for tools that supply their own host, such as `roc glue`.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add target entries before running `roc build` or `roc` directly with this platform.");
             try report.document.addLineBreak();
 
             return report;
@@ -593,7 +597,7 @@ test "createValidationReport generates correct report for extra_file" {
     try std.testing.expectEqual(Severity.warning, report.severity);
 }
 
-test "createValidationReport generates correct report for empty_targets" {
+test "createValidationReport generates correct report for hostless platforms" {
     const allocator = std.testing.allocator;
 
     var report = try createValidationReport(allocator, .{
@@ -725,6 +729,33 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
         \\        arm64mac: { inputs: [app] },
         \\        x64mac: { inputs: ["libhost.a", app], output: Shared },
         \\    }
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+
+    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
+
+    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
+}
+
+test "validatePlatformHasTargets accepts hostless platform with empty targets section" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\platform ""
+        \\    requires { make_glue : List({}) -> Try(List({}), Str) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_make_glue": make_glue_for_host }
+        \\    targets: {}
         \\
     ;
 

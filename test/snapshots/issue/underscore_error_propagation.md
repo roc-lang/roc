@@ -22,7 +22,6 @@ goodValue = "test"
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
-TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
 
 ┌──────────────────────────┐
@@ -49,19 +48,6 @@ TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
     The type was determined to be:
 
         BadDerived
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  goodValue = "test"                                                        │
- │              ‾‾‾‾‾‾                                                        │
- └───────────────────────────────────── underscore_error_propagation.md:13:13 ┘
-
-    The type was determined to be:
-
-        GoodDerived
 
 # TOKENS
 ~~~zig

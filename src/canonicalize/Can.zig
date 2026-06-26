@@ -9857,6 +9857,38 @@ fn runExprKernel(
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = nr.backing, .target = .scratch });
                 },
+                .nominal_apply => |na| {
+                    const region = self.parse_ir.tokenizedRegionToRegion(na.region);
+                    const args_slice = self.parse_ir.store.exprSlice(na.args);
+
+                    if (args_slice.len == 0) {
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                            .region = region,
+                        } });
+                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                        continue :expr_kernel_loop .dispatch;
+                    }
+
+                    // A single argument backs the nominal value directly; two or more
+                    // arguments are wrapped in a tuple backing expression. We canonicalize
+                    // the backing child through the same stack machinery as nominal_record.
+                    const backing_idx: AST.Expr.Idx = if (args_slice.len == 1)
+                        args_slice[0]
+                    else
+                        try self.parse_ir.store.addExpr(AST.Expr{ .tuple = .{
+                            .items = na.args,
+                            .region = na.region,
+                        } });
+                    const backing_type: CIR.Expr.NominalBackingType = if (args_slice.len == 1) .value else .tuple;
+
+                    try stacks.pushFinishNominalApply(frame_allocator, .{
+                        .region = region,
+                        .mapper = na.mapper,
+                        .backing_type = backing_type,
+                        .captures_top = self.scratch_captures.top(),
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = backing_idx, .target = .scratch });
+                },
                 .record_builder => |rb| {
                     const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
                     const fields_slice = self.parse_ir.store.recordFieldSlice(rb.fields);
@@ -12103,7 +12135,26 @@ fn runExprKernel(
                 break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
             };
 
-            const result_expr = try self.finishNominalRecordExpr(state.mapper, backing_expr.idx, state.region, backing_expr.free_vars);
+            const result_expr = try self.finishNominalConstructionExpr(state.mapper, backing_expr.idx, .record, state.region, backing_expr.free_vars);
+
+            child_slots.shrinkRetainingCapacity(result_start);
+            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, result_expr);
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_nominal_apply => {
+            const state = stacks.takeFinishNominalApply();
+            defer self.scratch_captures.clearFrom(state.captures_top);
+
+            const result_start = child_slots.items.len - 1;
+            const backing_expr = child_slots.items[result_start].expr orelse blk: {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = state.region,
+                } });
+                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            };
+
+            const result_expr = try self.finishNominalConstructionExpr(state.mapper, backing_expr.idx, state.backing_type, state.region, backing_expr.free_vars);
 
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, result_expr);
@@ -13556,16 +13607,17 @@ fn lookupExposedTargetByText(
     return null;
 }
 
-fn finishNominalRecordExpr(
+fn finishNominalConstructionExpr(
     self: *Self,
     mapper_idx: AST.Expr.Idx,
     backing_expr_idx: Expr.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
     region: Region,
     free_vars: DataSpan,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     const mapper = self.parse_ir.store.getExpr(mapper_idx);
     return switch (mapper) {
-        .tag => |tag| try self.finishNominalRecordForType(tag, backing_expr_idx, region, free_vars),
+        .tag => |tag| try self.finishNominalConstructionForType(tag, backing_expr_idx, backing_type, region, free_vars),
         else => CanonicalizedExpr{
             .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                 .region = region,
@@ -13575,10 +13627,11 @@ fn finishNominalRecordExpr(
     };
 }
 
-fn finishNominalRecordForType(
+fn finishNominalConstructionForType(
     self: *Self,
     type_expr: AST.TagExpr,
     backing_expr_idx: Expr.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
     region: Region,
     free_vars: DataSpan,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
@@ -13601,7 +13654,7 @@ fn finishNominalRecordForType(
                         .e_nominal = .{
                             .nominal_type_decl = nominal_type_decl_stmt_idx,
                             .backing_expr = backing_expr_idx,
-                            .backing_type = .record,
+                            .backing_type = backing_type,
                         },
                     }, region);
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
@@ -13671,7 +13724,7 @@ fn finishNominalRecordForType(
                     .module_idx = import_idx,
                     .target_node_idx = target_node_idx,
                     .backing_expr = backing_expr_idx,
-                    .backing_type = .record,
+                    .backing_type = backing_type,
                 },
             }, region);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
@@ -13718,7 +13771,7 @@ fn finishNominalRecordForType(
                     .e_nominal = .{
                         .nominal_type_decl = nominal_type_decl_stmt_idx,
                         .backing_expr = backing_expr_idx,
-                        .backing_type = .record,
+                        .backing_type = backing_type,
                     },
                 }, region);
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
@@ -13790,7 +13843,7 @@ fn finishNominalRecordForType(
             .module_idx = import_idx,
             .target_node_idx = target_node_idx,
             .backing_expr = backing_expr_idx,
-            .backing_type = .record,
+            .backing_type = backing_type,
         },
     }, region);
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars };
@@ -15001,6 +15054,7 @@ const ExprKernelLabel = enum {
     finish_if_then_else,
     finish_if_without_else,
     finish_nominal_record,
+    finish_nominal_apply,
     finish_record_builder,
     for_after_list,
     finish_for_expr,
@@ -15347,6 +15401,13 @@ const ExprFinishNominalRecordWork = struct {
     captures_top: u32,
 };
 
+const ExprFinishNominalApplyWork = struct {
+    region: Region,
+    mapper: AST.Expr.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+    captures_top: u32,
+};
+
 const ExprForAfterListWork = struct {
     region: Region,
     ast_patt: AST.Pattern.Idx,
@@ -15468,6 +15529,7 @@ const ExprKernelWork = struct {
     finish_if_then_else: std.ArrayList(ExprFinishIfThenElseWork) = .empty,
     finish_if_without_else: std.ArrayList(ExprFinishIfWithoutElseWork) = .empty,
     finish_nominal_record: std.ArrayList(ExprFinishNominalRecordWork) = .empty,
+    finish_nominal_apply: std.ArrayList(ExprFinishNominalApplyWork) = .empty,
     finish_record_builder: std.ArrayList(ExprFinishRecordBuilderWork) = .empty,
     for_after_list: std.ArrayList(ExprForAfterListWork) = .empty,
     finish_for_expr: std.ArrayList(ExprFinishForExprWork) = .empty,
@@ -15523,6 +15585,7 @@ const ExprKernelWork = struct {
             .finish_if_then_else => _ = self.takeFinishIfThenElse(),
             .finish_if_without_else => _ = self.takeFinishIfWithoutElse(),
             .finish_nominal_record => _ = self.takeFinishNominalRecord(),
+            .finish_nominal_apply => _ = self.takeFinishNominalApply(),
             .finish_record_builder => _ = self.takeFinishRecordBuilder(),
             .for_after_list => _ = self.takeForAfterList(),
             .finish_for_expr => _ = self.takeFinishForExpr(),
@@ -15607,6 +15670,7 @@ const ExprKernelWork = struct {
         self.finish_if_then_else.deinit(allocator);
         self.finish_if_without_else.deinit(allocator);
         self.finish_nominal_record.deinit(allocator);
+        self.finish_nominal_apply.deinit(allocator);
         self.finish_record_builder.deinit(allocator);
         self.for_after_list.deinit(allocator);
         self.finish_for_expr.deinit(allocator);
@@ -15664,6 +15728,7 @@ const ExprKernelWork = struct {
         self.finish_if_then_else.clearRetainingCapacity();
         self.finish_if_without_else.clearRetainingCapacity();
         self.finish_nominal_record.clearRetainingCapacity();
+        self.finish_nominal_apply.clearRetainingCapacity();
         self.finish_record_builder.clearRetainingCapacity();
         self.for_after_list.clearRetainingCapacity();
         self.finish_for_expr.clearRetainingCapacity();
@@ -15943,6 +16008,12 @@ const ExprKernelWork = struct {
         try self.pushLabel(allocator, .finish_nominal_record, self.current_target);
     }
 
+    inline fn pushFinishNominalApply(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishNominalApplyWork) std.mem.Allocator.Error!void {
+        try self.finish_nominal_apply.append(allocator, item);
+        errdefer _ = self.finish_nominal_apply.pop();
+        try self.pushLabel(allocator, .finish_nominal_apply, self.current_target);
+    }
+
     inline fn pushFinishRecordBuilder(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishRecordBuilderWork) std.mem.Allocator.Error!void {
         try self.finish_record_builder.append(allocator, item);
         errdefer _ = self.finish_record_builder.pop();
@@ -16165,6 +16236,10 @@ const ExprKernelWork = struct {
 
     inline fn takeFinishNominalRecord(self: *ExprKernelWork) ExprFinishNominalRecordWork {
         return self.finish_nominal_record.pop() orelse unreachable;
+    }
+
+    inline fn takeFinishNominalApply(self: *ExprKernelWork) ExprFinishNominalApplyWork {
+        return self.finish_nominal_apply.pop() orelse unreachable;
     }
 
     inline fn takeFinishRecordBuilder(self: *ExprKernelWork) ExprFinishRecordBuilderWork {

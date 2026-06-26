@@ -4799,6 +4799,130 @@ test "check type - nested same-module mutually recursive nominal types" {
     try checkTypesModule(source, .{ .pass = .{ .def = "mk" } }, "{} -> Tree");
 }
 
+test "check type - primitive-backed nominal lifts numeric literal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\d : Distance
+        \\d = 0
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Distance");
+}
+
+test "check type - primitive-backed nominal lifts string literal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Token := Str
+        \\
+        \\token : Token
+        \\token = "abc"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Token");
+}
+
+test "check type - multi-level numeric nominal chain lifts numeric literal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := U64
+        \\Outer := Inner
+        \\
+        \\x : Outer
+        \\x = 0
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "check type - builtin-backed nominal does not inherit backing methods" {
+    // A literal lifts into `Distance` because `from_numeral` is inherited from
+    // the `U64` backing (the backing-chain walk). Other methods are NOT inherited
+    // that way: `+` requires `Distance` to provide `add`, which it does not, so
+    // this is a MISSING METHOD error — not a TYPE MISMATCH. This pins the
+    // asymmetry: only the literal conversion rides through the backing chain.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\d : Distance
+        \\d = 0
+        \\
+        \\total = d + d
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - custom from_numeral wins over builtin-backing validation" {
+    // `Tiny` is U8-backed but defines its OWN `from_numeral` that accepts any
+    // numeral (it ignores the value and yields Tiny.(0)). The literal `300` does
+    // NOT fit U8, so if the builtin-backing walk shadowed the custom method we'd
+    // get an InvalidNumeral error. The custom `from_numeral` must take precedence,
+    // so this should type-check cleanly.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Tiny := U8.{
+        \\    from_numeral : Numeral -> Try(Tiny, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Tiny.(0))
+        \\}
+        \\
+        \\t : Tiny
+        \\t = 300
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Tiny");
+}
+
+test "check type - explicit value-backed nominal construction" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\toDistance : U64 -> Distance
+        \\toDistance = |n| Distance.(n)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U64 -> Distance");
+}
+
+test "check type - bare value does not lift into nominal" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\toDistance : U64 -> Distance
+        \\toDistance = |n| n
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - explicit construction backing mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Distance := U64
+        \\
+        \\d : Distance
+        \\d = Distance.("x")
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - opaque nominal construction in defining module" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Secret :: U64
+        \\
+        \\s : Secret
+        \\s = Secret.(7)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Secret");
+}
+
 // early return //
 
 test "check type - early return - pass" {

@@ -492,6 +492,10 @@ pub const Tag = enum {
     /// * lhs - mapper/type expression
     /// * rhs - backing record expression
     nominal_record,
+    /// Direct nominal value/tuple construction: Type.(arg1, arg2, ...)
+    /// * lhs - mapper/type expression
+    /// * rhs - extra_data index of [args.span.start, args.span.len]
+    nominal_apply,
     /// A block of statements
     /// Main token is newline preceding the block
     /// * lhs - first statement node
