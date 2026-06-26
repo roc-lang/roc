@@ -748,6 +748,8 @@ Tasks:
     `Map(ListIter | Append(ListIter, item...) | Range | Single | Concat, fn)`
     plans with direct mapping functions are consumed by direct-call `Iter.fold`
     without public iterator step values.
+  - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
+    are consumed by direct-call `Iter.fold` without public iterator step values.
 - [ ] Optimized `List.from_iter` consumes plan values directly.
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     `List.from_iter` and list-result `Iter.collect` as exact-capacity list
@@ -765,6 +767,9 @@ Tasks:
     `Map(ListIter | Append(ListIter, item...) | Range | Single | Concat, fn)`
     plans with direct mapping functions are consumed by `List.from_iter` and
     list-result `Iter.collect` without public collect-worker specialization.
+  - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
+    are consumed by `List.from_iter` and list-result `Iter.collect` without
+    public collect-worker specialization.
 - [ ] `saved = iter; for item in iter { ... }; use(saved)` preserves public
   behavior.
   - [x] Local `List.iter` with a public alias preserves public iterator behavior.
@@ -806,6 +811,11 @@ Tasks:
   - [x] Local filter producer operands consumed by optimized `for` preserve
     `dbg` ordering relative to the producer site, loop body, and following
     expressions.
+  - [x] Direct filtered append operands consumed by `List.from_iter` preserve
+    `dbg` ordering relative to collection and following expressions.
+  - [x] Direct filtered append operands and accumulator operands consumed by
+    `Iter.fold` preserve `dbg` ordering relative to the fold result and
+    following expressions.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
   - [x] Direct `List.from_iter(List(Str).iter().append(...))` passes optimized
     LIR interpretation with the expected string list.
