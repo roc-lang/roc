@@ -321,6 +321,7 @@ pub const SemanticModuleData = struct {
 pub const TypeCheckOutput = struct {
     checker: Check,
     checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+    user_errors_allow_lowering: bool = false,
 
     pub fn deinit(self: *TypeCheckOutput) void {
         if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
@@ -349,8 +350,30 @@ pub const ArtifactPublicationInputs = struct {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
+        .static_dispatch => |static_dispatch| switch (static_dispatch) {
+            .unresolved_dispatcher => |unresolved| !unresolved.runtime_error_inserted,
+            .dispatcher_not_nominal,
+            .dispatcher_does_not_impl_method,
+            .type_does_not_support_equality,
+            .recursive_dispatch,
+            => true,
+        },
         .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
         else => true,
+    };
+}
+
+fn problemAllowsLoweringWithUserErrors(problem: check.problem.Problem) bool {
+    return switch (problem) {
+        .static_dispatch => |static_dispatch| switch (static_dispatch) {
+            .unresolved_dispatcher => |unresolved| unresolved.runtime_error_inserted,
+            .dispatcher_not_nominal,
+            .dispatcher_does_not_impl_method,
+            .type_does_not_support_equality,
+            .recursive_dispatch,
+            => false,
+        },
+        else => false,
     };
 }
 
@@ -359,6 +382,13 @@ fn checkerHasArtifactBlockingProblems(checker: *const Check) bool {
         if (problemBlocksCheckedArtifact(problem)) return true;
     }
     return false;
+}
+
+fn checkerProblemsAllowLoweringWithUserErrors(checker: *const Check) bool {
+    for (checker.problems.problems.items) |problem| {
+        if (!problemAllowsLoweringWithUserErrors(problem)) return false;
+    }
+    return true;
 }
 
 fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool {
@@ -1767,15 +1797,27 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
-        if (moduleHasArtifactBlockingCanonicalizeDiagnostics(env) or
-            try moduleHasDuplicateTopLevelValueDefs(check_alloc, env) or
-            checkerHasArtifactBlockingProblems(&checker) or
-            !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
+        const has_artifact_blocking_canonicalize_diagnostics = moduleHasArtifactBlockingCanonicalizeDiagnostics(env);
+        const has_duplicate_top_level_value_defs = try moduleHasDuplicateTopLevelValueDefs(check_alloc, env);
+        const has_artifact_blocking_check_problems = checkerHasArtifactBlockingProblems(&checker);
+        const imported_artifacts_cover_imports = importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts);
+        const user_errors_allow_lowering =
+            !has_artifact_blocking_canonicalize_diagnostics and
+            !has_duplicate_top_level_value_defs and
+            !has_artifact_blocking_check_problems and
+            imported_artifacts_cover_imports and
+            checkerProblemsAllowLoweringWithUserErrors(&checker);
+
+        if (has_artifact_blocking_canonicalize_diagnostics or
+            has_duplicate_top_level_value_defs or
+            has_artifact_blocking_check_problems or
+            !imported_artifacts_cover_imports)
         {
             _ = try checker.problems.flushPendingStaticExhaustiveness(check_alloc);
             return .{
                 .checker = checker,
                 .checked_artifact = null,
+                .user_errors_allow_lowering = false,
             };
         }
 
@@ -1798,6 +1840,7 @@ pub const PackageEnv = struct {
                 return .{
                     .checker = checker,
                     .checked_artifact = null,
+                    .user_errors_allow_lowering = false,
                 };
             },
             else => |other| return other,
@@ -1807,6 +1850,7 @@ pub const PackageEnv = struct {
         return .{
             .checker = checker,
             .checked_artifact = checked_artifact,
+            .user_errors_allow_lowering = user_errors_allow_lowering,
         };
     }
 

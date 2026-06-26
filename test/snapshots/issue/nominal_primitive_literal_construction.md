@@ -1,54 +1,35 @@
 # META
 ~~~ini
-description=Error types should propagate through aliases when underscores are used
+description=Primitive-backed nominal types accept matching number/string literals
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
-BadBase := _
+UserId := U64
 
-BadDerived := BadBase
+uid : UserId
+uid = 0
 
-value : BadDerived
-value = "test"
+Token := Str
+
+token : Token
+token = "abc"
 
 GoodBase := Str
-
 GoodDerived := GoodBase
 
 goodValue : GoodDerived
 goodValue = "test"
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
+NIL
 # PROBLEMS
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_error_propagation.md:1:1:1:1:**
-```roc
-BadBase := _
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**underscore_error_propagation.md:6:9:6:15:**
-```roc
-value = "test"
-```
-        ^^^^^^
-
-The type was determined to be:
-
-    BadDerived
-
+NIL
 # TOKENS
 ~~~zig
-UpperIdent,OpColonEqual,Underscore,
+UpperIdent,OpColonEqual,UpperIdent,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
 UpperIdent,OpColonEqual,UpperIdent,
 LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,StringStart,StringPart,StringEnd,
@@ -64,19 +45,24 @@ EndOfFile,
 	(type-module)
 	(statements
 		(s-type-decl
-			(header (name "BadBase")
+			(header (name "UserId")
 				(args))
-			(_))
-		(s-type-decl
-			(header (name "BadDerived")
-				(args))
-			(ty (name "BadBase")))
-		(s-type-anno (name "value")
-			(ty (name "BadDerived")))
+			(ty (name "U64")))
+		(s-type-anno (name "uid")
+			(ty (name "UserId")))
 		(s-decl
-			(p-ident (raw "value"))
+			(p-ident (raw "uid"))
+			(e-int (raw "0")))
+		(s-type-decl
+			(header (name "Token")
+				(args))
+			(ty (name "Str")))
+		(s-type-anno (name "token")
+			(ty (name "Token")))
+		(s-decl
+			(p-ident (raw "token"))
 			(e-string
-				(e-string-part (raw "test"))))
+				(e-string-part (raw "abc"))))
 		(s-type-decl
 			(header (name "GoodBase")
 				(args))
@@ -94,17 +80,37 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+UserId := U64
+
+uid : UserId
+uid = 0
+
+Token := Str
+
+token : Token
+token = "abc"
+
+GoodBase := Str
+
+GoodDerived := GoodBase
+
+goodValue : GoodDerived
+goodValue = "test"
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "value"))
-		(e-string
-			(e-literal (string "test")))
+		(p-assign (ident "uid"))
+		(e-num (value "0"))
 		(annotation
-			(ty-lookup (name "BadDerived") (local))))
+			(ty-lookup (name "UserId") (local))))
+	(d-let
+		(p-assign (ident "token"))
+		(e-string
+			(e-literal (string "abc")))
+		(annotation
+			(ty-lookup (name "Token") (local))))
 	(d-let
 		(p-assign (ident "goodValue"))
 		(e-string
@@ -112,11 +118,11 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "GoodDerived") (local))))
 	(s-nominal-decl
-		(ty-header (name "BadBase"))
-		(ty-underscore))
+		(ty-header (name "UserId"))
+		(ty-lookup (name "U64") (builtin)))
 	(s-nominal-decl
-		(ty-header (name "BadDerived"))
-		(ty-lookup (name "BadBase") (local)))
+		(ty-header (name "Token"))
+		(ty-lookup (name "Str") (builtin)))
 	(s-nominal-decl
 		(ty-header (name "GoodBase"))
 		(ty-lookup (name "Str") (builtin)))
@@ -128,18 +134,20 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "BadDerived"))
+		(patt (type "UserId"))
+		(patt (type "Token"))
 		(patt (type "GoodDerived")))
 	(type_decls
-		(nominal (type "BadBase")
-			(ty-header (name "BadBase")))
-		(nominal (type "BadDerived")
-			(ty-header (name "BadDerived")))
+		(nominal (type "UserId")
+			(ty-header (name "UserId")))
+		(nominal (type "Token")
+			(ty-header (name "Token")))
 		(nominal (type "GoodBase")
 			(ty-header (name "GoodBase")))
 		(nominal (type "GoodDerived")
 			(ty-header (name "GoodDerived"))))
 	(expressions
-		(expr (type "BadDerived"))
+		(expr (type "UserId"))
+		(expr (type "Token"))
 		(expr (type "GoodDerived"))))
 ~~~

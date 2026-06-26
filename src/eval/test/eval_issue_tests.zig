@@ -328,4 +328,38 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "Ok(22.0)" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/9783
+        // The exact mathematical result is 16129, which does not fit in I8.
+        .name = "issue 9783: signed times crashes on overflow",
+        .source = "I8.times(I8.highest, I8.highest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9812
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9812: signed negate crashes on lowest value",
+        .source = "I8.negate(I8.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9813
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9813: signed abs crashes on lowest value",
+        .source = "I8.abs(I8.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9814
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9814: signed div_by crashes on lowest divided by negative one",
+        .source = "I8.div_by(I8.lowest, -1)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // The same signed division edge has a defined remainder of zero.
+        .name = "issue 9814: signed rem and mod by negative one return zero",
+        .source = "(I8.rem_by(I8.lowest, -1), I8.mod_by(I8.lowest, -1))",
+        .expected = .{ .inspect_str = "(0, 0)" },
+    },
 };

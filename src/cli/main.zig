@@ -2307,6 +2307,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 resolutionConfigFromLimits(args.resolve_limits),
                 &cache_manager,
                 &reporter,
+                true,
             );
             const result = if (lowered_result) |*value| value else unreachable;
             entrypoint_names = result.entrypoint_names;
@@ -2325,6 +2326,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 resolutionConfigFromLimits(args.resolve_limits),
                 &cache_manager,
                 &reporter,
+                true,
             );
             shm_handle_opt = shm_result.handle;
             entrypoint_names = shm_result.entrypoint_names;
@@ -2336,7 +2338,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         .size, .speed => unreachable,
     }
 
-    if (error_count > 0) {
+    if (error_count > 0 and entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -2951,10 +2953,10 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &cache_manager, &reporter);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &cache_manager, &reporter, true);
     defer closeSharedMemoryHandle(shm_result.handle);
 
-    if (shm_result.error_count > 0) {
+    if (shm_result.error_count > 0 and shm_result.entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -3071,10 +3073,11 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         resolutionConfigFromLimits(args.resolve_limits),
         &cache_manager,
         &reporter,
+        true,
     );
     defer lowered_result.deinit();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -5118,6 +5121,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         resolutionConfigFromLimits(args.resolve_limits),
         null,
         null,
+        false,
     );
     defer lowered_result.deinit();
 
@@ -5422,6 +5426,7 @@ fn lowerLirWithCoordinator(
     resolution_config: compile.package_resolution.Config,
     cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
 
@@ -5577,7 +5582,7 @@ fn lowerLirWithCoordinator(
         return err;
     };
 
-    if (coord.hasUserErrors()) {
+    if (coord.hasUserErrors() and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
         if (reporter) |r| r.fail();
         const watch_inputs = try coord.collectWatchInputStates();
@@ -5592,11 +5597,15 @@ fn lowerLirWithCoordinator(
         };
     }
 
-    try coord.finalizeExecutableArtifacts();
+    if (allow_user_errors) {
+        try coord.finalizeExecutableArtifactsAllowUserErrors();
+    } else {
+        try coord.finalizeExecutableArtifacts();
+    }
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     const watch_inputs = try coord.collectWatchInputStates();
     errdefer coord.freeWatchInputStates(watch_inputs);
-    if (finalized_counts.errors > 0) {
+    if (finalized_counts.errors > 0 and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         if (reporter) |r| r.fail();
         return .{
             .lowered = null,
@@ -5687,6 +5696,7 @@ pub fn buildLirImageWithCoordinator(
     resolution_config: compile.package_resolution.Config,
     cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
@@ -5707,10 +5717,11 @@ pub fn buildLirImageWithCoordinator(
         resolution_config,
         cache_manager,
         reporter,
+        allow_user_errors,
     );
     defer lowered_result.deinitWatchInputs();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         shm.updateHeader();
         return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
     }
@@ -5744,7 +5755,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, null);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, null, true);
 }
 
 /// Platform resolution result containing the platform source path
@@ -6859,6 +6870,12 @@ fn selectBuildPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             try ctx.io.stderr().print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
@@ -6895,6 +6912,12 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .no_default => {
+            if (targets_config.targets.len == 0) {
+                renderValidationError(ctx.gpa, .{
+                    .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
+                }, ctx.io.stderr());
+                return error.UnsupportedTarget;
+            }
             const native_target = RocTarget.detectNative();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
@@ -7528,6 +7551,7 @@ fn rocBuildWasmSurgical(
     defer codegen.deinit();
     loaded_module = false;
     codegen.configureBuiltinRelocs(builtin_symbols);
+    codegen.configureStaticDataAddressTracking();
 
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
@@ -11357,6 +11381,11 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
+        .opt = switch (args.opt) {
+            .dev => .dev,
+            .interpreter => .interpreter,
+            .size, .speed => unreachable,
+        },
     }, temp_dir, ctx.io.std_io);
 }
 
