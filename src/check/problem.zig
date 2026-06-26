@@ -49,6 +49,7 @@ pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
 pub const UnreachableCode = types.UnreachableCode;
 pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
+pub const ComptimeCondition = types.ComptimeCondition;
 
 // Type declaration errors
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;

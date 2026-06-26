@@ -5,11 +5,7 @@ step = |boxed| {
     model = Box.unbox(boxed)
     temp = List.concat([1.U8, 2.U8, 3.U8], [4.U8, 5.U8, 6.U8])
 
-    if List.len(temp) == 6.U64 {
-        Box.box(model + 6)
-    } else {
-        Box.box(0)
-    }
+    Box.box(model + List.len(temp))
 }
 
 main! = |seed| {

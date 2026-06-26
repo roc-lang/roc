@@ -1747,8 +1747,10 @@ test "default app resolves a sibling type module imported with exposing" {
         .data =
         \\import FooBar exposing [square]
         \\
-        \\main! = |_arg| {
-        \\    if square(12) == 144 {
+        \\main! = |args| {
+        \\    arg_count = List.len(args)
+        \\    n = 12 + arg_count - arg_count
+        \\    if square(n) == 144 {
         \\        Ok({})
         \\    } else {
         \\        Err(Exit(1))
