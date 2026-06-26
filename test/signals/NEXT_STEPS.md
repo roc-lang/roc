@@ -252,20 +252,33 @@ Validation completed for this phase:
 
 ## Phase 4 — Update and review baseline measurements
 
-- [ ] Re-run `run-signals-bench` across all six apps and record fresh baselines.
-- [ ] Capture the current values of the work counters (`nodes_recomputed`,
+- [x] Re-run `run-signals-bench` across all six apps and record fresh baselines.
+- [x] Capture the current values of the work counters (`nodes_recomputed`,
       `patches_emitted`, `active_graph_records_rebuilt`, `stream_nodes_scanned`,
       `each_key_compares`, per-event allocation deltas) for the representative
       events of each app.
 - [ ] Review the baselines together: which paths are actually expensive, and on
       what inputs? This review is what turns the optimisation hypotheses below
       from suspicion into prioritised, evidence-backed work.
-- [ ] Wire the foundation counters into `expect_metric_delta` budget assertions
+- [x] Wire the foundation counters into `expect_metric_delta` budget assertions
       (not just captured numbers) on a representative event — at minimum
       `active_graph_records_rebuilt` on a non-structural event and a single-row
-      splice. These budgets currently pass silently because nothing asserts them;
-      turning the budget into a gate is what makes the Phase 5 design-gap items
-      falsifiable rather than hopeful.
+      splice. These now gate through the app specs: `kanban_board.txt` asserts
+      `active_graph_records_rebuilt` for reorder/splice events, and the
+      identity-stress spec asserts keyed-row budgets such as `each_key_compares`
+      and row reuse/create/remove counts.
+
+Fresh `zig build run-signals-bench` single-sample baselines captured on
+2026-06-26:
+
+| case | actions | nodes_recomputed | patches_emitted | active_graph_records_rebuilt | stream_nodes_scanned | each_key_compares | allocs_this_event | deallocs_this_event | retained_alloc_delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| signals-ops-dashboard | 60 | 60 | 3900 | 20 | 820 | 20 | 33760 | 21200 | 12560 |
+| signals-kanban-board | 300 | 300 | 22500 | 3500 | 3580 | 361240 | 202080 | 178240 | 23800 |
+| signals-async-effects | 180 | 220 | 2660 | 60 | 420 | 12880 | 16640 | 13700 | 2900 |
+| signals-component-composition | 100 | 100 | 1500 | 120 | 180 | 7420 | 9700 | 7240 | 2420 |
+| signals-identity-stress | 180 | 180 | 4000 | 300 | 700 | 75720 | 25380 | 20340 | 5000 |
+| signals-checkout-wizard | 180 | 180 | 4280 | 320 | 780 | 16120 | 17840 | 13180 | 4620 |
 
 ## Phase 5 — Re-prioritise the optimisation backlog
 
