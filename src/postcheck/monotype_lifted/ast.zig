@@ -43,6 +43,7 @@ pub const ComptimeSiteId = Mono.ComptimeSiteId;
 pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
 /// Compile-time site metadata shared with Monotype IR.
 pub const ComptimeSite = Mono.ComptimeSite;
+/// Local procedure context shared with Monotype IR.
 pub const LocalProcContext = Mono.LocalProcContext;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;

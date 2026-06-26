@@ -31,11 +31,13 @@ pub fn Length(comptime ExprId: type) type {
     };
 }
 
+/// Whether a range plan includes its end value.
 pub const RangeInclusivity = enum {
     exclusive,
     inclusive,
 };
 
+/// Compiler-internal iterator plan parameterized by the owning IR ids.
 pub fn IterPlan(
     comptime ExprId: type,
     comptime FnId: type,

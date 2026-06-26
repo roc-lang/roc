@@ -38,6 +38,7 @@ pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
+/// Compiler-internal iterator plan in Monotype IR.
 pub const IterPlan = iter_plan.IterPlan(ExprId, FnId, Type.TypeId);
 
 /// Owned string bytes plus the exact slice used by this literal.

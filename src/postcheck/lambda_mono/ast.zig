@@ -35,6 +35,7 @@ pub const StringLiteralId = Lifted.StringLiteralId;
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
+/// Local procedure context shared with Monotype IR.
 pub const LocalProcContext = Mono.LocalProcContext;
 
 /// Slice descriptor over one of the program side arrays.

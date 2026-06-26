@@ -576,12 +576,14 @@ pub const NumericSuffixTarget = extern struct {
     }
 };
 
+/// Whether a canonical expression can be evaluated without runtime inputs.
 pub const RuntimeDependency = enum(u8) {
     compile_time_known,
     runtime_dependent,
     poisoned,
 };
 
+/// Runtime-dependency result recorded for a canonical expression node.
 pub const RuntimeDependencySummary = extern struct {
     node_idx: u32,
     dependency: RuntimeDependency,
@@ -917,6 +919,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.common.idents.interner.deinit(self.gpa);
 }
 
+/// Record or replace the runtime-dependency summary for a node.
 pub fn recordRuntimeDependencySummary(
     self: *Self,
     node_idx: Node.Idx,
@@ -935,6 +938,7 @@ pub fn recordRuntimeDependencySummary(
     });
 }
 
+/// Return the runtime-dependency summary for a node, if canonicalization recorded one.
 pub fn runtimeDependencySummaryForNode(
     self: *const Self,
     node_idx: Node.Idx,
