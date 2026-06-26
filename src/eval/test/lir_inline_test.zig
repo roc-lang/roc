@@ -62,6 +62,7 @@ fn lowerModule(
 const LowerModuleOptions = struct {
     debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
     proc_debug_names: bool = false,
+    tag_reachability: bool = false,
     imports: []const helpers.ModuleSource = &.{},
 };
 
@@ -100,6 +101,7 @@ fn lowerModuleWithOptions(
             .inline_mode = inline_mode,
             .debug_effects = options.debug_effects,
             .proc_debug_names = options.proc_debug_names,
+            .tag_reachability = options.tag_reachability,
         },
     );
     errdefer lowered.deinit();
@@ -940,6 +942,40 @@ fn reachableProcShapeFieldTotal(
         for (calls) |call| try work.append(allocator, call);
     }
     return total;
+}
+
+fn expectReachableProcShapeFieldNoGreater(
+    allocator: Allocator,
+    iter_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    list_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    comptime field_name: []const u8,
+) anyerror!void {
+    const iter_total = try reachableProcShapeFieldTotal(allocator, iter_lowered, field_name);
+    const list_total = try reachableProcShapeFieldTotal(allocator, list_lowered, field_name);
+    if (iter_total > list_total) {
+        std.debug.print(
+            "{s}: iter form has {d}, direct-list form has {d}\n",
+            .{ field_name, iter_total, list_total },
+        );
+    }
+    try std.testing.expect(iter_total <= list_total);
+}
+
+fn expectStaticListIterAppendLoopNoBulkierThanDirectList(
+    iter_source: []const u8,
+    list_source: []const u8,
+) anyerror!void {
+    const allocator = std.testing.allocator;
+    var iter_optimized = try lowerModuleWithOptions(allocator, iter_source, .wrappers, .{ .tag_reachability = true });
+    defer iter_optimized.deinit(allocator);
+    var list_optimized = try lowerModuleWithOptions(allocator, list_source, .wrappers, .{ .tag_reachability = true });
+    defer list_optimized.deinit(allocator);
+
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "direct_call_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "switch_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "struct_assign_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "tag_assign_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "join_count");
 }
 
 fn reachableProcShape(
@@ -1843,6 +1879,134 @@ test "static list iter append loop eliminates public iter adapters" {
     try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.Iter.append"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "iter_from_step"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &list_optimized.lowered, "Builtin.Iter.append"));
+}
+
+test "static record list iter append loop lowers no bulkier than direct list loop" {
+    const record_iter_source =
+        \\module [main]
+        \\
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+    const record_list_source =
+        \\module [main]
+        \\
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ]
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+
+    try expectStaticListIterAppendLoopNoBulkierThanDirectList(record_iter_source, record_list_source);
+}
+
+test "static primitive list iter append loop lowers no bulkier than direct list loop" {
+    const primitive_iter_source =
+        \\module [main]
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [11.I64, 13, 3, 11].iter()
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append(2).append(7)
+        \\        } else if anim_index == 1 {
+        \\            base_points.append(2)
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for point in collision_points {
+        \\        $sum = $sum + point
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+    const primitive_list_source =
+        \\module [main]
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [11.I64, 13, 3, 11]
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append(2).append(7)
+        \\        } else if anim_index == 1 {
+        \\            base_points.append(2)
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for point in collision_points {
+        \\        $sum = $sum + point
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+
+    try expectStaticListIterAppendLoopNoBulkierThanDirectList(primitive_iter_source, primitive_list_source);
 }
 
 test "stream from iterator collect keeps finite step callables" {
