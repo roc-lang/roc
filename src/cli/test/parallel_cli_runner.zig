@@ -4263,6 +4263,18 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
     // untracked source file.
     const test_zig_content = std.fmt.allocPrint(allocator,
         \\const abi = @import("{s}");
+        \\comptime {{
+        \\    if (@sizeOf(usize) == 8) {{
+        \\        if (@sizeOf(abi.Padded) != 12) @compileError("Padded nominal record size regression");
+        \\        if (@alignOf(abi.Padded) != 4) @compileError("Padded nominal record alignment regression");
+        \\        if (@offsetOf(abi.Padded, "z") != 0) @compileError("Padded.z offset regression");
+        \\        if (@offsetOf(abi.Padded, "a") != 8) @compileError("Padded.a offset regression");
+        \\        if (@sizeOf(abi.PaddedCheckArgs) != 12) @compileError("Padded.check args size regression");
+        \\        if (@alignOf(abi.PaddedCheckArgs) != 4) @compileError("Padded.check args alignment regression");
+        \\        if (@offsetOf(abi.PaddedCheckArgs, "z") != 0) @compileError("PaddedCheckArgs.z offset regression");
+        \\        if (@offsetOf(abi.PaddedCheckArgs, "a") != 8) @compileError("PaddedCheckArgs.a offset regression");
+        \\    }}
+        \\}}
         \\export fn _roc_glue_abi_check() void {{
         \\    var host: abi.RocHost = undefined;
         \\    var box: abi.RocBox = null;
