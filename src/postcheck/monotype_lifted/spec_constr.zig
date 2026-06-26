@@ -2982,8 +2982,15 @@ const Cloner = struct {
 
         const arg_values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(arg_values);
+        const callee_uses = if (@intFromEnum(callee) < self.pass.plans.len)
+            self.pass.plans[@intFromEnum(callee)].used_args
+        else
+            &.{};
         for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneExprValue(arg_expr);
+            arg_values[index] = if (index < callee_uses.len and callee_uses[index])
+                try self.cloneExprValueDemandingFact(arg_expr)
+            else
+                try self.cloneExprValue(arg_expr);
         }
 
         var unsafe_count: usize = 0;
