@@ -146,6 +146,9 @@ Current branch status:
 - direct private `ListIter` state can feed a private `.append(...)` local when
   that produced local is itself only observed by private iterator consumers; the
   appended item is evaluated at the append declaration site.
+- direct private `Custom` state can cross an immutable local when the local's
+  only later observations are exact `for` iterable uses in the same lowering
+  scope.
 - direct finite numeric ranges are consumed by optimized `for` as private
   numeric cursor state, including inclusive end values at numeric maxima.
 - direct `Iter.custom` is consumed by optimized `for` as private custom state
@@ -606,6 +609,8 @@ Tasks:
     an immutable local and are consumed with private child state.
   - [x] Direct `Filter(ListIter | Append(ListIter, item...), predicate)` plans
     can cross an immutable local and are consumed with private child state.
+  - [x] Direct `Custom` plans can cross an immutable local and are consumed
+    with private custom state.
 - [ ] Private plan state can cross `if`.
 - [ ] Private plan state can cross `match`.
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
@@ -649,6 +654,8 @@ Tasks:
     public step values when consumed by a private `for`.
   - [x] Direct local `Filter(ListIter | Append(ListIter, item...), predicate)`
     avoids public step values when consumed by a private `for`.
+  - [x] Direct local `Custom` avoids public iterator materialization when
+    consumed by a private `for`.
 - [ ] Optimized `for` through `if` avoids public step values.
   - [x] Direct `for` over an `if` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans lowers to branch-local private cursor
@@ -678,6 +685,7 @@ Tasks:
   state.
 - [x] Optimized `for` over ranges uses direct numeric state.
 - [x] Optimized `for` over direct `Iter.custom` uses private custom state.
+- [x] Optimized `for` over local `Iter.custom` uses private custom state.
 - [ ] Optimized `Iter.fold` consumes plan values directly.
   - [x] Direct `ListIter` and `Append(ListIter, item...)` plans are consumed by
     direct-call `Iter.fold` as accumulator loop parameters without public

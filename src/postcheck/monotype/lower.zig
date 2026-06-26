@@ -13871,6 +13871,7 @@ const BodyContext = struct {
         if (try self.concatIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.mapIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.filterIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.customIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         return null;
     }
 
@@ -14362,6 +14363,149 @@ const BodyContext = struct {
                 .phase = phase_expr,
             } },
         });
+    }
+
+    fn customIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        switch (expr.data) {
+            .call => |call| {
+                const direct_target = call.direct_target orelse return null;
+                if (!self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "custom")) return null;
+                if (call.args.len != 3) {
+                    Common.invariant("checked direct Iter.custom call had an unexpected argument shape");
+                }
+
+                var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
+                defer call_ctx.deinit();
+                self.inheritLoweringEntryWrapperRoot(&call_ctx);
+                call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+                call_ctx.current_fn_key = self.current_fn_key;
+
+                const source_fn_ty = self.directCallInstantiationSourceFnType(direct_target, call.source_fn_ty_payload);
+                const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(source_fn_ty, self, expr.ty, call.args);
+                const fn_data = self.builder.functionShape(mono_fn_ty, "checked direct Iter.custom call had a non-function type");
+                const arg_tys = self.builder.program.types.span(fn_data.args);
+                if (arg_tys.len != 3) {
+                    Common.invariant("checked direct Iter.custom call had an unexpected monomorphic arity");
+                }
+
+                const seed_value = try self.lowerExprAtType(call.args[0], arg_tys[0]);
+                const len_hint_value = try self.lowerExprAtType(call.args[1], arg_tys[1]);
+                const step_fn_value = try self.lowerExprAtType(call.args[2], arg_tys[2]);
+                return try self.customIteratorPlanForPrivateLocalArgs(seed_value, len_hint_value, step_fn_value, iterator_ty, lowered);
+            },
+            else => {},
+        }
+
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        if (!self.methodNameIs(plan.method, "custom")) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 3) {
+            Common.invariant("checked Iter.custom dispatch plan had an unexpected argument shape");
+        }
+
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
+        defer call_ctx.deinit();
+        self.inheritLoweringEntryWrapperRoot(&call_ctx);
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+
+        const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, expr.ty, plan_args, iterator_ty);
+        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked Iter.custom dispatch plan had a non-function type");
+        const plan_arg_tys = self.builder.program.types.span(plan_fn_data.args);
+        if (plan_arg_tys.len != 3) {
+            Common.invariant("checked Iter.custom dispatch plan had an unexpected monomorphic arity");
+        }
+
+        const seed_value = try self.lowerDispatchOperandAtType(plan_args[0], plan_arg_tys[0]);
+        const len_hint_value = try self.lowerDispatchOperandAtType(plan_args[1], plan_arg_tys[1]);
+        const step_fn_value = try self.lowerDispatchOperandAtType(plan_args[2], plan_arg_tys[2]);
+        return try self.customIteratorPlanForPrivateLocalArgs(seed_value, len_hint_value, step_fn_value, iterator_ty, lowered);
+    }
+
+    fn customIteratorPlanForPrivateLocalArgs(
+        self: *BodyContext,
+        seed_value: Ast.ExprId,
+        len_hint_value: Ast.ExprId,
+        step_fn_value: Ast.ExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!Ast.IterPlanId {
+        const state_ty = self.builder.program.exprs.items[@intFromEnum(seed_value)].ty;
+        const seed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), state_ty);
+        const seed_expr = try self.builder.localExpr(seed_local, state_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(seed_local, state_ty),
+            .value = seed_value,
+        } }));
+
+        const length = try self.bindPrivateCustomLengthHint(len_hint_value, lowered);
+
+        const step_fn_ty = self.builder.program.exprs.items[@intFromEnum(step_fn_value)].ty;
+        const step_fn_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), step_fn_ty);
+        const step_fn_expr = try self.builder.localExpr(step_fn_local, step_fn_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(step_fn_local, step_fn_ty),
+            .value = step_fn_value,
+        } }));
+
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = self.iterItemType(iterator_ty),
+            .length = length,
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .materialized = null,
+            .data = .{ .custom = .{
+                .state = seed_expr,
+                .step_fn = step_fn_expr,
+            } },
+        });
+    }
+
+    fn bindPrivateCustomLengthHint(
+        self: *BodyContext,
+        len_hint_value: Ast.ExprId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!iter_plan.Length(Ast.ExprId) {
+        const len_hint = self.builder.program.exprs.items[@intFromEnum(len_hint_value)];
+        if (len_hint.data == .tag) {
+            const tag = len_hint.data.tag;
+            const tag_text = self.builder.program.names.tagLabelText(tag.name);
+            if (Ident.textEql(tag_text, "Known")) {
+                const payloads = self.builder.program.exprSpan(tag.payloads);
+                if (payloads.len != 1) Common.invariant("Iter length Known tag had an unexpected payload shape");
+                const len_ty = self.builder.program.exprs.items[@intFromEnum(payloads[0])].ty;
+                const len_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), len_ty);
+                const len_expr = try self.builder.localExpr(len_local, len_ty);
+                try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+                    .pat = try self.builder.bindPat(len_local, len_ty),
+                    .value = payloads[0],
+                } }));
+                return .{ .known = len_expr };
+            }
+            if (Ident.textEql(tag_text, "Unknown")) {
+                const payloads = self.builder.program.exprSpan(tag.payloads);
+                if (payloads.len != 0) Common.invariant("Iter length Unknown tag had an unexpected payload shape");
+                return .unknown;
+            }
+        }
+
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.program.addPat(.{ .ty = len_hint.ty, .data = .wildcard }),
+            .value = len_hint_value,
+        } }));
+        return .unknown;
     }
 
     fn iteratorPlanForPrivateProducerOperand(

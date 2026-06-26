@@ -1893,6 +1893,78 @@ test "optimized for over local drop_if uses child plan cursor" {
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
+test "optimized for over local Iter.custom uses private custom state" {
+    const source =
+        \\module [main]
+        \\
+        \\tap_i64 : I64 -> I64
+        \\tap_i64 = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\tap_u64 : U64 -> U64
+        \\tap_u64 = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 3 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    iter = Iter.custom(tap_i64(0.I64), Known(tap_u64(3.U64)), advance)
+        \\    dbg 4.I64
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "0", "3", "4", "3" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 3 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : I64
+        \\main = {
+        \\    iter = Iter.custom(0.I64, Unknown, advance)
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_get_unsafe_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_with_capacity_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_append_unsafe_count);
+}
+
 test "optimized for over if-selected list iter append uses private iterator cursors" {
     const source =
         \\module [main]
