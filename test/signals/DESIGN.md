@@ -83,9 +83,11 @@ Every part of this design must respect them.
    intrinsically mutable, so it lives in the Zig engine/host, which is the one
    place mutation is legal.
 5. **Type-mismatch crashes are structurally impossible.** A typed `Signal(a)`
-   stays typed end to end. Erasure is confined to one generated thunk per edge,
-   pinned to that edge's monomorphized types. There is no second, independently
-   typed read site that can disagree with the writer.
+   stays typed end to end. Erasure is confined to one generated set of ownership
+   operations per edge — a **capability** bundling clone/split, equality, and drop
+   plus any edge-specific read — pinned to that edge's monomorphized types. There
+   is no second, independently typed read site that can disagree with the writer,
+   and no host-side knowledge of the value's layout. See *Confined Erasure*.
 6. **One engine, two thin hosts.** All reactive and structural logic lives in the
    shared engine. A host file contains only its boundary (sink, marshalling,
    spec runner / JS bridge) and its `Ctx` implementation. Reactive or structural
@@ -193,34 +195,30 @@ This replaces string-collision/rename hazards with explicit, typed structure.
 ## Confined Erasure: No NodeValue, No Decode Crash
 
 The host's node table is heterogeneous, so values cross the boundary as opaque
-payloads. But erasure is confined to **one generated set of thunks per edge**,
-pinned to that edge's monomorphized types:
+payloads. Erasure is confined to **one capability per retained edge**, pinned to
+that edge's monomorphized types:
 
-- For each `map`/`map2`/`combine`/`state`/sink, the platform-glue layer emits the
-  concrete `is_eq` comparison (for change pruning) and — only where a value must
-  be stored or moved as bytes — `encode`/`decode` thunks, by static dispatch on
-  the value type. These are generated from the same call site whose argument
-  types are tied to the source `Signal(a)`'s `a`. (Static dispatch resolves each
-  call to a concrete method on the value's type; there is no auto-derivation, so
-  the value's type must define those methods, and monomorphization specializes
-  the thunk per instantiation.)
-- The host **never chooses** a decoder. It stores a boxed, opaque Roc value and
-  hands it back to the one thunk that owns that edge. There is no second,
-  independently typed read site, so a mismatch is a compile-time type error, not
-  a runtime decode crash.
+- For each `map`/`map2`/`combine`/`state`/source/sink edge, platform Roc builds a
+  concrete capability at the call site. Static dispatch resolves the value's
+  required operations (`is_eq`, key hashing, sink reads, and similar edge-specific
+  functions), and monomorphization specializes the capability for that edge's
+  concrete `a`.
+- The host **never chooses** a decoder, destructor, comparator, or reader. It
+  stores a boxed, opaque Roc value and invokes the capability that owns that edge.
+  There is no second, independently typed read site, so a mismatch is a routing
+  assertion failure in debug builds, not a runtime decode crash.
 
 Hot-path values are stored as **boxed typed Roc values the host never
-inspects**, with an `is_eq` thunk used for change pruning. Byte serialization is
+inspects**. Equality uses the capability's typed `eq`; byte serialization is
 reserved for persistence and the wire, never forced on every event. We do not
-`memcmp` encoded bytes for equality (fragile for floats/maps); we call the
-generated `is_eq` thunk.
+`memcmp` encoded bytes for equality (fragile for floats/maps), and the host never
+reconstructs type semantics from bytes.
 
 This opaque carrier must be produced at a real typed edge boundary. It is not a
 generic `Box({})` field in the descriptor tree: Roc keeps `Box(a)` typed, so a
 generic `Opaque(a)` value cannot be placed directly into heterogeneous `Elem`
-payloads. The platform boundary must either generate an erased host value cell at
-the monomorphized call site or reshape descriptors so each stored value is owned
-by the one typed thunk that can read it.
+payloads. The platform boundary produces a `HostValue` cell at the monomorphized
+call site and carries the capability that owns that cell.
 
 There is no untyped value representation crossing the boundary. The public API
 is a few polymorphic functions (below); monomorphization generates concrete code
@@ -253,6 +251,77 @@ Two rules keep this invariant honest:
    confined erasure is wired correctly, and it is part of the design, not an
    optional extra.
 
+### The capability: bundled ownership operations per retained value
+
+A thunk that *reads* an erased value is not enough. The host does not only read
+these values — it **owns their lifecycle**. After `roc_ui_init` the host owns the
+mutable runtime graph: state cells, source caches, derived-signal caches, keyed
+row key/item cells, pending task payloads, and sink values. Those cells are
+replaced during propagation, pruned when unchanged, cloned for non-consuming
+reads, and destroyed when a scope is disposed or the app unmounts. At each of
+those moments the host is the only code that knows a particular value is now
+dead, so the host is the code that must release it.
+
+The prebuilt host cannot release an app value by inspecting it. The host can own
+an opaque cell, but `a` comes from the app, not the platform. When a retained
+`Box(a)` reaches its final release, the payload's nested refcounted fields — a
+`Str` backing, a `List`, a record of lists, a tag union carrying a heap string —
+must also be released, and that requires the concrete monomorphized layout the
+prebuilt host was compiled without.
+
+Every retained `HostValue` is therefore paired with a **capability**: one bundled
+record of app-compiled, monomorphized operations for that value's exact type,
+produced at the same typed edge that produced the value. The capability is the
+typed instruction manual attached to the opaque cell. Conceptually:
+
+```roc
+# Produced at the monomorphized edge, stored beside the opaque cell.
+CapabilityHandle(a) := {
+    split : Box((Box(a) -> { keep : Box(a), out : Box(a) })),  # clone / split ownership
+    eq    : Box((HostValue, HostValue -> Bool)),               # value pruning
+    drop  : Box((HostValue -> {})),                            # release, incl. nested fields
+}
+```
+
+- **Clone/split, equality, and drop are the universal trio** every retained value
+  needs, because every retained value can be copied for a read, compared for
+  pruning, and released on disposal. They are bundled into one object so a value
+  and the operations that own it cannot drift apart.
+- **Reads and hashes are edge-specific extensions**, not part of the universal
+  trio. A signal-backed text edge owns a `read : HostValue -> Str`; a `Ui.when`
+  condition owns a `read : HostValue -> Bool`; a `Ui.each` key owns hash/equality.
+  These are carried by the edge that needs them and are tied to the same
+  capability identity, never invented by the host.
+- **The capability is app-compiled, not host-authored.** The prebuilt host sees
+  only the platform ABI; `a` is made concrete by the *application* (`Signal(a)`,
+  `Model`, a row item type). The capability's closures are emitted by
+  monomorphization when the app is built and handed to the host as ordinary
+  `RocErasedCallable` values. The host stores and invokes them; it never inspects
+  the layout they encapsulate.
+
+**The split law.** `get`/`get_tagged` is *split-and-replace clone, never a
+borrow*. The capability's `split` takes the stored owned `Box(a)` and returns two
+independently owned boxes: `keep` is written back into the cell, `out` is handed
+to the caller. Dropping either must not invalidate the other, and any nested
+refcounted field (`Str`, `List`, record, tag union, boxed closure) must end up
+independently owned in both. The host relies on this law but never enforces it by
+inspecting bytes; correctness is the capability's responsibility, expressed in
+typed Roc and lowered by the backend.
+
+**Boundary discipline.** The host never walks a payload, never increments a
+nested refcount, and never identifies a value by pointer shape. Every ownership
+action — clone, compare, release — is a capability call. Typed aliasing
+operations that share backing must retain that backing in typed Roc/compiler
+lowering, not in the host. The debug carrier tag above rides on the capability
+identity: in safe builds the host asserts that a value is only ever handed to the
+capability that produced or owns its edge, which is what makes a routing bug a
+caught assertion rather than undefined behavior.
+
+This is dictionary passing made concrete: a retained cell is morally an
+existential `exists a. { value : Box(a), cap : CapabilityHandle(a) }`. The host
+holds the package without knowing `a`; Roc owns all type knowledge; the capability
+bridges the two.
+
 ## App-Facing API
 
 The app sees `Signal(a)`, typed keys, `Elem`, `Cmd(a)`, `Sub(a)`, and a small
@@ -263,7 +332,7 @@ spec runner and the browser.
 
 ### Module surface
 
-Signatures use current Roc: parenthesized type application (`Signal(a)`,
+Signatures use Roc syntax: parenthesized type application (`Signal(a)`,
 `List(Elem)`), and `where [...]` static-dispatch constraints naming the methods
 a type variable must provide. There is no `implements`/ability syntax; a
 constraint such as `a.is_eq : a, a -> Bool` says "the concrete type bound to `a`
@@ -448,9 +517,9 @@ edges), and the host assigns dense ids by walking identity-bearing construction
 sites in deterministic pre-order. Each signal edge records its kind and inputs:
 
 ```roc
-# Conceptual shape. The implementation calls the signal node type `SignalExpr`
-# and carries identity via explicit per-edge tokens rather than dense list
-# indices; the host interns those tokens into shared records at ingestion.
+# Conceptual signal expression shape. Identity is carried via explicit
+# per-edge tokens rather than dense list indices; the host interns those
+# tokens into shared records at ingestion.
 SignalExpr := [
     Ref(U64),                                          # bound to a host source node id
     ConstValue({ value : HostValue, eq : EqThunk }),
@@ -464,12 +533,15 @@ SignalExpr := [
 erasure). They are produced from `Signal.map`/`map2`/`Ui.state` at the call site,
 so their input and output types are pinned to the surrounding `Signal(a)`. A
 source's initial value, sink reads, event payloads, structural conditions, and
-keyed row key/item slots are all carried as opaque `HostValue` handles with the
-typed equality/drop/read thunks owned by that exact edge. A `HostValue` is **not**
-a literal `Box(OpaqueValue)` field in the heterogeneous descriptor tree; Roc
-cannot erase `Box(a)` that way. The value is produced at the monomorphized edge
-and stored in a host value cell; the descriptor carries only the opaque handle
-plus the thunks that own it.
+keyed row key/item slots are all carried as opaque `HostValue` handles, each
+paired with the per-edge **capability** (clone/split, equality, drop) plus any
+edge-specific read thunk that owns it — see *The capability* under Confined
+Erasure. The conceptual `eq` fields above are the equality member of that
+capability, not a free-floating thunk. A `HostValue` is **not** a literal
+`Box(OpaqueValue)` field in the heterogeneous descriptor tree; Roc cannot erase
+`Box(a)` that way. The value is produced at the monomorphized edge and stored in
+a host value cell; the descriptor carries only the opaque handle plus the
+capability that owns it.
 
 The platform does **not** evaluate the graph. It only describes it. There is no
 `eval_signal`, no dirty propagation, no cache in Roc.
@@ -623,9 +695,8 @@ Non-negotiable structural rules that follow from the budget:
 - **`Ui.each` carries a key hash index.** The `key.hash` constraint in the API is
   load-bearing, not decorative: the host builds a `HashMap(key → row scope id)`
   for each `each` site and uses it for the keyed diff and the duplicate-key
-  check. Linear `is_eq` matching is a budget violation. If the implemented API
-  ever drops `key.hash`, that is a regression to fix in the API, not a host
-  workaround to absorb.
+  check. Linear `is_eq` matching is a budget violation. Dropping `key.hash` is a
+  regression to fix in the API, not a host workaround to absorb.
 - **Reorder moves, it does not rebuild.** A pure permutation of surviving rows
   must emit only DOM moves for displaced rows (computed against a longest-stable
   subsequence so unmoved rows cost nothing) and must not re-collect row
@@ -883,7 +954,11 @@ Questions), kept out of the thin executor.
 - The host holds exactly one refcount per live retained closure/value (the Leak
   invariant above). JS never owns Roc refcounts; JS holds DOM nodes and integer
   ids only. On `RemoveNode`, JS detaches the DOM node and clears `nodes[id]`; the
-  refcount drop happens inside the host's scope-dispose path.
+  refcount drop happens inside the host's scope-dispose path. That drop releases
+  the value through its per-edge **capability** (see Confined Erasure), never by
+  the host walking the payload layout: the prebuilt host cannot know how to free
+  the nested fields of an app-typed `Box(a)`, so releasing it is a capability
+  call.
 - String buffers JS receives are borrowed for the drain; the host owns and frees
   them. Buffers JS produces for event payloads are `roc_alloc`'d by JS and
   ownership transfers to the host on `roc_ui_event`.
