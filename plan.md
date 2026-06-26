@@ -655,7 +655,11 @@ Tasks:
     cursor and accumulator loop parameters without public iterator step values.
   - [x] Direct `Single` plans are consumed by direct-call `Iter.fold` without
     public iterator step values.
-  - [x] Direct `Map(ListIter | Append(ListIter, item...) | Range | Single, fn)`
+  - [x] Direct `Concat` of list-backed/list-append-backed plans is consumed by
+    direct-call `Iter.fold` with a private phase cursor and without public
+    iterator step values.
+  - [x] Direct
+    `Map(ListIter | Append(ListIter, item...) | Range | Single | Concat, fn)`
     plans with direct mapping functions are consumed by direct-call `Iter.fold`
     without public iterator step values.
 - [ ] Optimized `List.from_iter` consumes plan values directly.
@@ -692,6 +696,9 @@ Tasks:
   - [x] Direct mapped append operands and accumulator operands consumed by
     `Iter.fold` preserve `dbg` ordering relative to the fold result and
     following expressions.
+  - [x] Direct concat operands and accumulator operands consumed by `Iter.fold`
+    preserve `dbg` ordering relative to the fold result and following
+    expressions.
 - [ ] Refcounted list/string/item payload tests pass under ARC.
   - [x] Direct `List.from_iter(List(Str).iter().append(...))` passes optimized
     LIR interpretation with the expected string list.

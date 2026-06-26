@@ -2053,6 +2053,51 @@ test "optimized Iter.fold over direct append keeps refcounted items" {
     , &.{"\"ab\""});
 }
 
+test "optimized Iter.fold over direct concat consumes iterator plan" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold([1.I64, 2.I64].iter().append(3.I64).concat([4.I64, 5.I64].iter().append(6.I64)), 0.I64, |acc, item| acc + item)
+        \\    {}
+        \\}
+    , &.{"21"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = Iter.fold([1.I64, 2.I64].iter().append(3.I64).concat([4.I64, 5.I64].iter().append(6.I64)), 0.I64, |acc, item| acc + item)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "tag_assign_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_tag_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+}
+
+test "optimized Iter.fold over direct concat preserves producer and accumulator effects" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold([tap(1.I64)].iter().append(tap(2.I64)).concat([tap(3.I64)].iter().append(tap(4.I64))), tap(10.I64), |acc, item| acc + item)
+        \\    dbg 5.I64
+        \\    {}
+        \\}
+    , &.{ "1", "2", "3", "4", "10", "20", "5" });
+}
+
 test "optimized Iter.fold over direct range consumes iterator plan" {
     try expectOptimizedDbgEvents(
         \\module [main]
@@ -2211,6 +2256,32 @@ test "optimized Iter.fold over direct list append map consumes iterator plan" {
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_tag_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
+}
+
+test "optimized Iter.fold over direct concat map consumes iterator plan" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\main : {}
+        \\main = {
+        \\    dbg Iter.fold([1.I64].iter().append(2.I64).concat([3.I64].iter().append(4.I64)).map(|item| item * 2), 0.I64, |acc, item| acc + item)
+        \\    {}
+        \\}
+    , &.{"20"});
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = Iter.fold([1.I64].iter().append(2.I64).concat([3.I64].iter().append(4.I64)).map(|item| item * 2), 0.I64, |acc, item| acc + item)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "tag_assign_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_tag_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 2), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "list_get_unsafe_count"));
 }
 
 test "optimized Iter.fold over direct list append map preserves producer and accumulator effects" {
