@@ -228,8 +228,8 @@ TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 MISSING METHOD - fuzz_crash_027.md:68:3:68:8
 MISSING METHOD - fuzz_crash_027.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
-TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
+TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 # PROBLEMS
 
 LEADING ZERO
@@ -1018,23 +1018,6 @@ Numbers cannot have leading zeros.
     These can never match! Either the pattern or expression has a problem.
 
 
-┌──────────────┐
-│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
-└┬─────────────┘  1 instead.                                                  │
- │                                                                            │
- │  match_time(                                                               │
- │      ..., #                                                                │
- │  )                                                                         │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_027.md:111:2 ┘
-
-    The `match_time` function has the type:
-
-        [Blue, Red, ..], _arg -> Error
-
-    Are there any missing commas?
-
-
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
 └┬──────────────┘                                                             │
@@ -1053,6 +1036,23 @@ Numbers cannot have leading zeros.
 
     Hint: All `return` statements and the final expression in a function must
     have the same type.
+
+
+┌──────────────┐
+│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
+└┬─────────────┘  1 instead.                                                  │
+ │                                                                            │
+ │  match_time(                                                               │
+ │      ..., #                                                                │
+ │  )                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:111:2 ┘
+
+    The `match_time` function has the type:
+
+        [Blue, Red, ..], _arg -> Error
+
+    Are there any missing commas?
 
 # TOKENS
 ~~~zig
