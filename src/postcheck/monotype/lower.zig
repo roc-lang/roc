@@ -3978,6 +3978,23 @@ const BodyContext = struct {
         return try self.lowerExprWithType(expr_id, expr_ty);
     }
 
+    fn lowerReturn(self: *BodyContext, ret: anytype) Allocator.Error!Ast.Return {
+        const target = try self.returnTargetType(ret.lambda);
+        return .{
+            .value = try self.lowerExprAtType(ret.expr, target),
+            .target = target,
+        };
+    }
+
+    fn returnTargetType(self: *BodyContext, lambda_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
+        const lambda_expr = self.view.bodies.expr(lambda_id);
+        const body_id = switch (lambda_expr.data) {
+            .lambda => |lambda| lambda.body,
+            else => Common.invariant("checked return target did not reference a lambda"),
+        };
+        return try self.lowerType(self.view.bodies.expr(body_id).ty);
+    }
+
     fn lowerComptimeRootExprAtType(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -4180,7 +4197,7 @@ const BodyContext = struct {
             } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
@@ -13376,7 +13393,7 @@ const BodyContext = struct {
                 .region = checked_expr.source_region,
             } },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
             else => Common.invariant("checked expression was marked divergent but has no divergent lowering path"),
         };
     }
@@ -14355,7 +14372,7 @@ const BodyContext = struct {
                 } };
             },
             .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
         };
         return try self.builder.program.addStmt(stmt);
     }
