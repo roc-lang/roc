@@ -648,14 +648,18 @@ Tasks:
     preserves public iterator behavior.
   - [x] Public `Iter.next` through an unspecialized iterator argument preserves
     public step variants for recognized non-list producer plans.
-- [ ] Public aggregate storage materializes.
+- [x] Public aggregate storage materializes.
   - [x] Tuple storage containing `List.iter(...)` materializes before Lambda.
+  - [x] Tuple storage containing every recognized iterator producer
+    materializes before Lambda.
 - [ ] Unspecialized function return materializes.
   - [x] Function return of `List.iter(...)` materializes before Lambda and
     preserves public `Iter.next` behavior.
-- [ ] Unspecialized call argument materializes.
+- [x] Unspecialized call argument materializes.
   - [x] Function argument receiving `List.iter(...)` materializes before Lambda
     and preserves public `Iter.next` behavior.
+  - [x] Function argument receiving every recognized iterator producer
+    materializes before Lambda.
 - [x] Raw plan expressions cannot reach Lambda-to-LIR lowering.
 - [x] Raw plan expressions cannot reach LIR.
 - [ ] Optimized `for` consumes plan values directly.

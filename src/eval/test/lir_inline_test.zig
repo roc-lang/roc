@@ -3257,6 +3257,44 @@ test "public aggregate storage materializes iterator plan before Lambda" {
     try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
+test "public aggregate storage materializes recognized iterator plans before Lambda" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 1 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\main : (
+        \\    Iter(I64), Iter(I64), Iter(I64), Iter(I64),
+        \\    Iter(I64), Iter(I64), Iter(I64), Iter(I64),
+        \\    Iter(I64), Iter(I64), Iter(I64), Iter(I64),
+        \\)
+        \\main = (
+        \\    [10.I64, 20.I64].iter(),
+        \\    Iter.single(42.I64),
+        \\    1.I64..<3.I64,
+        \\    1.I64..=3.I64,
+        \\    Iter.custom(0.I64, Known(1.U64), advance),
+        \\    [10.I64].iter().append(20.I64),
+        \\    [10.I64].iter().prepended(5.I64),
+        \\    [10.I64].iter().iter(),
+        \\    [10.I64].iter().concat([20.I64].iter()),
+        \\    [10.I64].iter().map(|n| n + 1),
+        \\    [10.I64, 20.I64].iter().keep_if(|n| n > 10),
+        \\    [10.I64, 20.I64].iter().drop_if(|n| n < 20),
+        \\)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
 test "unspecialized function return materializes iterator plan before Lambda" {
     try expectOptimizedDbgEvents(
         \\module [main]
@@ -3323,6 +3361,49 @@ test "unspecialized function argument materializes iterator plan before Lambda" 
         \\
         \\main : I64
         \\main = take_first([10.I64, 20.I64].iter())
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
+test "unspecialized function argument materializes recognized iterator plans before Lambda" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 1 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\take_first : Iter(I64) -> I64
+        \\take_first = |iter|
+        \\    match Iter.next(iter) {
+        \\        Append({ after, .. }) => after
+        \\        One({ item, .. }) => item
+        \\        Skip(_) => -2
+        \\        _ => -1
+        \\    }
+        \\
+        \\main : (I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64)
+        \\main = (
+        \\    take_first([10.I64, 20.I64].iter()),
+        \\    take_first(Iter.single(42.I64)),
+        \\    take_first(1.I64..<3.I64),
+        \\    take_first(1.I64..=3.I64),
+        \\    take_first(Iter.custom(0.I64, Known(1.U64), advance)),
+        \\    take_first([10.I64].iter().append(20.I64)),
+        \\    take_first([10.I64].iter().prepended(5.I64)),
+        \\    take_first([10.I64].iter().iter()),
+        \\    take_first([10.I64].iter().concat([20.I64].iter())),
+        \\    take_first([10.I64].iter().map(|n| n + 1)),
+        \\    take_first([10.I64, 20.I64].iter().keep_if(|n| n > 10)),
+        \\    take_first([10.I64, 20.I64].iter().drop_if(|n| n < 20)),
+        \\)
     );
     defer lifted_source.deinit(allocator);
 
