@@ -2305,7 +2305,9 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 args.max_threads,
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
+                &cache_manager,
                 &reporter,
+                true,
             );
             const result = if (lowered_result) |*value| value else unreachable;
             entrypoint_names = result.entrypoint_names;
@@ -2322,7 +2324,9 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 args.max_threads,
                 debugEffectsForOpt(args.opt),
                 resolutionConfigFromLimits(args.resolve_limits),
+                &cache_manager,
                 &reporter,
+                true,
             );
             shm_handle_opt = shm_result.handle;
             entrypoint_names = shm_result.entrypoint_names;
@@ -2334,7 +2338,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         .size, .speed => unreachable,
     }
 
-    if (error_count > 0) {
+    if (error_count > 0 and entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -2940,13 +2944,19 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &reporter);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits), &cache_manager, &reporter, true);
     defer closeSharedMemoryHandle(shm_result.handle);
 
-    if (shm_result.error_count > 0) {
+    if (shm_result.error_count > 0 and shm_result.entrypoint_names.len == 0) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -3061,11 +3071,13 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         args.max_threads,
         debugEffectsForOpt(args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
+        &cache_manager,
         &reporter,
+        true,
     );
     defer lowered_result.deinit();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         reporter.fail();
         if (args.allow_errors) return;
         return error.TypeCheckingFailed;
@@ -4838,12 +4850,12 @@ fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []
                 ctx.gpa.free(@constCast(note_entry.value));
             }
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         } else if (rep.severity == .warning) {
             counts.warnings += 1;
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
             }
         }
     }
@@ -5108,6 +5120,8 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         debugEffectsForOpt(.dev),
         resolutionConfigFromLimits(args.resolve_limits),
         null,
+        null,
+        false,
     );
     defer lowered_result.deinit();
 
@@ -5410,7 +5424,9 @@ fn lowerLirWithCoordinator(
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
+    cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!LoweredCoordinatorResult {
     if (reporter) |r| r.begin("Resolving Dependencies");
 
@@ -5447,6 +5463,18 @@ fn lowerLirWithCoordinator(
         try ctx.arena.dupe(u8, roc_file_path);
     var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
     defer resolved.deinit();
+    const resolved_packages = resolved.packages;
+
+    const package_names = try ctx.gpa.alloc([]const u8, resolved_packages.len);
+    defer ctx.gpa.free(package_names);
+    for (package_names, resolved_packages, 0..) |*package_name, package, i| {
+        package_name.* = if (i == compile.package_resolution.Resolved.root_index) "app" else package.identity;
+    }
+    for (resolved_packages[compile.package_resolution.Resolved.root_index].deps) |dep| {
+        if (dep.is_platform) {
+            package_names[dep.target] = "pf";
+        }
+    }
     if (reporter) |r| r.end();
 
     const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
@@ -5459,7 +5487,7 @@ fn lowerLirWithCoordinator(
         RocTarget.detectNative(),
         &builtin_modules,
         build_options.compiler_version,
-        null, // no cache for IPC
+        cache_manager,
         ctx.coreCtx(),
     );
     defer coord.deinit();
@@ -5469,7 +5497,7 @@ fn lowerLirWithCoordinator(
     try coord.start();
 
     const app_pkg = try coord.ensurePackage("app", app_dir);
-    const root_package = resolved.packages[compile.package_resolution.Resolved.root_index];
+    const root_package = resolved_packages[compile.package_resolution.Resolved.root_index];
     try app_pkg.setRootInput(ctx.gpa, root_package.root_file, try currentCompilerWatchInputState(ctx, root_package.root_file));
     const app_module_name = base.module_path.getModuleName(roc_file_path);
     const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
@@ -5481,15 +5509,17 @@ fn lowerLirWithCoordinator(
     app_pkg.remaining_modules += 1;
     coord.total_remaining += 1;
 
-    // Register every resolved package (named by its unique identity), then
-    // wire each package's shorthand aliases and enqueue the platform root.
-    const resolved_packages = resolved.packages;
-    for (resolved_packages[1..]) |package| {
+    // Register resolved packages under the coordinator package names that
+    // participate in checked module identity. Non-platform packages keep their
+    // resolved identities; the root platform package uses the stable "pf" name,
+    // matching Coordinator.discoverAppFromPath.
+    for (resolved_packages[1..], 1..) |package, package_idx| {
+        const package_name = package_names[package_idx];
         const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
             .url = url.url,
             .url_id = url.url_id,
         } else null;
-        const pkg = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
+        const pkg = try coord.ensurePackageWithUrl(package_name, package.root_dir, url_view);
         const root_file_state: compile.watch_inputs.State = if (url_view == null)
             try currentCompilerWatchInputState(ctx, package.root_file)
         else
@@ -5518,14 +5548,11 @@ fn lowerLirWithCoordinator(
         const from_pkg = if (i == compile.package_resolution.Resolved.root_index)
             app_pkg
         else
-            coord.packages.get(package.identity) orelse return error.CliError;
+            coord.packages.get(package_names[i]) orelse return error.CliError;
 
         for (package.deps) |dep| {
             const target = resolved_packages[dep.target];
-            const target_name = if (dep.target == compile.package_resolution.Resolved.root_index)
-                "app"
-            else
-                target.identity;
+            const target_name = package_names[dep.target];
             try from_pkg.shorthands.put(
                 try ctx.gpa.dupe(u8, dep.alias),
                 try ctx.gpa.dupe(u8, target_name),
@@ -5534,14 +5561,14 @@ fn lowerLirWithCoordinator(
             // The app's platform root module is parsed eagerly so its
             // provides/hosted declarations are available to the build.
             if (i == compile.package_resolution.Resolved.root_index and dep.is_platform) {
-                const pf_pkg = coord.packages.get(target.identity) orelse return error.CliError;
+                const pf_pkg = coord.packages.get(target_name) orelse return error.CliError;
                 if (pf_pkg.root_module_id == null) {
                     const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", target.root_file);
                     pf_pkg.root_module_id = pf_module_id;
                     pf_pkg.modules.items[pf_module_id].depth = 1;
                     pf_pkg.remaining_modules += 1;
                     coord.total_remaining += 1;
-                    try coord.enqueueParseTask(target.identity, pf_module_id);
+                    try coord.enqueueParseTask(target_name, pf_module_id);
                 }
             }
         }
@@ -5555,7 +5582,7 @@ fn lowerLirWithCoordinator(
         return err;
     };
 
-    if (coord.hasUserErrors()) {
+    if (coord.hasUserErrors() and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
         if (reporter) |r| r.fail();
         const watch_inputs = try coord.collectWatchInputStates();
@@ -5570,11 +5597,15 @@ fn lowerLirWithCoordinator(
         };
     }
 
-    try coord.finalizeExecutableArtifacts();
+    if (allow_user_errors) {
+        try coord.finalizeExecutableArtifactsAllowUserErrors();
+    } else {
+        try coord.finalizeExecutableArtifacts();
+    }
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     const watch_inputs = try coord.collectWatchInputStates();
     errdefer coord.freeWatchInputStates(watch_inputs);
-    if (finalized_counts.errors > 0) {
+    if (finalized_counts.errors > 0 and (!allow_user_errors or !coord.userErrorsAllowExecutableLowering())) {
         if (reporter) |r| r.fail();
         return .{
             .lowered = null,
@@ -5663,7 +5694,9 @@ pub fn buildLirImageWithCoordinator(
     max_threads: ?usize,
     debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
+    cache_manager: ?*CacheManager,
     reporter: ?*progress.Reporter,
+    allow_user_errors: bool,
 ) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
@@ -5682,11 +5715,13 @@ pub fn buildLirImageWithCoordinator(
         max_threads,
         debug_effects,
         resolution_config,
+        cache_manager,
         reporter,
+        allow_user_errors,
     );
     defer lowered_result.deinitWatchInputs();
 
-    if (lowered_result.counts.errors > 0) {
+    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
         shm.updateHeader();
         return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
     }
@@ -5720,7 +5755,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{}, null, null, true);
 }
 
 /// Platform resolution result containing the platform source path
@@ -5970,12 +6005,10 @@ fn resolvePackages(ctx: *CliCtx, roc_file_abs: []const u8, resolution_config: co
         error.OutOfMemory => error.OutOfMemory,
         error.ResolutionFailed => {
             for (resolver.diagnostics.items) |diagnostic| {
-                var report = reporting.Report.init(ctx.gpa, diagnostic.title, .runtime_error);
+                var report = reporting.Report.init(ctx.gpa, diagnostic.title, diagnostic.message, .runtime_error) catch break;
                 defer report.deinit();
-                const owned = report.addOwnedString(diagnostic.message) catch break;
-                report.addErrorMessage(owned) catch break;
                 if (!builtin.is_test) {
-                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
                 }
             }
             ctx.io.flush();
@@ -11078,7 +11111,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "FAIL",
+                        "Fail",
                         .runtime_error,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -11092,7 +11125,7 @@ fn renderTestResultBodies(
                         module_result.path,
                         module_result.env,
                         region_info,
-                        "COMPILER_ERROR",
+                        "Compiler Error",
                         .warning,
                         result.failure_detail,
                         result.failure_detail_visibility,
@@ -11120,9 +11153,6 @@ fn printTestProblem(
 ) ReportRenderError!void {
     const src = env.getSourceAll();
 
-    var report = reporting.Report.init(allocator, label, severity);
-    defer report.deinit();
-
     const doc_comment: ?[]const u8 = blk: {
         const line_starts = env.getLineStarts();
         const curr_line_start_idx = region_info.start_line_idx;
@@ -11134,10 +11164,24 @@ fn printTestProblem(
         }
         break :blk null;
     };
-    if (doc_comment) |comment| {
-        try report.document.addText(comment);
-        try report.document.addLineBreak();
+
+    // The headline is the test's doc comment, if any. House style requires a
+    // headline to end in a period, so append one when it's missing.
+    var headline: []const u8 = "";
+    var headline_owned = false;
+    if (doc_comment) |dc| {
+        if (std.mem.endsWith(u8, dc, ".")) {
+            headline = dc;
+        } else {
+            headline = try std.fmt.allocPrint(allocator, "{s}.", .{dc});
+            headline_owned = true;
+        }
     }
+    defer if (headline_owned) allocator.free(headline);
+
+    var report = try reporting.Report.init(allocator, label, headline, severity);
+    defer report.deinit();
+
     try report.addSourceContext(region_info, path, src, env.getLineStarts());
 
     const should_print_detail = switch (failure_detail_visibility) {
@@ -11317,10 +11361,16 @@ fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMod
     const color_disabled = repl_args.no_color or no_color_env;
     const should_color = !color_disabled and (force_color or (mode == .interactive and stderr_is_tty));
 
+    // Always render the box layout; when color is disabled, keep the
+    // color_terminal target but force the no-color palette so the REPL shows the
+    // same plain box as non-TTY output (rather than the old markdown layout).
     var config = if (should_color)
-        if (high_contrast) reporting.ReportingConfig.initHighContrast() else reporting.ReportingConfig.initColorTerminal()
-    else
-        reporting.ReportingConfig.initMarkdown();
+        if (high_contrast) reporting.ReportingConfig.initHighContrast() else ctx.terminalReportConfig()
+    else blk: {
+        var plain = ctx.terminalReportConfig();
+        plain.color_preference = .never;
+        break :blk plain;
+    };
 
     config.is_tty = stderr_is_tty;
     return config;
@@ -12060,7 +12110,7 @@ fn finishRocCheck(
 
     for (check_result.reports) |module| {
         for (module.reports) |*report| {
-            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig());
         }
     }
 
@@ -12603,7 +12653,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
         for (module.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig()) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}", .{report.title}) catch {};

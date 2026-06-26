@@ -10,19 +10,22 @@ type=expr
 # EXPECTED
 MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
 # PROBLEMS
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**bang_on_numeric_literal.md:1:1:1:3:**
-```roc
-!3
-```
-^^
 
-The value's type, which does not have a method named **not**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  !3                                                                        │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────── bang_on_numeric_literal.md:1:1 ┘
 
-    Dec
+    The value's type, which does not have a method named `not`, is:
 
-**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+        Dec
+
+    Hint: This numeric literal was given the type `Dec` because it was never
+    used as any concrete number type. To use a different numeric type, add a
+    suffix or a type annotation.
 
 # TOKENS
 ~~~zig

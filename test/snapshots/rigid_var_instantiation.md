@@ -30,41 +30,41 @@ UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `num` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:10:5:10:8:**
-```roc
-    num = identity(42)
-```
-    ^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `num` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  num = identity(42)                                                        │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────── rigid_var_instantiation.md:10:5 ┘
 
-
-**UNUSED VARIABLE**
-Variable `str` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:13:5:13:8:**
-```roc
-    str = identity("hello")
-```
-    ^^^
+    If you don't need this variable, prefix it with an underscore like `_num`
+    to suppress this warning.
 
 
-**UNUSED VARIABLE**
-Variable `lst` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `str` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  str = identity("hello")                                                   │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────── rigid_var_instantiation.md:13:5 ┘
 
-If you don't need this variable, prefix it with an underscore like `_lst` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:16:5:16:8:**
-```roc
-    lst = identity([1, 2, 3])
-```
-    ^^^
+    If you don't need this variable, prefix it with an underscore like `_str`
+    to suppress this warning.
 
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `lst` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  lst = identity([1, 2, 3])                                                 │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────── rigid_var_instantiation.md:16:5 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_lst`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig

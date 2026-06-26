@@ -17,72 +17,72 @@ PARSE ERROR - module_multiline_with_comments.md:2:12:2:13
 PARSE ERROR - module_multiline_with_comments.md:3:11:3:12
 PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**module_multiline_with_comments.md:1:2:1:3:**
-```roc
-	[ # Comment After exposes open
-```
-	^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  [ # Comment After exposes open                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────── module_multiline_with_comments.md:1:2 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**module_multiline_with_comments.md:2:3:2:12:**
-```roc
-		something, # Comment after exposed item
-```
-		^^^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  something, # Comment after exposed item                                   │
+ │  ‾‾‾‾‾‾‾‾‾                                                                 │
+ └───────────────────────────────────── module_multiline_with_comments.md:2:3 ┘
 
-**module_multiline_with_comments.md:2:12:2:13:**
-```roc
-		something, # Comment after exposed item
-```
-		         ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**module_multiline_with_comments.md:3:11:3:12:**
-```roc
-		SomeType, # Comment after final exposed item
-```
-		        ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  something, # Comment after exposed item                                   │
+ │           ‾                                                                │
+ └──────────────────────────────────── module_multiline_with_comments.md:2:12 ┘
 
-**module_multiline_with_comments.md:4:2:4:3:**
-```roc
-	]
-```
-	^
+    This is an unexpected parsing error. Please check your syntax.
 
+
+┌─────────────┐
+│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
+└┬────────────┘  arguments.                                                   │
+ │                                                                            │
+ │  SomeType, # Comment after final exposed item                              │
+ │          ‾                                                                 │
+ └──────────────────────────────────── module_multiline_with_comments.md:3:11 ┘
+
+    I found a type followed by what looks like a type argument, but they need
+    to be connected with parentheses.
+
+    Instead of:
+        List U8
+
+    Use:
+        List(U8)
+
+    Other valid examples:
+        Dict(Str, Num)
+        Try(a, Str)
+        Maybe(List(U64))
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  ]                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────── module_multiline_with_comments.md:4:2 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig

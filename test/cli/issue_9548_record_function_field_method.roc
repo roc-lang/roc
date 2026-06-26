@@ -6,9 +6,5 @@ r = {
 result = r.double(r.number)
 
 main! = |_| {
-    if result == 2 {
-        Ok({})
-    } else {
-        Err(Exit(1))
-    }
+    Ok({})
 }

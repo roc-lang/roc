@@ -23,39 +23,38 @@ UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
 TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
-**UNDECLARED TYPE VARIABLE**
-The type variable _a_ is not declared in this scope.
 
-Type variables must be introduced in a type annotation before they can be used.
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  Container : a -> [Container(a)]                                           │
+ │              ‾                                                             │
+ └────────────────────────────────────── nominal_associated_in_tuples.md:9:13 ┘
 
-This type variable is referenced here:
-**nominal_associated_in_tuples.md:9:13:9:14:**
-```roc
-Container : a -> [Container(a)]
-```
-            ^
-
-
-**UNDECLARED TYPE VARIABLE**
-The type variable _a_ is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**nominal_associated_in_tuples.md:9:29:9:30:**
-```roc
-Container : a -> [Container(a)]
-```
-                            ^
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
 
-**TOO MANY ARGS**
-The type _Container_ expects 0 arguments, but got 1 instead.
-**nominal_associated_in_tuples.md:11:9:11:27:**
-```roc
-boxed : Container(Foo.Bar)
-```
-        ^^^^^^^^^^^^^^^^^^
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  Container : a -> [Container(a)]                                           │
+ │                              ‾                                             │
+ └────────────────────────────────────── nominal_associated_in_tuples.md:9:29 ┘
+
+    Type variables must be introduced in a type annotation before they can be
+    used.
+
+
+┌───────────────┐
+│ TOO MANY ARGS ├─ The type Container expects 0 arguments, but got 1 ─────────┐
+└┬──────────────┘  instead.                                                   │
+ │                                                                            │
+ │  boxed : Container(Foo.Bar)                                                │
+ │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────── nominal_associated_in_tuples.md:11:9 ┘
 
 
 # TOKENS

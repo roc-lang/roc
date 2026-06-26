@@ -1,6 +1,7 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
+import pf.Host
 
 # Regression test: early return with live refcounted symbols.
 # When early_return is taken, all live RC symbols in the enclosing scope
@@ -16,7 +17,10 @@ try_get = |list| {
 }
 
 main! = || {
-    match try_get([]) {
+    runtime = Host.get_greeting!(Host.new("early"))
+    values = if Str.count_utf8_bytes(runtime) > 0 { [] } else { ["unused"] }
+
+    match try_get(values) {
         Ok(val) => Stdout.line!(val)
         Err(ListWasEmpty) => Stdout.line!("empty")
     }

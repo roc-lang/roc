@@ -18,21 +18,22 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**test_instantiated_return_crash.md:6:24:**
-```roc
-    needs_string = |f| f(["hello"])
-```
-                         ^^^^^^^^^
 
-This argument has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
+└┬──────────────┘  wrong type.                                                │
+ │                                                                            │
+ │  needs_string = |f| f(["hello"])                                           │
+ │                       ‾‾‾‾‾‾‾‾‾                                            │
+ └──────────────────────────────────── test_instantiated_return_crash.md:6:26 ┘
 
-    List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
+    This argument has the type:
 
-But `f` needs the first argument to be:
+        List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
 
-    Str
+    But `f` needs the first argument to be:
+
+        Str
 
 # TOKENS
 ~~~zig

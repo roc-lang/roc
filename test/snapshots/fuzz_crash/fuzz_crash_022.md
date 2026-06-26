@@ -32,175 +32,178 @@ UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_package_or_platform_name`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_022.md:1:1:1:4:**
-```roc
-app [main!] { |f: platform "c" }
-```
-^^^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: expected_package_or_platform_name ─┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_022.md:1:1 ┘
 
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **platform** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**fuzz_crash_022.md:1:19:1:27:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                  ^^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token platform is not expected ──┐
+└┬────────────────────────────────────┘  in a type annotation.                │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │                    ‾‾‾‾‾‾‾‾                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
 
-**fuzz_crash_022.md:1:28:1:29:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_022.md:1:29:1:30:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                            ^
+    Type annotations should contain types like Str, Num a, or List U64.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │                             ‾                                              │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:1:28 ┘
 
-**fuzz_crash_022.md:1:30:1:31:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_022.md:1:32:1:33:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                               ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **)** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │                              ‾                                             │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:1:29 ┘
 
-**fuzz_crash_022.md:6:27:6:28:**
-```roc
-getUser = |id| if (id > 1!) "big" else "l"
-```
-                          ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **else** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**fuzz_crash_022.md:6:35:6:39:**
-```roc
-getUser = |id| if (id > 1!) "big" else "l"
-```
-                                  ^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │                               ‾                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:1:30 ┘
 
-**fuzz_crash_022.md:8:7:8:8:**
-```roc
--ain! = |_| getUser(900)
-```
-      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_round_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_022.md:9:1:9:1:**
-```roc
-
-```
-^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │                                 ‾                                          │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:1:32 ┘
 
-**fuzz_crash_022.md:9:1:9:1:**
-```roc
-
-```
-^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_022.md:1:19:1:27:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                  ^^^^^^^^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**INVALID IF CONDITION**
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ) is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  getUser = |id| if (id > 1!) "big" else "l"                                │
+ │                            ‾                                               │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:6:27 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+
+
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token else is not expected in an ─────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  getUser = |id| if (id > 1!) "big" else "l"                                │
+ │                                    ‾‾‾‾                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:6:35 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+
+
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  -ain! = |_| getUser(900)                                                  │
+ │        ‾                                                                   │
+ └───────────────────────────────────────────────────── fuzz_crash_022.md:8:7 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
+└┬────────────┘  expected_expr_close_round_or_comma                           │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token  is not expected in an ─────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+
+
+┌────────────────┐
+│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
+└┬───────────────┘  syntax.                                                   │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │                    ‾‾‾‾‾‾‾‾                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
+
+
+
+INVALID IF CONDITION
+
 The condition in this `if` expression could not be processed.
-
 The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
 
-**UNUSED VARIABLE**
-Variable `id` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_022.md:6:12:6:14:**
-```roc
-getUser = |id| if (id > 1!) "big" else "l"
-```
-           ^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `id` is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  getUser = |id| if (id > 1!) "big" else "l"                                │
+ │             ‾‾                                                             │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:6:12 ┘
 
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_022.md:1:16:1:27:**
-```roc
-app [main!] { |f: platform "c" }
-```
-               ^^^^^^^^^^^
+    If you don't need this variable, prefix it with an underscore like `_id` to
+    suppress this warning.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  app [main!] { |f: platform "c" }                                          │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_022.md:1:16 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_022.md:5:1:5:20:**
-```roc
-ser : UserId -> Str
-```
-^^^^^^^^^^^^^^^^^^^
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  ser : UserId -> Str                                                       │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_022.md:5:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

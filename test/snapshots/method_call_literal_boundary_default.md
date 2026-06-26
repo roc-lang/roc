@@ -17,25 +17,31 @@ result = func(10, 20)
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:8:4:9
 LITERAL DEFAULTED - method_call_literal_boundary_default.md:4:22:4:23
 # PROBLEMS
-**LITERAL DEFAULTED**
-Nothing in this definition's type determines the type of this number literal, so it was given the default type **Dec** instead:
-**method_call_literal_boundary_default.md:4:8:4:9:**
-```roc
-	add_x(5).plus(add_y(5))
-```
-	      ^
 
-**Hint:** To use a different numeric type here, add a suffix or a type annotation.
+┌───────────────────┐
+│ LITERAL DEFAULTED ├─ Nothing in this definition's type determines the ──────┐
+└┬──────────────────┘  type of this number literal, so it was given the       │
+ │                     default type `Dec` instead.                            │
+ │                                                                            │
+ │  add_x(5).plus(add_y(5))                                                   │
+ │        ‾                                                                   │
+ └─────────────────────────────── method_call_literal_boundary_default.md:4:8 ┘
 
-**LITERAL DEFAULTED**
-Nothing in this definition's type determines the type of this number literal, so it was given the default type **Dec** instead:
-**method_call_literal_boundary_default.md:4:22:4:23:**
-```roc
-	add_x(5).plus(add_y(5))
-```
-	                    ^
+    Hint: To use a different numeric type here, add a suffix or a type
+    annotation.
 
-**Hint:** To use a different numeric type here, add a suffix or a type annotation.
+
+┌───────────────────┐
+│ LITERAL DEFAULTED ├─ Nothing in this definition's type determines the ──────┐
+└┬──────────────────┘  type of this number literal, so it was given the       │
+ │                     default type `Dec` instead.                            │
+ │                                                                            │
+ │  add_x(5).plus(add_y(5))                                                   │
+ │                      ‾                                                     │
+ └────────────────────────────── method_call_literal_boundary_default.md:4:22 ┘
+
+    Hint: To use a different numeric type here, add a suffix or a type
+    annotation.
 
 # TOKENS
 ~~~zig

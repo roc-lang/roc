@@ -10,8 +10,8 @@ type=repl
 » {foo: "Hello", bar: "World"}.bar
 ~~~
 # OUTPUT
-**TYPE MISMATCH**
-This record does not have a `foo` field:
+**Type Mismatch**
+This record does not have a `foo` field.
 **repl:1:1:1:3:**
 ```roc
 {}.foo

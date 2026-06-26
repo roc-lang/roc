@@ -14,38 +14,40 @@ expect result == result
 ~~~
 # EXPECTED
 TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
-: - :0:0:0:0
 # PROBLEMS
-**TYPE DOES NOT SUPPORT EQUALITY**
-This expression is doing an equality check on a type that doesn't support equality:
-**tag_union_multiple_ineligible.md:6:8:6:24:**
-```roc
-expect result == result
-```
-       ^^^^^^^^^^^^^^^^
 
-The type is:
+┌────────────────────────────────┐
+│ TYPE DOES NOT SUPPORT EQUALITY ├─ This expression is doing an equality ─────┐
+└┬───────────────────────────────┘  check on a type that doesn't support      │
+ │                                  equality.                                 │
+ │                                                                            │
+ │  expect result == result                                                   │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────────── tag_union_multiple_ineligible.md:6:8 ┘
 
-    [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]
+    The type is:
+
+        [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]
+          where [
+            a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+            b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
+            d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+            d.is_gt : d, d -> Bool,
+          ]
+
+    This tag union does not support equality because these tags have payload
+    types that don't support is_eq:
+
+        Transform (a -> a)
+            Function equality is not supported.
+        Validate (a -> Bool
       where [
-        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
-        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        d.is_gt : d, d -> Bool,
-      ]
-
-This tag union does not support equality because these tags have payload types that don't support **is_eq**:
-
-    **Transform** (_a -> a_)
-        Function equality is not supported.
-    **Validate** (_a -> Bool
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    a.is_gt : a, a -> Bool,
-  ]_)
-        Function equality is not supported.
-**Hint:** Tag unions only have an **is_eq** method if all of their payload types have **is_eq** methods.
-
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        a.is_gt : a, a -> Bool,
+      ])
+            Function equality is not supported.
+    Hint: Tag unions only have an is_eq method if all of their payload types
+    have is_eq methods.
 
 # TOKENS
 ~~~zig

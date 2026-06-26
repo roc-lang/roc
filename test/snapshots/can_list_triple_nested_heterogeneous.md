@@ -10,17 +10,18 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_triple_nested_heterogeneous.md:1:23:1:30
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**can_list_triple_nested_heterogeneous.md:1:23:1:30:**
-```roc
-[[], [[], [1]], [[], ["hello"]]]
-```
-                      ^^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [[], [[], [1]], [[], ["hello"]]]                                          │
+ │                        ‾‾‾‾‾‾‾                                             │
+ └────────────────────────────── can_list_triple_nested_heterogeneous.md:1:23 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig

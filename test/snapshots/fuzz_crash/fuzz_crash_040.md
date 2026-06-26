@@ -15,59 +15,60 @@ PARSE ERROR - fuzz_crash_040.md:2:4:2:5
 MALFORMED TYPE - fuzz_crash_040.md:2:3:2:4
 DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_040.md:1:20:1:21:**
-```roc
-app[]{f:platform""}{
-```
-                   ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  app[]{f:platform""}{                                                      │
+ │                     ‾                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_040.md:1:20 ┘
 
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**fuzz_crash_040.md:2:3:2:4:**
-```roc
-o:0)
-```
-  ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────────────────────────────┐
+│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
+└┬────────────────────────────────────┘  type annotation.                     │
+ │                                                                            │
+ │  o:0)                                                                      │
+ │    ‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_040.md:2:3 ┘
 
-**fuzz_crash_040.md:2:4:2:5:**
-```roc
-o:0)
-```
-   ^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_040.md:2:3:2:4:**
-```roc
-o:0)
-```
-  ^
+    Type annotations should contain types like Str, Num a, or List U64.
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_040.md:2:1:2:4:**
-```roc
-o:0)
-```
-^^^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  o:0)                                                                      │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_040.md:2:4 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌────────────────┐
+│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
+└┬───────────────┘  syntax.                                                   │
+ │                                                                            │
+ │  o:0)                                                                      │
+ │    ‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_040.md:2:3 ┘
+
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  o:0)                                                                      │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_040.md:2:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig

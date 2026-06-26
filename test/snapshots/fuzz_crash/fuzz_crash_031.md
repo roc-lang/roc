@@ -19,81 +19,81 @@ PARSE ERROR - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
-**UNCLOSED SINGLE QUOTE**
-This single-quoted literal is missing a closing quote.
 
-**fuzz_crash_031.md:4:10:4:11:**
-```roc
-vavar t= '
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_031.md:1:1:1:5:**
-```roc
-mule []
-```
-^^^^
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  vavar t= '                                                                │
+ │           ‾                                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_031.md:1:6:1:7:**
-```roc
-mule []
-```
-     ^
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  mule []                                                                   │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_031.md:1:1 ┘
 
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_031.md:1:7:1:8:**
-```roc
-mule []
-```
-      ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  mule []                                                                   │
+ │       ‾                                                                    │
+ └───────────────────────────────────────────────────── fuzz_crash_031.md:1:6 ┘
 
-**fuzz_crash_031.md:4:1:4:6:**
-```roc
-vavar t= '
-```
-^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**fuzz_crash_031.md:4:10:4:11:**
-```roc
-vavar t= '
-```
-         ^
+    This is an unexpected parsing error. Please check your syntax.
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  mule []                                                                   │
+ │        ‾                                                                   │
+ └───────────────────────────────────────────────────── fuzz_crash_031.md:1:7 ┘
 
-**fuzz_crash_031.md:4:10:4:11:**
-```roc
-vavar t= '
-```
-         ^
+    This is an unexpected parsing error. Please check your syntax.
 
-This might be a syntax error, an unsupported language feature, or a typo.
+
+┌─────────────┐
+│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
+└┬────────────┘                                                               │
+ │                                                                            │
+ │  vavar t= '                                                                │
+ │  ‾‾‾‾‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_031.md:4:1 ┘
+
+    This is an unexpected parsing error. Please check your syntax.
+
+
+┌────────────────────────────────┐
+│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ' is not expected in an ────────┐
+└┬───────────────────────────────┘  expression.                               │
+ │                                                                            │
+ │  vavar t= '                                                                │
+ │           ‾                                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+
+    Expressions can be identifiers, literals, function calls, or operators.
+
+
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  vavar t= '                                                                │
+ │           ‾                                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

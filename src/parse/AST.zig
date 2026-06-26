@@ -143,19 +143,19 @@ pub fn deinit(self: *AST) void {
 /// Convert a tokenize diagnostic to a Report for rendering
 pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
     const title = switch (diagnostic.tag) {
-        .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
-        .AsciiControl => "ASCII CONTROL CHARACTER",
-        .LeadingZero => "LEADING ZERO",
-        .UppercaseBase => "UPPERCASE BASE",
-        .InvalidUnicodeEscapeSequence => "INVALID UNICODE ESCAPE SEQUENCE",
-        .InvalidEscapeSequence => "INVALID ESCAPE SEQUENCE",
-        .UnclosedString => "UNCLOSED STRING",
-        .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
-        .InvalidUtf8InSource => "INVALID UTF-8",
-        .DollarInMiddleOfIdentifier => "STRAY DOLLAR SIGN",
-        .SingleQuoteTooLong => "SINGLE QUOTE TOO LONG",
-        .SingleQuoteEmpty => "SINGLE QUOTE EMPTY",
-        .SingleQuoteUnclosed => "UNCLOSED SINGLE QUOTE",
+        .MisplacedCarriageReturn => "Misplaced Carriage Return",
+        .AsciiControl => "ASCII Control Character",
+        .LeadingZero => "Leading Zero",
+        .UppercaseBase => "Uppercase Base",
+        .InvalidUnicodeEscapeSequence => "Invalid Unicode Escape Sequence",
+        .InvalidEscapeSequence => "Invalid Escape Sequence",
+        .UnclosedString => "Unclosed String",
+        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode In String-like Literal",
+        .InvalidUtf8InSource => "Invalid UTF-8",
+        .DollarInMiddleOfIdentifier => "Stray Dollar Sign",
+        .SingleQuoteTooLong => "Single Quote Too Long",
+        .SingleQuoteEmpty => "Single Quote Empty",
+        .SingleQuoteUnclosed => "Unclosed Single Quote",
     };
 
     const body = switch (diagnostic.tag) {
@@ -173,10 +173,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .SingleQuoteUnclosed => "This single-quoted literal is missing a closing quote.",
     };
 
-    var report = reporting.Report.init(allocator, title, .runtime_error);
-    try report.document.addText(body);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    var report = try reporting.Report.init(allocator, title, body, .runtime_error);
 
     // Add the region information from the diagnostic if valid
     if (diagnostic.region.start.offset < diagnostic.region.end.offset and
@@ -253,75 +250,91 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     };
 
     const title = switch (diagnostic.tag) {
-        .multiple_platforms => "MULTIPLE PLATFORMS",
-        .no_platform => "NO PLATFORM",
-        .missing_arrow => "MISSING ARROW",
-        .expected_exposes => "EXPECTED EXPOSES",
-        .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
-        .expected_exposes_open_square => "EXPECTED OPENING BRACKET",
-        .expected_packages => "EXPECTED PACKAGES",
-        .expected_packages_close_curly => "EXPECTED CLOSING BRACE",
-        .expected_packages_open_curly => "EXPECTED OPENING BRACE",
-        .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
-        .pattern_list_rest_old_syntax => "BAD LIST REST PATTERN SYNTAX",
-        .pattern_unexpected_eof => "UNEXPECTED END OF FILE IN PATTERN",
-        .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
-        .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
-        .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
-        .crash_statement_in_expr_position => "CRASH IN EXPRESSION",
-        .return_outside_function => "RETURN OUTSIDE FUNCTION",
-        .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
-        .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
-        .where_expected_open_bracket => "WHERE CLAUSE ERROR",
-        .where_expected_close_bracket => "WHERE CLAUSE ERROR",
-        .where_expected_var => "WHERE CLAUSE ERROR",
-        .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
-        .where_expected_colon => "WHERE CLAUSE ERROR",
-        .where_expected_constraints => "WHERE CLAUSE ERROR",
-        .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
-        .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
-        .deprecated_number_suffix => "DEPRECATED NUMBER SUFFIX",
-        .expr_double_dot_is_not_range => "NOT A RANGE OPERATOR",
-        else => "PARSE ERROR",
+        .multiple_platforms => "Multiple Platforms",
+        .no_platform => "No Platform",
+        .missing_arrow => "Missing Arrow",
+        .expected_exposes => "Expected Exposes",
+        .expected_exposes_close_square => "Expected Closing Bracket",
+        .expected_exposes_open_square => "Expected Opening Bracket",
+        .expected_packages => "Expected Packages",
+        .expected_packages_close_curly => "Expected Closing Brace",
+        .expected_packages_open_curly => "Expected Opening Brace",
+        .pattern_unexpected_token => "Unexpected Token In Pattern",
+        .pattern_list_rest_old_syntax => "Bad List Rest Pattern Syntax",
+        .pattern_unexpected_eof => "Unexpected End Of File In Pattern",
+        .ty_anno_unexpected_token => "Unexpected Token In Type Annotation",
+        .string_unexpected_token => "Unexpected Token In String",
+        .expr_unexpected_token => "Unexpected Token In Expression",
+        .crash_statement_in_expr_position => "Crash In Expression",
+        .return_outside_function => "Return Outside Function",
+        .import_must_be_top_level => "Import Must Be Top Level",
+        .expected_expr_close_square_or_comma => "List Not Closed",
+        .where_expected_open_bracket => "Where Clause Error",
+        .where_expected_close_bracket => "Where Clause Error",
+        .where_expected_var => "Where Clause Error",
+        .where_expected_method_or_alias_name => "Where Clause Error",
+        .where_expected_colon => "Where Clause Error",
+        .where_expected_constraints => "Where Clause Error",
+        .type_alias_cannot_have_associated => "Type Alias With Associated Items",
+        .nominal_associated_cannot_have_final_expression => "Expression In Associated Items",
+        .deprecated_number_suffix => "Deprecated Number Suffix",
+        .expr_double_dot_is_not_range => "Not A Range Operator",
+        else => "Parse Error",
     };
 
-    var report = reporting.Report.init(allocator, title, .runtime_error);
+    // Lead sentence for the report's headline. Dynamic branches (whose lead
+    // interpolates token or tag text) keep their lead in the document below and
+    // use an empty headline, letting the renderer derive the summary from the
+    // document lead.
+    const headline: []const u8 = switch (diagnostic.tag) {
+        .multiple_platforms => "Only one platform declaration is allowed per file.",
+        .no_platform => "App files must specify a platform.",
+        .missing_arrow => "Expected an arrow -> here.",
+        .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => "Module headers must have an exposing section that lists what the module exposes.",
+        .expected_packages, .expected_packages_close_curly, .expected_packages_open_curly => "Platform headers must have a packages section that lists package dependencies.",
+        .pattern_list_rest_old_syntax => "List rest patterns should use the `.. as name` syntax, not `..name`.",
+        .pattern_unexpected_eof => "This pattern is incomplete - the file ended unexpectedly.",
+        .return_outside_function => "The return keyword can only be used inside a function body.",
+        .import_must_be_top_level => "Import statements must appear at the top level of a module.",
+        .expected_expr_close_square_or_comma => "This list is missing a closing bracket or has a syntax error.",
+        .expected_colon_after_type_annotation => "Type applications require parentheses around their type arguments.",
+        .where_expected_open_bracket => "Expected an opening bracket [ after where.",
+        .where_expected_close_bracket => "Expected a closing bracket ] after the where clause constraints.",
+        .where_expected_var => "Expected a type variable name here.",
+        .where_expected_method_or_alias_name => "Expected a method name or type alias after the dot.",
+        .where_expected_colon => "Expected a colon : after the method name in this where clause constraint.",
+        .where_expected_constraints => "A where clause cannot be empty.",
+        .match_branch_wrong_arrow => "Match branches use `=>` instead of `->`.",
+        .match_has_no_branches => "A match expression must have at least one branch.",
+        .multi_arrow_needs_parens => "Function types with multiple arrows need parentheses.",
+        .type_alias_cannot_have_associated => "Type aliases cannot have associated items (such as types or methods).",
+        .nominal_associated_cannot_have_final_expression => "Associated items (such as types or methods) can only have associated types and values, not plain expressions.",
+        .deprecated_number_suffix => "This number literal uses a deprecated suffix syntax.",
+        .expr_double_dot_is_not_range => ".. is not an operator. For an exclusive range use ..<; for an inclusive range use ..=.",
+        else => "",
+    };
+
+    var report = try reporting.Report.init(allocator, title, headline, .runtime_error);
 
     // Add detailed error message based on the diagnostic type
     switch (diagnostic.tag) {
         .multiple_platforms => {
-            try report.document.addReflowingText("Only one platform declaration is allowed per file.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("Remove the duplicate platform declaration.");
         },
         .no_platform => {
-            try report.document.addReflowingText("App files must specify a platform.");
-            try report.document.addLineBreak();
             try report.document.addText("Add a platform specification like:");
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
         },
         .missing_arrow => {
-            try report.document.addText("Expected an arrow ");
-            try report.document.addAnnotated("->", .emphasized);
-            try report.document.addText(" here.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("Function type annotations require arrows between parameter and return types.");
         },
         .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => {
-            try report.document.addReflowingText("Module headers must have an ");
-            try report.document.addKeyword("exposing");
-            try report.document.addReflowingText(" section that lists what the module exposes.");
-            try report.document.addLineBreak();
             try report.document.addText("For example: ");
             try report.document.addCodeBlock("module [main, add, subtract]");
         },
         .expected_packages, .expected_packages_close_curly, .expected_packages_open_curly => {
-            try report.document.addReflowingText("Platform headers must have a ");
-            try report.document.addKeyword("packages");
-            try report.document.addReflowingText(" section that lists package dependencies.");
-            try report.document.addLineBreak();
             try report.document.addText("For example: ");
             try report.document.addCodeBlock("packages { base: \"../base/main.roc\" }");
         },
@@ -346,13 +359,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             }
         },
         .pattern_list_rest_old_syntax => {
-            try report.document.addReflowingText("List rest patterns should use the `.. as name` syntax, not `..name`.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("For example, use `[first, .. as rest]` instead of `[first, ..rest]`.");
         },
         .pattern_unexpected_eof => {
-            try report.document.addReflowingText("This pattern is incomplete - the file ended unexpectedly.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("Complete the pattern or remove the incomplete pattern.");
         },
         .ty_anno_unexpected_token => {
@@ -426,23 +435,15 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             );
         },
         .return_outside_function => {
-            try report.document.addText("The ");
-            try report.document.addAnnotated("return", .error_highlight);
-            try report.document.addText(" keyword can only be used inside a function body.");
-            try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("Use `return` to exit early from a function and provide a value. For example:");
             try report.document.addLineBreak();
             try report.document.addCodeBlock("foo = |x| { if x < 0 { return Err(NegativeInput) }; Ok(x) }");
         },
         .import_must_be_top_level => {
-            try report.document.addReflowingText("Import statements must appear at the top level of a module.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("Move this import to the top of the file, after the module header but before any definitions.");
         },
         .expected_expr_close_square_or_comma => {
-            try report.document.addReflowingText("This list is missing a closing bracket or has a syntax error.");
-            try report.document.addLineBreak();
             try report.document.addText("Lists must be closed with ");
             try report.document.addAnnotated("]", .emphasized);
             try report.document.addText(" and list items must be separated by commas.");
@@ -451,8 +452,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addCodeBlock("[1, 2, 3]");
         },
         .expected_colon_after_type_annotation => {
-            try report.document.addReflowingText("Type applications require parentheses around their type arguments.");
-            try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("I found a type followed by what looks like a type argument, but they need to be connected with parentheses.");
             try report.document.addLineBreak();
@@ -481,31 +480,17 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
         },
         .where_expected_open_bracket => {
-            try report.document.addReflowingText("Expected an opening bracket ");
-            try report.document.addAnnotated("[", .emphasized);
-            try report.document.addText(" after ");
-            try report.document.addKeyword("where");
-            try report.document.addText(".");
-            try report.document.addLineBreak();
             try report.document.addText("Where clauses should look like: ");
             try report.document.addCodeBlock("where [a.method : Type]");
         },
         .where_expected_close_bracket => {
-            try report.document.addReflowingText("Expected a closing bracket ");
-            try report.document.addAnnotated("]", .emphasized);
-            try report.document.addText(" after the where clause constraints.");
-            try report.document.addLineBreak();
             try report.document.addText("Where clauses should look like: ");
             try report.document.addCodeBlock("where [a.method : Type]");
         },
         .where_expected_var => {
-            try report.document.addReflowingText("Expected a type variable name here.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("Type variables are lowercase identifiers that represent types.");
         },
         .where_expected_method_or_alias_name => {
-            try report.document.addReflowingText("Expected a method name or type alias after the dot.");
-            try report.document.addLineBreak();
             try report.document.addText("Where clauses can contain:");
             try report.document.addLineBreak();
             try report.document.addIndent(1);
@@ -517,20 +502,12 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addCodeBlock("a.SomeTypeAlias");
         },
         .where_expected_colon => {
-            try report.document.addReflowingText("Expected a colon ");
-            try report.document.addAnnotated(":", .emphasized);
-            try report.document.addText(" after the method name in this where clause constraint.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("Method constraints require a colon to separate the method name from its type.");
             try report.document.addLineBreak();
             try report.document.addText("For example: ");
             try report.document.addCodeBlock("a.method : a -> b");
         },
         .where_expected_constraints => {
-            try report.document.addReflowingText("A ");
-            try report.document.addKeyword("where");
-            try report.document.addText(" clause cannot be empty.");
-            try report.document.addLineBreak();
             try report.document.addReflowingText("Where clauses must contain at least one constraint.");
             try report.document.addLineBreak();
             try report.document.addText("For example:");
@@ -538,15 +515,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addIndent(1);
             try report.document.addCodeBlock("where [a.method : a -> b]");
         },
-        .match_branch_wrong_arrow => {
-            try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
-        },
-        .match_has_no_branches => {
-            try report.document.addReflowingText("A match expression must have at least one branch.");
-        },
+        .match_branch_wrong_arrow => {},
+        .match_has_no_branches => {},
         .multi_arrow_needs_parens => {
-            try report.document.addReflowingText("Function types with multiple arrows need parentheses.");
-            try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addText("Instead of writing ");
             try report.document.addAnnotated("a -> b -> c", .error_highlight);
@@ -569,8 +540,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(" another function)");
         },
         .type_alias_cannot_have_associated => {
-            try report.document.addText("Type aliases cannot have associated items (such as types or methods).");
-            try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("Only nominal types (defined with ");
             try report.document.addAnnotated(":=", .emphasized);
@@ -579,8 +548,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addReflowingText(") only define names for other types.");
         },
         .nominal_associated_cannot_have_final_expression => {
-            try report.document.addText("Associated items (such as types or methods) can only have associated types and values, not plain expressions.");
-            try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
         },
@@ -597,8 +564,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             const owned_suffix = try report.addOwnedString(split.deprecated_suffix_text);
             const owned_suggested = try report.addOwnedString(suggested);
 
-            try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
-            try report.document.addLineBreak();
             try report.document.addLineBreak();
 
             try report.document.addSourceRegion(
@@ -619,14 +584,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addReflowingText(" instead.");
             return report;
         },
-        .expr_double_dot_is_not_range => {
-            try report.document.addInlineCode("..");
-            try report.document.addText(" is not an operator. For an exclusive range use ");
-            try report.document.addInlineCode("..<");
-            try report.document.addText("; for an inclusive range use ");
-            try report.document.addInlineCode("..=");
-            try report.document.addText(".");
-        },
+        .expr_double_dot_is_not_range => {},
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);

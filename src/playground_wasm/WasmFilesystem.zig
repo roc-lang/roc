@@ -79,6 +79,7 @@ const wasm_vtable = CoreCtx.VTable{
     .writeStderr = &writeStderrWasm,
     .readStdin = &readStdinWasm,
     .isTty = &isTtyWasm,
+    .terminalWidth = &terminalWidthWasm,
 };
 
 /// Recover the WasmContext from an opaque pointer.
@@ -253,4 +254,8 @@ fn readStdinWasm(_: ?*anyopaque, _: std.Io, _: []u8) CoreCtx.StdioError!usize {
 
 fn isTtyWasm(_: ?*anyopaque, _: std.Io) bool {
     return false;
+}
+
+fn terminalWidthWasm(_: ?*anyopaque, _: std.Io) ?u16 {
+    return null;
 }

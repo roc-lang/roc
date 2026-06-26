@@ -10,21 +10,22 @@ I.5
 # EXPECTED
 TYPE MISMATCH - module_dot_tuple.md:1:1:1:4
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**module_dot_tuple.md:1:1:1:4:**
-```roc
-I.5
-```
-^^^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  I.5                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── module_dot_tuple.md:1:1 ┘
 
-    (_field, _field2, _field3, _field4, _field5, _field6)
+    It has the type:
 
-But you are trying to use it as:
+        (_field, _field2, _field3, _field4, _field5, _field6)
 
-    [I, ..]
+    But you are trying to use it as:
+
+        [I, ..]
 
 # TOKENS
 ~~~zig

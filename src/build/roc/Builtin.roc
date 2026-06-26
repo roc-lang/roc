@@ -11391,15 +11391,9 @@ Builtin :: [].{
 			## the input is negative. `NaN` and positive infinity return `Ok`
 			## with the IEEE 754 result.
 			## ```roc
-			## expect match F32.sqrt_try(9.0) {
-			##     Ok(value) => F32.is_float_eq(value, 3.0)
-			##     Err(_) => False
-			## }
+			## expect F32.is_float_eq(F32.sqrt_try(9.0).ok_or(0.0), 3.0)
 			##
-			## expect match F32.sqrt_try(-1.0) {
-			##     Ok(_) => False
-			##     Err(SqrtOfNegative) => True
-			## }
+			## expect F32.sqrt_try(-1.0) == Err(SqrtOfNegative)
 			## ```
 			sqrt_try : F32 -> Try(F32, [SqrtOfNegative, ..])
 			sqrt_try = |self|
@@ -11741,10 +11735,7 @@ Builtin :: [].{
 			## result is always non-negative; to build a negative value, [F32.negate]
 			## the result.
 			## ```roc
-			## expect match F32.from_int_digits([1, 2, 3]) {
-			##     Ok(x) => F32.to_str(x) == "123"
-			##     Err(_) => False
-			## }
+			## expect F32.to_str(F32.from_int_digits([1, 2, 3]).ok_or(0.0)) == "123"
 			## ```
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
 			from_int_digits = |digits| f32_from_int_digits(digits)
@@ -11757,10 +11748,7 @@ Builtin :: [].{
 			## always non-negative; to build a negative value, [F32.negate] the
 			## result.
 			## ```roc
-			## expect match F32.from_dec_digits(([1, 2], [5])) {
-			##     Ok(x) => F32.to_str(x) == "12.5"
-			##     Err(_) => False
-			## }
+			## expect F32.to_str(F32.from_dec_digits(([1, 2], [5])).ok_or(0.0)) == "12.5"
 			## ```
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_dec_digits = |digits| f32_from_dec_digits(digits)
@@ -11775,15 +11763,9 @@ Builtin :: [].{
 			## string is not a valid decimal number, or if the parsed value does
 			## not fit in an [F32].
 			## ```roc
-			## expect match F32.from_str("42.5") {
-			##     Ok(x) => F32.to_str(x) == "42.5"
-			##     Err(_) => False
-			## }
+			## expect F32.to_str(F32.from_str("42.5").ok_or(0.0)) == "42.5"
 			##
-			## expect match F32.from_str("-1.25") {
-			##     Ok(x) => F32.to_str(x) == "-1.25"
-			##     Err(_) => False
-			## }
+			## expect F32.to_str(F32.from_str("-1.25").ok_or(0.0)) == "-1.25"
 			##
 			## expect Try.is_err(F32.from_str("not a number"))
 			## ```
@@ -12289,15 +12271,9 @@ Builtin :: [].{
 			## the input is negative. `NaN` and positive infinity return `Ok`
 			## with the IEEE 754 result.
 			## ```roc
-			## expect match F64.sqrt_try(9.0) {
-			##     Ok(value) => F64.is_float_eq(value, 3.0)
-			##     Err(_) => False
-			## }
+			## expect F64.is_float_eq(F64.sqrt_try(9.0).ok_or(0.0), 3.0)
 			##
-			## expect match F64.sqrt_try(-1.0) {
-			##     Ok(_) => False
-			##     Err(SqrtOfNegative) => True
-			## }
+			## expect F64.sqrt_try(-1.0) == Err(SqrtOfNegative)
 			## ```
 			sqrt_try : F64 -> Try(F64, [SqrtOfNegative, ..])
 			sqrt_try = |self|
@@ -12639,10 +12615,7 @@ Builtin :: [].{
 			## result is always non-negative; to build a negative value, [F64.negate]
 			## the result.
 			## ```roc
-			## expect match F64.from_int_digits([1, 2, 3]) {
-			##     Ok(x) => F64.to_str(x) == "123"
-			##     Err(_) => False
-			## }
+			## expect F64.to_str(F64.from_int_digits([1, 2, 3]).ok_or(0.0)) == "123"
 			## ```
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
 			from_int_digits = |digits| f64_from_int_digits(digits)
@@ -12655,10 +12628,7 @@ Builtin :: [].{
 			## always non-negative; to build a negative value, [F64.negate] the
 			## result.
 			## ```roc
-			## expect match F64.from_dec_digits(([1, 2], [5])) {
-			##     Ok(x) => F64.to_str(x) == "12.5"
-			##     Err(_) => False
-			## }
+			## expect F64.to_str(F64.from_dec_digits(([1, 2], [5])).ok_or(0.0)) == "12.5"
 			## ```
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_dec_digits = |digits| f64_from_dec_digits(digits)
@@ -12673,15 +12643,9 @@ Builtin :: [].{
 			## string is not a valid decimal number, or if the parsed value does
 			## not fit in an [F64].
 			## ```roc
-			## expect match F64.from_str("42.5") {
-			##     Ok(x) => F64.to_str(x) == "42.5"
-			##     Err(_) => False
-			## }
+			## expect F64.to_str(F64.from_str("42.5").ok_or(0.0)) == "42.5"
 			##
-			## expect match F64.from_str("-1.25") {
-			##     Ok(x) => F64.to_str(x) == "-1.25"
-			##     Err(_) => False
-			## }
+			## expect F64.to_str(F64.from_str("-1.25").ok_or(0.0)) == "-1.25"
 			##
 			## expect Try.is_err(F64.from_str("not a number"))
 			## ```
@@ -12902,10 +12866,7 @@ Builtin :: [].{
 			## that fit in an [F32] succeed, though precision may still be lost
 			## due to [F32]'s smaller mantissa.
 			## ```roc
-			## expect match F64.to_f32_try(1.5) {
-			##     Ok(x) => F32.to_str(x) == "1.5"
-			##     Err(_) => False
-			## }
+			## expect F32.to_str(F64.to_f32_try(1.5).ok_or(0.0)) == "1.5"
 			## ```
 			to_f32_try : F64 -> Try(F32, [OutOfRange])
 			to_f32_try = |num| out_of_range_try(f64_to_f32_try_unsafe(num))

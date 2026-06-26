@@ -35,29 +35,29 @@ main! = |_| {
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `unused` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_unused` to suppress this warning.
-The unused variable is declared here:
-**lambda_parameter_unused.md:5:8:5:14:**
-```roc
-add = |unused| 42
-```
-       ^^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `unused` is defined here and then never used. ──┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  add = |unused| 42                                                         │
+ │         ‾‾‾‾‾‾                                                             │
+ └──────────────────────────────────────────── lambda_parameter_unused.md:5:8 ┘
+
+    If you don't need this variable, prefix it with an underscore like
+    `_unused` to suppress this warning.
 
 
-**UNDERSCORE VARIABLE USED**
-Variable `_factor` is prefixed with an underscore but is actually used.
+┌──────────────────────────┐
+│ UNDERSCORE VARIABLE USED ├─ Variable `_factor` is prefixed with an ─────────┐
+└┬─────────────────────────┘  underscore but is actually used.                │
+ │                                                                            │
+ │  multiply = |_factor| _factor * 2                                          │
+ │                       ‾‾‾‾‾‾‾                                              │
+ └─────────────────────────────────────────── lambda_parameter_unused.md:9:22 ┘
 
-Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `factor`.
-
-**lambda_parameter_unused.md:9:22:9:29:**
-```roc
-multiply = |_factor| _factor * 2
-```
-                     ^^^^^^^
-
+    Variables prefixed with `_` are intended to be unused. Remove the
+    underscore prefix: `factor`.
 
 # TOKENS
 ~~~zig
