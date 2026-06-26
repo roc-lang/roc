@@ -209,13 +209,19 @@ const History = struct {
     }
 
     pub fn append(self: *History, input: []const u8) Allocator.Error!void {
-        if (self.entries.items.len > 0) {
-            const last = self.entries.items[self.entries.items.len - 1];
-            if (std.mem.eql(u8, last, input)) return;
+        var it = std.mem.splitScalar(u8, input, '\n');
+        while (it.next()) |raw_line| {
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
+            if (line.len == 0) continue;
+
+            if (self.entries.items.len > 0) {
+                const last = self.entries.items[self.entries.items.len - 1];
+                if (std.mem.eql(u8, last, line)) continue;
+            }
+            const line_copy = try self.allocator.alloc(u8, line.len);
+            @memcpy(line_copy, line);
+            try self.entries.append(self.allocator, line_copy);
         }
-        const input_copy = try self.allocator.alloc(u8, input.len);
-        @memcpy(input_copy, input);
-        try self.entries.append(self.allocator, input_copy);
     }
 };
 
@@ -1530,3 +1536,16 @@ test "History: replay index" {
     replay_index3 = null;
     try testing.expect(state3.replay_index.* == null);
 }
+
+test "History: multiline command split" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try history.append("line A\nline B\r\nline C");
+
+    try testing.expectEqual(@as(usize, 3), history.entries.items.len);
+    try testing.expectEqualStrings("line A", history.entries.items[0]);
+    try testing.expectEqualStrings("line B", history.entries.items[1]);
+    try testing.expectEqualStrings("line C", history.entries.items[2]);
+}
+

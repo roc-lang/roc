@@ -11244,8 +11244,9 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                     continue;
                 }
 
+                try reader.history.append(raw_line);
+
                 if (pending.items.len == 0 and std.mem.findAny(u8, raw_line, "\n\r") != null) {
-                    try reader.history.append(raw_line);
                     should_exit = try processReplInput(ctx, &session, raw_line, report_config, &had_diagnostics);
                     continue;
                 }
@@ -11256,7 +11257,6 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                 switch (try session.inputStatus(pending.items)) {
                     .incomplete => {},
                     .complete, .invalid => {
-                        try reader.history.append(pending.items);
                         should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                         pending.clearRetainingCapacity();
                     },
