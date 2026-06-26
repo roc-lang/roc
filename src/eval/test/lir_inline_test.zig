@@ -1070,144 +1070,13 @@ fn reachableReturnSlotProcCount(
     return count;
 }
 
-fn markReachableLiftedExpr(
-    program: *const postcheck.MonotypeLifted.Ast.Program,
-    expr_id: postcheck.MonotypeLifted.Ast.ExprId,
-    reachable: []bool,
-) void {
-    const index = @intFromEnum(expr_id);
-    if (reachable[index]) return;
-    reachable[index] = true;
-
-    switch (program.exprs.items[index].data) {
-        .local,
-        .unit,
-        .int_lit,
-        .frac_f32_lit,
-        .frac_f64_lit,
-        .dec_lit,
-        .str_lit,
-        .static_data,
-        .fn_ref,
-        .crash,
-        .comptime_exhaustiveness_failed,
-        .uninitialized,
-        .uninitialized_payload,
-        => {},
-        .static_data_candidate => |candidate| markReachableLiftedExpr(program, candidate.fallback, reachable),
-        .list,
-        .tuple,
-        => |items| for (program.exprSpan(items)) |child| markReachableLiftedExpr(program, child, reachable),
-        .record => |fields| for (program.fieldExprSpan(fields)) |field| markReachableLiftedExpr(program, field.value, reachable),
-        .tag => |tag| for (program.exprSpan(tag.payloads)) |payload| markReachableLiftedExpr(program, payload, reachable),
-        .nominal,
-        .return_,
-        .dbg,
-        .expect,
-        => |child| markReachableLiftedExpr(program, child, reachable),
-        .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
-        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
-        .if_initialized_payload => |switch_| {
-            markReachableLiftedExpr(program, switch_.cond, reachable);
-            markReachableLiftedExpr(program, switch_.initialized, reachable);
-            markReachableLiftedExpr(program, switch_.uninitialized, reachable);
-        },
-        .try_sequence => |sequence| {
-            markReachableLiftedExpr(program, sequence.try_expr, reachable);
-            markReachableLiftedExpr(program, sequence.ok_body, reachable);
-        },
-        .try_record_sequence => |sequence| {
-            markReachableLiftedExpr(program, sequence.try_expr, reachable);
-            markReachableLiftedExpr(program, sequence.ok_body, reachable);
-        },
-        .let_ => |let_| {
-            markReachableLiftedExpr(program, let_.value, reachable);
-            markReachableLiftedExpr(program, let_.rest, reachable);
-        },
-        .lambda,
-        .def_ref,
-        .fn_def,
-        => {},
-        .call_value => |call| {
-            markReachableLiftedExpr(program, call.callee, reachable);
-            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
-        },
-        .call_proc => |call| {
-            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
-        },
-        .low_level => |call| for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable),
-        .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
-        .tuple_access => |access| markReachableLiftedExpr(program, access.tuple, reachable),
-        .structural_eq => |eq| {
-            markReachableLiftedExpr(program, eq.lhs, reachable);
-            markReachableLiftedExpr(program, eq.rhs, reachable);
-        },
-        .structural_hash => |h| {
-            markReachableLiftedExpr(program, h.value, reachable);
-            markReachableLiftedExpr(program, h.hasher, reachable);
-        },
-        .match_ => |match| {
-            markReachableLiftedExpr(program, match.scrutinee, reachable);
-            for (program.branchSpan(match.branches)) |branch| {
-                if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
-                markReachableLiftedExpr(program, branch.body, reachable);
-            }
-        },
-        .if_ => |if_| {
-            for (program.ifBranchSpan(if_.branches)) |branch| {
-                markReachableLiftedExpr(program, branch.cond, reachable);
-                markReachableLiftedExpr(program, branch.body, reachable);
-            }
-            markReachableLiftedExpr(program, if_.final_else, reachable);
-        },
-        .block => |block| {
-            for (program.stmtSpan(block.statements)) |stmt| markReachableLiftedStmt(program, stmt, reachable);
-            markReachableLiftedExpr(program, block.final_expr, reachable);
-        },
-        .loop_ => |loop| {
-            for (program.exprSpan(loop.initial_values)) |initial| markReachableLiftedExpr(program, initial, reachable);
-            markReachableLiftedExpr(program, loop.body, reachable);
-        },
-        .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
-        .continue_ => |continue_| for (program.exprSpan(continue_.values)) |value| markReachableLiftedExpr(program, value, reachable),
-    }
-}
-
-fn markReachableLiftedStmt(
-    program: *const postcheck.MonotypeLifted.Ast.Program,
-    stmt_id: postcheck.MonotypeLifted.Ast.StmtId,
-    reachable: []bool,
-) void {
-    switch (program.stmts.items[@intFromEnum(stmt_id)]) {
-        .let_ => |let_| markReachableLiftedExpr(program, let_.value, reachable),
-        .expr,
-        .expect,
-        .dbg,
-        .return_,
-        => |expr| markReachableLiftedExpr(program, expr, reachable),
-        .crash => {},
-        .uninitialized => {},
-    }
-}
-
-fn countUnreachableLiftedDirectCalls(
-    allocator: Allocator,
-    program: *const postcheck.MonotypeLifted.Ast.Program,
-) anyerror!usize {
-    const reachable = try allocator.alloc(bool, program.exprs.items.len);
-    defer allocator.free(reachable);
-    @memset(reachable, false);
-
+fn countHostedLiftedFns(program: *const postcheck.MonotypeLifted.Ast.Program) usize {
+    var count: usize = 0;
     for (program.fns.items) |fn_| {
         switch (fn_.body) {
-            .roc => |body| markReachableLiftedExpr(program, body, reachable),
-            .hosted => {},
+            .roc => {},
+            .hosted => count += 1,
         }
-    }
-
-    var count: usize = 0;
-    for (program.exprs.items, reachable) |expr, is_reachable| {
-        if (!is_reachable and expr.data == .call_proc) count += 1;
     }
     return count;
 }
@@ -1227,16 +1096,14 @@ fn directRecordWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn whileRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.self_call_count == 0 and
+    return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 2 and
         shape.jump_count >= 2;
 }
 
 fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.self_call_count == 0 and
+    return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 1 and
         shape.jump_count >= 2;
@@ -1313,15 +1180,13 @@ fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn opaqueLetCallWorkerDoesNotDuplicateCall(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.direct_call_count == 0 and
+    return shape.direct_call_count == 0 and
         shape.low_level_count == 2 and
         shape.struct_assign_count == 0;
 }
 
 fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.low_level_count > 2 and
+    return shape.low_level_count > 2 and
         shape.struct_assign_count == 0;
 }
 
@@ -1654,13 +1519,13 @@ test "destination phase 6: string concat caller uses append variant" {
         \\
         \\suffix : Str -> Str
         \\suffix = |input| {
-        \\    middle = input
+        \\    middle = if input == "" { input } else { input }
         \\    Str.concat(middle, "!")
         \\}
         \\
         \\build : Str -> Str
         \\build = |input| {
-        \\    prefix = "pre"
+        \\    prefix = if input == "" { "pre" } else { "pre" }
         \\    result = suffix(input)
         \\    Str.concat(prefix, result)
         \\}
@@ -2172,7 +2037,7 @@ test "spec constr writes dynamically discovered workers once" {
     var lifted = try liftModuleAfterSpecConstr(allocator, source);
     defer lifted.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 0), try countUnreachableLiftedDirectCalls(allocator, &lifted.lifted));
+    try std.testing.expectEqual(@as(usize, 0), countHostedLiftedFns(&lifted.lifted));
 }
 
 test "spec constr specializes recursive record state" {
@@ -2229,6 +2094,41 @@ test "spec constr specializes record state carried by while loop" {
         \\
         \\main : I64
         \\main = sum_from({ n: 4 })
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr specializes primitive-start record state carried by while loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : I64 -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start, acc: 0 }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4)
     ;
 
     var optimized = try lowerModule(allocator, source, .wrappers);

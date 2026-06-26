@@ -685,13 +685,13 @@ direct-list source.
 - [x] No `src/postcheck/iter_plan.zig` remains.
 - [x] No post-check IR expression has an `iter_plan` case.
 - [x] Source `for` lowering uses ordinary checked `.iter` and `.next`.
-- [ ] `SpecConstr` rewrites every original Roc body as a base specialization
+- [x] `SpecConstr` rewrites every original Roc body as a base specialization
       while preserving its ABI.
-- [ ] Direct-call worker creation uses an explicit worklist of discovered
+- [x] Direct-call worker creation uses an explicit worklist of discovered
       call patterns.
-- [ ] Call rewriting happens while cloning the containing base body or worker.
-- [ ] No late `rewriteExistingCalls` cleanup pass remains.
-- [ ] Primitive function arguments get the same local loop-state
+- [x] Call rewriting happens while cloning the containing base body or worker.
+- [x] No late `rewriteExistingCalls` cleanup pass remains.
+- [x] Primitive function arguments get the same local loop-state
       specialization as equivalent single-field-record arguments.
 - [x] Shape specialization handles direct-call results in demanded contexts.
 - [x] Shape specialization handles `if` and `match` joins.

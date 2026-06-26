@@ -178,25 +178,28 @@
 //! stream's known fields and callable captures directly, and recursive loop
 //! updates pass those fields forward instead of re-forming a stream value.
 //!
-//! The implementation has five parts:
+//! The implementation has four parts:
 //!
 //! 1. Scan original lifted functions and mark argument positions read by
 //!    `match`, field access, or tuple access. Direct calls propagate those marks
 //!    to the caller's corresponding arguments.
-//! 2. Record call patterns at direct calls. If a marked argument is an explicit
-//!    `tag`, `record`, `tuple`, `nominal`, or lifted callable value, that
-//!    constructor shape becomes part of the pattern.
-//! 3. Reserve worker ids for the recorded patterns, then clone each source
-//!    function into its workers. Constructor-shaped arguments are split into
-//!    their leaves; ordinary arguments stay as normal worker arguments.
-//! 4. Clone with a value environment. Known records simplify field reads, known
-//!    tuples simplify tuple reads, known tags simplify matches, known callable
-//!    values inline direct calls, and calls matching a recorded pattern are
-//!    redirected to the worker.
-//! 5. Specialize loop state in the cloned body. If a loop starts with a
-//!    constructor-shaped state value, its loop parameters are split the same way
-//!    function arguments are split, and `continue` values must pass the same
-//!    shape's leaves.
+//! 2. Rewrite each original Roc body with the same value-environment clone used
+//!    for workers, while preserving that original function's ABI. This base-body
+//!    rewrite can specialize local loop state even when the function was called
+//!    with only primitive arguments.
+//! 3. While cloning a base body or worker, record direct-call patterns as soon as
+//!    known-shaped arguments reach a callee that reads them. Recording a pattern
+//!    immediately reserves a worker id and pushes a worker job.
+//! 4. Drain the worker worklist by cloning each source body into the reserved
+//!    worker. Constructor-shaped arguments are split into leaves; ordinary
+//!    arguments stay as normal worker arguments. Calls matching a recorded
+//!    pattern are redirected during the containing clone, so there is no later
+//!    cleanup walk over already-written bodies.
+//!
+//! Cloning with a value environment is where the simplifications happen: known
+//! records simplify field reads, known tuples simplify tuple reads, known tags
+//! simplify matches, known callable values inline direct calls, and loop state is
+//! split when every `continue` value can provide the same leaves.
 //!
 //! Callable identity is part of a call pattern. A lifted callable matches only
 //! the same function id, or a specialized clone whose stored source function
@@ -331,6 +334,11 @@ const FnPlan = struct {
     }
 };
 
+const WorkerJob = struct {
+    source_fn: Ast.FnId,
+    spec_index: usize,
+};
+
 const BindingTarget = union(enum) {
     local: Ast.LocalId,
     binder: check.CheckedModule.PatternBinderId,
@@ -361,8 +369,8 @@ const Pass = struct {
     arena: std.heap.ArenaAllocator,
     program: *Ast.Program,
     plans: []FnPlan,
+    worker_worklist: std.ArrayList(WorkerJob),
     symbols: Common.SymbolGen,
-    spec_ids_reserved: bool,
 
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -388,12 +396,13 @@ const Pass = struct {
             .arena = arena,
             .program = program,
             .plans = plans,
+            .worker_worklist = .empty,
             .symbols = .{ .next = program.next_symbol },
-            .spec_ids_reserved = false,
         };
     }
 
     fn deinit(self: *Pass) void {
+        self.worker_worklist.deinit(self.allocator);
         for (self.plans) |*plan| plan.deinit(self.allocator);
         self.allocator.free(self.plans);
         self.arena.deinit();
@@ -401,13 +410,12 @@ const Pass = struct {
 
     fn run(self: *Pass) Common.LowerError!void {
         const original_fn_count = self.plans.len;
+        const original_bodies = try self.captureOriginalBodies(original_fn_count);
+        defer self.allocator.free(original_bodies);
 
         try self.collectArgUses(original_fn_count);
-        try self.collectCallPatterns(original_fn_count);
-        try self.reserveSpecIds();
-        self.spec_ids_reserved = true;
-        try self.createSpecializations(original_fn_count);
-        try self.rewriteExistingCalls();
+        try self.rewriteBaseBodies(original_bodies);
+        try self.createSpecializations(original_bodies);
 
         self.program.next_symbol = self.symbols.next;
     }
@@ -416,6 +424,17 @@ const Pass = struct {
         if (self.program.procDebugName(source_symbol)) |name| {
             try self.program.setProcDebugName(target_symbol, name);
         }
+    }
+
+    fn captureOriginalBodies(self: *Pass, original_fn_count: usize) Allocator.Error![]?Ast.ExprId {
+        const original_bodies = try self.allocator.alloc(?Ast.ExprId, original_fn_count);
+        for (self.program.fns.items[0..original_fn_count], original_bodies) |fn_, *body_slot| {
+            body_slot.* = switch (fn_.body) {
+                .roc => |body| body,
+                .hosted => null,
+            };
+        }
+        return original_bodies;
     }
 
     fn collectArgUses(self: *Pass, original_fn_count: usize) Allocator.Error!void {
@@ -433,54 +452,33 @@ const Pass = struct {
         }
     }
 
-    fn collectCallPatterns(self: *Pass, original_fn_count: usize) Allocator.Error!void {
-        for (0..original_fn_count) |index| {
-            const fn_ = self.program.fns.items[index];
-            const body = switch (fn_.body) {
-                .roc => |body| body,
-                .hosted => continue,
-            };
+    fn rewriteBaseBodies(self: *Pass, original_bodies: []const ?Ast.ExprId) Common.LowerError!void {
+        for (original_bodies, 0..) |maybe_body, index| {
+            const body_expr = maybe_body orelse continue;
             const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            try self.collectCallPatternsInExpr(fn_id, body);
+
+            var cloner = Cloner.initForBaseBody(self, fn_id);
+            defer cloner.deinit();
+
+            try cloner.inline_stack.append(self.allocator, fn_id);
+            defer {
+                const popped = cloner.inline_stack.pop() orelse Common.invariant("base body inline stack underflow");
+                if (popped != fn_id) Common.invariant("base body inline stack was corrupted");
+            }
+
+            self.program.fns.items[index].body = .{ .roc = try cloner.cloneExpr(body_expr) };
         }
     }
 
-    fn reserveSpecIds(self: *Pass) Allocator.Error!void {
-        for (self.plans, 0..) |*plan, source_index| {
-            const source_fn = self.program.fns.items[source_index];
-            for (plan.specs.items) |*spec| {
-                if (spec.fn_id != null) Common.invariant("call-pattern specialization id was assigned before the reserve phase");
-                const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
-                const symbol = self.symbols.fresh();
-                spec.fn_id = fn_id;
-                try self.program.fns.append(self.allocator, .{
-                    .symbol = symbol,
-                    .source = source_fn.source,
-                    .args = .empty(),
-                    .captures = source_fn.captures,
-                    .body = .hosted,
-                    .ret = source_fn.ret,
-                });
-                try self.copyProcDebugName(source_fn.symbol, symbol);
-            }
-        }
-    }
+    fn createSpecializations(self: *Pass, original_bodies: []const ?Ast.ExprId) Common.LowerError!void {
+        while (self.worker_worklist.pop()) |job| {
+            const source_index = @intFromEnum(job.source_fn);
+            const source_body = original_bodies[source_index] orelse
+                Common.invariant("hosted function had a call-pattern specialization");
+            if (self.plans[source_index].specs.items[job.spec_index].written) continue;
 
-    fn createSpecializations(self: *Pass, original_fn_count: usize) Common.LowerError!void {
-        var wrote_spec = true;
-        while (wrote_spec) {
-            wrote_spec = false;
-            for (0..original_fn_count) |index| {
-                const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-                var spec_index: usize = 0;
-                while (spec_index < self.plans[index].specs.items.len) : (spec_index += 1) {
-                    if (self.plans[index].specs.items[spec_index].written) continue;
-
-                    self.plans[index].specs.items[spec_index].written = true;
-                    try self.writeSpecialization(fn_id, spec_index);
-                    wrote_spec = true;
-                }
-            }
+            self.plans[source_index].specs.items[job.spec_index].written = true;
+            try self.writeSpecialization(job.source_fn, job.spec_index, source_body);
         }
     }
 
@@ -626,184 +624,6 @@ const Pass = struct {
         }
     }
 
-    fn collectCallPatternsInExpr(self: *Pass, owner: Ast.FnId, expr_id: Ast.ExprId) Allocator.Error!void {
-        const expr = self.program.exprs.items[@intFromEnum(expr_id)];
-        switch (expr.data) {
-            .local,
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .static_data,
-            .fn_ref,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            .uninitialized,
-            .uninitialized_payload,
-            => {},
-            .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.fallback),
-            .list,
-            .tuple,
-            => |items| try self.collectCallPatternsInExprSpan(owner, items),
-            .record => |fields| try self.collectCallPatternsInFieldExprSpan(owner, fields),
-            .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
-            .nominal,
-            .return_,
-            .dbg,
-            .expect,
-            => |child| try self.collectCallPatternsInExpr(owner, child),
-            .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
-            .comptime_branch_taken => |taken| try self.collectCallPatternsInExpr(owner, taken.body),
-            .let_ => |let_| {
-                try self.collectCallPatternsInExpr(owner, let_.value);
-                try self.collectCallPatternsInExpr(owner, let_.rest);
-            },
-            .lambda,
-            .def_ref,
-            .fn_def,
-            => Common.invariant("pre-lift function expression reached call-pattern specialization"),
-            .call_value => |call| {
-                try self.collectCallPatternsInExpr(owner, call.callee);
-                try self.collectCallPatternsInExprSpan(owner, call.args);
-            },
-            .call_proc => |call| {
-                try self.collectCallPatternsInExprSpan(owner, call.args);
-                const callee = Ast.callProcCallee(call);
-                if (@intFromEnum(callee) < self.plans.len) try self.recordCallPattern(callee, call.args);
-            },
-            .low_level => |call| {
-                try self.collectCallPatternsInExprSpan(owner, call.args);
-            },
-            .field_access => |field| try self.collectCallPatternsInExpr(owner, field.receiver),
-            .tuple_access => |access| try self.collectCallPatternsInExpr(owner, access.tuple),
-            .structural_eq => |eq| {
-                try self.collectCallPatternsInExpr(owner, eq.lhs);
-                try self.collectCallPatternsInExpr(owner, eq.rhs);
-            },
-            .structural_hash => |h| {
-                try self.collectCallPatternsInExpr(owner, h.value);
-                try self.collectCallPatternsInExpr(owner, h.hasher);
-            },
-            .match_ => |match| {
-                try self.collectCallPatternsInExpr(owner, match.scrutinee);
-                try self.collectCallPatternsInBranchSpan(owner, match.branches);
-            },
-            .if_ => |if_| {
-                try self.collectCallPatternsInIfBranchSpan(owner, if_.branches);
-                try self.collectCallPatternsInExpr(owner, if_.final_else);
-            },
-            .block => |block| {
-                try self.collectCallPatternsInStmtSpan(owner, block.statements);
-                try self.collectCallPatternsInExpr(owner, block.final_expr);
-            },
-            .loop_ => |loop| {
-                try self.collectCallPatternsInExprSpan(owner, loop.initial_values);
-                try self.collectCallPatternsInExpr(owner, loop.body);
-            },
-            .break_ => |maybe| if (maybe) |value| try self.collectCallPatternsInExpr(owner, value),
-            .continue_ => |continue_| try self.collectCallPatternsInExprSpan(owner, continue_.values),
-            .if_initialized_payload => |payload_switch| {
-                try self.collectCallPatternsInExpr(owner, payload_switch.cond);
-                try self.collectCallPatternsInExpr(owner, payload_switch.initialized);
-                try self.collectCallPatternsInExpr(owner, payload_switch.uninitialized);
-            },
-            .try_sequence => |sequence| {
-                try self.collectCallPatternsInExpr(owner, sequence.try_expr);
-                try self.collectCallPatternsInExpr(owner, sequence.ok_body);
-            },
-            .try_record_sequence => |sequence| {
-                try self.collectCallPatternsInExpr(owner, sequence.try_expr);
-                try self.collectCallPatternsInExpr(owner, sequence.ok_body);
-            },
-        }
-    }
-
-    fn collectCallPatternsInExprSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.ExprId, self.program.exprSpan(span));
-        defer self.allocator.free(source);
-        for (source) |expr| try self.collectCallPatternsInExpr(owner, expr);
-    }
-
-    fn collectCallPatternsInFieldExprSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.FieldExpr)) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.FieldExpr, self.program.fieldExprSpan(span));
-        defer self.allocator.free(source);
-        for (source) |field| try self.collectCallPatternsInExpr(owner, field.value);
-    }
-
-    fn collectCallPatternsInBranchSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.Branch)) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.Branch, self.program.branchSpan(span));
-        defer self.allocator.free(source);
-        for (source) |branch| {
-            if (branch.guard) |guard| try self.collectCallPatternsInExpr(owner, guard);
-            try self.collectCallPatternsInExpr(owner, branch.body);
-        }
-    }
-
-    fn collectCallPatternsInIfBranchSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.IfBranch)) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.IfBranch, self.program.ifBranchSpan(span));
-        defer self.allocator.free(source);
-        for (source) |branch| {
-            try self.collectCallPatternsInExpr(owner, branch.cond);
-            try self.collectCallPatternsInExpr(owner, branch.body);
-        }
-    }
-
-    fn collectCallPatternsInStmtSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.StmtId)) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.StmtId, self.program.stmtSpan(span));
-        defer self.allocator.free(source);
-        for (source) |stmt| try self.collectCallPatternsInStmt(owner, stmt);
-    }
-
-    fn collectCallPatternsInStmt(self: *Pass, owner: Ast.FnId, stmt_id: Ast.StmtId) Allocator.Error!void {
-        switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
-            .let_ => |let_| try self.collectCallPatternsInExpr(owner, let_.value),
-            .expr,
-            .expect,
-            .dbg,
-            .return_,
-            => |expr| try self.collectCallPatternsInExpr(owner, expr),
-            .uninitialized, .crash => {},
-        }
-    }
-
-    fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
-        const raw = @intFromEnum(fn_id);
-        const args = try self.allocator.dupe(Ast.ExprId, self.program.exprSpan(args_span));
-        defer self.allocator.free(args);
-        const fn_args = self.program.typedLocalSpan(self.program.fns.items[raw].args);
-        if (args.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
-
-        const shapes = try self.arena.allocator().alloc(Shape, args.len);
-        var has_constructor = false;
-
-        for (args, 0..) |arg, index| {
-            if (self.plans[raw].used_args[index]) {
-                var cloner = Cloner.initForRewrite(self);
-                defer cloner.deinit();
-                const value = try cloner.cloneExprValue(arg);
-                if (try self.shapeFromValue(value)) |shape| {
-                    shapes[index] = shape;
-                    has_constructor = true;
-                    continue;
-                }
-            }
-            shapes[index] = .{ .any = self.program.exprs.items[@intFromEnum(arg)].ty };
-        }
-
-        if (!has_constructor) return;
-
-        const pattern: CallPattern = .{ .args = shapes };
-        for (self.plans[raw].specs.items) |spec| {
-            if (patternEql(self.program, spec.pattern, pattern)) return;
-        }
-
-        try self.plans[raw].specs.append(self.allocator, .{
-            .pattern = pattern,
-        });
-    }
-
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
         const raw = @intFromEnum(fn_id);
         if (raw >= self.plans.len) return;
@@ -830,31 +650,39 @@ const Pass = struct {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
 
-        if (self.spec_ids_reserved) {
-            const source_fn = self.program.fns.items[raw];
-            const fn_id_reserved: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
-            const symbol = self.symbols.fresh();
-            try self.plans[raw].specs.append(self.allocator, .{
-                .pattern = pattern,
-                .fn_id = fn_id_reserved,
-            });
-            try self.program.fns.append(self.allocator, .{
-                .symbol = symbol,
-                .source = source_fn.source,
-                .args = .empty(),
-                .captures = source_fn.captures,
-                .body = .hosted,
-                .ret = source_fn.ret,
-            });
-            try self.copyProcDebugName(source_fn.symbol, symbol);
-        } else {
-            try self.plans[raw].specs.append(self.allocator, .{
-                .pattern = pattern,
-            });
-        }
+        const spec_index = self.plans[raw].specs.items.len;
+        try self.plans[raw].specs.append(self.allocator, .{ .pattern = pattern });
+        try self.reserveWorker(@enumFromInt(@as(u32, @intCast(raw))), spec_index);
     }
 
-    fn writeSpecialization(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize) Common.LowerError!void {
+    fn reserveWorker(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize) Allocator.Error!void {
+        const source_index = @intFromEnum(source_fn_id);
+        const spec = &self.plans[source_index].specs.items[spec_index];
+        if (spec.fn_id != null) Common.invariant("call-pattern specialization id was assigned twice");
+
+        try self.program.fns.ensureUnusedCapacity(self.allocator, 1);
+        try self.worker_worklist.ensureUnusedCapacity(self.allocator, 1);
+
+        const source_fn = self.program.fns.items[source_index];
+        const fn_id_reserved: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
+        const symbol = self.symbols.fresh();
+        spec.fn_id = fn_id_reserved;
+        self.program.fns.appendAssumeCapacity(.{
+            .symbol = symbol,
+            .source = source_fn.source,
+            .args = .empty(),
+            .captures = source_fn.captures,
+            .body = .hosted,
+            .ret = source_fn.ret,
+        });
+        self.worker_worklist.appendAssumeCapacity(.{
+            .source_fn = source_fn_id,
+            .spec_index = spec_index,
+        });
+        try self.copyProcDebugName(source_fn.symbol, symbol);
+    }
+
+    fn writeSpecialization(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize, source_body: Ast.ExprId) Common.LowerError!void {
         const source_fn = self.program.fns.items[@intFromEnum(source_fn_id)];
         const spec = &self.plans[@intFromEnum(source_fn_id)].specs.items[spec_index];
 
@@ -871,10 +699,7 @@ const Pass = struct {
         }
 
         const args = try cloner.buildArgs();
-        const body: Ast.FnBody = switch (source_fn.body) {
-            .roc => |body_expr| .{ .roc = try cloner.cloneExpr(body_expr) },
-            .hosted => Common.invariant("hosted function had a call-pattern specialization"),
-        };
+        const body: Ast.FnBody = .{ .roc = try cloner.cloneExpr(source_body) };
 
         self.program.fns.items[@intFromEnum(spec_fn_id)] = .{
             .symbol = symbol,
@@ -885,269 +710,6 @@ const Pass = struct {
             .ret = source_fn.ret,
         };
         try self.copyProcDebugName(source_fn.symbol, symbol);
-    }
-
-    fn rewriteExistingCalls(self: *Pass) Allocator.Error!void {
-        const done = try self.allocator.alloc(bool, self.program.exprs.items.len);
-        defer self.allocator.free(done);
-        @memset(done, false);
-
-        const fn_count = self.program.fns.items.len;
-        for (0..fn_count) |index| {
-            const fn_ = self.program.fns.items[index];
-            const body = switch (fn_.body) {
-                .roc => |body| body,
-                .hosted => continue,
-            };
-            try self.rewriteCallsInExpr(body, done);
-        }
-    }
-
-    fn rewriteCallsInExpr(self: *Pass, expr_id: Ast.ExprId, done: []bool) Allocator.Error!void {
-        const index = @intFromEnum(expr_id);
-        if (done[index]) return;
-        done[index] = true;
-
-        const expr = self.program.exprs.items[index];
-        switch (expr.data) {
-            .local,
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .static_data,
-            .fn_ref,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            .uninitialized,
-            .uninitialized_payload,
-            => {},
-            .static_data_candidate => |candidate| try self.rewriteCallsInExpr(candidate.fallback, done),
-            .list,
-            .tuple,
-            => |items| try self.rewriteCallsInExprSpan(items, done),
-            .record => |fields| try self.rewriteCallsInFieldExprSpan(fields, done),
-            .tag => |tag| try self.rewriteCallsInExprSpan(tag.payloads, done),
-            .nominal,
-            .return_,
-            .dbg,
-            .expect,
-            => |child| try self.rewriteCallsInExpr(child, done),
-            .expect_err => |expect_err| try self.rewriteCallsInExpr(expect_err.msg, done),
-            .comptime_branch_taken => |taken| try self.rewriteCallsInExpr(taken.body, done),
-            .let_ => |let_| {
-                try self.rewriteCallsInExpr(let_.value, done);
-                try self.rewriteCallsInExpr(let_.rest, done);
-            },
-            .lambda,
-            .def_ref,
-            .fn_def,
-            => Common.invariant("pre-lift function expression reached call-pattern specialization"),
-            .call_value => |call| {
-                try self.rewriteCallsInExpr(call.callee, done);
-                try self.rewriteCallsInExprSpan(call.args, done);
-            },
-            .call_proc => |call| {
-                try self.rewriteCallsInExprSpan(call.args, done);
-                try self.rewriteCallProc(expr_id, call);
-            },
-            .low_level => |call| try self.rewriteCallsInExprSpan(call.args, done),
-            .field_access => |field| try self.rewriteCallsInExpr(field.receiver, done),
-            .tuple_access => |access| try self.rewriteCallsInExpr(access.tuple, done),
-            .structural_eq => |eq| {
-                try self.rewriteCallsInExpr(eq.lhs, done);
-                try self.rewriteCallsInExpr(eq.rhs, done);
-            },
-            .structural_hash => |h| {
-                try self.rewriteCallsInExpr(h.value, done);
-                try self.rewriteCallsInExpr(h.hasher, done);
-            },
-            .match_ => |match| {
-                try self.rewriteCallsInExpr(match.scrutinee, done);
-                try self.rewriteCallsInBranchSpan(match.branches, done);
-            },
-            .if_ => |if_| {
-                try self.rewriteCallsInIfBranchSpan(if_.branches, done);
-                try self.rewriteCallsInExpr(if_.final_else, done);
-            },
-            .block => |block| {
-                try self.rewriteCallsInStmtSpan(block.statements, done);
-                try self.rewriteCallsInExpr(block.final_expr, done);
-            },
-            .loop_ => |loop| {
-                try self.rewriteCallsInExprSpan(loop.initial_values, done);
-                try self.rewriteCallsInExpr(loop.body, done);
-            },
-            .break_ => |maybe| if (maybe) |value| try self.rewriteCallsInExpr(value, done),
-            .continue_ => |continue_| try self.rewriteCallsInExprSpan(continue_.values, done),
-            .if_initialized_payload => |payload_switch| {
-                try self.rewriteCallsInExpr(payload_switch.cond, done);
-                try self.rewriteCallsInExpr(payload_switch.initialized, done);
-                try self.rewriteCallsInExpr(payload_switch.uninitialized, done);
-            },
-            .try_sequence => |sequence| {
-                try self.rewriteCallsInExpr(sequence.try_expr, done);
-                try self.rewriteCallsInExpr(sequence.ok_body, done);
-            },
-            .try_record_sequence => |sequence| {
-                try self.rewriteCallsInExpr(sequence.try_expr, done);
-                try self.rewriteCallsInExpr(sequence.ok_body, done);
-            },
-        }
-    }
-
-    fn rewriteCallsInExprSpan(self: *Pass, span: Ast.Span(Ast.ExprId), done: []bool) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.ExprId, self.program.exprSpan(span));
-        defer self.allocator.free(source);
-        for (source) |expr| try self.rewriteCallsInExpr(expr, done);
-    }
-
-    fn rewriteCallsInFieldExprSpan(self: *Pass, span: Ast.Span(Ast.FieldExpr), done: []bool) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.FieldExpr, self.program.fieldExprSpan(span));
-        defer self.allocator.free(source);
-        for (source) |field| try self.rewriteCallsInExpr(field.value, done);
-    }
-
-    fn rewriteCallsInBranchSpan(self: *Pass, span: Ast.Span(Ast.Branch), done: []bool) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.Branch, self.program.branchSpan(span));
-        defer self.allocator.free(source);
-        for (source) |branch| {
-            if (branch.guard) |guard| try self.rewriteCallsInExpr(guard, done);
-            try self.rewriteCallsInExpr(branch.body, done);
-        }
-    }
-
-    fn rewriteCallsInIfBranchSpan(self: *Pass, span: Ast.Span(Ast.IfBranch), done: []bool) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.IfBranch, self.program.ifBranchSpan(span));
-        defer self.allocator.free(source);
-        for (source) |branch| {
-            try self.rewriteCallsInExpr(branch.cond, done);
-            try self.rewriteCallsInExpr(branch.body, done);
-        }
-    }
-
-    fn rewriteCallsInStmtSpan(self: *Pass, span: Ast.Span(Ast.StmtId), done: []bool) Allocator.Error!void {
-        const source = try self.allocator.dupe(Ast.StmtId, self.program.stmtSpan(span));
-        defer self.allocator.free(source);
-        for (source) |stmt| try self.rewriteCallsInStmt(stmt, done);
-    }
-
-    fn rewriteCallsInStmt(self: *Pass, stmt_id: Ast.StmtId, done: []bool) Allocator.Error!void {
-        switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
-            .let_ => |let_| try self.rewriteCallsInExpr(let_.value, done),
-            .expr,
-            .expect,
-            .dbg,
-            .return_,
-            => |expr| try self.rewriteCallsInExpr(expr, done),
-            .uninitialized, .crash => {},
-        }
-    }
-
-    fn rewriteCallProc(self: *Pass, expr_id: Ast.ExprId, call: @import("../monotype/ast.zig").CallProc) Allocator.Error!void {
-        const callee = Ast.callProcCallee(call);
-        const raw = @intFromEnum(callee);
-        if (raw >= self.plans.len) return;
-        if (self.plans[raw].specs.items.len == 0) return;
-
-        const args = try self.allocator.dupe(Ast.ExprId, self.program.exprSpan(call.args));
-        defer self.allocator.free(args);
-        for (self.plans[raw].specs.items) |spec| {
-            var rewritten_args = std.ArrayList(Ast.ExprId).empty;
-            defer rewritten_args.deinit(self.allocator);
-
-            if (try self.appendExistingCallArgs(spec.pattern, args, &rewritten_args)) {
-                self.program.exprs.items[@intFromEnum(expr_id)].data = .{ .call_proc = .{
-                    .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before rewriting") },
-                    .args = try self.program.addExprSpan(rewritten_args.items),
-                    .is_cold = call.is_cold,
-                } };
-                return;
-            }
-        }
-    }
-
-    fn appendExistingCallArgs(
-        self: *Pass,
-        pattern: CallPattern,
-        args: []const Ast.ExprId,
-        out: *std.ArrayList(Ast.ExprId),
-    ) Allocator.Error!bool {
-        if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
-        var cloner = Cloner.initForExistingCallRewrite(self);
-        defer cloner.deinit();
-
-        for (pattern.args, args) |shape, arg| {
-            const value = try cloner.cloneExprValue(arg);
-            if (!shapeMatchesValue(self.program, shape, value)) return false;
-            try cloner.appendExprsFromValue(shape, value, out);
-        }
-        return true;
-    }
-
-    fn appendExistingExprsForShape(
-        self: *Pass,
-        shape: Shape,
-        expr_id: Ast.ExprId,
-        out: *std.ArrayList(Ast.ExprId),
-    ) Allocator.Error!bool {
-        switch (shape) {
-            .any => {
-                try out.append(self.allocator, expr_id);
-                return true;
-            },
-            .tag => |tag| {
-                const expr = self.program.exprs.items[@intFromEnum(expr_id)];
-                const expr_tag = switch (expr.data) {
-                    .tag => |expr_tag| expr_tag,
-                    else => return false,
-                };
-                if (!sameType(self.program, expr.ty, tag.ty) or expr_tag.name != tag.name) return false;
-                const payloads = self.program.exprSpan(expr_tag.payloads);
-                if (payloads.len != tag.payloads.len) Common.invariant("tag call pattern arity differed from tag expression arity");
-                for (tag.payloads, payloads) |payload_shape, payload| {
-                    if (!try self.appendExistingExprsForShape(payload_shape, payload, out)) return false;
-                }
-                return true;
-            },
-            .record => |record| {
-                const expr = self.program.exprs.items[@intFromEnum(expr_id)];
-                const fields = switch (expr.data) {
-                    .record => |fields| self.program.fieldExprSpan(fields),
-                    else => return false,
-                };
-                if (!sameType(self.program, expr.ty, record.ty) or fields.len != record.fields.len) return false;
-                for (record.fields, fields) |field_shape, field| {
-                    if (field_shape.name != field.name) return false;
-                    if (!try self.appendExistingExprsForShape(field_shape.shape, field.value, out)) return false;
-                }
-                return true;
-            },
-            .tuple => |tuple| {
-                const expr = self.program.exprs.items[@intFromEnum(expr_id)];
-                const items = switch (expr.data) {
-                    .tuple => |items| self.program.exprSpan(items),
-                    else => return false,
-                };
-                if (!sameType(self.program, expr.ty, tuple.ty) or items.len != tuple.items.len) return false;
-                for (tuple.items, items) |item_shape, item| {
-                    if (!try self.appendExistingExprsForShape(item_shape, item, out)) return false;
-                }
-                return true;
-            },
-            .nominal => |nominal| {
-                const expr = self.program.exprs.items[@intFromEnum(expr_id)];
-                const backing = switch (expr.data) {
-                    .nominal => |backing| backing,
-                    else => return false,
-                };
-                if (!sameType(self.program, expr.ty, nominal.ty)) return false;
-                return try self.appendExistingExprsForShape(nominal.backing.*, backing, out);
-            },
-            .callable => return false,
-        }
     }
 
     fn constructorShape(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!?Shape {
@@ -1323,10 +885,10 @@ const Cloner = struct {
         };
     }
 
-    fn initForRewrite(pass: *Pass) Cloner {
+    fn initForBaseClone(pass: *Pass) Cloner {
         return .{
             .pass = pass,
-            .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
+            .source_fn = undefined, // Base-body cloning never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
             .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
             .binder_subst = std.AutoHashMap(check.CheckedModule.PatternBinderId, Value).init(pass.allocator),
@@ -1342,10 +904,10 @@ const Cloner = struct {
         };
     }
 
-    fn initForExistingCallRewrite(pass: *Pass) Cloner {
-        var cloner = Cloner.initForRewrite(pass);
+    fn initForBaseBody(pass: *Pass, source_fn: Ast.FnId) Cloner {
+        var cloner = Cloner.initForBaseClone(pass);
+        cloner.source_fn = source_fn;
         cloner.inline_direct_requires_known_arg = true;
-        cloner.record_call_patterns = false;
         return cloner;
     }
 
@@ -1910,10 +1472,12 @@ const Cloner = struct {
                 const source = try self.pass.allocator.dupe(Ast.StmtId, self.pass.program.stmtSpan(block.statements));
                 defer self.pass.allocator.free(source);
 
-                const statements = try self.pass.allocator.alloc(Ast.StmtId, source.len);
-                defer self.pass.allocator.free(statements);
-                for (source, 0..) |stmt, index| {
-                    statements[index] = try self.cloneStmt(stmt);
+                var statements = std.ArrayList(Ast.StmtId).empty;
+                defer statements.deinit(self.pass.allocator);
+                for (source) |stmt| {
+                    if (try self.cloneStmt(stmt)) |cloned| {
+                        try statements.append(self.pass.allocator, cloned);
+                    }
                 }
 
                 const final_value = try self.cloneExprValue(block.final_expr);
@@ -1922,7 +1486,7 @@ const Cloner = struct {
                     if (try self.cloneDivergentAtType(block.final_expr, rest_ty)) |divergent| {
                         self.restore(change_start);
                         return try self.addExpr(.{ .ty = rest_ty, .data = .{ .block = .{
-                            .statements = try self.pass.program.addStmtSpan(statements),
+                            .statements = try self.pass.program.addStmtSpan(statements.items),
                             .final_expr = divergent,
                         } } });
                     }
@@ -1934,7 +1498,7 @@ const Cloner = struct {
                 self.restore(change_start);
 
                 return try self.addExpr(.{ .ty = rest_ty, .data = .{ .block = .{
-                    .statements = try self.pass.program.addStmtSpan(statements),
+                    .statements = try self.pass.program.addStmtSpan(statements.items),
                     .final_expr = rest,
                 } } });
             },
@@ -1976,8 +1540,12 @@ const Cloner = struct {
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingShape(initial);
             if (try self.pass.shapeFromValue(values[index])) |shape| {
-                shapes[index] = shape;
-                has_constructor = true;
+                if (shapeCanProjectFromExpr(shape)) {
+                    shapes[index] = shape;
+                    has_constructor = true;
+                } else {
+                    shapes[index] = .{ .any = valueType(self.pass.program, values[index]) };
+                }
             } else {
                 shapes[index] = .{ .any = valueType(self.pass.program, values[index]) };
             }
@@ -2023,14 +1591,16 @@ const Cloner = struct {
         const source = try self.pass.allocator.dupe(Ast.StmtId, self.pass.program.stmtSpan(block.statements));
         defer self.pass.allocator.free(source);
 
-        const statements = try self.pass.allocator.alloc(Ast.StmtId, source.len);
-        defer self.pass.allocator.free(statements);
-        for (source, 0..) |stmt, index| {
-            statements[index] = try self.cloneStmt(stmt);
+        var statements = std.ArrayList(Ast.StmtId).empty;
+        defer statements.deinit(self.pass.allocator);
+        for (source) |stmt| {
+            if (try self.cloneStmt(stmt)) |cloned| {
+                try statements.append(self.pass.allocator, cloned);
+            }
         }
 
         return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
-            .statements = try self.pass.program.addStmtSpan(statements),
+            .statements = try self.pass.program.addStmtSpan(statements.items),
             .final_expr = try self.cloneExpr(block.final_expr),
         } } });
     }
@@ -2042,16 +1612,18 @@ const Cloner = struct {
         const source = try self.pass.allocator.dupe(Ast.StmtId, self.pass.program.stmtSpan(block.statements));
         defer self.pass.allocator.free(source);
 
-        const statements = try self.pass.allocator.alloc(Ast.StmtId, source.len);
-        defer self.pass.allocator.free(statements);
-        for (source, 0..) |stmt, index| {
-            statements[index] = try self.cloneStmt(stmt);
+        var statements = std.ArrayList(Ast.StmtId).empty;
+        defer statements.deinit(self.pass.allocator);
+        for (source) |stmt| {
+            if (try self.cloneStmt(stmt)) |cloned| {
+                try statements.append(self.pass.allocator, cloned);
+            }
         }
 
         const final_value = try self.cloneExprValue(block.final_expr);
         const final_expr = try self.materialize(final_value);
         const block_expr = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
-            .statements = try self.pass.program.addStmtSpan(statements),
+            .statements = try self.pass.program.addStmtSpan(statements.items),
             .final_expr = final_expr,
         } } });
 
@@ -2125,12 +1697,8 @@ const Cloner = struct {
             }
 
             for (self.pass.plans[raw].specs.items) |spec| {
-                const spec_fn_id = spec.fn_id orelse {
-                    if (self.record_call_patterns and self.pass.spec_ids_reserved) {
-                        Common.invariant("call-pattern specialization id was not assigned before cloning calls");
-                    }
-                    continue;
-                };
+                const spec_fn_id = spec.fn_id orelse
+                    Common.invariant("call-pattern specialization id was not assigned before cloning calls");
                 var rewritten_args = std.ArrayList(Ast.ExprId).empty;
                 defer rewritten_args.deinit(self.pass.allocator);
 
@@ -3218,7 +2786,7 @@ const Cloner = struct {
         };
     }
 
-    fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!Ast.StmtId {
+    fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!?Ast.StmtId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -3227,14 +2795,15 @@ const Cloner = struct {
         self.current_region = self.pass.program.stmtRegion(stmt_id);
 
         const stmt = self.pass.program.stmts.items[@intFromEnum(stmt_id)];
-        return try self.addStmt(switch (stmt) {
+        const cloned: Ast.Stmt = switch (stmt) {
             .uninitialized => |pat| .{ .uninitialized = try self.clonePat(pat) },
             .let_ => |let_| blk: {
                 const value = try self.cloneExprValue(let_.value);
                 const value_expr = try self.materialize(value);
-                if (!try self.bindPatToReusableValue(let_.pat, value)) {
-                    _ = try self.bindPatToMaterializedShape(let_.pat, value);
+                if (!let_.recursive and try self.bindPatToReusableValue(let_.pat, value)) {
+                    return null;
                 }
+                _ = try self.bindPatToMaterializedShape(let_.pat, value);
                 break :blk .{ .let_ = .{
                     .pat = try self.clonePat(let_.pat),
                     .value = value_expr,
@@ -3247,7 +2816,8 @@ const Cloner = struct {
             .dbg => |expr| .{ .dbg = try self.cloneExpr(expr) },
             .return_ => |expr| .{ .return_ = try self.cloneExpr(expr) },
             .crash => |msg| .{ .crash = msg },
-        });
+        };
+        return try self.addStmt(cloned);
     }
 
     fn cloneExprSpan(self: *Cloner, span: Ast.Span(Ast.ExprId)) Common.LowerError!Ast.Span(Ast.ExprId) {
@@ -4276,10 +3846,19 @@ fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bo
 
 fn shapeCanProjectFromExpr(shape: Shape) bool {
     return switch (shape) {
-        .any,
-        .record,
-        .tuple,
-        => true,
+        .any => true,
+        .record => |record| blk: {
+            for (record.fields) |field| {
+                if (!shapeCanProjectFromExpr(field.shape)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tuple => |tuple| blk: {
+            for (tuple.items) |item| {
+                if (!shapeCanProjectFromExpr(item)) break :blk false;
+            }
+            break :blk true;
+        },
         .nominal => |nominal| shapeCanProjectFromExpr(nominal.backing.*),
         .tag,
         .callable,
