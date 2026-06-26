@@ -2244,6 +2244,37 @@ test "spec constr specializes record state carried by while loop" {
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
 }
 
+test "spec constr exposes direct call record result for field access" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\make_state : I64 -> State
+        \\make_state = |n| { n: n, acc: n + 1 }
+        \\
+        \\read_acc : Start -> I64
+        \\read_acc = |start| make_state(start.n).acc
+        \\
+        \\main : I64
+        \\main = read_acc({ n: 4 })
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "direct_call_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "struct_assign_count"));
+
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &unoptimized.lowered, "direct_call_count") > 0);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &unoptimized.lowered, "struct_assign_count") > 0);
+}
+
 test "spec constr specializes if-joined record state carried by while loop" {
     const allocator = std.testing.allocator;
     const source =

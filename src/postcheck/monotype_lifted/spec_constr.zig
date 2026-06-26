@@ -1530,7 +1530,7 @@ const Cloner = struct {
             },
             .let_ => |let_| return try self.cloneLetValue(let_),
             .field_access => |field| {
-                const receiver = try self.cloneExprValue(field.receiver);
+                const receiver = try self.cloneExprValueDemandingShape(field.receiver);
                 if (try self.fieldFromKnownValue(receiver, field.field)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
                     .receiver = try self.materialize(receiver),
@@ -1538,7 +1538,7 @@ const Cloner = struct {
                 } } }) };
             },
             .tuple_access => |access| {
-                const receiver = try self.cloneExprValue(access.tuple);
+                const receiver = try self.cloneExprValueDemandingShape(access.tuple);
                 if (try self.itemFromKnownValue(receiver, access.elem_index)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
                     .tuple = try self.materialize(receiver),
@@ -1546,7 +1546,7 @@ const Cloner = struct {
                 } } }) };
             },
             .match_ => |match| {
-                const scrutinee = try self.cloneExprValue(match.scrutinee);
+                const scrutinee = try self.cloneExprValueDemandingShape(match.scrutinee);
                 if (try self.simplifyKnownMatchValue(scrutinee, match.branches)) |value| return value;
                 const scrutinee_expr = try self.materialize(scrutinee);
                 if (try self.cloneCaseOfCaseValue(expr.ty, scrutinee_expr, match.branches)) |value| return value;
@@ -1555,7 +1555,7 @@ const Cloner = struct {
             .if_ => |if_| return try self.cloneIfValue(expr.ty, if_),
             .block => |block| return try self.cloneBlockValue(expr.ty, block),
             .call_value => |call| {
-                const callee = try self.cloneExprValue(call.callee);
+                const callee = try self.cloneExprValueDemandingShape(call.callee);
                 if (callee == .callable) {
                     return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args);
                 }
@@ -1578,6 +1578,23 @@ const Cloner = struct {
                 );
             },
             else => return .{ .expr = try self.cloneExprPlain(expr_id) },
+        }
+    }
+
+    fn cloneExprValueDemandingShape(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
+        const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
+        switch (expr.data) {
+            .call_proc => |call| {
+                if (call.is_cold) return try self.cloneExprValue(expr_id);
+                if (!self.inline_direct_calls) return try self.cloneExprValue(expr_id);
+                return try self.inlineDirectCallValue(
+                    Ast.callProcCallee(call),
+                    call.args,
+                    expr_id,
+                );
+            },
+            .comptime_branch_taken => |taken| return try self.cloneExprValueDemandingShape(taken.body),
+            else => return try self.cloneExprValue(expr_id),
         }
     }
 
@@ -1957,7 +1974,7 @@ const Cloner = struct {
         const shapes = try self.pass.arena.allocator().alloc(Shape, initial_values.len);
         var has_constructor = false;
         for (initial_values, 0..) |initial, index| {
-            values[index] = try self.cloneExprValue(initial);
+            values[index] = try self.cloneExprValueDemandingShape(initial);
             if (try self.pass.shapeFromValue(values[index])) |shape| {
                 shapes[index] = shape;
                 has_constructor = true;
@@ -2167,7 +2184,7 @@ const Cloner = struct {
     }
 
     fn valueForCallArg(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
-        return try self.cloneExprValue(expr_id);
+        return try self.cloneExprValueDemandingShape(expr_id);
     }
 
     fn appendExprsFromValue(
@@ -2283,7 +2300,7 @@ const Cloner = struct {
     }
 
     fn cloneFieldAccess(self: *Cloner, ty: Type.TypeId, field: anytype) Common.LowerError!Ast.ExprId {
-        const receiver = try self.cloneExprValue(field.receiver);
+        const receiver = try self.cloneExprValueDemandingShape(field.receiver);
         if (try self.fieldFromKnownValue(receiver, field.field)) |value| return try self.materialize(value);
         return try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
             .receiver = try self.materialize(receiver),
@@ -2292,7 +2309,7 @@ const Cloner = struct {
     }
 
     fn cloneTupleAccess(self: *Cloner, ty: Type.TypeId, access: anytype) Common.LowerError!Ast.ExprId {
-        const receiver = try self.cloneExprValue(access.tuple);
+        const receiver = try self.cloneExprValueDemandingShape(access.tuple);
         if (try self.itemFromKnownValue(receiver, access.elem_index)) |value| return try self.materialize(value);
         return try self.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{
             .tuple = try self.materialize(receiver),
@@ -2348,11 +2365,11 @@ const Cloner = struct {
                 .cond = try self.cloneExpr(branch.cond),
                 .body = undefined,
             };
-            body_values[index] = try self.cloneExprValue(branch.body);
+            body_values[index] = try self.cloneExprValueDemandingShape(branch.body);
             branches[index].body = try self.materialize(body_values[index]);
         }
 
-        body_values[source_branches.len] = try self.cloneExprValue(if_.final_else);
+        body_values[source_branches.len] = try self.cloneExprValueDemandingShape(if_.final_else);
         const final_else = try self.materialize(body_values[source_branches.len]);
 
         const shape = try self.joinValueShapes(body_values);
@@ -2384,7 +2401,7 @@ const Cloner = struct {
                 .guard = if (branch.guard) |guard| try self.cloneExpr(guard) else null,
                 .body = undefined,
             };
-            body_values[index] = try self.cloneExprValue(branch.body);
+            body_values[index] = try self.cloneExprValueDemandingShape(branch.body);
             branches[index].body = try self.materialize(body_values[index]);
         }
 
