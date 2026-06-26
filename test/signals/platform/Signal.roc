@@ -131,8 +131,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), cap : Capability(a) }.{
 				task_token: task.source.token,
 				task_name: task.source.name,
 				request_init: Box.box(request_init),
-				request_cap: Capability.handle(request_cap),
-				request_read: Box.box(request_read),
+				request_read: { capability: Capability.handle(request_cap), read: Box.box(request_read) },
 			},
 		)
 	}

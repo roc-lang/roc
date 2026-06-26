@@ -85,10 +85,11 @@ Every part of this design must respect them.
 5. **Type-mismatch crashes are structurally impossible.** A typed `Signal(a)`
    stays typed end to end. Erasure is confined to one generated set of ownership
    operations per edge — a **capability** bundling clone, equality, and drop,
-   with typed split private to those operations and edge-specific reads guarded
-   by the same capability — pinned to that edge's monomorphized types. There is
-   no second, independently typed read site that can disagree with the writer,
-   and no host-side knowledge of the value's layout. See *Confined Erasure*.
+   with typed split private to those operations and edge-specific extension
+   records carrying their owning capability — pinned to that edge's
+   monomorphized types. There is no host-authored read site that can disagree
+   with the writer, and no host-side knowledge of the value's layout. See
+   *Confined Erasure*.
 6. **One engine, two thin hosts.** All reactive and structural logic lives in the
    shared engine. A host file contains only its boundary (sink, marshalling,
    spec runner / JS bridge) and its `Ctx` implementation. Reactive or structural
@@ -201,9 +202,9 @@ that edge's monomorphized types:
 
 - For each `map`/`map2`/`combine`/`state`/source/sink edge, platform Roc builds a
   concrete capability at the call site. Static dispatch resolves the value's
-  required operations (`is_eq`, key hashing, sink reads, and similar edge-specific
-  functions), and monomorphization specializes the capability for that edge's
-  concrete `a`.
+  required operations (`is_eq`, key hashing, sink reads, and similar
+  edge-specific functions), and monomorphization specializes the capability and
+  any capability-owned extension record for that edge's concrete `a`.
 - The host **never chooses** a decoder, destructor, comparator, or reader. It
   stores a boxed, opaque Roc value and invokes the capability that owns that edge.
   There is no second, independently typed read site, so a mismatch is a routing
@@ -292,11 +293,14 @@ CapabilityHandle := {
   the generated `clone`, `eq`, and `drop` callables. The heterogeneous descriptor
   graph stores only the erased handle above, not a parameterized
   `CapabilityHandle(a)`.
-- **Reads and hashes are edge-specific extensions**, not part of the universal
-  trio. A signal-backed text edge owns a `read : HostValue -> Str`; a `Ui.when`
-  condition owns a `read : HostValue -> Bool`; a `Ui.each` key owns hash/equality.
-  These are carried by the edge that needs them and are tied to the same
-  capability identity, never invented by the host.
+- **Reads, reducers, and row operations are edge-specific extensions**, not part
+  of the universal trio. A signal-backed text edge owns a
+  `{ capability, read : HostValue -> Str }` record; a `Ui.when` condition owns a
+  `{ capability, read : HostValue -> Bool }` record; a task request read and an
+  event reducer carry their operation the same way; `Ui.each` owns one ops
+  record containing its item/key/items capabilities plus `items_to_values`,
+  `key_of`, `key_hash`, and `row`. These records are carried by the edge that
+  needs them, never invented by the host.
 - **The capability is app-compiled, not host-authored.** The prebuilt host sees
   only the platform ABI; `a` is made concrete by the *application* (`Signal(a)`,
   `Model`, a row item type). The capability's closures are emitted by
@@ -541,9 +545,10 @@ so their input and output types are pinned to the surrounding `Signal(a)`. A
 source's initial value, sink reads, event payloads, structural conditions, and
 keyed row key/item slots are all carried as opaque `HostValue` handles, each
 paired with the per-edge **capability** (clone/split, equality, drop) plus any
-edge-specific read thunk that owns it — see *The capability* under Confined
-Erasure. The conceptual `eq` fields above are the equality member of that
-capability, not a free-floating thunk. A `HostValue` is **not** a literal
+capability-owned extension record for the edge-specific operation — see *The
+capability* under Confined Erasure. The conceptual `eq` fields above are the
+equality member of that capability, not a free-floating thunk. A `HostValue` is
+**not** a literal
 `Box(OpaqueValue)` field in the heterogeneous descriptor tree; Roc cannot erase
 `Box(a)` that way. The value is produced at the monomorphized edge and stored in
 a host value cell; the descriptor carries only the opaque handle plus the

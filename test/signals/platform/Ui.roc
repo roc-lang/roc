@@ -42,7 +42,12 @@ Ui := [].{
 					next = f(current)
 					Capability.store(Box.box(next), current_cap)
 				}
-				{ binder: st.ref, payload_kind: Node.unit_payload_kind, payload_accessor: Node.payload_accessor_none, payload_cap: Capability.handle(payload_cap), transform: Box.box(wrapped) }
+				{
+					binder: st.ref,
+					payload_kind: Node.unit_payload_kind,
+					payload_accessor: Node.payload_accessor_none,
+					payload_reducer: { capability: Capability.handle(payload_cap), transform: Box.box(wrapped) },
+				}
 			}
 
 		on_str : State(a), (a, Str -> a) -> Node.Msg
@@ -59,7 +64,12 @@ Ui := [].{
 					next = f(current, payload)
 					Capability.store(Box.box(next), current_cap)
 				}
-				{ binder: st.ref, payload_kind: Node.str_payload_kind, payload_accessor: Node.payload_accessor_target_value, payload_cap: Capability.handle(payload_cap), transform: Box.box(wrapped) }
+				{
+					binder: st.ref,
+					payload_kind: Node.str_payload_kind,
+					payload_accessor: Node.payload_accessor_target_value,
+					payload_reducer: { capability: Capability.handle(payload_cap), transform: Box.box(wrapped) },
+				}
 			}
 
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
@@ -76,7 +86,12 @@ Ui := [].{
 					next = f(current, payload)
 					Capability.store(Box.box(next), current_cap)
 				}
-				{ binder: st.ref, payload_kind: Node.bool_payload_kind, payload_accessor: Node.payload_accessor_target_checked, payload_cap: Capability.handle(payload_cap), transform: Box.box(wrapped) }
+				{
+					binder: st.ref,
+					payload_kind: Node.bool_payload_kind,
+					payload_accessor: Node.payload_accessor_target_checked,
+					payload_reducer: { capability: Capability.handle(payload_cap), transform: Box.box(wrapped) },
+				}
 			}
 	}
 
@@ -140,8 +155,7 @@ Ui := [].{
 		Elem.When(
 			{
 				condition: Signal.to_expr(condition),
-				read_cap: Capability.handle(condition_cap),
-				read: Box.box(read_condition),
+				read: { capability: Capability.handle(condition_cap), read: Box.box(read_condition) },
 				when_true: Box.box(when_true({})),
 				when_false: Box.box(when_false({})),
 			},
@@ -204,12 +218,15 @@ Ui := [].{
 		Elem.Each(
 			{
 				items: Signal.to_expr(items),
-				items_to_values: Box.box(items_to_values),
-				item_cap: Capability.handle(item_cap),
-				key_cap: Capability.handle(key_cap),
-				key_hash: Box.box(key_hash_hv),
-				key_of: Box.box(key_of_hv),
-				row: Box.box(row_hv),
+				ops: {
+					items_capability: Capability.handle(items_cap),
+					item_capability: Capability.handle(item_cap),
+					key_capability: Capability.handle(key_cap),
+					items_to_values: Box.box(items_to_values),
+					key_hash: Box.box(key_hash_hv),
+					key_of: Box.box(key_of_hv),
+					row: Box.box(row_hv),
+				},
 			},
 		)
 	}

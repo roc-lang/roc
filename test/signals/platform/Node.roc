@@ -26,10 +26,9 @@ import HostValue exposing [HostValue]
 	## marshal the typed payload before calling the transform.
 	Msg : {
 		binder : BinderRef,
-		payload_cap : HostValue.CapabilityHandle,
 		payload_accessor : U64,
 		payload_kind : U64,
-		transform : Box((HostValue, HostValue -> HostValue)),
+		payload_reducer : HostValue.EventReducerHandle,
 	}
 
 	## Signal expression. `Ref` reads a binder's current value. Other variants
@@ -75,8 +74,7 @@ import HostValue exposing [HostValue]
 				task_token : Box(U64),
 				task_name : Str,
 				request_init : Box(({} -> HostValue)),
-				request_cap : HostValue.CapabilityHandle,
-				request_read : Box((HostValue -> Str)),
+				request_read : HostValue.TaskRequestReadHandle,
 			},
 		),
 	]
@@ -141,9 +139,9 @@ import HostValue exposing [HostValue]
 	## `SignalExpr`; event handlers carry a `Msg`.
 	Attr := [
 		StaticText({ field : U64, value : Str }),
-		SignalText({ field : U64, signal : Box(SignalExpr), read_cap : HostValue.CapabilityHandle, read : Box((HostValue -> Str)) }),
+		SignalText({ field : U64, signal : Box(SignalExpr), read : HostValue.TextReadHandle }),
 		StaticBool({ field : U64, value : Bool }),
-		SignalBool({ field : U64, signal : Box(SignalExpr), read_cap : HostValue.CapabilityHandle, read : Box((HostValue -> Bool)) }),
+		SignalBool({ field : U64, signal : Box(SignalExpr), read : HostValue.BoolReadHandle }),
 		OnEvent({ kind : U64, msg : Msg }),
 	]
 }

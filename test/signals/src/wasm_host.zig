@@ -438,15 +438,16 @@ fn dispatchEvent(event_id: u32, payload_kind: EventPayloadKind, payload: HostVal
     const ctx = WasmCtx{};
     const desc = hostEventById(event_id);
     if (desc.payload_kind != payload_kind) failHost();
-    setHostValueCapability(payload, desc.payload_cap);
-    defer callHostValueToUnitWithCapability(desc.payload_cap, hv.hostValueCapabilityDrop(desc.payload_cap), payload);
+    const payload_cap = desc.payload_reducer.capability;
+    setHostValueCapability(payload, payload_cap);
+    defer callHostValueToUnitWithCapability(payload_cap, hv.hostValueCapabilityDrop(payload_cap), payload);
 
     shared_engine.recordDispatch();
 
     const current = currentStateValue(desc.target_node_id);
     const state_cap = shared_engine.stateCapability(desc.target_node_id) catch failHost();
     defer callHostValueToUnitWithCapability(state_cap, hv.hostValueCapabilityDrop(state_cap), current);
-    const next = callHostValueHostValueToHostValueWithCapabilities(state_cap, desc.payload_cap, desc.transform, current, payload);
+    const next = callHostValueHostValueToHostValueWithCapabilities(state_cap, payload_cap, desc.payload_reducer.transform, current, payload);
     if (!updateStateValue(desc.target_node_id, next)) return;
 
     const dirty_source_node_ids = [_]u64{desc.target_node_id};

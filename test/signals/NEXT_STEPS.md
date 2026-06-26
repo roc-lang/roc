@@ -169,14 +169,13 @@ Debug hardening:
 - clone results must be a different handle owned by the same capability;
 - taking a value releases the stored capability once, and a second take fails.
 
-Remaining scattered paths are deliberate edge extensions, not ownership
-capabilities. Signal text/bool reads, `Ui.when` condition reads, task request
-reads, event payload accessors, and `Ui.each` key/hash/accessor thunks still
-travel beside `read_cap`, `payload_cap`, `item_cap`, or `key_cap`. Those thunks
-are explicitly tied to the same capability, and every host call into them pushes
-the owning capability frame first. A future cleanup can fold these into richer
-capability-extension records, but the universal retained-value contract is now
-`clone`/`eq`/`drop`.
+The remaining edge operations now travel as app-compiled extension records
+rather than scattered free-standing thunks. Signal text/bool reads, `Ui.when`
+condition reads, task request reads, event reducers, and `Ui.each` operations
+carry the owning capability and operation together at the host boundary. The
+universal retained-value contract remains `clone`/`eq`/`drop`; edge-specific
+operations extend that contract only where the descriptor explicitly asks for
+them.
 
 Validation completed for this phase:
 
@@ -199,43 +198,57 @@ The exact glue regeneration command used for the ABI update was:
 ```
 
 Judgment: proceed with the capability architecture. The host now uses a
-first-class capability object, not only a Roc-side wrapper. The next work is
-Phase 3.5: remove the remaining edge-thunk scattering and bring the boundary all
-the way onto capability-owned extension objects.
+first-class capability object, not only a Roc-side wrapper, and the edge thunks
+cross as capability-owned extension records.
 
 ## Phase 3.5 — Remove remaining capability-edge legacy
 
-The ownership trio is coherent, but the descriptor graph still carries
-edge-specific thunks next to capability handles:
+Status: completed as the current architecture.
 
-- signal-backed text/bool reads: `read_cap` + `read`;
-- `Ui.when` condition reads: `read_cap` + `read`;
-- task request reads: `request_cap` + `request_read`;
-- event payload accessors/reducers: `payload_cap` + `transform`;
-- `Ui.each` item/key operations: `item_cap`, `key_cap`, `items_to_values`,
-  `key_of`, `key_hash`, and `row`.
+The descriptor graph no longer carries edge-specific thunks next to separate
+capability handles:
 
-These paths are guarded by active capability frames today, so they are safe, but
-they are still scattered descriptor contracts. The next architecture step is to
-replace them with small app-compiled capability extension records where the
-operation and owning capability are one object at the host boundary.
+- signal-backed text reads use `HostValue.TextReadHandle`;
+- signal-backed bool reads and `Ui.when` conditions use
+  `HostValue.BoolReadHandle`;
+- task request reads use `HostValue.TaskRequestReadHandle`;
+- event reducers use `HostValue.EventReducerHandle`;
+- `Ui.each` operations travel in one erased ops record containing the items,
+  item, and key capabilities plus `items_to_values`, `key_of`, `key_hash`, and
+  `row`.
 
-Target direction:
+The operation and owning capability are now one object at the host boundary. The
+host-visible shapes remain erased and stable, with no `Box(a)` fields in
+heterogeneous descriptors. The host stores/passes one extension object per
+retained edge instead of reconstructing a capability plus free-standing thunk.
 
-- introduce explicit extension shapes such as text read, bool read, task
-  request read, event reducer, row key, and row render capability objects;
-- keep the host-visible shapes erased and stable, with no `Box(a)` fields in
-  heterogeneous descriptors;
-- have the host store/pass one extension object per retained edge instead of
-  reconstructing a cap plus free-standing thunk;
-- keep `HostValue.get` split-and-replace and `HostValue.take` consuming;
-- keep task payload callbacks on the consuming ownership path;
-- preserve the active-capability assertion model, or make it redundant because
-  each extension object carries its owner capability internally.
+`HostValue.get` stays split-and-replace, `HostValue.take` stays consuming, and
+task payload callbacks stay on the consuming ownership path. The host still has
+no Roc layout/refcount knowledge; it only invokes the app-compiled operations it
+was handed.
 
 Do not reintroduce the abandoned parameterized host-visible handle shape
 (`CapabilityHandle(a)` in `Elem`/`Node` descriptors), compiler fallbacks, or
 host-side Roc layout/refcount knowledge.
+
+The exact glue regeneration command used for this ABI update was:
+
+```sh
+./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/src test/signals/platform/main.roc
+```
+
+Validation completed for this phase:
+
+- `zig build roc`
+- `./zig-out/bin/roc check test/signals/apps/task_to_utf8_lifetime.roc`
+- `./zig-out/bin/roc check test/signals/apps/ops_dashboard.roc`
+- `node --test test/signals/browser/runtime_contract.test.mjs`
+- `python3 test/signals/serve.py test/signals/apps/task_to_utf8_lifetime.roc --output /private/tmp/task_to_utf8_lifetime.wasm --no-server --skip-tailwind`
+- `node test/signals/browser/task_lifetime_harness.mjs /private/tmp/task_to_utf8_lifetime.wasm success`
+- `node test/signals/browser/task_lifetime_harness.mjs /private/tmp/task_to_utf8_lifetime.wasm failure`
+- `zig build run-test-zig -- --test-filter "signals host descriptors carry capability-owned extension records"`
+- `zig build run-test-zig -- --test-filter "signals host"`
+- `zig build run-test-signals`
 
 ## Phase 4 — Update and review baseline measurements
 

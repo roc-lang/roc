@@ -404,6 +404,11 @@ pub fn retainHostCallable(callable: abi.RocErasedCallable, metrics: anytype) abi
 }
 
 pub const HostValueCapability = hv.HostValueCapabilityHandle;
+pub const HostTextRead = abi.HostValueTextReadHandle;
+pub const HostBoolRead = abi.HostValueBoolReadHandle;
+pub const HostEventReducer = abi.HostValueEventReducerHandle;
+pub const HostTaskRequestRead = abi.HostValueTaskRequestReadHandle;
+pub const HostEachOps = abi.__AnonStruct58;
 
 /// Identity token interned per signal expression node.
 pub const HostSignalToken = *u64;
@@ -425,6 +430,72 @@ fn retainHostValueCapability(capability: HostValueCapability, metrics: anytype) 
 fn releaseHostValueCapability(capability: HostValueCapability, roc_host: *abi.RocHost, metrics: anytype) void {
     metrics.bump(.closure_releases, 3);
     hv.releaseHostValueCapability(capability, roc_host);
+}
+
+fn assertHostValueCapabilitiesMatch(actual: HostValueCapability, expected: HostValueCapability, message: []const u8) void {
+    if (!hv.hostValueCapabilitiesMatch(actual, expected)) @panic(message);
+}
+
+fn retainHostTextRead(read: HostTextRead, metrics: anytype) HostTextRead {
+    _ = retainHostValueCapability(read.capability, metrics);
+    abi.increfErasedCallable(read.read, 1);
+    metrics.bump(.closure_retains, 1);
+    return read;
+}
+
+fn releaseHostTextRead(read: HostTextRead, roc_host: *abi.RocHost, metrics: anytype) void {
+    releaseHostValueCapability(read.capability, roc_host, metrics);
+    abi.decrefErasedCallable(read.read, roc_host);
+    metrics.bump(.closure_releases, 1);
+}
+
+fn retainHostBoolRead(read: HostBoolRead, metrics: anytype) HostBoolRead {
+    _ = retainHostValueCapability(read.capability, metrics);
+    abi.increfErasedCallable(read.read, 1);
+    metrics.bump(.closure_retains, 1);
+    return read;
+}
+
+fn releaseHostBoolRead(read: HostBoolRead, roc_host: *abi.RocHost, metrics: anytype) void {
+    releaseHostValueCapability(read.capability, roc_host, metrics);
+    abi.decrefErasedCallable(read.read, roc_host);
+    metrics.bump(.closure_releases, 1);
+}
+
+fn retainHostEventReducer(reducer: HostEventReducer, metrics: anytype) HostEventReducer {
+    _ = retainHostValueCapability(reducer.capability, metrics);
+    abi.increfErasedCallable(reducer.transform, 1);
+    metrics.bump(.closure_retains, 1);
+    return reducer;
+}
+
+fn releaseHostEventReducer(reducer: HostEventReducer, roc_host: *abi.RocHost, metrics: anytype) void {
+    releaseHostValueCapability(reducer.capability, roc_host, metrics);
+    abi.decrefErasedCallable(reducer.transform, roc_host);
+    metrics.bump(.closure_releases, 1);
+}
+
+fn retainHostEachOps(ops: HostEachOps, metrics: anytype) HostEachOps {
+    _ = retainHostValueCapability(ops.items_capability, metrics);
+    _ = retainHostValueCapability(ops.item_capability, metrics);
+    _ = retainHostValueCapability(ops.key_capability, metrics);
+    abi.increfErasedCallable(ops.items_to_values, 1);
+    abi.increfErasedCallable(ops.key_hash, 1);
+    abi.increfErasedCallable(ops.key_of, 1);
+    abi.increfErasedCallable(ops.row, 1);
+    metrics.bump(.closure_retains, 4);
+    return ops;
+}
+
+fn releaseHostEachOps(ops: HostEachOps, roc_host: *abi.RocHost, metrics: anytype) void {
+    releaseHostValueCapability(ops.items_capability, roc_host, metrics);
+    releaseHostValueCapability(ops.item_capability, roc_host, metrics);
+    releaseHostValueCapability(ops.key_capability, roc_host, metrics);
+    abi.decrefErasedCallable(ops.items_to_values, roc_host);
+    abi.decrefErasedCallable(ops.key_hash, roc_host);
+    abi.decrefErasedCallable(ops.key_of, roc_host);
+    abi.decrefErasedCallable(ops.row, roc_host);
+    metrics.bump(.closure_releases, 4);
 }
 
 fn releaseHostBinderToken(token: HostBinderToken, roc_host: *abi.RocHost) void {
@@ -694,8 +765,7 @@ pub const HostActiveEventDesc = struct {
     target_node_id: u64,
     payload_kind: EventPayloadKind,
     payload_accessor: EventPayloadAccessor,
-    payload_cap: HostValueCapability,
-    transform: abi.RocErasedCallable,
+    payload_reducer: HostEventReducer,
 };
 
 pub const HostPendingTask = struct {
@@ -939,8 +1009,7 @@ pub const HostNodeSignalTextNodeDesc = struct {
     parent_elem_id: u64,
     scope_id: u64,
     signal: HostSignalBinding,
-    read_cap: HostValueCapability,
-    read: abi.RocErasedCallable,
+    read: HostTextRead,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -954,8 +1023,7 @@ pub const HostNodeSignalTextAttrDesc = struct {
     elem_id: u64,
     field: RenderTextField,
     signal: HostSignalBinding,
-    read_cap: HostValueCapability,
-    read: abi.RocErasedCallable,
+    read: HostTextRead,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -969,8 +1037,7 @@ pub const HostNodeSignalBoolAttrDesc = struct {
     elem_id: u64,
     field: RenderBoolField,
     signal: HostSignalBinding,
-    read_cap: HostValueCapability,
-    read: abi.RocErasedCallable,
+    read: HostBoolRead,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -999,10 +1066,8 @@ pub const HostNodeEventDesc = struct {
     target_node_id: u64,
     payload_kind: EventPayloadKind,
     payload_accessor: EventPayloadAccessor,
-    payload_cap: HostValueCapability,
-    transform: abi.RocErasedCallable,
-    owns_payload_cap: bool = true,
-    owns_transform: bool = true,
+    payload_reducer: HostEventReducer,
+    owns_payload_reducer: bool = true,
 };
 
 pub const HostNodeStateDesc = struct {
@@ -1014,8 +1079,7 @@ pub const HostNodeStateDesc = struct {
 pub const HostNodeWhenDesc = struct {
     node_id: u64,
     condition: HostSignalBinding,
-    read_cap: HostValueCapability,
-    read: abi.RocErasedCallable,
+    read: HostBoolRead,
     when_false: abi.Elem,
     when_true: abi.Elem,
     cached_value: HostSignalCacheSlot = .absent,
@@ -1024,12 +1088,7 @@ pub const HostNodeWhenDesc = struct {
 pub const HostNodeEachDesc = struct {
     node_id: u64,
     items: HostSignalBinding,
-    items_to_values: abi.RocErasedCallable,
-    item_cap: HostValueCapability,
-    key_hash: abi.RocErasedCallable,
-    key_cap: HostValueCapability,
-    key_of: abi.RocErasedCallable,
-    row: abi.RocErasedCallable,
+    ops: HostEachOps,
     cached_value: HostSignalCacheSlot = .absent,
 };
 
@@ -1289,9 +1348,7 @@ pub const HostNodeDescriptorStream = struct {
         for (self.signal_text_nodes.items) |*desc| {
             desc.cached_value.deinit(ctx, roc_host, metrics);
             desc.signal.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(desc.read, roc_host);
-            releaseHostValueCapability(desc.read_cap, roc_host, metrics);
+            releaseHostTextRead(desc.read, roc_host, metrics);
         }
         self.signal_text_nodes.deinit(allocator);
 
@@ -1303,9 +1360,7 @@ pub const HostNodeDescriptorStream = struct {
         for (self.signal_text_attrs.items) |*desc| {
             desc.cached_value.deinit(ctx, roc_host, metrics);
             desc.signal.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(desc.read, roc_host);
-            releaseHostValueCapability(desc.read_cap, roc_host, metrics);
+            releaseHostTextRead(desc.read, roc_host, metrics);
         }
         self.signal_text_attrs.deinit(allocator);
 
@@ -1314,9 +1369,7 @@ pub const HostNodeDescriptorStream = struct {
         for (self.signal_bool_attrs.items) |*desc| {
             desc.cached_value.deinit(ctx, roc_host, metrics);
             desc.signal.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(desc.read, roc_host);
-            releaseHostValueCapability(desc.read_cap, roc_host, metrics);
+            releaseHostBoolRead(desc.read, roc_host, metrics);
         }
         self.signal_bool_attrs.deinit(allocator);
 
@@ -1340,13 +1393,7 @@ pub const HostNodeDescriptorStream = struct {
         self.cleanups.deinit(allocator);
 
         for (self.events.items) |desc| {
-            if (desc.owns_payload_cap) {
-                releaseHostValueCapability(desc.payload_cap, roc_host, metrics);
-            }
-            if (desc.owns_transform) {
-                metrics.bump(.closure_releases, 1);
-                abi.decrefErasedCallable(desc.transform, roc_host);
-            }
+            if (desc.owns_payload_reducer) releaseHostEventReducer(desc.payload_reducer, roc_host, metrics);
         }
         self.events.deinit(allocator);
 
@@ -1365,9 +1412,7 @@ pub const HostNodeDescriptorStream = struct {
         for (self.whens.items) |*desc| {
             desc.cached_value.deinit(ctx, roc_host, metrics);
             desc.condition.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(desc.read, roc_host);
-            releaseHostValueCapability(desc.read_cap, roc_host, metrics);
+            releaseHostBoolRead(desc.read, roc_host, metrics);
             abi.decrefElem(desc.when_false, roc_host);
             abi.decrefElem(desc.when_true, roc_host);
         }
@@ -1376,13 +1421,7 @@ pub const HostNodeDescriptorStream = struct {
         for (self.eaches.items) |*desc| {
             desc.cached_value.deinit(ctx, roc_host, metrics);
             desc.items.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 4);
-            abi.decrefErasedCallable(desc.items_to_values, roc_host);
-            abi.decrefErasedCallable(desc.key_hash, roc_host);
-            abi.decrefErasedCallable(desc.key_of, roc_host);
-            releaseHostValueCapability(desc.key_cap, roc_host, metrics);
-            releaseHostValueCapability(desc.item_cap, roc_host, metrics);
-            abi.decrefErasedCallable(desc.row, roc_host);
+            releaseHostEachOps(desc.ops, roc_host, metrics);
         }
         self.eaches.deinit(allocator);
 
@@ -1472,20 +1511,16 @@ pub const HostNodeDescriptorStream = struct {
         self.recordTextNodeIndex(allocator, elem_id, text_node_index);
     }
 
-    pub fn appendSignalTextNode(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, parent_elem_id: u64, scope_id: u64, signal: HostSignalBinding, read_cap: HostValueCapability, read: abi.RocErasedCallable) void {
+    pub fn appendSignalTextNode(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, parent_elem_id: u64, scope_id: u64, signal: HostSignalBinding, read: HostTextRead) void {
         self.next_elem_id += 1;
         self.rememberSignalRecordTree(allocator, signal.record);
-        _ = retainHostValueCapability(read_cap, metrics);
-        abi.increfErasedCallable(read, 1);
-        metrics.bump(.closure_retains, 1);
+        const retained_read = retainHostTextRead(read, metrics);
         const signal_text_node_index = self.signal_text_nodes.items.len;
 
         self.render_nodes.append(allocator, .{ .elem_id = elem_id, .kind = .signal_text }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(read, roc_host);
-            releaseHostValueCapability(read_cap, roc_host, metrics);
+            releaseHostTextRead(retained_read, roc_host, metrics);
             @panic("out of memory");
         };
         self.signal_text_nodes.append(allocator, .{
@@ -1493,14 +1528,11 @@ pub const HostNodeDescriptorStream = struct {
             .parent_elem_id = parent_elem_id,
             .scope_id = scope_id,
             .signal = signal,
-            .read_cap = read_cap,
-            .read = read,
+            .read = retained_read,
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(read, roc_host);
-            releaseHostValueCapability(read_cap, roc_host, metrics);
+            releaseHostTextRead(retained_read, roc_host, metrics);
             @panic("out of memory");
         };
         self.recordSignalTextNodeIndex(allocator, elem_id, signal_text_node_index);
@@ -1520,24 +1552,19 @@ pub const HostNodeDescriptorStream = struct {
         self.recordStaticTextAttrIndex(allocator, elem_id, field, attr_index);
     }
 
-    pub fn appendSignalTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, field: RenderTextField, signal: HostSignalBinding, read_cap: HostValueCapability, read: abi.RocErasedCallable) void {
+    pub fn appendSignalTextAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, field: RenderTextField, signal: HostSignalBinding, read: HostTextRead) void {
         self.rememberSignalRecordTree(allocator, signal.record);
-        _ = retainHostValueCapability(read_cap, metrics);
-        abi.increfErasedCallable(read, 1);
-        metrics.bump(.closure_retains, 1);
+        const retained_read = retainHostTextRead(read, metrics);
         const attr_index = self.signal_text_attrs.items.len;
         self.signal_text_attrs.append(allocator, .{
             .elem_id = elem_id,
             .field = field,
             .signal = signal,
-            .read_cap = read_cap,
-            .read = read,
+            .read = retained_read,
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(read, roc_host);
-            releaseHostValueCapability(read_cap, roc_host, metrics);
+            releaseHostTextRead(retained_read, roc_host, metrics);
             @panic("out of memory");
         };
         self.recordSignalTextAttrIndex(allocator, elem_id, field, attr_index);
@@ -1553,24 +1580,19 @@ pub const HostNodeDescriptorStream = struct {
         self.recordStaticBoolAttrIndex(allocator, elem_id, field, attr_index);
     }
 
-    pub fn appendSignalBoolAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, field: RenderBoolField, signal: HostSignalBinding, read_cap: HostValueCapability, read: abi.RocErasedCallable) void {
+    pub fn appendSignalBoolAttr(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, field: RenderBoolField, signal: HostSignalBinding, read: HostBoolRead) void {
         self.rememberSignalRecordTree(allocator, signal.record);
-        _ = retainHostValueCapability(read_cap, metrics);
-        abi.increfErasedCallable(read, 1);
-        metrics.bump(.closure_retains, 1);
+        const retained_read = retainHostBoolRead(read, metrics);
         const attr_index = self.signal_bool_attrs.items.len;
         self.signal_bool_attrs.append(allocator, .{
             .elem_id = elem_id,
             .field = field,
             .signal = signal,
-            .read_cap = read_cap,
-            .read = read,
+            .read = retained_read,
         }) catch {
             var owned_signal = signal;
             owned_signal.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(read, roc_host);
-            releaseHostValueCapability(read_cap, roc_host, metrics);
+            releaseHostBoolRead(retained_read, roc_host, metrics);
             @panic("out of memory");
         };
         self.recordSignalBoolAttrIndex(allocator, elem_id, field, attr_index);
@@ -1618,10 +1640,8 @@ pub const HostNodeDescriptorStream = struct {
         };
     }
 
-    pub fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor, payload_cap: HostValueCapability, transform: abi.RocErasedCallable) void {
-        _ = retainHostValueCapability(payload_cap, metrics);
-        abi.increfErasedCallable(transform, 1);
-        metrics.bump(.closure_retains, 1);
+    pub fn appendEvent(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, roc_host: *abi.RocHost, metrics: anytype, elem_id: u64, kind: RenderEventKind, binder_token: HostBinderToken, target_node_id: u64, payload_kind: EventPayloadKind, payload_accessor: EventPayloadAccessor, payload_reducer: HostEventReducer) void {
+        const retained_reducer = retainHostEventReducer(payload_reducer, metrics);
         const event_index = self.events.items.len;
         self.events.append(allocator, .{
             .elem_id = elem_id,
@@ -1630,12 +1650,9 @@ pub const HostNodeDescriptorStream = struct {
             .target_node_id = target_node_id,
             .payload_kind = payload_kind,
             .payload_accessor = payload_accessor,
-            .payload_cap = payload_cap,
-            .transform = transform,
+            .payload_reducer = retained_reducer,
         }) catch {
-            releaseHostValueCapability(payload_cap, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(transform, roc_host);
+            releaseHostEventReducer(retained_reducer, roc_host, metrics);
             @panic("out of memory");
         };
         self.recordEventIndex(allocator, elem_id, kind, event_index);
@@ -1677,60 +1694,38 @@ pub const HostNodeDescriptorStream = struct {
         };
     }
 
-    pub fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, condition: HostSignalBinding, read_cap: HostValueCapability, read: abi.RocErasedCallable, when_false: abi.Elem, when_true: abi.Elem) void {
+    pub fn appendWhen(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, condition: HostSignalBinding, read: HostBoolRead, when_false: abi.Elem, when_true: abi.Elem) void {
         self.rememberSignalRecordTree(allocator, condition.record);
-        _ = retainHostValueCapability(read_cap, metrics);
-        abi.increfErasedCallable(read, 1);
+        const retained_read = retainHostBoolRead(read, metrics);
         abi.increfElem(when_false, 1);
         abi.increfElem(when_true, 1);
-        metrics.bump(.closure_retains, 1);
         self.whens.append(allocator, .{
             .node_id = node_id,
             .condition = condition,
-            .read_cap = read_cap,
-            .read = read,
+            .read = retained_read,
             .when_false = when_false,
             .when_true = when_true,
         }) catch {
             var owned_condition = condition;
             owned_condition.deinit(allocator, ctx, roc_host, metrics);
-            metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(read, roc_host);
-            releaseHostValueCapability(read_cap, roc_host, metrics);
+            releaseHostBoolRead(retained_read, roc_host, metrics);
             abi.decrefElem(when_false, roc_host);
             abi.decrefElem(when_true, roc_host);
             @panic("out of memory");
         };
     }
 
-    pub fn appendEach(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, items: HostSignalBinding, items_to_values: abi.RocErasedCallable, item_cap: HostValueCapability, key_hash: abi.RocErasedCallable, key_cap: HostValueCapability, key_of: abi.RocErasedCallable, row: abi.RocErasedCallable) void {
+    pub fn appendEach(self: *HostNodeDescriptorStream, allocator: std.mem.Allocator, ctx: anytype, roc_host: *abi.RocHost, metrics: anytype, node_id: u64, items: HostSignalBinding, ops: HostEachOps) void {
         self.rememberSignalRecordTree(allocator, items.record);
-        _ = retainHostValueCapability(item_cap, metrics);
-        _ = retainHostValueCapability(key_cap, metrics);
-        abi.increfErasedCallable(items_to_values, 1);
-        abi.increfErasedCallable(key_hash, 1);
-        abi.increfErasedCallable(key_of, 1);
-        abi.increfErasedCallable(row, 1);
-        metrics.bump(.closure_retains, 4);
+        const retained_ops = retainHostEachOps(ops, metrics);
         self.eaches.append(allocator, .{
             .node_id = node_id,
             .items = items,
-            .items_to_values = items_to_values,
-            .item_cap = item_cap,
-            .key_hash = key_hash,
-            .key_cap = key_cap,
-            .key_of = key_of,
-            .row = row,
+            .ops = retained_ops,
         }) catch {
             var owned_items = items;
             owned_items.deinit(allocator, ctx, roc_host, metrics);
-            releaseHostValueCapability(item_cap, roc_host, metrics);
-            releaseHostValueCapability(key_cap, roc_host, metrics);
-            metrics.bump(.closure_releases, 4);
-            abi.decrefErasedCallable(items_to_values, roc_host);
-            abi.decrefErasedCallable(key_hash, roc_host);
-            abi.decrefErasedCallable(key_of, roc_host);
-            abi.decrefErasedCallable(row, roc_host);
+            releaseHostEachOps(retained_ops, roc_host, metrics);
             @panic("out of memory");
         };
     }
@@ -2532,9 +2527,7 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn deinitActiveEventDesc(self: *Self, roc_host: *abi.RocHost, desc: ActiveEventDesc) void {
-            releaseHostValueCapability(desc.payload_cap, roc_host, &self.pending_roc_metrics);
-            abi.decrefErasedCallable(desc.transform, roc_host);
-            self.pending_roc_metrics.bump(.closure_releases, 1);
+            releaseHostEventReducer(desc.payload_reducer, roc_host, &self.pending_roc_metrics);
         }
 
         pub fn clearActiveEvents(self: *Self) RocHostRequiredError!void {
@@ -3187,7 +3180,7 @@ pub fn Engine(comptime Ctx: type) type {
                     .signal_text => {
                         const desc = findSignalTextNodeDesc(previous, node.elem_id) orelse @panic("copyActiveScopeSubtreeDescriptors: render node has no matching descriptor");
                         const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
-                        stream.appendSignalTextNode(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, signal, desc.read_cap, desc.read);
+                        stream.appendSignalTextNode(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.parent_elem_id, desc.scope_id, signal, desc.read);
                         stream.signal_text_nodes.items[stream.signal_text_nodes.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
                     },
                 }
@@ -3200,7 +3193,7 @@ pub fn Engine(comptime Ctx: type) type {
             for (previous.signal_text_attrs.items) |desc| {
                 if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
                 const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
-                stream.appendSignalTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read_cap, desc.read);
+                stream.appendSignalTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
                 stream.signal_text_attrs.items[stream.signal_text_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
             }
             for (previous.static_bool_attrs.items) |desc| {
@@ -3210,7 +3203,7 @@ pub fn Engine(comptime Ctx: type) type {
             for (previous.signal_bool_attrs.items) |desc| {
                 if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
                 const signal = desc.signal.cloneRetained(allocator, &self.pending_roc_metrics);
-                stream.appendSignalBoolAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read_cap, desc.read);
+                stream.appendSignalBoolAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.field, signal, desc.read);
                 stream.signal_bool_attrs.items[stream.signal_bool_attrs.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
             }
             for (previous.on_changes.items) |desc| {
@@ -3229,9 +3222,8 @@ pub fn Engine(comptime Ctx: type) type {
             }
             for (previous.events.items, 0..) |desc, event_index| {
                 if (!u64SliceContains(copied_elem_ids.items, desc.elem_id)) continue;
-                const payload_cap = if (desc.owns_payload_cap) desc.payload_cap else self.activeEventPayloadCapabilityByIndex(event_index) catch @panic("active event table is missing a retained payload capability");
-                const transform = if (desc.owns_transform) desc.transform else self.activeEventTransformByIndex(event_index) catch @panic("active event table is missing a retained transform");
-                stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, desc.payload_accessor, payload_cap, transform);
+                const payload_reducer = if (desc.owns_payload_reducer) desc.payload_reducer else self.activeEventReducerByIndex(event_index) catch @panic("active event table is missing a retained payload reducer");
+                stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, desc.elem_id, desc.kind, desc.binder_token, desc.target_node_id, desc.payload_kind, desc.payload_accessor, payload_reducer);
             }
 
             for (previous.scope_sites.items) |desc| {
@@ -3249,13 +3241,13 @@ pub fn Engine(comptime Ctx: type) type {
             for (previous.whens.items) |desc| {
                 if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
                 const condition = desc.condition.cloneRetained(allocator, &self.pending_roc_metrics);
-                stream.appendWhen(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.node_id, condition, desc.read_cap, desc.read, desc.when_false, desc.when_true);
+                stream.appendWhen(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.node_id, condition, desc.read, desc.when_false, desc.when_true);
                 stream.whens.items[stream.whens.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
             }
             for (previous.eaches.items) |desc| {
                 if (!self.streamNodeIdInScopeSubtree(previous, desc.node_id, root_scope_id)) continue;
                 const items = desc.items.cloneRetained(allocator, &self.pending_roc_metrics);
-                stream.appendEach(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.node_id, items, desc.items_to_values, desc.item_cap, desc.key_hash, desc.key_cap, desc.key_of, desc.row);
+                stream.appendEach(allocator, ctx, roc_host, &self.pending_roc_metrics, desc.node_id, items, desc.ops);
                 stream.eaches.items[stream.eaches.items.len - 1].cached_value = self.cloneHostSignalCacheSlot(ctx, desc.cached_value, &self.pending_roc_metrics);
             }
         }
@@ -3401,7 +3393,7 @@ pub fn Engine(comptime Ctx: type) type {
             };
         }
 
-        pub fn syncEachRowScopes(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, key_hash: abi.RocErasedCallable, key_cap: HostValueCapability, item_cap: HostValueCapability) HostKeyedRowDiffResult {
+        pub fn syncEachRowScopes(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, parent_scope_id: u64, site_ordinal: u64, keys: []const HostValue, items: []const HostValue, ops: HostEachOps) HostKeyedRowDiffResult {
             self.validateScopeId(parent_scope_id) catch @panic("scope id has no host scope descriptor");
             if (keys.len != items.len) @panic("Ui.each keyed scope received mismatched key and item lists");
 
@@ -3409,7 +3401,9 @@ pub fn Engine(comptime Ctx: type) type {
             const existing_scope_ids = self.activeEachRowScopes(allocator, parent_scope_id, site_ordinal) catch @panic("scope id has no host scope descriptor");
             defer allocator.free(existing_scope_ids);
 
-            const match_plan = self.buildEachRowMatchPlan(allocator, ctx, roc_host, existing_scope_ids, keys, key_hash, key_cap) catch @panic("keyed row diff operation failed");
+            const key_cap = ops.key_capability;
+            const item_cap = ops.item_capability;
+            const match_plan = self.buildEachRowMatchPlan(allocator, ctx, roc_host, existing_scope_ids, keys, ops) catch @panic("keyed row diff operation failed");
             defer allocator.free(match_plan.rows);
             errdefer allocator.free(match_plan.removed_scope_ids);
 
@@ -3482,9 +3476,10 @@ pub fn Engine(comptime Ctx: type) type {
             const allocator = Ctx.allocator(ctx);
             const items_value = self.cloneCachedSignalValue(ctx, &each.cached_value);
             const items_cap = self.hostSignalBindingCapability(ctx, &each.items);
+            assertHostValueCapabilitiesMatch(each.ops.items_capability, items_cap, "each items extension capability did not match its signal value");
             defer callHostValueToUnitWithCapability(ctx, roc_host, items_cap, hv.hostValueCapabilityDrop(items_cap), items_value);
 
-            const items = callHostValueToHostValueListWithCapability(ctx, roc_host, items_cap, each.items_to_values, items_value);
+            const items = callHostValueToHostValueListWithCapability(ctx, roc_host, each.ops.items_capability, each.ops.items_to_values, items_value);
             defer items.decref(roc_host);
             const item_values = items.items();
 
@@ -3492,10 +3487,10 @@ pub fn Engine(comptime Ctx: type) type {
             defer allocator.free(keys);
 
             for (item_values, 0..) |item, index| {
-                keys[index] = callHostValueToHostValueWithCapability(ctx, roc_host, each.item_cap, each.key_of, item);
+                keys[index] = callHostValueToHostValueWithCapability(ctx, roc_host, each.ops.item_capability, each.ops.key_of, item);
             }
 
-            return self.syncEachRowScopes(ctx, roc_host, site.scope_id, site.ordinal, keys, item_values, each.key_hash, each.key_cap, each.item_cap);
+            return self.syncEachRowScopes(ctx, roc_host, site.scope_id, site.ordinal, keys, item_values, each.ops);
         }
 
         pub fn collectNodeAttrDescriptor(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, stream: *HostNodeDescriptorStream, elem_id: u64, attr: abi.NodeAttr, binder_stack: []const HostBinderBinding) void {
@@ -3510,7 +3505,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const payload = attr.payload_signal_text();
                     const field = renderTextFieldFromAbi(payload.field);
                     const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
-                    stream.appendSignalTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read_cap, payload.read);
+                    stream.appendSignalTextAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
                 },
                 .StaticBool => {
                     const payload = attr.payload_static_bool();
@@ -3521,7 +3516,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const payload = attr.payload_signal_bool();
                     const field = renderBoolFieldFromAbi(payload.field);
                     const signal = self.bindNodeSignal(allocator, stream, payload.signal.*, binder_stack);
-                    stream.appendSignalBoolAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read_cap, payload.read);
+                    stream.appendSignalBoolAttr(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, field, signal, payload.read);
                 },
                 .OnEvent => {
                     const payload = attr.payload_on_event();
@@ -3530,7 +3525,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const payload_kind = eventPayloadKindFromAbi(msg.payload_kind);
                     const payload_accessor = eventPayloadAccessorFromAbi(msg.payload_accessor);
                     const target_node_id = resolveNodeBinderRef(binder_stack, msg.binder);
-                    stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_accessor, msg.payload_cap, msg.transform);
+                    stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_accessor, msg.payload_reducer);
                 },
             }
         }
@@ -3584,7 +3579,7 @@ pub fn Engine(comptime Ctx: type) type {
                 }
 
                 const row_values = self.eachRowScopeValues(row_scope_id);
-                const row_elem = callHostValueHostValueToElemWithCapabilities(ctx, roc_host, each.key_cap, each.item_cap, each.row, row_values.key, row_values.item);
+                const row_elem = callHostValueHostValueToElemWithCapabilities(ctx, roc_host, each.ops.key_capability, each.ops.item_capability, each.ops.row, row_values.key, row_values.item);
                 defer abi.decrefElem(row_elem, roc_host);
 
                 var ordinal: u64 = 0;
@@ -3600,7 +3595,7 @@ pub fn Engine(comptime Ctx: type) type {
             binder_stack.appendSlice(allocator, site.binder_bindings) catch @panic("out of memory");
 
             const row_values = self.eachRowScopeValues(row_scope_id);
-            const row_elem = callHostValueHostValueToElemWithCapabilities(ctx, roc_host, each.key_cap, each.item_cap, each.row, row_values.key, row_values.item);
+            const row_elem = callHostValueHostValueToElemWithCapabilities(ctx, roc_host, each.ops.key_capability, each.ops.item_capability, each.ops.row, row_values.key, row_values.item);
             defer abi.decrefElem(row_elem, roc_host);
 
             var ordinal: u64 = 0;
@@ -3635,7 +3630,7 @@ pub fn Engine(comptime Ctx: type) type {
                     dom_ordinal.* += 1;
                     const text_signal = elem.payload_text_signal();
                     const signal = self.bindNodeSignal(allocator, stream, text_signal.signal.*, binder_stack.items);
-                    stream.appendSignalTextNode(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read_cap, text_signal.read);
+                    stream.appendSignalTextNode(allocator, ctx, roc_host, &self.pending_roc_metrics, elem_id, parent_elem_id, scope_id, signal, text_signal.read);
                 },
                 .Cleanup => {
                     stream.appendCleanup(allocator, scope_id, elem.payload_cleanup().cleanup.asSlice());
@@ -3679,13 +3674,15 @@ pub fn Engine(comptime Ctx: type) type {
                     stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .when, binder_stack.items);
                     const when_payload = elem.payload_when();
                     const condition_binding = self.bindNodeSignal(allocator, stream, when_payload.condition.*, binder_stack.items);
-                    stream.appendWhen(allocator, ctx, roc_host, &self.pending_roc_metrics, node_id, condition_binding, when_payload.read_cap, when_payload.read, when_payload.when_false.*, when_payload.when_true.*);
+                    stream.appendWhen(allocator, ctx, roc_host, &self.pending_roc_metrics, node_id, condition_binding, when_payload.read, when_payload.when_false.*, when_payload.when_true.*);
 
                     const when_index = stream.whens.items.len - 1;
                     const when_desc = &stream.whens.items[when_index];
                     const condition = self.evalHostSignalBinding(ctx, roc_host, &when_desc.condition);
-                    const active_branch: HostScopeBranch = if (callHostValueToBoolWithCapability(ctx, roc_host, when_desc.read_cap, when_desc.read, condition)) .true_branch else .false_branch;
-                    when_desc.cached_value.replace(ctx, roc_host, &self.pending_roc_metrics, condition, self.hostSignalBindingCapability(ctx, &when_desc.condition));
+                    const condition_cap = self.hostSignalBindingCapability(ctx, &when_desc.condition);
+                    assertHostValueCapabilitiesMatch(when_desc.read.capability, condition_cap, "when read extension capability did not match its signal value");
+                    const active_branch: HostScopeBranch = if (callHostValueToBoolWithCapability(ctx, roc_host, when_desc.read.capability, when_desc.read.read, condition)) .true_branch else .false_branch;
+                    when_desc.cached_value.replace(ctx, roc_host, &self.pending_roc_metrics, condition, condition_cap);
                     if (self.activeWhenBranchScopeId(scope_id, site_ordinal, active_branch.opposite()) catch @panic("scope id has no host scope descriptor")) |inactive_scope_id| {
                         self.disposeScopeSubtree(ctx, roc_host, inactive_scope_id);
                     }
@@ -3706,38 +3703,26 @@ pub fn Engine(comptime Ctx: type) type {
                     stream.appendScopeSite(allocator, node_id, scope_id, site_ordinal, parent_elem_id, .each, binder_stack.items);
                     const each_payload = elem.payload_each();
                     const items_binding = self.bindNodeSignal(allocator, stream, each_payload.items.*, binder_stack.items);
-                    stream.appendEach(
-                        allocator,
-                        ctx,
-                        roc_host,
-                        &self.pending_roc_metrics,
-                        node_id,
-                        items_binding,
-                        each_payload.items_to_values,
-                        each_payload.item_cap,
-                        each_payload.key_hash,
-                        each_payload.key_cap,
-                        each_payload.key_of,
-                        each_payload.row,
-                    );
+                    stream.appendEach(allocator, ctx, roc_host, &self.pending_roc_metrics, node_id, items_binding, each_payload.ops);
                     const each_index = stream.eaches.items.len - 1;
                     const each_desc = stream.eaches.items[stream.eaches.items.len - 1];
 
                     const items_value = self.evalHostSignalBinding(ctx, roc_host, &stream.eaches.items[each_index].items);
                     const each_items_cap = self.hostSignalBindingCapability(ctx, &stream.eaches.items[each_index].items);
-                    const items = callHostValueToHostValueListWithCapability(ctx, roc_host, each_items_cap, each_desc.items_to_values, items_value);
+                    assertHostValueCapabilitiesMatch(each_desc.ops.items_capability, each_items_cap, "each items extension capability did not match its signal value");
+                    const items = callHostValueToHostValueListWithCapability(ctx, roc_host, each_desc.ops.items_capability, each_desc.ops.items_to_values, items_value);
                     defer items.decref(roc_host);
-                    stream.eaches.items[each_index].cached_value.replace(ctx, roc_host, &self.pending_roc_metrics, items_value, self.hostSignalBindingCapability(ctx, &stream.eaches.items[each_index].items));
+                    stream.eaches.items[each_index].cached_value.replace(ctx, roc_host, &self.pending_roc_metrics, items_value, each_items_cap);
                     const item_values = items.items();
 
                     const keys = allocator.alloc(HostValue, item_values.len) catch @panic("out of memory");
                     defer allocator.free(keys);
 
                     for (item_values, 0..) |item, index| {
-                        keys[index] = callHostValueToHostValueWithCapability(ctx, roc_host, each_desc.item_cap, each_desc.key_of, item);
+                        keys[index] = callHostValueToHostValueWithCapability(ctx, roc_host, each_desc.ops.item_capability, each_desc.ops.key_of, item);
                     }
 
-                    const diff = self.syncEachRowScopes(ctx, roc_host, scope_id, site_ordinal, keys, item_values, each_desc.key_hash, each_desc.key_cap, each_desc.item_cap);
+                    const diff = self.syncEachRowScopes(ctx, roc_host, scope_id, site_ordinal, keys, item_values, each_desc.ops);
                     defer diff.deinit(allocator);
 
                     for (diff.scope_ids, diff.row_items_changed, diff.scope_created) |row_scope_id, row_item_changed, row_created| {
@@ -3747,7 +3732,7 @@ pub fn Engine(comptime Ctx: type) type {
                         }
 
                         const row_values = self.eachRowScopeValues(row_scope_id);
-                        const row_elem = callHostValueHostValueToElemWithCapabilities(ctx, roc_host, each_desc.key_cap, each_desc.item_cap, each_desc.row, row_values.key, row_values.item);
+                        const row_elem = callHostValueHostValueToElemWithCapabilities(ctx, roc_host, each_desc.ops.key_capability, each_desc.ops.item_capability, each_desc.ops.row, row_values.key, row_values.item);
                         defer abi.decrefElem(row_elem, roc_host);
 
                         var row_ordinal: u64 = 0;
@@ -4281,22 +4266,19 @@ pub fn Engine(comptime Ctx: type) type {
         fn deinitActiveSignalTextNodeDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalTextNodeDesc) void {
             desc.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
-            self.pending_roc_metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(desc.read, roc_host);
+            releaseHostTextRead(desc.read, roc_host, &self.pending_roc_metrics);
         }
 
         fn deinitActiveSignalTextAttrDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalTextAttrDesc) void {
             desc.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
-            self.pending_roc_metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(desc.read, roc_host);
+            releaseHostTextRead(desc.read, roc_host, &self.pending_roc_metrics);
         }
 
         fn deinitActiveSignalBoolAttrDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeSignalBoolAttrDesc) void {
             desc.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
             desc.signal.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
-            self.pending_roc_metrics.bump(.closure_releases, 1);
-            abi.decrefErasedCallable(desc.read, roc_host);
+            releaseHostBoolRead(desc.read, roc_host, &self.pending_roc_metrics);
         }
 
         fn deinitActiveOnChangeDesc(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, desc: *HostNodeOnChangeDesc) void {
@@ -4510,7 +4492,7 @@ pub fn Engine(comptime Ctx: type) type {
             self.recordStreamNodesScanned(self.active_stream.events.items.len);
             for (self.active_stream.events.items, 0..) |desc, event_index| {
                 if (self.elemIdInReplacementTarget(&self.active_stream, desc.elem_id, target)) {
-                    if (desc.owns_payload_cap or desc.owns_transform) {
+                    if (desc.owns_payload_reducer) {
                         @panic("active event descriptor retained ownership outside the active event table");
                     }
                     self.active_stream.clearEventIndex(desc.elem_id, desc.kind, event_index);
@@ -4571,9 +4553,7 @@ pub fn Engine(comptime Ctx: type) type {
                     self.releaseActiveSignalRecord(ctx, removed.condition.record);
                     removed.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
                     removed.condition.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
-                    self.pending_roc_metrics.bump(.closure_releases, 1);
-                    abi.decrefErasedCallable(removed.read, roc_host);
-                    releaseHostValueCapability(removed.read_cap, roc_host, &self.pending_roc_metrics);
+                    releaseHostBoolRead(removed.read, roc_host, &self.pending_roc_metrics);
                     abi.decrefElem(removed.when_false, roc_host);
                     abi.decrefElem(removed.when_true, roc_host);
                     continue;
@@ -4593,13 +4573,7 @@ pub fn Engine(comptime Ctx: type) type {
                     self.releaseActiveSignalRecord(ctx, removed.items.record);
                     removed.cached_value.deinit(ctx, roc_host, &self.pending_roc_metrics);
                     removed.items.deinit(Ctx.allocator(ctx), ctx, roc_host, &self.pending_roc_metrics);
-                    self.pending_roc_metrics.bump(.closure_releases, 4);
-                    abi.decrefErasedCallable(removed.items_to_values, roc_host);
-                    abi.decrefErasedCallable(removed.key_hash, roc_host);
-                    abi.decrefErasedCallable(removed.key_of, roc_host);
-                    releaseHostValueCapability(removed.key_cap, roc_host, &self.pending_roc_metrics);
-                    releaseHostValueCapability(removed.item_cap, roc_host, &self.pending_roc_metrics);
-                    abi.decrefErasedCallable(removed.row, roc_host);
+                    releaseHostEachOps(removed.ops, roc_host, &self.pending_roc_metrics);
                     continue;
                 }
                 self.active_stream.eaches.items[write_index] = desc;
@@ -4640,7 +4614,7 @@ pub fn Engine(comptime Ctx: type) type {
 
             const event_base = self.active_stream.events.items.len;
             for (replacement.events.items, 0..) |*desc, offset| {
-                if (!desc.owns_payload_cap or !desc.owns_transform) {
+                if (!desc.owns_payload_reducer) {
                     @panic("replacement event descriptor did not own its retained payload");
                 }
                 self.active_stream.recordEventIndex(allocator, desc.elem_id, desc.kind, event_base + offset);
@@ -4648,11 +4622,9 @@ pub fn Engine(comptime Ctx: type) type {
                     .target_node_id = desc.target_node_id,
                     .payload_kind = desc.payload_kind,
                     .payload_accessor = desc.payload_accessor,
-                    .payload_cap = desc.payload_cap,
-                    .transform = desc.transform,
+                    .payload_reducer = desc.payload_reducer,
                 }) catch @panic("out of memory");
-                desc.owns_payload_cap = false;
-                desc.owns_transform = false;
+                desc.owns_payload_reducer = false;
             }
 
             self.active_stream.events.appendSlice(allocator, replacement.events.items) catch @panic("out of memory");
@@ -4961,57 +4933,61 @@ pub fn Engine(comptime Ctx: type) type {
             return self.evalHostSignalRecord(ctx, roc_host, signal.record);
         }
 
-        pub fn evalSignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
+        pub fn evalSignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: HostTextRead, cache_slot: *HostSignalCacheSlot) bool {
             const value = self.evalHostSignalBinding(ctx, roc_host, signal);
-            const cap = self.hostSignalBindingCapability(ctx, signal);
-            const text = callHostValueToStrWithCapability(ctx, roc_host, cap, read, value);
+            const signal_cap = self.hostSignalBindingCapability(ctx, signal);
+            assertHostValueCapabilitiesMatch(read.capability, signal_cap, "text read extension capability did not match its signal value");
+            const text = callHostValueToStrWithCapability(ctx, roc_host, read.capability, read.read, value);
             defer text.decref(roc_host);
             const changed = self.applyRenderTextField(ctx, elem_id, field, text.asSlice());
-            cache_slot.replace(ctx, roc_host, &self.pending_roc_metrics, value, cap);
+            cache_slot.replace(ctx, roc_host, &self.pending_roc_metrics, value, signal_cap);
             return changed;
         }
 
-        pub fn evalSignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot) bool {
+        pub fn evalSignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: HostBoolRead, cache_slot: *HostSignalCacheSlot) bool {
             const value = self.evalHostSignalBinding(ctx, roc_host, signal);
-            const cap = self.hostSignalBindingCapability(ctx, signal);
-            const bool_value = callHostValueToBoolWithCapability(ctx, roc_host, cap, read, value);
+            const signal_cap = self.hostSignalBindingCapability(ctx, signal);
+            assertHostValueCapabilitiesMatch(read.capability, signal_cap, "bool read extension capability did not match its signal value");
+            const bool_value = callHostValueToBoolWithCapability(ctx, roc_host, read.capability, read.read, value);
             const changed = self.applyRenderBoolField(ctx, elem_id, field, bool_value);
-            cache_slot.replace(ctx, roc_host, &self.pending_roc_metrics, value, cap);
+            cache_slot.replace(ctx, roc_host, &self.pending_roc_metrics, value, signal_cap);
             return changed;
         }
 
-        pub fn evalDirtySignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+        pub fn evalDirtySignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: HostTextRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
             const result = self.evalDirtyHostSignalBinding(ctx, roc_host, signal, dirty_source_node_ids, dirty_generation);
             const cap = self.hostSignalBindingCapability(ctx, signal);
+            assertHostValueCapabilitiesMatch(read.capability, cap, "dirty text read extension capability did not match its signal value");
             if (!result.changed) {
                 callHostValueToUnitWithCapability(ctx, roc_host, cap, hv.hostValueCapabilityDrop(cap), result.value);
                 return false;
             }
             if (!self.updateDirtySignalCache(ctx, roc_host, cache_slot, result.value, cap)) return false;
-            const text = callHostValueToStrWithCapability(ctx, roc_host, cap, read, result.value);
+            const text = callHostValueToStrWithCapability(ctx, roc_host, read.capability, read.read, result.value);
             defer text.decref(roc_host);
             return self.applyRenderTextField(ctx, elem_id, field, text.asSlice());
         }
 
-        pub fn evalDirtySignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+        pub fn evalDirtySignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: HostBoolRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
             const result = self.evalDirtyHostSignalBinding(ctx, roc_host, signal, dirty_source_node_ids, dirty_generation);
             const cap = self.hostSignalBindingCapability(ctx, signal);
+            assertHostValueCapabilitiesMatch(read.capability, cap, "dirty bool read extension capability did not match its signal value");
             if (!result.changed) {
                 callHostValueToUnitWithCapability(ctx, roc_host, cap, hv.hostValueCapabilityDrop(cap), result.value);
                 return false;
             }
             if (!self.updateDirtySignalCache(ctx, roc_host, cache_slot, result.value, cap)) return false;
-            return self.applyRenderBoolField(ctx, elem_id, field, callHostValueToBoolWithCapability(ctx, roc_host, cap, read, result.value));
+            return self.applyRenderBoolField(ctx, elem_id, field, callHostValueToBoolWithCapability(ctx, roc_host, read.capability, read.read, result.value));
         }
 
-        pub fn evalStructuralSignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+        pub fn evalStructuralSignalTextField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderTextField, signal: *HostSignalBinding, read: HostTextRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
             if (dirty_generation != 0 and sourceNodeIdsIntersect(signal.source_node_ids, dirty_source_node_ids)) {
                 return self.evalDirtySignalTextField(ctx, roc_host, elem_id, field, signal, read, cache_slot, dirty_source_node_ids, dirty_generation);
             }
             return self.evalSignalTextField(ctx, roc_host, elem_id, field, signal, read, cache_slot);
         }
 
-        pub fn evalStructuralSignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: abi.RocErasedCallable, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
+        pub fn evalStructuralSignalBoolField(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, elem_id: u64, field: RenderBoolField, signal: *HostSignalBinding, read: HostBoolRead, cache_slot: *HostSignalCacheSlot, dirty_source_node_ids: []const u64, dirty_generation: u64) bool {
             if (dirty_generation != 0 and sourceNodeIdsIntersect(signal.source_node_ids, dirty_source_node_ids)) {
                 return self.evalDirtySignalBoolField(ctx, roc_host, elem_id, field, signal, read, cache_slot, dirty_source_node_ids, dirty_generation);
             }
@@ -5181,11 +5157,12 @@ pub fn Engine(comptime Ctx: type) type {
                             const desc = &self.active_stream.whens.items[route.index];
                             const result = self.evalDirtyHostSignalBinding(ctx, roc_host, &desc.condition, dirty_source_node_ids, dirty_generation);
                             const cap = self.hostSignalBindingCapability(ctx, &desc.condition);
+                            assertHostValueCapabilitiesMatch(desc.read.capability, cap, "dirty when read extension capability did not match its signal value");
                             if (!result.changed) {
                                 callHostValueToUnitWithCapability(ctx, roc_host, cap, hv.hostValueCapabilityDrop(cap), result.value);
                                 continue;
                             }
-                            const active_branch: HostScopeBranch = if (callHostValueToBoolWithCapability(ctx, roc_host, desc.read_cap, desc.read, result.value)) .true_branch else .false_branch;
+                            const active_branch: HostScopeBranch = if (callHostValueToBoolWithCapability(ctx, roc_host, desc.read.capability, desc.read.read, result.value)) .true_branch else .false_branch;
                             if (self.updateDirtySignalCache(ctx, roc_host, &desc.cached_value, result.value, cap)) {
                                 dirty_structural_signals.append(allocator, .{
                                     .kind = .when,
@@ -5228,14 +5205,9 @@ pub fn Engine(comptime Ctx: type) type {
             return self.states.items[state_index].cell.cap;
         }
 
-        pub fn activeEventTransformByIndex(self: *Self, event_index: usize) ActiveEventLookupError!abi.RocErasedCallable {
+        pub fn activeEventReducerByIndex(self: *Self, event_index: usize) ActiveEventLookupError!HostEventReducer {
             if (event_index >= self.active_events.items.len) return ActiveEventLookupError.MissingActiveEvent;
-            return self.active_events.items[event_index].transform;
-        }
-
-        pub fn activeEventPayloadCapabilityByIndex(self: *Self, event_index: usize) ActiveEventLookupError!HostValueCapability {
-            if (event_index >= self.active_events.items.len) return ActiveEventLookupError.MissingActiveEvent;
-            return self.active_events.items[event_index].payload_cap;
+            return self.active_events.items[event_index].payload_reducer;
         }
 
         pub fn activeScopeSiteByNodeId(self: *Self, node_id: u64, kind: HostNodeScopeSiteKind) ?HostNodeScopeSiteDesc {
@@ -5330,23 +5302,24 @@ pub fn Engine(comptime Ctx: type) type {
             return callHostValueToU64WithCapability(ctx, roc_host, key_cap, key_hash, key);
         }
 
-        pub fn eachKeysEqual(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, key_cap: HostValueCapability, left: HostValue, right: HostValue) bool {
+        pub fn eachKeysEqual(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, ops: HostEachOps, left: HostValue, right: HostValue) bool {
             self.recordEachKeyCompare();
+            const key_cap = ops.key_capability;
             return callHostValueHostValueToBoolWithCapability(ctx, roc_host, key_cap, hv.hostValueCapabilityEq(key_cap), left, right);
         }
 
-        pub fn buildEachRowMatchPlan(self: *Self, allocator: std.mem.Allocator, ctx: Ctx.Handle, roc_host: *abi.RocHost, existing_scope_ids: []const u64, keys: []const HostValue, key_hash: abi.RocErasedCallable, key_cap: HostValueCapability) keyed_rows.Error!keyed_rows.Plan {
+        pub fn buildEachRowMatchPlan(self: *Self, allocator: std.mem.Allocator, ctx: Ctx.Handle, roc_host: *abi.RocHost, existing_scope_ids: []const u64, keys: []const HostValue, ops: HostEachOps) keyed_rows.Error!keyed_rows.Plan {
             const key_hashes = allocator.alloc(u64, keys.len) catch return error.OutOfMemory;
             defer allocator.free(key_hashes);
             for (keys, 0..) |key, key_index| {
-                key_hashes[key_index] = self.hashEachKeyValue(ctx, roc_host, key_hash, key_cap, key);
+                key_hashes[key_index] = self.hashEachKeyValue(ctx, roc_host, ops.key_hash, ops.key_capability, key);
             }
 
             const existing_key_hashes = allocator.alloc(u64, existing_scope_ids.len) catch return error.OutOfMemory;
             defer allocator.free(existing_key_hashes);
             for (existing_scope_ids, 0..) |scope_id, existing_index| {
                 const existing_key = self.eachRowScopeKeyValue(scope_id);
-                existing_key_hashes[existing_index] = self.hashEachKeyValue(ctx, roc_host, key_hash, key_cap, existing_key);
+                existing_key_hashes[existing_index] = self.hashEachKeyValue(ctx, roc_host, ops.key_hash, ops.key_capability, existing_key);
             }
 
             const MatchContext = struct {
@@ -5355,10 +5328,10 @@ pub fn Engine(comptime Ctx: type) type {
                 roc_host: *abi.RocHost,
                 existing_scope_ids: []const u64,
                 keys: []const HostValue,
-                key_cap: HostValueCapability,
+                ops: HostEachOps,
 
                 pub fn nextKeysEqual(context: *@This(), left_index: usize, right_index: usize) bool {
-                    return context.engine.eachKeysEqual(context.ctx, context.roc_host, context.key_cap, context.keys[left_index], context.keys[right_index]);
+                    return context.engine.eachKeysEqual(context.ctx, context.roc_host, context.ops, context.keys[left_index], context.keys[right_index]);
                 }
 
                 pub fn existingKeyEquals(context: *@This(), existing_index: usize, key_index: usize) bool {
@@ -5373,7 +5346,7 @@ pub fn Engine(comptime Ctx: type) type {
                 .roc_host = roc_host,
                 .existing_scope_ids = existing_scope_ids,
                 .keys = keys,
-                .key_cap = key_cap,
+                .ops = ops,
             };
             return keyed_rows.buildPlan(allocator, existing_scope_ids, existing_key_hashes, key_hashes, &match_context);
         }
@@ -5629,7 +5602,7 @@ pub fn Engine(comptime Ctx: type) type {
             desc.run_on_mount = false;
 
             const cmd = erased_calls.callUnitToStartTaskCmd(roc_host, desc.to_cmd);
-            defer abi.decref__AnonStruct82(cmd, roc_host);
+            defer abi.decref__AnonStruct86(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 
@@ -6357,17 +6330,14 @@ pub fn Engine(comptime Ctx: type) type {
             self.clearActiveEvents() catch @panic("active event table cannot release retained payloads without a Roc host");
 
             for (stream.events.items) |*desc| {
-                if (!desc.owns_payload_cap) @panic("event descriptor payload capability ownership was already transferred");
-                if (!desc.owns_transform) @panic("event descriptor transform ownership was already transferred");
+                if (!desc.owns_payload_reducer) @panic("event descriptor payload reducer ownership was already transferred");
                 self.active_events.append(allocator, .{
                     .target_node_id = desc.target_node_id,
                     .payload_kind = desc.payload_kind,
                     .payload_accessor = desc.payload_accessor,
-                    .payload_cap = desc.payload_cap,
-                    .transform = desc.transform,
+                    .payload_reducer = desc.payload_reducer,
                 }) catch @panic("out of memory");
-                desc.owns_payload_cap = false;
-                desc.owns_transform = false;
+                desc.owns_payload_reducer = false;
             }
         }
 
@@ -6450,8 +6420,8 @@ pub fn Engine(comptime Ctx: type) type {
             }
 
             const request_value = erased_calls.callValueInitThunk(roc_host, cmd.request_init);
-            defer callHostValueToUnitWithCapability(ctx, roc_host, cmd.request_cap, hv.hostValueCapabilityDrop(cmd.request_cap), request_value);
-            const request = callHostValueToStrWithCapability(ctx, roc_host, cmd.request_cap, cmd.request_read, request_value);
+            defer callHostValueToUnitWithCapability(ctx, roc_host, cmd.request_read.capability, hv.hostValueCapabilityDrop(cmd.request_read.capability), request_value);
+            const request = callHostValueToStrWithCapability(ctx, roc_host, cmd.request_read.capability, cmd.request_read.read, request_value);
             defer request.decref(roc_host);
 
             self.cancelPendingTasksByTaskToken(ctx, cmd.task_token);
@@ -6503,7 +6473,7 @@ pub fn Engine(comptime Ctx: type) type {
             if (!self.updateDirtySignalCache(ctx, roc_host, &desc.cached_value, result.value, cap)) return .{};
 
             const cmd = callHostValueToStartTaskCmdWithCapability(ctx, roc_host, cap, desc.to_cmd, result.value);
-            defer abi.decref__AnonStruct82(cmd, roc_host);
+            defer abi.decref__AnonStruct86(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 

@@ -5,6 +5,26 @@ HostValue := [HostValue(U64)].{
 		drop : Box((HostValue -> {})),
 	}
 
+	TextReadHandle := {
+		capability : CapabilityHandle,
+		read : Box((HostValue -> Str)),
+	}
+
+	BoolReadHandle := {
+		capability : CapabilityHandle,
+		read : Box((HostValue -> Bool)),
+	}
+
+	TaskRequestReadHandle := {
+		capability : CapabilityHandle,
+		read : Box((HostValue -> Str)),
+	}
+
+	EventReducerHandle := {
+		capability : CapabilityHandle,
+		transform : Box((HostValue, HostValue -> HostValue)),
+	}
+
 	clone : HostValue -> HostValue
 	store_with_capability : Box(a), CapabilityHandle -> HostValue
 	store_with_existing_capability : Box(a), HostValue -> HostValue

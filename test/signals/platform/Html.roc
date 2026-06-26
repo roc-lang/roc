@@ -17,7 +17,7 @@ Html := [].{
 		cap = signal.cap
 		read : HostValue -> Str
 		read = |value| Box.unbox(Capability.get(value, cap))
-		Node.Attr.SignalText({ field: Node.field_class, signal: Signal.to_expr(signal), read_cap: Capability.handle(cap), read: Box.box(read) })
+		Node.Attr.SignalText({ field: Node.field_class, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } })
 	}
 
 	div : List(Node.Attr), List(Elem) -> Elem
@@ -107,7 +107,7 @@ Html := [].{
 		cap = signal.cap
 		read : HostValue -> Str
 		read = |value| Box.unbox(Capability.get(value, cap))
-		Elem.TextSignal({ signal: Signal.to_expr(signal), read_cap: Capability.handle(cap), read: Box.box(read) })
+		Elem.TextSignal({ signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } })
 	}
 
 	## Signal-backed preformatted text block.
@@ -120,7 +120,7 @@ Html := [].{
 			{
 				tag: "pre",
 				attrs: [
-					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(signal), read_cap: Capability.handle(cap), read: Box.box(read) }),
+					Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(signal), read: { capability: Capability.handle(cap), read: Box.box(read) } }),
 					class_attr(classes),
 				],
 				children: [],
@@ -169,7 +169,7 @@ Html := [].{
 				tag: "button",
 				attrs: List.concat(
 					[
-						Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read_cap: Capability.handle(label_cap), read: Box.box(read_label) }),
+						Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: { capability: Capability.handle(label_cap), read: Box.box(read_label) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 					],
 					attrs,
@@ -199,8 +199,8 @@ Html := [].{
 				tag: "button",
 				attrs: List.concat(
 					[
-						Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read_cap: Capability.handle(label_cap), read: Box.box(read_label) }),
-						Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled), read_cap: Capability.handle(disabled_cap), read: Box.box(read_disabled) }),
+						Node.Attr.SignalText({ field: Node.field_text, signal: Signal.to_expr(label), read: { capability: Capability.handle(label_cap), read: Box.box(read_label) } }),
+						Node.Attr.SignalBool({ field: Node.bool_field_disabled, signal: Signal.to_expr(disabled), read: { capability: Capability.handle(disabled_cap), read: Box.box(read_disabled) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_click, msg }),
 					],
 					attrs,
@@ -230,7 +230,7 @@ Html := [].{
 					[
 						Node.Attr.StaticText({ field: Node.field_role, value: "textbox" }),
 						Node.Attr.StaticText({ field: Node.field_label, value: label }),
-						Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value), read_cap: Capability.handle(value_cap), read: Box.box(read_value) }),
+						Node.Attr.SignalText({ field: Node.field_value, signal: Signal.to_expr(value), read: { capability: Capability.handle(value_cap), read: Box.box(read_value) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_input, msg }),
 					],
 					attrs,
@@ -260,7 +260,7 @@ Html := [].{
 					[
 						Node.Attr.StaticText({ field: Node.field_role, value: "checkbox" }),
 						Node.Attr.StaticText({ field: Node.field_label, value: label }),
-						Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked), read_cap: Capability.handle(checked_cap), read: Box.box(read_checked) }),
+						Node.Attr.SignalBool({ field: Node.bool_field_checked, signal: Signal.to_expr(checked), read: { capability: Capability.handle(checked_cap), read: Box.box(read_checked) } }),
 						Node.Attr.OnEvent({ kind: Node.event_kind_check, msg }),
 					],
 					attrs,
