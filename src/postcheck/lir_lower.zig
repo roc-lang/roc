@@ -1304,18 +1304,18 @@ const Lowerer = struct {
         const target_struct = self.result.layouts.getStructData(target_content.getStruct().idx);
         const target_fields = self.result.layouts.struct_fields.sliceRange(target_struct.getFields());
 
-        var semantic_field_count: usize = 0;
+        var non_padding_field_count: usize = 0;
         for (0..target_fields.len) |sorted_index| {
             const target_field = target_fields.get(@intCast(sorted_index));
-            if (!target_field.is_padding) semantic_field_count += 1;
+            if (!target_field.is_padding) non_padding_field_count += 1;
         }
 
-        const field_locals = try self.allocator.alloc(LIR.LocalId, semantic_field_count);
+        const field_locals = try self.allocator.alloc(LIR.LocalId, non_padding_field_count);
         defer self.allocator.free(field_locals);
-        const source_layouts = try self.allocator.alloc(layout.Idx, semantic_field_count);
+        const source_layouts = try self.allocator.alloc(layout.Idx, non_padding_field_count);
         defer self.allocator.free(source_layouts);
 
-        for (0..semantic_field_count) |field_index| {
+        for (0..non_padding_field_count) |field_index| {
             const target_field_layout = self.structFieldLayoutByOriginalIndex(target_content.getStruct().idx, @intCast(field_index)) orelse return null;
             const source_field_layout = self.structFieldLayoutByOriginalIndex(source_content.getStruct().idx, @intCast(field_index)) orelse return null;
             if (!self.layoutsAssignable(target_field_layout, source_field_layout)) return null;
@@ -1328,7 +1328,7 @@ const Lowerer = struct {
             .fields = try self.result.store.addLocalSpan(field_locals),
             .next = next,
         } });
-        var i = semantic_field_count;
+        var i = non_padding_field_count;
         while (i > 0) {
             i -= 1;
             current = try self.assignRefRead(
@@ -1343,8 +1343,8 @@ const Lowerer = struct {
 
     fn structLayoutsAssignable(self: *Lowerer, target_content: layout.Layout, source_content: layout.Layout) bool {
         if (target_content.tag != .struct_ or source_content.tag != .struct_) return false;
-        const target_count = self.semanticStructFieldCount(target_content.getStruct().idx);
-        if (target_count != self.semanticStructFieldCount(source_content.getStruct().idx)) return false;
+        const target_count = self.nonPaddingStructFieldCount(target_content.getStruct().idx);
+        if (target_count != self.nonPaddingStructFieldCount(source_content.getStruct().idx)) return false;
 
         var field_index: usize = 0;
         while (field_index < target_count) : (field_index += 1) {
@@ -1355,7 +1355,7 @@ const Lowerer = struct {
         return true;
     }
 
-    fn semanticStructFieldCount(self: *Lowerer, struct_idx: layout.StructIdx) usize {
+    fn nonPaddingStructFieldCount(self: *Lowerer, struct_idx: layout.StructIdx) usize {
         const struct_data = self.result.layouts.getStructData(struct_idx);
         const fields = self.result.layouts.struct_fields.sliceRange(struct_data.getFields());
         var count: usize = 0;

@@ -251,7 +251,7 @@ expression whose own dependency region is resolved and otherwise eligible. This
 is required for Roc's recover-and-continue behavior: `roc check`, tests, and
 program execution must keep doing all valid work that does not depend on the
 erroneous code path.
-No downstream compile-time-evaluation step may use a checked artifact's
+No downstream compile-time-evaluation step may use a CheckedModule's
 nonempty diagnostic list as a reason to skip independent roots; it must consume
 the explicit root list and the per-root poisoned/dependency state produced by
 checking.
@@ -356,7 +356,7 @@ candidate interval added by its children with the parent candidate. When a
 frame finishes as runtime-dependent or effectful, it leaves eligible
 unconditionally reached children in place. When a frame is in a branch body,
 match guard, or match branch value controlled by a runtime decision, it does
-not publish independent candidates from that conditional region. The enclosing
+not add selected roots from that conditional region. The enclosing
 `if` or `match` may still be selected if the whole control expression becomes
 compile-time-known and effect-free.
 
@@ -1080,14 +1080,14 @@ unresolved static-dispatch call, type error, or other checker-owned diagnostic
 poisons the expression that owns the error and any expression that explicitly
 depends on it. It does not poison sibling definitions, unrelated top-level
 values, unrelated imported modules, or the checked program as a whole. A checked
-artifact that carries diagnostics is still a valid input to every independent
+CheckedModule data that carries diagnostics is still a valid input to every independent
 compile-time-evaluation decision whose expression/dependency region is
 well-checked. If one definition is erroneous and another definition is
 independently compile-time-known, the independent definition must still be
 evaluated during checking and, when reachable, emitted as static data.
-The checked artifact must therefore be able to contain both diagnostics and
+The CheckedModule data must therefore be able to contain both diagnostics and
 successful compile-time root requests. The presence of diagnostics is not an
-artifact-level root-selection failure.
+module-level root-selection failure.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
@@ -1353,7 +1353,7 @@ representation. This is the source of truth for propagation through locals,
 blocks, `if`, `match`, and function specialization. The compiler must not
 propagate iterator information by replaying checked expressions, re-lowering
 declaration right-hand sides, mining the public record/closure representation,
-or asking a backend to recover iterator semantics from generated code.
+or asking a backend to recover iterator behavior from generated code.
 
 The implementation owner for this is the iterator-aware post-check lowering
 logic that is already deciding how expressions become lower IR. This must not be
@@ -1364,12 +1364,12 @@ consumer sites or materialize them exactly where they cross a public boundary.
 No raw plan value may survive into LIR, because LIR has only ordinary values,
 control flow, calls, and explicit ARC statements.
 
-Passes that do not explicitly own iterator-plan semantics must treat
+Passes that do not explicitly own iterator-plan behavior must treat
 `iter_plan` as opaque. In particular, general call-pattern specialization must
 not mine private plan operands or the materialized public fallback to discover
 new call patterns. If those optimizations should compose, iterator-plan
 lowering must first rewrite the plan into ordinary post-check IR that the
-general pass already understands, at the semantic boundary already being
+general pass already understands, at the materialization boundary already being
 lowered.
 
 Because plans are post-check values, source evaluation order is preserved by
@@ -1463,7 +1463,7 @@ opaque outside the builtin module, so ordinary Roc code cannot observe that
 field. The builtin module can access the backing record field internally, but
 iterator producer plans are disabled while lowering the builtin module.
 
-Materialization is a semantic operation, not a size cleanup. When a known plan
+Materialization is a meaning-preserving lowering operation, not a size cleanup. When a known plan
 crosses this boundary, lowering constructs the ordinary public `Iter` value and
 public step values with the same meaning as the Roc builtin implementation. A
 later consumer that receives only a public iterator value must treat it as a
@@ -1483,7 +1483,7 @@ decision that introduced or observed it:
   more precise plan for that value
 
 LIR and backends consume ordinary values, control flow, and explicit ARC
-statements. They must not know builtin iterator semantics, public `Iter`
+statements. They must not know builtin iterator behavior, public `Iter`
 closure layouts, or special reference-counting rules for iterator wrappers.
 
 Private plan state produced by iterator-aware lowering is still ordinary
@@ -1517,7 +1517,7 @@ dispatch plan, and Monotype instantiation. It must not recognize iterator
 operations by source names, display strings, generated symbol names, closure
 layout shape, wasm bytes, or backend output. If a stage needs to know that an
 expression is builtin `Iter.map`, the checked stage must have produced explicit
-identity data that makes that fact available.
+identity output that records that relationship.
 
 This design deliberately mirrors the useful part of Rust iterators: optimized
 code sees concrete state machines whose `next` operation mutates private
@@ -1529,7 +1529,7 @@ The existing call-pattern specialization pass is a useful precedent and may
 remain part of the implementation, but the long-term source of truth for
 iterator optimization is the explicit iterator-plan representation. General
 constructor/call-pattern specialization should not be responsible for
-rediscovering builtin iterator semantics from the public Roc implementation.
+rediscovering builtin iterator behavior from the public Roc implementation.
 
 ### Structural Serialization Methods
 
