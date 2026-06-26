@@ -3330,6 +3330,80 @@ test "unspecialized function return materializes iterator plan before Lambda" {
     try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
 }
 
+test "unspecialized function return materializes recognized iterator plans before Lambda" {
+    const allocator = std.testing.allocator;
+    var lifted_source = try solveModuleWithIteratorPlans(allocator,
+        \\module [main]
+        \\
+        \\advance : I64 -> Try((I64, I64), [NoMore])
+        \\advance = |state|
+        \\    if state < 1 {
+        \\        Ok((state, state + 1))
+        \\    } else {
+        \\        Err(NoMore)
+        \\    }
+        \\
+        \\make_list : () -> Iter(I64)
+        \\make_list = || [10.I64, 20.I64].iter()
+        \\
+        \\make_single : () -> Iter(I64)
+        \\make_single = || Iter.single(42.I64)
+        \\
+        \\make_exclusive_range : () -> Iter(I64)
+        \\make_exclusive_range = || 1.I64..<3.I64
+        \\
+        \\make_inclusive_range : () -> Iter(I64)
+        \\make_inclusive_range = || 1.I64..=3.I64
+        \\
+        \\make_custom : () -> Iter(I64)
+        \\make_custom = || Iter.custom(0.I64, Known(1.U64), advance)
+        \\
+        \\make_append : () -> Iter(I64)
+        \\make_append = || [10.I64].iter().append(20.I64)
+        \\
+        \\make_prepended : () -> Iter(I64)
+        \\make_prepended = || [10.I64].iter().prepended(5.I64)
+        \\
+        \\make_iter : () -> Iter(I64)
+        \\make_iter = || [10.I64].iter().iter()
+        \\
+        \\make_concat : () -> Iter(I64)
+        \\make_concat = || [10.I64].iter().concat([20.I64].iter())
+        \\
+        \\make_map : () -> Iter(I64)
+        \\make_map = || [10.I64].iter().map(|n| n + 1)
+        \\
+        \\make_keep_if : () -> Iter(I64)
+        \\make_keep_if = || [10.I64, 20.I64].iter().keep_if(|n| n > 10)
+        \\
+        \\make_drop_if : () -> Iter(I64)
+        \\make_drop_if = || [10.I64, 20.I64].iter().drop_if(|n| n < 20)
+        \\
+        \\main : (
+        \\    Iter(I64), Iter(I64), Iter(I64), Iter(I64),
+        \\    Iter(I64), Iter(I64), Iter(I64), Iter(I64),
+        \\    Iter(I64), Iter(I64), Iter(I64), Iter(I64),
+        \\)
+        \\main = (
+        \\    make_list(),
+        \\    make_single(),
+        \\    make_exclusive_range(),
+        \\    make_inclusive_range(),
+        \\    make_custom(),
+        \\    make_append(),
+        \\    make_prepended(),
+        \\    make_iter(),
+        \\    make_concat(),
+        \\    make_map(),
+        \\    make_keep_if(),
+        \\    make_drop_if(),
+        \\)
+    );
+    defer lifted_source.deinit(allocator);
+
+    try expectNoReachableLiftedIterPlans(allocator, &lifted_source.solved.lifted);
+}
+
 test "unspecialized function argument materializes iterator plan before Lambda" {
     try expectOptimizedDbgEvents(
         \\module [main]

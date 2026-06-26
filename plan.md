@@ -652,9 +652,11 @@ Tasks:
   - [x] Tuple storage containing `List.iter(...)` materializes before Lambda.
   - [x] Tuple storage containing every recognized iterator producer
     materializes before Lambda.
-- [ ] Unspecialized function return materializes.
+- [x] Unspecialized function return materializes.
   - [x] Function return of `List.iter(...)` materializes before Lambda and
     preserves public `Iter.next` behavior.
+  - [x] Function return of every recognized iterator producer materializes
+    before Lambda.
 - [x] Unspecialized call argument materializes.
   - [x] Function argument receiving `List.iter(...)` materializes before Lambda
     and preserves public `Iter.next` behavior.
