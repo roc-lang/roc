@@ -1158,6 +1158,7 @@ const Cloner = struct {
                     true,
                 );
             },
+            .block => |block| return try self.cloneBlockValueDemandingFact(expr.ty, block),
             .comptime_branch_taken => |taken| return try self.cloneExprValueDemandingFact(taken.body),
             else => return try self.cloneExprValue(expr_id),
         }
@@ -1679,7 +1680,10 @@ const Cloner = struct {
                     .captures = captures,
                 } };
             },
-            .expr_with_known_fact => |known| try self.projectableLoopFactFromExpr(known.fact),
+            .expr_with_known_fact => |known| if (canReadFieldsFromExpr(self.pass.program, known.expr))
+                try self.projectableLoopFactFromExpr(known.fact)
+            else
+                null,
             .expr,
             .tag,
             => if (factCanProjectFromExpr(fact)) fact else null,
@@ -1751,6 +1755,19 @@ const Cloner = struct {
     }
 
     fn cloneBlockValue(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Value {
+        return try self.cloneBlockValueWithFinalDemand(ty, block, false);
+    }
+
+    fn cloneBlockValueDemandingFact(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Value {
+        return try self.cloneBlockValueWithFinalDemand(ty, block, true);
+    }
+
+    fn cloneBlockValueWithFinalDemand(
+        self: *Cloner,
+        ty: Type.TypeId,
+        block: anytype,
+        demand_final_fact: bool,
+    ) Common.LowerError!Value {
         const change_start = self.changes.items.len;
         defer self.restore(change_start);
 
@@ -1763,7 +1780,12 @@ const Cloner = struct {
             try self.cloneStmtInto(stmt, &statements);
         }
 
-        const final_value = try self.cloneExprValue(block.final_expr);
+        const final_value = if (demand_final_fact)
+            try self.cloneExprValueDemandingFact(block.final_expr)
+        else
+            try self.cloneExprValue(block.final_expr);
+        if (demand_final_fact and statements.items.len == 0) return final_value;
+
         const final_expr = try self.materialize(final_value);
         const block_expr = try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
             .statements = try self.pass.program.addStmtSpan(statements.items),
