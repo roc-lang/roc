@@ -531,6 +531,7 @@ Builtin :: [].{
 								rest: Iter.custom(
 									next_seed,
 									match len_if_known {
+										Known(0) => Unknown
 										Known(l) => Known(l - 1)
 										Unknown => Unknown
 									},

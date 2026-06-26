@@ -3660,7 +3660,10 @@ const core_tests = [_]TestCase{
         \\            Try.Err(NoMore)
         \\        }
         \\
-        \\    Iter.collect(Iter.custom(0.U64, Known(8), adv))
+        \\    collected : List(U64)
+        \\    collected = Iter.collect(Iter.custom(0.U64, Known(8), adv))
+        \\
+        \\    collected
         \\}
         ,
         .expected = .{ .inspect_str = "[0, 1, 2, 3, 4, 5, 6, 7, 8]" },
