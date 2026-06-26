@@ -1398,12 +1398,49 @@ captures, and type data produced by earlier stages.
 The existing constructor/callable shape specialization pass is the owner of
 this optimization direction. It is general over values shaped as tags, records,
 tuples, nominals, and callables; `Iter` and `Stream` are important clients, not
-special cases. The pass may expose shape through a direct call when the caller
-is currently using that result in a shape-demanding context, such as field
-access, tag matching, calling a returned callable, loop-state splitting, or a
-specialized call argument. This uses the ordinary direct-call body and preserves
-argument evaluation order. It must not decide based on method names such as
-`iter`, `append`, `next`, or `map`.
+special cases.
+
+The shape-specialization engine has one value/shape model and two outputs:
+
+1. It rewrites every original Roc function body in place while preserving that
+   function's public ABI: the same function id, arguments, captures, return
+   type, and call sites remain valid.
+2. It creates extra direct-call workers only when an explicit call pattern
+   proves that splitting a callee argument is useful and correct.
+
+This separation is required. Local optimizations such as loop-state splitting
+must not depend on whether some caller happened to pass a constructor-shaped
+argument. A function taking `I64` should get the same local loop-state
+specialization as the same function taking `{ n : I64 }` when the loop state
+inside the function has the same known shape. Constructor-shaped arguments are
+only relevant to interprocedural worker ABIs; they are not the permission slip
+for optimizing the callee's own body.
+
+The pass should therefore operate as a worklist:
+
+- First compute the explicit argument-demand information needed to know which
+  direct-call arguments are worth splitting.
+- Then clone each original Roc body once as the base specialization, preserving
+  its ABI and applying the same field-read, tag-match, callable, direct-call,
+  branch-join, and loop-state shape rewrites used everywhere else.
+- While cloning a base body or worker, record any newly discovered direct-call
+  worker pattern.
+- Pop unwritten worker patterns from the worklist, reserve their function ids,
+  clone their bodies with split arguments, and keep recording more patterns
+  until the worklist is empty.
+
+There should not be a separate post-clone cleanup pass whose job is to scan the
+finished program and rewrite calls after the fact. Calls are rewritten while
+their containing body is cloned, using the same explicit `Shape` and `Value`
+facts as every other transformation. That keeps the source of truth single and
+prevents one pass from guessing at information another pass already had.
+
+The pass may expose shape through a direct call when the caller is currently
+using that result in a shape-demanding context, such as field access, tag
+matching, calling a returned callable, loop-state splitting, or a specialized
+call argument. This uses the ordinary direct-call body and preserves argument
+evaluation order. It must not decide based on method names such as `iter`,
+`append`, `next`, or `map`.
 
 Shape must flow through ordinary local bindings, blocks, `if`, `match`, loop
 initial values, and loop `continue` values. When branches share a common outer

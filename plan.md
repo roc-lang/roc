@@ -258,8 +258,76 @@ It also already:
 - inlines known callable calls
 - has direct-call inlining machinery guarded against recursion
 
-The work is to make that machinery complete enough for `Iter` and `Stream`,
-not to add a new iterator optimizer.
+The work is to make that machinery complete enough and correctly staged, not
+to add a new iterator optimizer.
+
+The long-term pass design is one shape-specialization engine with two products:
+
+- **Base body rewrite:** every original Roc function body is cloned once back
+  into the same function id, with the same arguments, captures, return type,
+  and public ABI. This pass performs local shape rewrites such as field
+  projection, tag simplification, callable inlining, branch/match shape joins,
+  and loop-state splitting.
+- **Extra direct-call workers:** when a direct call passes a known-shaped value
+  into an argument that the callee actually uses in a shape-demanding way, the
+  same engine creates an additional worker whose ABI receives that argument's
+  leaves directly.
+
+These two products must not be conflated. Loop-state splitting is local to a
+function body and must not require a constructor-shaped caller argument. This
+must optimize the same way:
+
+```roc
+sum : I64 -> I64
+sum = |start| {
+    var $state = { n: start, acc: 0 }
+
+    while $state.n != 0 {
+        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+    }
+
+    $state.acc
+}
+```
+
+as this:
+
+```roc
+sum : { n : I64 } -> I64
+sum = |start| {
+    var $state = { n: start.n, acc: 0 }
+
+    while $state.n != 0 {
+        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+    }
+
+    $state.acc
+}
+```
+
+The record argument only matters for a possible interprocedural worker ABI. It
+must not be the reason the body gets local loop-state specialization.
+
+The pass should run as a worklist:
+
+1. Compute explicit argument-demand data: which callee arguments are inspected
+   by field access, tuple access, match, callable call, or by propagation
+   through another direct call.
+2. Clone each original Roc function body in place as the base specialization,
+   preserving its ABI and applying the ordinary shape rewrites.
+3. While cloning any base body or worker, record newly discovered direct-call
+   worker patterns from explicit `Shape` facts.
+4. Reserve a function id for each newly discovered worker pattern.
+5. Clone each worker with split arguments, applying the same body-local shape
+   rewrites and recording any further worker patterns it discovers.
+6. Continue until the worklist is empty.
+
+There should be no separate post-clone cleanup phase that scans the finished
+program and tries to rewrite calls after the fact. Calls are rewritten while
+their containing body is cloned, using the same explicit `Shape`/`Value` facts
+as every other optimization. This gives the pass a single source of truth and
+avoids a late pass trying to reconstruct information that the cloner already
+had.
 
 The generalized pass must expose constructor/callable shape through:
 
@@ -449,7 +517,58 @@ The tests should inspect the compiler IR or generated wasm/object text where
 possible, not only output values. Value tests prove correctness; shape tests
 prove the optimization happened.
 
-### 6. Generalize Direct-Call Shape Exposure
+### 6. Refactor `SpecConstr` Around Base Bodies And Worker Worklist
+
+Refactor `src/postcheck/monotype_lifted/spec_constr.zig` so the clone engine is
+not only used when a call-pattern worker exists.
+
+Concrete work:
+
+- Represent the original function body as the **base specialization**.
+- Clone every original Roc function body once into the same function id.
+- Preserve the original function's ABI exactly:
+  - same function id
+  - same argument list
+  - same captures
+  - same return type
+  - existing calls to that function still type-check and lower unchanged
+- Run the same shape-aware cloner for base bodies and worker bodies.
+- Let the base-body clone perform local rewrites:
+  - known record/tuple field projection
+  - known tag match simplification
+  - known callable calls
+  - branch/match shape joins
+  - loop-state splitting
+  - demanded direct-call result exposure
+- While cloning any base body or worker, record newly discovered direct-call
+  worker patterns.
+- Maintain an explicit worklist of unwritten worker patterns.
+- Reserve worker ids when patterns are discovered, then clone worker bodies by
+  popping that worklist until it is empty.
+- Rewrite calls while cloning the containing body. Delete the late
+  `rewriteExistingCalls` style cleanup once the cloner owns all call rewriting.
+
+This step must add a regression test proving primitive arguments do not block
+local loop-state specialization:
+
+```roc
+sum : I64 -> I64
+sum = |start| {
+    var $state = { n: start, acc: 0 }
+
+    while $state.n != 0 {
+        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+    }
+
+    $state.acc
+}
+```
+
+The optimized LIR shape for that function must split the loop state just like
+the otherwise equivalent `{ n : I64 } -> I64` version. The test should assert
+the loop join parameter count, not just final output.
+
+### 7. Generalize Direct-Call Shape Exposure
 
 Extend `spec_constr` so a direct call can expose a constructor/callable result
 when the caller is currently trying to use that result as a shape.
@@ -468,7 +587,7 @@ Concrete work:
 This is the piece that lets calls like `Iter.append(base, point)` expose the
 record containing the new step thunk.
 
-### 7. Generalize Shape Joins
+### 8. Generalize Shape Joins
 
 Add a value-shape join operation for `if` and `match`.
 
@@ -487,10 +606,11 @@ The join operation should:
 This lets `collision_points` keep the `Iter` record shape across branches even
 when the selected step callable value differs.
 
-### 8. Strengthen Loop-State Splitting
+### 9. Strengthen Loop-State Splitting
 
 Update loop specialization so split loop state works with:
 
+- base-body rewrites, not only call-pattern workers
 - shapes returned from direct calls
 - shapes returned from branch/match joins
 - callable fields read from known records
@@ -501,7 +621,7 @@ The loop rewrite must remain all-or-nothing for each loop parameter. If the
 initial shape and every reachable `continue` shape cannot be made consistent,
 keep the ordinary loop value.
 
-### 9. Ensure Lambda Sets Stay Finite Until Lowering
+### 10. Ensure Lambda Sets Stay Finite Until Lowering
 
 Verify that the optimizer does not prematurely erase step callables. The step
 function in `Iter` and `Stream` must remain an ordinary callable value with
@@ -516,7 +636,7 @@ Required checks:
 - public ABI or hosted boundaries still force erasure only through existing
   checked data
 
-### 10. Delete Stale Iterator-Plan Tests And Add New Ones
+### 11. Delete Stale Iterator-Plan Tests And Add New Ones
 
 - Remove structural tests asserting `iter_plan` fields exist.
 - Replace them with tests asserting the absence of iterator-plan IR.
@@ -525,7 +645,7 @@ Required checks:
 - Add regression tests that `Stream.next!` remains the effectful analog of
   `Iter.next`.
 
-### 11. Rebuild Rocci Bird
+### 12. Rebuild Rocci Bird
 
 For Rocci Bird:
 
@@ -544,7 +664,7 @@ that the iterator version no longer carries public iterator wrapper churn in
 the collision loop and no longer regresses significantly relative to the
 direct-list source.
 
-### 12. Update Documentation
+### 13. Update Documentation
 
 - Update `design.md` to describe the lambda/callable-shape design.
 - Remove the old design claim that explicit iterator plans are the long-term
@@ -565,6 +685,14 @@ direct-list source.
 - [x] No `src/postcheck/iter_plan.zig` remains.
 - [x] No post-check IR expression has an `iter_plan` case.
 - [x] Source `for` lowering uses ordinary checked `.iter` and `.next`.
+- [ ] `SpecConstr` rewrites every original Roc body as a base specialization
+      while preserving its ABI.
+- [ ] Direct-call worker creation uses an explicit worklist of discovered
+      call patterns.
+- [ ] Call rewriting happens while cloning the containing base body or worker.
+- [ ] No late `rewriteExistingCalls` cleanup pass remains.
+- [ ] Primitive function arguments get the same local loop-state
+      specialization as equivalent single-field-record arguments.
 - [x] Shape specialization handles direct-call results in demanded contexts.
 - [x] Shape specialization handles `if` and `match` joins.
 - [ ] Loop-state splitting handles iterator records and step callables.
@@ -598,3 +726,6 @@ direct-list source.
 - Do not let LIR or backends know iterator rules.
 - Do not keep both explicit iterator plans and generalized shape specialization
   as competing long-term systems.
+- Do not add a late cleanup pass that reconstructs call-shape information after
+  body cloning; calls must be rewritten by the same shape-aware cloner that has
+  the explicit facts.
