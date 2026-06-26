@@ -225,12 +225,14 @@ const ReplLine = @This();
 allocator: Allocator,
 history: History,
 kill_ring: ?[]const u8,
+replay_index: ?usize,
 
 pub fn init(allocator: Allocator) ReplLine {
     return ReplLine{
         .allocator = allocator,
         .history = History.init(allocator),
         .kill_ring = null,
+        .replay_index = null,
     };
 }
 
@@ -264,6 +266,8 @@ const LineState = struct {
     history_index: ?usize,
     transient_line: ?[]const u8,
     kill_ring: *?[]const u8,
+    last_navigated_index: ?usize,
+    replay_index: *?usize,
     /// Set after a Ctrl-C so that a second consecutive Ctrl-C quits. Any other
     /// input event clears it, so the two presses must be back-to-back.
     ctrl_c_armed: bool,
@@ -501,6 +505,8 @@ fn historyBackward(state: *LineState) CommandError!void {
     try state.out.writeAll(state.line_buffer.items);
     try ansi_term.clearFromCursorToLineEnd(state.out); // Clear any ghost text
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+
+    state.last_navigated_index = state.history_index;
 }
 
 fn historyForward(state: *LineState) CommandError!void {
@@ -529,6 +535,8 @@ fn historyForward(state: *LineState) CommandError!void {
     try state.out.writeAll(state.line_buffer.items);
     try ansi_term.clearFromCursorToLineEnd(state.out); // Clear any ghost text
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+
+    state.last_navigated_index = state.history_index;
 }
 
 fn findCommandFn(state: *LineState) CommandFn {
@@ -674,6 +682,8 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         .history_index = null,
         .transient_line = null,
         .kill_ring = &self.kill_ring,
+        .last_navigated_index = null,
+        .replay_index = &self.replay_index,
         .ctrl_c_armed = false,
     };
 
@@ -781,16 +791,51 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
             }
 
             const cmd = ReplLine.findCommandFn(&state);
-            cmd(&state) catch |err| {
-                switch (err) {
-                    error.ExitRepl => return .eof,
-                    error.NewLine => {
-                        done = true;
-                        break;
-                    },
-                    else => |readline_error| return readline_error,
+
+            var intercepted = false;
+            if (cmd == historyForward) {
+                if (state.history_index == null) {
+                    if (state.replay_index.*) |r_idx| {
+                        if (r_idx < state.history.entries.items.len) {
+                            state.history_index = r_idx;
+                            const entry = state.history.entries.items[r_idx];
+                            state.line_buffer.clearAndFree(state.temp);
+                            try state.line_buffer.appendSlice(state.temp, entry);
+                            state.col_offset = entry.len;
+
+                            try ansi_term.setCursorColumn(state.out, state.prompt_width);
+                            try state.out.writeAll(state.line_buffer.items);
+                            try ansi_term.clearFromCursorToLineEnd(state.out);
+                            try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+
+                            state.last_navigated_index = r_idx;
+                            state.replay_index.* = null;
+                            intercepted = true;
+                        } else {
+                            state.replay_index.* = null;
+                        }
+                    }
                 }
-            };
+            } else if (cmd == historyBackward) {
+                state.replay_index.* = null;
+            } else if (cmd == acceptLine) {
+                state.replay_index.* = if (state.last_navigated_index) |idx| idx + 1 else null;
+            } else {
+                state.replay_index.* = null;
+            }
+
+            if (!intercepted) {
+                cmd(&state) catch |err| {
+                    switch (err) {
+                        error.ExitRepl => return .eof,
+                        error.NewLine => {
+                            done = true;
+                            break;
+                        },
+                        else => |readline_error| return readline_error,
+                    }
+                };
+            }
         }
         if (done) break;
     }
@@ -1161,6 +1206,7 @@ test "Keyboard commands: advanced bindings" {
     var kill_ring: ?[]const u8 = null;
     defer if (kill_ring) |k| testing.allocator.free(k);
 
+    var dummy_replay_index: ?usize = null;
     var state = LineState{
         .outlive = testing.allocator,
         .temp = testing.allocator,
@@ -1176,6 +1222,8 @@ test "Keyboard commands: advanced bindings" {
         .history_index = null,
         .transient_line = null,
         .kill_ring = &kill_ring,
+        .last_navigated_index = null,
+        .replay_index = &dummy_replay_index,
         .ctrl_c_armed = false,
     };
     defer state.line_buffer.deinit(testing.allocator);
@@ -1313,6 +1361,7 @@ test "History: transient line preservation" {
     var kill_ring: ?[]const u8 = null;
     defer if (kill_ring) |k| testing.allocator.free(k);
 
+    var dummy_replay_index: ?usize = null;
     var state = LineState{
         .outlive = testing.allocator,
         .temp = temp,
@@ -1328,6 +1377,8 @@ test "History: transient line preservation" {
         .history_index = null,
         .transient_line = null,
         .kill_ring = &kill_ring,
+        .last_navigated_index = null,
+        .replay_index = &dummy_replay_index,
         .ctrl_c_armed = false,
     };
 
@@ -1355,4 +1406,127 @@ test "History: transient line preservation" {
     try historyForward(&state);
     try testing.expectEqualStrings("third draft", state.line_buffer.items);
     try testing.expect(state.history_index == null);
+}
+
+test "History: replay index" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try history.append("cmd 0");
+    try history.append("cmd 1");
+    try history.append("cmd 2");
+
+    var arena = base.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const temp = arena.allocator();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |k| testing.allocator.free(k);
+
+    var replay_index: ?usize = null;
+    var state = LineState{
+        .outlive = testing.allocator,
+        .temp = temp,
+        .prompt = "> ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = &history,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .last_navigated_index = null,
+        .replay_index = &replay_index,
+        .ctrl_c_armed = false,
+    };
+    defer state.line_buffer.deinit(temp);
+
+    // Navigate backward twice
+    try historyBackward(&state);
+    try historyBackward(&state);
+
+    try testing.expectEqual(@as(?usize, 1), state.history_index);
+    try testing.expectEqual(@as(?usize, 1), state.last_navigated_index);
+
+    // Simulate line execution saving next replay index
+    replay_index = if (state.last_navigated_index) |idx| idx + 1 else null;
+    try testing.expectEqual(@as(?usize, 2), replay_index);
+
+    // Initialize fresh state for the next prompt
+    var state2 = LineState{
+        .outlive = testing.allocator,
+        .temp = temp,
+        .prompt = "> ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = &history,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .last_navigated_index = null,
+        .replay_index = &replay_index,
+        .ctrl_c_armed = false,
+    };
+    defer state2.line_buffer.deinit(temp);
+
+    // Simulate pressing DOWN on blank line (triggering intercept logic)
+    var intercepted = false;
+    if (state2.history_index == null) {
+        if (state2.replay_index.*) |r_idx| {
+            if (r_idx < state2.history.entries.items.len) {
+                state2.history_index = r_idx;
+                const entry = state2.history.entries.items[r_idx];
+                state2.line_buffer.clearAndFree(state2.temp);
+                try state2.line_buffer.appendSlice(state2.temp, entry);
+                state2.col_offset = entry.len;
+                state2.last_navigated_index = r_idx;
+                state2.replay_index.* = null;
+                intercepted = true;
+            }
+        }
+    }
+
+    try testing.expect(intercepted);
+    try testing.expectEqualStrings("cmd 2", state2.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 2), state2.history_index);
+    try testing.expectEqual(@as(?usize, 2), state2.last_navigated_index);
+    try testing.expect(state2.replay_index.* == null);
+
+    // Verify replay index is reset on new commands/input
+    var replay_index3: ?usize = 2;
+    var state3 = LineState{
+        .outlive = testing.allocator,
+        .temp = temp,
+        .prompt = "> ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = &history,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .last_navigated_index = null,
+        .replay_index = &replay_index3,
+        .ctrl_c_armed = false,
+    };
+    defer state3.line_buffer.deinit(temp);
+
+    replay_index3 = null;
+    try testing.expect(state3.replay_index.* == null);
 }
