@@ -715,11 +715,13 @@ test "reachable proc pass marks static data callable plans" {
     erased_entries[0] = .{
         .entry = callable_proc,
         .template = .{
-            .fn_def = .{ .checked_generated = .{
-                .proc_base = @enumFromInt(0),
-                .template = @enumFromInt(0),
-            } },
-            .source_fn_ty = @enumFromInt(0),
+            .fn_def = .{
+                .checked_generated = .{
+                    .proc_base = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
+                    .template = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
+                },
+            },
+            .source_fn_ty = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
             .source_fn_key = .{},
         },
     };
@@ -735,14 +737,16 @@ test "reachable proc pass marks static data callable plans" {
     try result.static_data_values.append(std.testing.allocator, .{
         .const_ref = .{
             .artifact = .{},
-            .owner = .{ .top_level_binding = .{
-                .module_idx = 0,
-                .pattern = @enumFromInt(0),
-            } },
-            .template = @enumFromInt(0),
+            .owner = .{
+                .top_level_binding = .{
+                    .module_idx = 0,
+                    .pattern = undefined, // Reachability tests do not inspect checked const owner metadata.
+                },
+            },
+            .template = undefined, // Reachability tests do not inspect checked const owner metadata.
             .source_scheme = .{},
         },
-        .checked_type = @enumFromInt(0),
+        .checked_type = undefined, // Reachability tests do not inspect checked const type metadata.
         .layout_idx = .zst,
         .plan = plan,
     });
@@ -786,11 +790,13 @@ test "reachable proc pass marks finite callable capture plans" {
     erased_entries[0] = .{
         .entry = callable_proc,
         .template = .{
-            .fn_def = .{ .checked_generated = .{
-                .proc_base = @enumFromInt(0),
-                .template = @enumFromInt(0),
-            } },
-            .source_fn_ty = @enumFromInt(0),
+            .fn_def = .{
+                .checked_generated = .{
+                    .proc_base = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
+                    .template = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
+                },
+            },
+            .source_fn_ty = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
             .source_fn_key = .{},
         },
     };
@@ -812,7 +818,7 @@ test "reachable proc pass marks finite callable capture plans" {
     };
     const finite_variants = try std.testing.allocator.alloc(LirProgram.FnVariant, 1);
     finite_variants[0] = .{
-        .id = @enumFromInt(0),
+        .id = undefined, // Reachability tests do not inspect callable variant metadata ids.
         .discriminant = 0,
         .variant_index = 0,
         .payload_layout = .zst,
@@ -838,14 +844,16 @@ test "reachable proc pass marks finite callable capture plans" {
     try result.static_data_values.append(std.testing.allocator, .{
         .const_ref = .{
             .artifact = .{},
-            .owner = .{ .top_level_binding = .{
-                .module_idx = 0,
-                .pattern = @enumFromInt(0),
-            } },
-            .template = @enumFromInt(0),
+            .owner = .{
+                .top_level_binding = .{
+                    .module_idx = 0,
+                    .pattern = undefined, // Reachability tests do not inspect checked const owner metadata.
+                },
+            },
+            .template = undefined, // Reachability tests do not inspect checked const owner metadata.
             .source_scheme = .{},
         },
-        .checked_type = @enumFromInt(0),
+        .checked_type = undefined, // Reachability tests do not inspect checked const type metadata.
         .layout_idx = .zst,
         .plan = finite_plan,
     });

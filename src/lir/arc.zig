@@ -4122,11 +4122,13 @@ const ArcTest = struct {
     }
 
     fn assignStaticData(self: *ArcTest, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
-        return try self.store.addCFStmt(.{ .assign_literal = .{
-            .target = target,
-            .value = .{ .static_data = @enumFromInt(0) },
-            .next = next,
-        } });
+        return try self.store.addCFStmt(.{
+            .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = undefined }, // ARC tests inspect ownership shape; the static-data id is never dereferenced.
+                .next = next,
+            },
+        });
     }
 
     fn assignList(self: *ArcTest, target: LIR.LocalId, elems: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
