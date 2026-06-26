@@ -1071,6 +1071,15 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @intFromEnum(nr.mapper);
             node.data.rhs = @intFromEnum(nr.backing);
         },
+        .nominal_apply => |na| {
+            node.tag = .nominal_apply;
+            node.region = na.region;
+            node.data.lhs = @intFromEnum(na.mapper);
+            const args_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, na.args.span.start);
+            try store.extra_data.append(store.gpa, na.args.span.len);
+            node.data.rhs = @as(u32, @intCast(args_data_idx));
+        },
         .block => |body| {
             node.tag = .block;
             node.region = body.region;
@@ -2186,6 +2195,17 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             return .{ .nominal_record = .{
                 .mapper = @enumFromInt(node.data.lhs),
                 .backing = @enumFromInt(node.data.rhs),
+                .region = node.region,
+            } };
+        },
+        .nominal_apply => {
+            const args_data_idx = @as(usize, @intCast(node.data.rhs));
+            return .{ .nominal_apply = .{
+                .mapper = @enumFromInt(node.data.lhs),
+                .args = .{ .span = .{
+                    .start = store.extra_data.items[args_data_idx],
+                    .len = store.extra_data.items[args_data_idx + 1],
+                } },
                 .region = node.region,
             } };
         },
