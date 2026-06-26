@@ -286,7 +286,7 @@ test "where clause - discarded unpinned return type reports missing method" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("MISSING METHOD");
+    try test_env.assertOneTypeError("Missing Method");
     try std.testing.expect(hasRuntimeErrorExpr(&test_env));
 }
 

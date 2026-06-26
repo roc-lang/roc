@@ -4492,6 +4492,21 @@ test "check type - try operator on method call should apply to whole expression 
     try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
+test "check type - try closed error row satisfies open return error row" {
+    // Regression test for https://github.com/roc-lang/roc/issues/9798
+    const source =
+        \\inner : {} -> Try({}, [InnerErr])
+        \\inner = |{}| Err(InnerErr)
+        \\
+        \\outer : {} -> Try({}, [InnerErr, ..])
+        \\outer = |{}| {
+        \\    inner({})?
+        \\    Ok({})
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try({}, [InnerErr, ..])");
+}
+
 // record extension in type annotations //
 
 test "check type - record extension - basic open record annotation" {
