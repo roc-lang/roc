@@ -13865,6 +13865,7 @@ const BodyContext = struct {
         lowered: *LoweredStatements,
     ) Allocator.Error!?Ast.IterPlanId {
         if (try self.listIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.singleIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.appendIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.concatIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.mapIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
@@ -13990,6 +13991,73 @@ const BodyContext = struct {
                 .before = before_plan,
                 .after = after_expr,
                 .phase = phase_expr,
+            } },
+        });
+    }
+
+    fn singleIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        switch (expr.data) {
+            .call => |call| {
+                const direct_target = call.direct_target orelse return null;
+                if (!self.directTargetMatchesIteratorMethod(direct_target, iterator_ty, "single")) return null;
+                if (call.args.len != 1) {
+                    Common.invariant("checked direct Iter.single call had an unexpected argument shape");
+                }
+                const item_ty = self.iterItemType(iterator_ty);
+                const item_value = try self.lowerExprAtType(call.args[0], item_ty);
+                return try self.singleIteratorPlanForPrivateLocalItem(item_value, item_ty, lowered);
+            },
+            else => {},
+        }
+
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        if (!self.methodNameIs(plan.method, "single")) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (plan_args.len != 1) {
+            Common.invariant("checked Iter.single dispatch plan had an unexpected argument shape");
+        }
+
+        const item_ty = self.iterItemType(iterator_ty);
+        const item_value = try self.lowerDispatchOperandAtType(plan_args[0], item_ty);
+        return try self.singleIteratorPlanForPrivateLocalItem(item_value, item_ty, lowered);
+    }
+
+    fn singleIteratorPlanForPrivateLocalItem(
+        self: *BodyContext,
+        item_value: Ast.ExprId,
+        item_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!Ast.IterPlanId {
+        const item_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), item_ty);
+        const item_expr = try self.builder.localExpr(item_local, item_ty);
+        try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
+            .pat = try self.builder.bindPat(item_local, item_ty),
+            .value = item_value,
+        } }));
+
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        return try self.builder.program.addIterPlan(.{
+            .item_ty = item_ty,
+            .length = .{ .known = try self.builder.intLiteralExpr(1, u64_ty) },
+            .steps = .{ .one = true, .done = true },
+            .done = .reachable,
+            .materialized = null,
+            .data = .{ .single = .{
+                .item = item_expr,
+                .emitted = try self.boolLiteral(false, bool_ty),
             } },
         });
     }
