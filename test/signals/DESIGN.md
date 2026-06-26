@@ -84,9 +84,10 @@ Every part of this design must respect them.
    place mutation is legal.
 5. **Type-mismatch crashes are structurally impossible.** A typed `Signal(a)`
    stays typed end to end. Erasure is confined to one generated set of ownership
-   operations per edge — a **capability** bundling clone/split, equality, and drop
-   plus any edge-specific read — pinned to that edge's monomorphized types. There
-   is no second, independently typed read site that can disagree with the writer,
+   operations per edge — a **capability** bundling clone, equality, and drop,
+   with typed split private to those operations and edge-specific reads guarded
+   by the same capability — pinned to that edge's monomorphized types. There is
+   no second, independently typed read site that can disagree with the writer,
    and no host-side knowledge of the value's layout. See *Confined Erasure*.
 6. **One engine, two thin hosts.** All reactive and structural logic lives in the
    shared engine. A host file contains only its boundary (sink, marshalling,
@@ -241,15 +242,13 @@ Two rules keep this invariant honest:
    builds its `event_id -> source`, edge, and sink tables from explicit tokens
    in the descriptor. It never re-derives which thunk owns which value by
    guessing from structure or bytes.
-2. **Debug-only carrier type tags.** Every opaque `HostValue` cell carries a
-   monomorphized type tag, set where the value is produced and asserted in the
-   thunk trampoline before the value is read. The tag and its assertions compile
-   **only** in debug/safe builds (`std.debug.assert` / a `builtin.mode` gate) and
-   are stripped from release builds, so they add confidence with zero release
-   cost. If these assertions never fire across the full spec suite, the displaced
-   invariant is demonstrably holding. This is the cheapest possible proof that
-   confined erasure is wired correctly, and it is part of the design, not an
-   optional extra.
+2. **Capability ownership assertions.** Every opaque `HostValue` cell carries
+   the app-compiled capability that owns it. Public get/take operations must
+   present the same capability, and internal split/take operations are accepted
+   only while the host is executing an app-compiled callable under an active
+   frame containing that owning capability. If a value crosses to the wrong edge,
+   the host reports a capability mismatch instead of trying to recover. This is
+   part of the design, not an optional extra.
 
 ### The capability: bundled ownership operations per retained value
 
@@ -276,17 +275,23 @@ typed instruction manual attached to the opaque cell. Conceptually:
 
 ```roc
 # Produced at the monomorphized edge, stored beside the opaque cell.
-CapabilityHandle(a) := {
-    split : Box((Box(a) -> { keep : Box(a), out : Box(a) })),  # clone / split ownership
-    eq    : Box((HostValue, HostValue -> Bool)),               # value pruning
-    drop  : Box((HostValue -> {})),                            # release, incl. nested fields
+CapabilityHandle := {
+    clone : Box((HostValue -> HostValue)),        # split-and-store clone
+    eq    : Box((HostValue, HostValue -> Bool)),  # value pruning
+    drop  : Box((HostValue -> {})),               # release, incl. nested fields
 }
 ```
 
-- **Clone/split, equality, and drop are the universal trio** every retained value
+- **Clone, equality, and drop are the universal trio** every retained value
   needs, because every retained value can be copied for a read, compared for
   pruning, and released on disposal. They are bundled into one object so a value
   and the operations that own it cannot drift apart.
+- **Typed split is private to the app-compiled capability operations.** The
+  platform Roc wrapper for `Capability(a)` builds a typed
+  `split : Box(a) -> { keep : Box(a), out : Box(a) }` closure and captures it in
+  the generated `clone`, `eq`, and `drop` callables. The heterogeneous descriptor
+  graph stores only the erased handle above, not a parameterized
+  `CapabilityHandle(a)`.
 - **Reads and hashes are edge-specific extensions**, not part of the universal
   trio. A signal-backed text edge owns a `read : HostValue -> Str`; a `Ui.when`
   condition owns a `read : HostValue -> Bool`; a `Ui.each` key owns hash/equality.
@@ -300,27 +305,28 @@ CapabilityHandle(a) := {
   the layout they encapsulate.
 
 **The split law.** `get`/`get_tagged` is *split-and-replace clone, never a
-borrow*. The capability's `split` takes the stored owned `Box(a)` and returns two
-independently owned boxes: `keep` is written back into the cell, `out` is handed
-to the caller. Dropping either must not invalidate the other, and any nested
-refcounted field (`Str`, `List`, record, tag union, boxed closure) must end up
-independently owned in both. The host relies on this law but never enforces it by
-inspecting bytes; correctness is the capability's responsibility, expressed in
-typed Roc and lowered by the backend.
+borrow*. The capability's app-compiled clone operation uses its private typed
+split closure to turn the stored owned `Box(a)` into two independently owned
+boxes: `keep` is written back into the source cell and `out` is stored as the
+clone. A public get then consumes the clone. Dropping either box must not
+invalidate the other, and any nested refcounted field (`Str`, `List`, record,
+tag union, boxed closure) must end up independently owned in both. The host
+relies on this law but never enforces it by inspecting bytes; correctness is the
+capability's responsibility, expressed in typed Roc and lowered by the backend.
 
 **Boundary discipline.** The host never walks a payload, never increments a
 nested refcount, and never identifies a value by pointer shape. Every ownership
 action — clone, compare, release — is a capability call. Typed aliasing
 operations that share backing must retain that backing in typed Roc/compiler
-lowering, not in the host. The debug carrier tag above rides on the capability
-identity: in safe builds the host asserts that a value is only ever handed to the
-capability that produced or owns its edge, which is what makes a routing bug a
-caught assertion rather than undefined behavior.
+lowering, not in the host. The active capability frame above is the host-side
+guardrail: the host asserts that a value is only ever handed to the capability
+that produced or owns its edge, which is what makes a routing bug a caught
+contract violation rather than undefined behavior.
 
 This is dictionary passing made concrete: a retained cell is morally an
-existential `exists a. { value : Box(a), cap : CapabilityHandle(a) }`. The host
-holds the package without knowing `a`; Roc owns all type knowledge; the capability
-bridges the two.
+existential `exists a. { value : Box(a), cap : clone/eq/drop closures for a }`.
+The host holds the package without knowing `a`; Roc owns all type knowledge; the
+capability bridges the two.
 
 ## App-Facing API
 

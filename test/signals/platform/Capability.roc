@@ -1,7 +1,7 @@
 import HostValue exposing [HostValue]
 
 Capability(a) := [
-	Capability(HostValue.CapabilityHandle(a)),
+	Capability(HostValue.CapabilityHandle),
 ].{
 	new_with_eq : (a, a -> Bool) -> Capability(a)
 	new_with_eq = |is_equal| {
@@ -13,6 +13,13 @@ Capability(a) := [
 
 		split_handle : Box((Box(a) -> { keep : Box(a), out : Box(a) }))
 		split_handle = Box.box(split)
+
+		clone : HostValue -> HostValue
+		clone = |host_value| {
+			boxed : Box(a)
+			boxed = HostValue.get_with_split(host_value, split_handle)
+			HostValue.store_with_existing_capability(boxed, host_value)
+		}
 
 		eq : HostValue, HostValue -> Bool
 		eq = |left_hv, right_hv| {
@@ -31,7 +38,7 @@ Capability(a) := [
 			{}
 		}
 
-		Capability({ split: split_handle, eq: Box.box(eq), drop: Box.box(drop) })
+		Capability({ clone: Box.box(clone), eq: Box.box(eq), drop: Box.box(drop) })
 	}
 
 	new : {} -> Capability(a)
@@ -40,7 +47,7 @@ Capability(a) := [
 		]
 	new = |_| Capability.new_with_eq(|left, right| left.is_eq(right))
 
-	handle : Capability(a) -> HostValue.CapabilityHandle(a)
+	handle : Capability(a) -> HostValue.CapabilityHandle
 	handle = |Capability(handle_value)| handle_value
 
 	eq : Capability(a) -> Box((HostValue, HostValue -> Bool))

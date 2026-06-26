@@ -7739,6 +7739,36 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
     }
 }
 
+/// Count the formal type arguments a resolved declaration variable expects.
+/// Returns `null` when the variable does not resolve to a parameterizable type
+/// (alias or nominal), in which case the caller should fall through to its
+/// existing handling rather than report an arity mismatch.
+fn lookupDeclFormalArgCount(self: *Self, decl_var: Var) ?u32 {
+    const resolved = self.types.resolveVar(decl_var).desc.content;
+    return switch (resolved) {
+        .alias => |alias| @intCast(self.types.sliceAliasArgs(alias).len),
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| @intCast(self.types.sliceNominalArgs(nominal).len),
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Get the declared name of a resolved alias/nominal declaration variable, used
+/// for diagnostics. Returns `null` when the variable is not an alias/nominal.
+fn lookupDeclName(self: *Self, decl_var: Var) ?Ident.Idx {
+    const resolved = self.types.resolveVar(decl_var).desc.content;
+    return switch (resolved) {
+        .alias => |alias| alias.ident.ident_idx,
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| nominal.ident.ident_idx,
+            else => null,
+        },
+        else => null,
+    };
+}
+
 /// Given an annotation, generate the corresponding type based on the CIR
 ///
 /// This is used both for generation annotation types and type declaration types
@@ -7870,6 +7900,24 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                     const local_decl_var = ModuleEnv.varFrom(local.decl_idx);
 
+                    // A bare lookup (no `(...)`) supplies zero type arguments. If the
+                    // referenced type is parameterized, that is an arity mismatch: the
+                    // omitted argument would otherwise reach downstream stages as an
+                    // invalid unconstrained type. Report it here and keep going with an
+                    // error type ("inform, don't block").
+                    if (self.lookupDeclFormalArgCount(local_decl_var)) |formal_arg_count| {
+                        if (formal_arg_count != 0 and !self.isForClauseAliasStatement(local.decl_idx)) {
+                            _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                .type_name = self.lookupDeclName(local_decl_var) orelse lookup.name,
+                                .region = anno_region,
+                                .num_expected_args = formal_arg_count,
+                                .num_actual_args = 0,
+                            } });
+                            try self.unifyWith(anno_var, .err, env);
+                            return;
+                        }
+                    }
+
                     // Check if this is a for-clause alias (eg Model [Model : model]).
                     // For for-clause aliases, we do not want to instantiate the
                     // variable - each place that references it should reference
@@ -7884,6 +7932,22 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 },
                 .external => |ext| {
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                        // A bare lookup supplies zero type arguments. If the referenced
+                        // external type is parameterized, that is an arity mismatch (see
+                        // the `.local` branch above for the rationale).
+                        if (self.lookupDeclFormalArgCount(ext_ref.local_var)) |formal_arg_count| {
+                            if (formal_arg_count != 0) {
+                                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                    .type_name = self.lookupDeclName(ext_ref.local_var) orelse lookup.name,
+                                    .region = anno_region,
+                                    .num_expected_args = formal_arg_count,
+                                    .num_actual_args = 0,
+                                } });
+                                try self.unifyWith(anno_var, .err, env);
+                                return;
+                            }
+                        }
+
                         const ext_instantiated_var = try self.instantiateVar(
                             ext_ref.local_var,
                             env,

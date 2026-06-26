@@ -13,10 +13,20 @@ type=expr
 }
 ~~~
 # EXPECTED
+TOO FEW ARGS - ann_effectful_fn.md:2:28:2:31
 DECLARATION HAS NO VALUE - ann_effectful_fn.md:2:5:2:31
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
+**TOO FEW ARGS**
+The type _Try_ expects 2 arguments, but got 0 instead.
+**ann_effectful_fn.md:2:28:2:31:**
+```roc
+    launchTheNukes : {} => Try Bool LaunchNukeErr
+```
+                           ^^^
+
+
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.
 **ann_effectful_fn.md:2:5:2:31:**
@@ -115,7 +125,7 @@ EndOfFile,
 				(p-record-destructure
 					(destructs)))
 			(e-not-implemented)))
-	(e-call (constraint-fn-var 55)
+	(e-call (constraint-fn-var 46)
 		(e-lookup-local
 			(p-assign (ident "launchTheNukes")))
 		(e-empty_record)))

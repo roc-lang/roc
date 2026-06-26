@@ -46,6 +46,18 @@ const NativeCtx = struct {
         return ctx.cloneHostValue(value);
     }
 
+    pub fn debugPhase(ctx: Handle, phase: u32) void {
+        ctx.debug_phase = phase;
+    }
+
+    pub fn pushHostValueCapabilities(ctx: Handle, caps: []const HostValueCapability) void {
+        ctx.active_capabilities.push(caps);
+    }
+
+    pub fn popHostValueCapabilities(ctx: Handle) void {
+        ctx.active_capabilities.pop();
+    }
+
     pub fn stateValueByNodeId(ctx: Handle, node_id: u64) HostValue {
         return ctx.stateValueByNodeId(node_id);
     }
@@ -656,6 +668,9 @@ fn failHostValueRegistryError(err: anyerror) noreturn {
         error.MissingCapability => failHost("HostValue operation crossed erasure boundary without an owning capability"),
         error.CapabilityMismatch => failHost("HostValue operation used a capability that does not own the retained value"),
         error.ConflictingCapability => failHost("HostValue was assigned a conflicting capability"),
+        error.InactiveCapability => failHost("HostValue split operation ran without an active owning capability"),
+        error.CloneCapabilityMismatch => failHost("HostValue capability clone returned a value owned by a different capability"),
+        error.CloneReturnedSource => failHost("HostValue capability clone returned the source handle"),
         else => failHost("HostValue registry operation failed"),
     }
 }
@@ -695,6 +710,8 @@ const HostEnv = struct {
     test_host_value_kinds: std.ArrayListUnmanaged(?TestHostValueKind) = .empty,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
+    debug_phase: u32 = 0,
+    active_capabilities: hv.ActiveCapabilityStack = .{},
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
 
     fn init() HostEnv {
@@ -792,7 +809,19 @@ const HostEnv = struct {
     }
 
     fn hostValueRegistryOps(self: *HostEnv) hv.RegistryOps() {
-        return .{ .roc_host = self.activeRocHost() };
+        return .{
+            .roc_host = self.activeRocHost(),
+            .active_capabilities = &self.active_capabilities,
+            .debug_phase = &self.debug_phase,
+        };
+    }
+
+    pub fn pushHostValueCapabilities(self: *HostEnv, caps: []const HostValueCapability) void {
+        self.active_capabilities.push(caps);
+    }
+
+    pub fn popHostValueCapabilities(self: *HostEnv) void {
+        self.active_capabilities.pop();
     }
 
     // `ctx` surface consumed by the shared `host_values` box constructors
@@ -828,7 +857,9 @@ const HostEnv = struct {
 
     fn storeHostValueWithOwnedCapability(self: *HostEnv, box: abi.RocBox, owned_cap: HostValueCapability) HostValue {
         const allocator = self.gpa.allocator();
-        defer self.releaseOwnedHostValueCapability(owned_cap);
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 109;
+        defer self.debug_phase = previous_phase;
         const value = self.engine.host_values.storeOwnedCapability(allocator, box, owned_cap, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
@@ -842,6 +873,21 @@ const HostEnv = struct {
             failHostValueRegistryError(err);
         };
         self.resetTestHostValueKind(value);
+        return value;
+    }
+
+    fn storeHostValueWithExistingCapability(self: *HostEnv, box: abi.RocBox, source_value: HostValue) HostValue {
+        const allocator = self.gpa.allocator();
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 109;
+        defer self.debug_phase = previous_phase;
+        const value = self.engine.host_values.storeRetainedExistingCapability(allocator, box, source_value, self.hostValueRegistryOps()) catch |err| {
+            failHostValueRegistryError(err);
+        };
+        self.resetTestHostValueKind(value);
+        if (builtin.is_test) {
+            self.setTestHostValueKind(value, self.testHostValueKind(source_value));
+        }
         return value;
     }
 
@@ -881,19 +927,28 @@ const HostEnv = struct {
     }
 
     fn getHostValue(self: *HostEnv, value: HostValue) abi.RocBox {
-        return self.engine.host_values.get(value, self.hostValueRegistryOps()) catch |err| {
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 108;
+        defer self.debug_phase = previous_phase;
+        return self.engine.host_values.get(self.gpa.allocator(), value, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
     }
 
     fn getHostValueWithCapability(self: *HostEnv, value: HostValue, owned_cap: HostValueCapability) abi.RocBox {
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 108;
+        defer self.debug_phase = previous_phase;
         defer self.releaseOwnedHostValueCapability(owned_cap);
-        return self.engine.host_values.getWithCapability(value, owned_cap, self.hostValueRegistryOps()) catch |err| {
+        return self.engine.host_values.getWithCapability(self.gpa.allocator(), value, owned_cap, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
     }
 
     fn getHostValueWithSplit(self: *HostEnv, value: HostValue, owned_split: abi.RocErasedCallable) abi.RocBox {
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 103;
+        defer self.debug_phase = previous_phase;
         defer abi.decrefErasedCallable(owned_split, self.activeRocHost());
         return self.engine.host_values.getWithSplit(value, owned_split, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
@@ -909,6 +964,9 @@ const HostEnv = struct {
     }
 
     fn takeHostValueWithCapability(self: *HostEnv, value: HostValue, owned_cap: HostValueCapability) abi.RocBox {
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 110;
+        defer self.debug_phase = previous_phase;
         defer self.releaseOwnedHostValueCapability(owned_cap);
         return self.engine.host_values.takeWithCapability(value, owned_cap, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
@@ -916,6 +974,9 @@ const HostEnv = struct {
     }
 
     fn takeHostValueWithSplit(self: *HostEnv, value: HostValue, owned_split: abi.RocErasedCallable) abi.RocBox {
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 107;
+        defer self.debug_phase = previous_phase;
         defer abi.decrefErasedCallable(owned_split, self.activeRocHost());
         const box = self.engine.host_values.takeWithSplit(value, owned_split, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
@@ -938,6 +999,9 @@ const HostEnv = struct {
     // through the host's registry (the engine treats `self` as its clone ctx).
     pub fn cloneHostValue(self: *HostEnv, value: HostValue) HostValue {
         const allocator = self.gpa.allocator();
+        const previous_phase = self.debug_phase;
+        self.debug_phase = 101;
+        defer self.debug_phase = previous_phase;
         const cloned = self.engine.host_values.clone(allocator, value, self.hostValueRegistryOps()) catch |err| {
             failHostValueRegistryError(err);
         };
@@ -1039,7 +1103,7 @@ const HostEnv = struct {
     }
 
     fn clearSignalCache(self: *HostEnv) void {
-        self.engine.clearSignalCache() catch |err| {
+        self.engine.clearSignalCache(self) catch |err| {
             failRocHostRequiredError(err, "signal cache cannot release values without a Roc host");
         };
     }
@@ -1143,7 +1207,7 @@ const HostEnv = struct {
     }
 
     fn clearStates(self: *HostEnv) void {
-        self.engine.clearStates() catch |err| {
+        self.engine.clearStates(self) catch |err| {
             failRocHostRequiredError(err, "state table cannot release values without a Roc host");
         };
     }
@@ -1156,12 +1220,12 @@ const HostEnv = struct {
     fn updateStateValue(self: *HostEnv, roc_host: *abi.RocHost, node_id: u64, value: HostValue) bool {
         const state_index = self.engine.stateIndexByNodeId(node_id) orelse failHost("event referenced an unknown active state node");
         const state = &self.engine.states.items[state_index];
-        if (state.cell.valueEquals(roc_host, value)) {
-            state.cell.dropIncoming(roc_host, value);
+        if (state.cell.valueEquals(self, roc_host, value)) {
+            state.cell.dropIncoming(self, roc_host, value);
             return false;
         }
 
-        state.cell.replaceValue(roc_host, value);
+        state.cell.replaceValue(self, roc_host, value);
         state.version += 1;
         return true;
     }
@@ -1242,7 +1306,7 @@ const HostEnv = struct {
     }
 
     fn clearScopes(self: *HostEnv) void {
-        self.engine.clearScopes() catch |err| {
+        self.engine.clearScopes(self) catch |err| {
             failRocHostRequiredError(err, "host scope table cannot release keys without a Roc host");
         };
     }
@@ -1260,7 +1324,7 @@ const HostEnv = struct {
         self.engine.active_intervals.deinit(allocator);
         self.clearActiveSignalGraph();
         self.engine.active_signal_graph.deinit(allocator);
-        self.engine.active_stream.deinit(allocator, self.engine.roc_host.?, &self.engine.pending_roc_metrics);
+        self.engine.active_stream.deinit(allocator, self, self.engine.roc_host.?, &self.engine.pending_roc_metrics);
         self.clearActiveEvents();
         self.engine.active_events.deinit(allocator);
 
@@ -1660,6 +1724,10 @@ fn hostValueStoreWithCapability(box: abi.RocBox, cap: HostValueCapability) callc
     return currentHost().storeHostValueWithOwnedCapability(box, cap);
 }
 
+fn hostValueStoreWithExistingCapability(box: abi.RocBox, source_value: HostValue) callconv(.c) HostValue {
+    return currentHost().storeHostValueWithExistingCapability(box, source_value);
+}
+
 fn hostValueTakeWithCapability(value: HostValue, cap: HostValueCapability) callconv(.c) abi.RocBox {
     return currentHost().takeHostValueWithCapability(value, cap);
 }
@@ -1945,7 +2013,7 @@ fn hostSignalBindingCapability(host: *HostEnv, signal: *const HostSignalBinding)
 fn updateDirtySignalCache(host: *HostEnv, roc_host: *abi.RocHost, cache_slot: *HostSignalCacheSlot, value: HostValue) bool {
     const cap = testHostValueCapability(roc_host);
     defer abi.decrefHostValueCapabilityHandle(cap, roc_host);
-    return host.engine.updateDirtySignalCache(roc_host, cache_slot, value, cap);
+    return host.engine.updateDirtySignalCache(host, roc_host, cache_slot, value, cap);
 }
 
 fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, payload_text: []const u8, failed: bool) CommandCounts {
@@ -1965,9 +2033,9 @@ fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, 
     const payload_value = hostValueStrWithCapability(host, roc_host, payload_text, task_payload.payload_cap);
     const payload_take_epoch = host.hostValueTakeEpoch();
     const next = if (failed)
-        callErasedHostValueToHostValue(roc_host, task_payload.failed, payload_value)
+        callHostValueToHostValueWithCapability(host, roc_host, task_payload.payload_cap, task_payload.failed, payload_value)
     else
-        callErasedHostValueToHostValue(roc_host, task_payload.done, payload_value);
+        callHostValueToHostValueWithCapability(host, roc_host, task_payload.payload_cap, task_payload.done, payload_value);
     host.assertHostValueTakenAfter(payload_value, payload_take_epoch);
     return host.engine.dispatchEffectSourceValue(host, roc_host, record, next);
 }
@@ -2105,6 +2173,27 @@ const callErasedHostValueHostValueToBool = erased_calls.callErasedHostValueHostV
 
 const callErasedHostValueToUnit = erased_calls.callErasedHostValueToUnit;
 
+fn callHostValueToUnitWithCapability(host: *HostEnv, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) void {
+    const caps = [_]HostValueCapability{cap};
+    host.pushHostValueCapabilities(&caps);
+    defer host.popHostValueCapabilities();
+    callErasedHostValueToUnit(roc_host, callable, value);
+}
+
+fn callHostValueToHostValueWithCapability(host: *HostEnv, roc_host: *abi.RocHost, cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) HostValue {
+    const caps = [_]HostValueCapability{cap};
+    host.pushHostValueCapabilities(&caps);
+    defer host.popHostValueCapabilities();
+    return callErasedHostValueToHostValue(roc_host, callable, value);
+}
+
+fn callHostValueHostValueToHostValueWithCapabilities(host: *HostEnv, roc_host: *abi.RocHost, left_cap: HostValueCapability, right_cap: HostValueCapability, callable: abi.RocErasedCallable, left: HostValue, right: HostValue) HostValue {
+    const caps = [_]HostValueCapability{ left_cap, right_cap };
+    host.pushHostValueCapabilities(&caps);
+    defer host.popHostValueCapabilities();
+    return callErasedHostValueHostValueToHostValue(roc_host, callable, left, right);
+}
+
 fn hostEventById(host: *HostEnv, event_id: u64) HostActiveEventDesc {
     if (event_id == 0 or event_id > host.engine.active_events.items.len) {
         failHost("DOM event referenced an unknown active event");
@@ -2151,7 +2240,7 @@ fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source
     const root = host.engine.root_elem orelse failHost("host render requested before Roc root Elem was initialized");
 
     var next_stream: HostNodeDescriptorStream = .{};
-    errdefer next_stream.deinit(host.gpa.allocator(), roc_host, &host.engine.pending_roc_metrics);
+    errdefer next_stream.deinit(host.gpa.allocator(), host, roc_host, &host.engine.pending_roc_metrics);
     host.collectActiveElemRootDescriptors(roc_host, &next_stream, root, dirty_source_node_ids);
 
     const start_ns = benchmarkNowNs();
@@ -2164,7 +2253,7 @@ fn renderActiveRootMeasured(host: *HostEnv, roc_host: *abi.RocHost, dirty_source
     if (command_counts) |total| total.addAll(counts);
 
     host.rebuildActiveEventsFromStream(&next_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), host, roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = next_stream;
     const mount_counts = host.engine.runActiveMountCommands(host, roc_host);
     host.engine.render_metrics.addCommandCounts(mount_counts);
@@ -2188,7 +2277,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
     const desc = hostEventById(host, event_id);
     validateEventPayloadKind(desc, payload_kind);
     host.setHostValueCapability(payload, desc.payload_cap);
-    defer callErasedHostValueToUnit(roc_host, hv.hostValueCapabilityDrop(desc.payload_cap), payload);
+    defer callHostValueToUnitWithCapability(host, roc_host, desc.payload_cap, hv.hostValueCapabilityDrop(desc.payload_cap), payload);
 
     host.recordDispatch();
 
@@ -2199,8 +2288,9 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event_id: u6
 
     const start_ns = benchmarkNowNs();
     const current = host.stateValueByNodeId(desc.target_node_id);
-    defer callErasedHostValueToUnit(roc_host, hv.hostValueCapabilityDrop(host.stateCapability(desc.target_node_id)), current);
-    const next = callErasedHostValueHostValueToHostValue(roc_host, desc.transform, current, payload);
+    const state_cap = host.stateCapability(desc.target_node_id);
+    defer callHostValueToUnitWithCapability(host, roc_host, state_cap, hv.hostValueCapabilityDrop(state_cap), current);
+    const next = callHostValueHostValueToHostValueWithCapabilities(host, roc_host, state_cap, desc.payload_cap, desc.transform, current, payload);
     if (stats) |s| s.dispatch_roc_ns += benchmarkNowNs() - start_ns;
 
     const changed = host.updateStateValue(roc_host, desc.target_node_id, next);
@@ -2471,6 +2561,7 @@ comptime {
         @export(&hostValueGetWithCapability, .{ .name = "roc_host_value_get_with_capability", .visibility = .hidden });
         @export(&hostValueGetWithSplit, .{ .name = "roc_host_value_get_with_split", .visibility = .hidden });
         @export(&hostValueStoreWithCapability, .{ .name = "roc_host_value_store_with_capability", .visibility = .hidden });
+        @export(&hostValueStoreWithExistingCapability, .{ .name = "roc_host_value_store_with_existing_capability", .visibility = .hidden });
         @export(&hostValueTakeWithCapability, .{ .name = "roc_host_value_take_with_capability", .visibility = .hidden });
         @export(&hostValueTakeWithSplit, .{ .name = "roc_host_value_take_with_split", .visibility = .hidden });
 
@@ -3130,6 +3221,10 @@ const TestErasedHostValueCapture = extern struct {
     value: HostValue,
 };
 
+const TestCapabilityCloneCapture = extern struct {
+    split: abi.RocErasedCallable,
+};
+
 const TestTaskPayloadCapture = extern struct {
     payload_cap: HostValueCapability,
 };
@@ -3277,15 +3372,26 @@ fn testHostValueEqCallable(roc_host: *abi.RocHost) abi.RocErasedCallable {
     );
 }
 
+fn testHostValueCloneCallable(roc_host: *abi.RocHost, split: abi.RocErasedCallable) abi.RocErasedCallable {
+    return writeTestErasedCallable(
+        TestCapabilityCloneCapture,
+        roc_host,
+        &testCloneHostValueWithSplitCallable,
+        &testCapabilityCloneOnDrop,
+        .{ .split = split },
+    );
+}
+
 fn testHostValueCapabilityWithEq(roc_host: *abi.RocHost, eq_fn: abi.RocErasedCallableFn) HostValueCapability {
+    const split = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testSplitHostValueBoxCallable,
+        &testErasedCallableOnDrop,
+        .{ .amount = 0 },
+    );
     return .{
-        .split = writeTestErasedCallable(
-            TestErasedI64Capture,
-            roc_host,
-            &testSplitHostValueBoxCallable,
-            &testErasedCallableOnDrop,
-            .{ .amount = 0 },
-        ),
+        .clone = testHostValueCloneCallable(roc_host, split),
         .eq = writeTestErasedCallable(
             TestErasedI64Capture,
             roc_host,
@@ -3525,8 +3631,25 @@ fn testSplitHostValueBoxCallable(_: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u
     });
 }
 
+fn testCloneHostValueWithSplitCallable(roc_host: *abi.RocHost, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+    const capture = testCapturePtrAs(TestCapabilityCloneCapture, capture_ptr);
+    const call_args = testErasedArgsAs(ErasedHostValueUnaryArgs, args);
+    const host = hostFromRocHost(roc_host);
+
+    abi.increfErasedCallable(capture.split, 1);
+    const box = host.getHostValueWithSplit(call_args.arg0, capture.split);
+    const cloned = host.storeHostValueWithExistingCapability(box, call_args.arg0);
+    writeTestErasedResult(HostValue, ret, cloned);
+}
+
 fn testErasedCallableOnDrop(_: ?[*]u8, _: *abi.RocHost) callconv(.c) void {
     test_erased_callable_drop_count += 1;
+}
+
+fn testCapabilityCloneOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
+    test_erased_callable_drop_count += 1;
+    const capture = testCapturePtrAs(TestCapabilityCloneCapture, capture_ptr);
+    abi.decrefErasedCallable(capture.split, roc_host);
 }
 
 fn testBinderCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
@@ -4103,12 +4226,12 @@ test "signals host prunes dirty combine output through cache-owned equality" {
     const initial_items = [_]HostValue{ testHostValueI64(1), testHostValueI64(2) };
     const combine = testNodeCombineExpr(&roc_host, &.{});
     var stream: HostNodeDescriptorStream = .{};
-    defer stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    defer stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     var binding = host.bindNodeSignal(host.gpa.allocator(), &stream, combine, &.{});
-    defer binding.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    defer binding.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     var cache: HostSignalCacheSlot = .absent;
-    cache.replace(&roc_host, &host.engine.pending_roc_metrics, testHostValueI64List(&roc_host, &initial_items), hostSignalBindingCapability(&host, &binding));
-    defer cache.deinit(&roc_host, &host.engine.pending_roc_metrics);
+    cache.replace(&host, &roc_host, &host.engine.pending_roc_metrics, testHostValueI64List(&roc_host, &initial_items), hostSignalBindingCapability(&host, &binding));
+    defer cache.deinit(&host, &roc_host, &host.engine.pending_roc_metrics);
     abi.decrefNodeSignalExpr(combine, &roc_host);
 
     const dirty_items = [_]HostValue{ testHostValueI64(3), testHostValueI64(4) };
@@ -4333,7 +4456,7 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     var reordered_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &reordered_stream, reordered_root, &.{});
     const patch_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &reordered_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = reordered_stream;
 
     try std.testing.expectEqual(@as(u64, 3), test_row_elem_call_count);
@@ -4358,7 +4481,7 @@ test "signals host structural patch reorders keyed row DOM without recreating su
     var changed_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &changed_stream, changed_root, &.{});
     const changed_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &changed_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = changed_stream;
 
     try std.testing.expectEqual(@as(u64, 4), test_row_elem_call_count);
@@ -4688,7 +4811,7 @@ test "signals host structural patch clears fields absent from reused DOM node" {
     var next_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &next_stream, next_root, &.{});
     const patch_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &next_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = next_stream;
 
     try std.testing.expectEqual(@as(u64, 0), patch_counts.reset_dom);
@@ -4745,7 +4868,7 @@ test "signals host structural patch binds only changed event slots" {
     var same_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &same_stream, same_root, &.{});
     const same_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &same_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = same_stream;
 
     try std.testing.expectEqual(@as(u64, 0), same_counts.bind_event);
@@ -4764,7 +4887,7 @@ test "signals host structural patch binds only changed event slots" {
     var removed_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &removed_stream, removed_root, &.{});
     const removed_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &removed_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = removed_stream;
 
     try std.testing.expectEqual(@as(u64, 1), removed_counts.bind_event);
@@ -4810,7 +4933,7 @@ test "signals host structural patch shifts moved row event ids only" {
     var reordered_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &reordered_stream, reordered_root, &.{});
     const reordered_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &reordered_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = reordered_stream;
 
     try std.testing.expectEqual(@as(u64, 0), reordered_counts.create_element);
@@ -4830,7 +4953,7 @@ test "signals host structural patch shifts moved row event ids only" {
     var same_reordered_stream: HostNodeDescriptorStream = .{};
     host.collectActiveElemRootDescriptors(&roc_host, &same_reordered_stream, same_reordered_root, &.{});
     const same_reordered_counts = applyStructuralNodeDescriptorStream(&host, &roc_host, &same_reordered_stream);
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = same_reordered_stream;
 
     try std.testing.expectEqual(@as(u64, 0), same_reordered_counts.create_element);
@@ -5525,7 +5648,7 @@ test "signals host collects Elem descriptor stream" {
     }
 
     var stream: HostNodeDescriptorStream = .{};
-    defer stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    defer stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
 
     const root_attrs = [_]abi.NodeAttr{
         testNodeStaticTextAttr(&roc_host, .role, "region"),
@@ -5686,7 +5809,7 @@ test "signals host tracks descriptor stream closure lifecycle metrics" {
     try std.testing.expectEqual(@as(u64, 38), host.engine.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 0), host.engine.pending_roc_metrics.closure_releases);
 
-    stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
 
     try std.testing.expectEqual(@as(u64, 38), host.engine.pending_roc_metrics.closure_retains);
     try std.testing.expectEqual(@as(u64, 30), host.engine.pending_roc_metrics.closure_releases);
@@ -5704,7 +5827,7 @@ test "signals host preserves explicit signal tokens across cloned descriptors" {
     }
 
     var stream: HostNodeDescriptorStream = .{};
-    defer stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    defer stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
 
     const signal = testNodeMapExpr(&roc_host, testNodeConstExpr(&roc_host, testHostValueI64(41)));
     abi.increfNodeSignalExpr(signal, 1);
@@ -5746,7 +5869,7 @@ test "signals host retains state equality outside descriptor stream" {
     host.engine.active_stream = stream;
 
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = .{};
 
     try std.testing.expect(!host.updateStateValue(&roc_host, state_id, testHostValueI64(0)));
@@ -5782,7 +5905,7 @@ test "signals host dispatches through active event records outside descriptor st
     const event_id = host.dom_elements.items[@intCast(button_id)].bound_click_event orelse unreachable;
     const state_id = host.engine.active_stream.scope_sites.items[0].node_id;
 
-    host.engine.active_stream.deinit(host.gpa.allocator(), &roc_host, &host.engine.pending_roc_metrics);
+    host.engine.active_stream.deinit(host.gpa.allocator(), &host, &roc_host, &host.engine.pending_roc_metrics);
     host.engine.active_stream = .{};
 
     dispatchRocEvent(&host, &roc_host, event_id, .unit, testHostValueUnit());

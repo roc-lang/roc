@@ -11,6 +11,51 @@ const abi = @import("roc_platform_abi.zig");
 pub const HostValue = u64;
 pub const HostValueCapabilityHandle = abi.HostValueCapabilityHandle;
 
+pub const ActiveCapabilityStack = struct {
+    const max_frames = 64;
+    const max_capabilities = 128;
+
+    const Frame = struct {
+        start: usize,
+        len: usize,
+    };
+
+    frames: [max_frames]Frame = undefined,
+    frame_len: usize = 0,
+    capabilities: [max_capabilities]HostValueCapabilityHandle = undefined,
+    capability_len: usize = 0,
+
+    pub fn push(self: *ActiveCapabilityStack, caps: []const HostValueCapabilityHandle) void {
+        if (self.frame_len >= max_frames) @panic("HostValue active capability frame stack overflow");
+        if (self.capability_len + caps.len > max_capabilities) @panic("HostValue active capability stack overflow");
+
+        self.frames[self.frame_len] = .{
+            .start = self.capability_len,
+            .len = caps.len,
+        };
+        self.frame_len += 1;
+
+        for (caps) |cap| {
+            self.capabilities[self.capability_len] = cap;
+            self.capability_len += 1;
+        }
+    }
+
+    pub fn pop(self: *ActiveCapabilityStack) void {
+        if (self.frame_len == 0) @panic("HostValue active capability stack underflow");
+        self.frame_len -= 1;
+        const frame = self.frames[self.frame_len];
+        self.capability_len = frame.start;
+    }
+
+    pub fn contains(self: *const ActiveCapabilityStack, capability: HostValueCapabilityHandle) bool {
+        for (self.capabilities[0..self.capability_len]) |active| {
+            if (hostValueCapabilitiesMatch(active, capability)) return true;
+        }
+        return false;
+    }
+};
+
 /// Carrier-type category recorded for a freshly boxed value. The native host
 /// uses it for debug type assertions; the browser host ignores it.
 pub const ValueKind = enum { unit, str, bool, i64 };
@@ -33,15 +78,15 @@ pub fn releaseHostValueCapability(capability: HostValueCapabilityHandle, roc_hos
 }
 
 pub fn hostValueCapabilityId(capability: HostValueCapabilityHandle) usize {
-    return @intFromPtr(capability.split);
+    return @intFromPtr(capability.clone);
+}
+
+pub fn hostValueCapabilityClone(capability: HostValueCapabilityHandle) abi.RocErasedCallable {
+    return capability.clone;
 }
 
 pub fn hostValueCapabilityEq(capability: HostValueCapabilityHandle) abi.RocErasedCallable {
     return capability.eq;
-}
-
-pub fn hostValueCapabilitySplit(capability: HostValueCapabilityHandle) abi.RocErasedCallable {
-    return capability.split;
 }
 
 pub fn hostValueCapabilityDrop(capability: HostValueCapabilityHandle) abi.RocErasedCallable {
@@ -53,9 +98,9 @@ pub fn hostValueCapabilityEqFn(capability: HostValueCapabilityHandle) ?abi.RocEr
     return abi.rocErasedCallablePayloadPtr(eq).callable_fn_ptr;
 }
 
-pub fn hostValueCapabilitySplitFn(capability: HostValueCapabilityHandle) ?abi.RocErasedCallableFn {
-    const split = hostValueCapabilitySplit(capability) orelse return null;
-    return abi.rocErasedCallablePayloadPtr(split).callable_fn_ptr;
+pub fn hostValueCapabilityCloneFn(capability: HostValueCapabilityHandle) ?abi.RocErasedCallableFn {
+    const clone = hostValueCapabilityClone(capability) orelse return null;
+    return abi.rocErasedCallablePayloadPtr(clone).callable_fn_ptr;
 }
 
 pub fn hostValueCapabilityDropFn(capability: HostValueCapabilityHandle) ?abi.RocErasedCallableFn {
@@ -64,7 +109,7 @@ pub fn hostValueCapabilityDropFn(capability: HostValueCapabilityHandle) ?abi.Roc
 }
 
 pub fn hostValueCapabilitiesMatch(actual: HostValueCapabilityHandle, expected: HostValueCapabilityHandle) bool {
-    return actual.split == expected.split and actual.eq == expected.eq and actual.drop == expected.drop;
+    return actual.clone == expected.clone and actual.eq == expected.eq and actual.drop == expected.drop;
 }
 
 /// Registry-ops adapter passed to `host_value_registry.Registry` calls. It
@@ -72,6 +117,8 @@ pub fn hostValueCapabilitiesMatch(actual: HostValueCapabilityHandle, expected: H
 pub fn RegistryOps() type {
     return struct {
         roc_host: *abi.RocHost,
+        active_capabilities: *ActiveCapabilityStack,
+        debug_phase: ?*const u32 = null,
 
         pub fn retainCapability(_: @This(), capability: HostValueCapabilityHandle) void {
             abi.increfHostValueCapabilityHandle(capability, 1);
@@ -85,12 +132,19 @@ pub fn RegistryOps() type {
             return hostValueCapabilitiesMatch(actual, expected);
         }
 
-        pub fn capabilityMatchesSplit(_: @This(), actual: HostValueCapabilityHandle, expected_split: abi.RocErasedCallable) bool {
-            return hostValueCapabilitySplit(actual) == expected_split;
+        pub fn capabilityIsActive(self: @This(), actual: HostValueCapabilityHandle) bool {
+            return self.active_capabilities.contains(actual);
         }
 
-        pub fn splitBoxWithCapability(self: @This(), box: abi.RocBox, capability: HostValueCapabilityHandle) @import("erased_calls.zig").RocBoxPair {
-            return @import("erased_calls.zig").callErasedRocBoxToRocBoxPair(self.roc_host, hostValueCapabilitySplit(capability), box);
+        pub fn cloneValueWithCapability(self: @This(), value: HostValue, capability: HostValueCapabilityHandle) HostValue {
+            return self.callHostValueToHostValueWithCapability(capability, hostValueCapabilityClone(capability), value);
+        }
+
+        pub fn callHostValueToHostValueWithCapability(self: @This(), capability: HostValueCapabilityHandle, callable: abi.RocErasedCallable, value: HostValue) HostValue {
+            const caps = [_]HostValueCapabilityHandle{capability};
+            self.active_capabilities.push(&caps);
+            defer self.active_capabilities.pop();
+            return @import("erased_calls.zig").callErasedHostValueToHostValue(self.roc_host, callable, value);
         }
 
         pub fn splitBoxWithSplit(self: @This(), box: abi.RocBox, split: abi.RocErasedCallable) @import("erased_calls.zig").RocBoxPair {

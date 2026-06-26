@@ -11,7 +11,10 @@ pub const Error = error{
     UnconsumedHandle,
     MissingCapability,
     CapabilityMismatch,
+    InactiveCapability,
     ConflictingCapability,
+    CloneCapabilityMismatch,
+    CloneReturnedSource,
 };
 
 pub fn Registry(comptime Capability: type) type {
@@ -106,6 +109,11 @@ pub fn Registry(comptime Capability: type) type {
             return try self.storeOwnedCapability(allocator, box, borrowed_capability, ops);
         }
 
+        pub fn storeRetainedExistingCapability(self: *Self, allocator: std.mem.Allocator, box: abi.RocBox, source_value: HostValue, ops: anytype) Error!HostValue {
+            const capability_value = try self.storedCapability(source_value);
+            return try self.storeRetainedCapability(allocator, box, capability_value, ops);
+        }
+
         fn vacantSlotAvailable(self: *const Self) bool {
             for (self.slots.items) |entry| {
                 switch (entry) {
@@ -130,36 +138,28 @@ pub fn Registry(comptime Capability: type) type {
             if (!ops.capabilitiesMatch(actual_capability, expected_capability)) return Error.CapabilityMismatch;
         }
 
-        pub fn assertCapabilitySplit(self: *Self, value: HostValue, expected_split: abi.RocErasedCallable, ops: anytype) Error!void {
+        pub fn assertCapabilityActive(self: *Self, value: HostValue, ops: anytype) Error!void {
             const actual_capability = try self.storedCapability(value);
-            if (!ops.capabilityMatchesSplit(actual_capability, expected_split)) return Error.CapabilityMismatch;
+            if (!ops.capabilityIsActive(actual_capability)) return Error.InactiveCapability;
         }
 
-        pub fn getWithCapability(self: *Self, value: HostValue, expected_capability: Capability, ops: anytype) Error!abi.RocBox {
+        pub fn getWithCapability(self: *Self, allocator: std.mem.Allocator, value: HostValue, expected_capability: Capability, ops: anytype) Error!abi.RocBox {
             try self.assertCapability(value, expected_capability, ops);
-            return try self.getWithStoredCapability(value, ops);
+            return try self.getWithStoredCapability(allocator, value, ops);
         }
 
-        pub fn get(self: *Self, value: HostValue, ops: anytype) Error!abi.RocBox {
-            return try self.getWithStoredCapability(value, ops);
+        pub fn get(self: *Self, allocator: std.mem.Allocator, value: HostValue, ops: anytype) Error!abi.RocBox {
+            return try self.getWithStoredCapability(allocator, value, ops);
         }
 
-        pub fn getWithSplit(self: *Self, value: HostValue, expected_split: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
-            try self.assertCapabilitySplit(value, expected_split, ops);
-            return try self.getWithSplitUnchecked(value, expected_split, ops);
+        pub fn getWithSplit(self: *Self, value: HostValue, split: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
+            try self.assertCapabilityActive(value, ops);
+            return try self.getWithSplitUnchecked(value, split, ops);
         }
 
-        fn getWithStoredCapability(self: *Self, value: HostValue, ops: anytype) Error!abi.RocBox {
-            const capability_value = try self.storedCapability(value);
-            const entry = try self.slot(value);
-            return switch (entry.*) {
-                .vacant => Error.ReleasedHandle,
-                .occupied => |*occupied| blk: {
-                    const split = ops.splitBoxWithCapability(occupied.box, capability_value);
-                    occupied.box = split.keep;
-                    break :blk split.out;
-                },
-            };
+        fn getWithStoredCapability(self: *Self, allocator: std.mem.Allocator, value: HostValue, ops: anytype) Error!abi.RocBox {
+            const cloned = try self.clone(allocator, value, ops);
+            return try self.take(cloned, ops);
         }
 
         fn getWithSplitUnchecked(self: *Self, value: HostValue, split_callable: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
@@ -192,8 +192,8 @@ pub fn Registry(comptime Capability: type) type {
             return try self.take(value, ops);
         }
 
-        pub fn takeWithSplit(self: *Self, value: HostValue, expected_split: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
-            try self.assertCapabilitySplit(value, expected_split, ops);
+        pub fn takeWithSplit(self: *Self, value: HostValue, _: abi.RocErasedCallable, ops: anytype) Error!abi.RocBox {
+            try self.assertCapabilityActive(value, ops);
             return try self.take(value, ops);
         }
 
@@ -220,16 +220,12 @@ pub fn Registry(comptime Capability: type) type {
 
         pub fn clone(self: *Self, allocator: std.mem.Allocator, value: HostValue, ops: anytype) Error!HostValue {
             try self.ensureStoreCapacity(allocator);
-            const entry = try self.slot(value);
-            return switch (entry.*) {
-                .vacant => Error.ReleasedHandle,
-                .occupied => |*occupied| blk: {
-                    const capability_value = occupied.capability orelse return Error.MissingCapability;
-                    const split = ops.splitBoxWithCapability(occupied.box, capability_value);
-                    occupied.box = split.keep;
-                    break :blk try self.storeRetainedCapability(allocator, split.out, capability_value, ops);
-                },
-            };
+            const capability_value = try self.storedCapability(value);
+            const cloned = ops.cloneValueWithCapability(value, capability_value);
+            if (cloned == value) return Error.CloneReturnedSource;
+            const cloned_capability = try self.storedCapability(cloned);
+            if (!ops.capabilitiesMatch(cloned_capability, capability_value)) return Error.CloneCapabilityMismatch;
+            return cloned;
         }
 
         pub fn setCapability(self: *Self, value: HostValue, borrowed_capability: Capability, ops: anytype) Error!void {
@@ -250,15 +246,21 @@ pub fn Registry(comptime Capability: type) type {
 }
 
 const TestCapability = extern struct {
-    split: usize,
+    clone: usize,
     eq: usize,
     drop: usize,
 };
 
+const TestRegistry = Registry(TestCapability);
+
 const TestOps = struct {
+    registry: *TestRegistry,
     retained_capabilities: *u64,
     released_capabilities: *u64,
     split_boxes: *u64,
+    clone_returns_source: bool = false,
+    clone_uses_wrong_capability: bool = false,
+    active_capability: ?TestCapability = null,
 
     pub fn retainCapability(self: TestOps, _: TestCapability) void {
         self.retained_capabilities.* += 1;
@@ -269,15 +271,27 @@ const TestOps = struct {
     }
 
     pub fn capabilitiesMatch(_: TestOps, actual: TestCapability, expected: TestCapability) bool {
-        return actual.split == expected.split and actual.eq == expected.eq and actual.drop == expected.drop;
+        return actual.clone == expected.clone and actual.eq == expected.eq and actual.drop == expected.drop;
     }
 
-    pub fn capabilityMatchesSplit(_: TestOps, actual: TestCapability, expected_split: abi.RocErasedCallable) bool {
-        return actual.split == @intFromPtr(expected_split);
+    pub fn capabilityIsActive(self: TestOps, actual: TestCapability) bool {
+        const active = self.active_capability orelse return false;
+        return self.capabilitiesMatch(actual, active);
     }
 
-    pub fn splitBoxWithCapability(self: TestOps, box: abi.RocBox, capability: TestCapability) erased_calls.RocBoxPair {
-        return self.splitBoxWithSplit(box, @ptrFromInt(capability.split));
+    pub fn cloneValueWithCapability(self: TestOps, value: HostValue, capability: TestCapability) HostValue {
+        self.split_boxes.* += 1;
+        if (self.clone_returns_source) return value;
+        const stored_capability = if (self.clone_uses_wrong_capability)
+            TestCapability{ .clone = capability.clone + 1, .eq = capability.eq, .drop = capability.drop }
+        else
+            capability;
+        return self.registry.storeRetainedCapability(
+            std.testing.allocator,
+            @ptrFromInt(0x4000 + value),
+            stored_capability,
+            self,
+        ) catch unreachable;
     }
 
     pub fn splitBoxWithSplit(self: TestOps, box: abi.RocBox, _: abi.RocErasedCallable) erased_calls.RocBoxPair {
@@ -290,8 +304,9 @@ const TestOps = struct {
     }
 };
 
-fn testOps(retained: *u64, released: *u64, splits: *u64) TestOps {
+fn testOps(registry: *TestRegistry, retained: *u64, released: *u64, splits: *u64) TestOps {
     return .{
+        .registry = registry,
         .retained_capabilities = retained,
         .released_capabilities = released,
         .split_boxes = splits,
@@ -305,8 +320,8 @@ test "host value registry uses one-based handles and reuses vacant slots" {
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
-    const cap = TestCapability{ .split = 0x100, .eq = 0x101, .drop = 0x102 };
+    const ops = testOps(&registry, &retained, &released, &splits);
+    const cap = TestCapability{ .clone = 0x101, .eq = 0x102, .drop = 0x103 };
 
     const first = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x10), cap, ops);
     const second = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x20), null, ops);
@@ -329,8 +344,8 @@ test "host value registry reports live count and reaches zero when drained" {
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
-    const cap = TestCapability{ .split = 0x200, .eq = 0x201, .drop = 0x202 };
+    const ops = testOps(&registry, &retained, &released, &splits);
+    const cap = TestCapability{ .clone = 0x201, .eq = 0x202, .drop = 0x203 };
 
     try std.testing.expectEqual(@as(usize, 0), registry.liveCount());
     try std.testing.expect(!registry.hasLiveValues());
@@ -356,7 +371,7 @@ test "host value registry asserts consuming callbacks released their handle" {
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
+    const ops = testOps(&registry, &retained, &released, &splits);
     const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x70), null, ops);
     try std.testing.expectError(Error.UnconsumedHandle, registry.assertReleased(value));
 
@@ -365,22 +380,22 @@ test "host value registry asserts consuming callbacks released their handle" {
     try std.testing.expectError(Error.ReleasedHandle, registry.take(value, ops));
 }
 
-test "host value registry clones by splitting retained boxes and retaining capabilities" {
+test "host value registry clones through capability clone operation" {
     var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
-    const cap = TestCapability{ .split = 0x300, .eq = 0x301, .drop = 0x302 };
+    const ops = testOps(&registry, &retained, &released, &splits);
+    const cap = TestCapability{ .clone = 0x301, .eq = 0x302, .drop = 0x303 };
     const original = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x40), cap, ops);
     const cloned = try registry.clone(std.testing.allocator, original, ops);
 
     try std.testing.expect(cloned != original);
     try std.testing.expectEqual(@as(u64, 1), splits);
     try std.testing.expectEqual(@as(u64, 1), retained);
-    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x4040)), try registry.getWithCapability(cloned, cap, ops));
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x4000 + cloned)), try registry.getWithCapability(std.testing.allocator, cloned, cap, ops));
     try std.testing.expectEqual(@as(u64, 2), splits);
 }
 
@@ -391,31 +406,52 @@ test "host value registry enforces full capability identity" {
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
-    const cap_a = TestCapability{ .split = 0x400, .eq = 0x401, .drop = 0x402 };
-    const cap_b = TestCapability{ .split = 0x400, .eq = 0x411, .drop = 0x402 };
+    const ops = testOps(&registry, &retained, &released, &splits);
+    const cap_a = TestCapability{ .clone = 0x401, .eq = 0x402, .drop = 0x403 };
+    const cap_b = TestCapability{ .clone = 0x401, .eq = 0x412, .drop = 0x403 };
     const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x80), cap_a, ops);
 
     try registry.assertCapability(value, cap_a, ops);
     try std.testing.expectError(Error.CapabilityMismatch, registry.assertCapability(value, cap_b, ops));
     try std.testing.expectError(Error.ConflictingCapability, registry.setCapability(value, cap_b, ops));
-    try std.testing.expectError(Error.CapabilityMismatch, registry.getWithCapability(value, cap_b, ops));
-    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x2080)), try registry.getWithCapability(value, cap_a, ops));
+    try std.testing.expectError(Error.CapabilityMismatch, registry.getWithCapability(std.testing.allocator, value, cap_b, ops));
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x4000 + value)), try registry.getWithCapability(std.testing.allocator, value, cap_a, ops));
 }
 
-test "host value registry permits split-only access for capability thunks" {
+test "host value registry permits active-capability split access for capability thunks" {
     var registry: Registry(TestCapability) = .{};
     defer registry.deinit(std.testing.allocator);
 
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
-    const cap = TestCapability{ .split = 0x500, .eq = 0x501, .drop = 0x502 };
+    var ops = testOps(&registry, &retained, &released, &splits);
+    const cap = TestCapability{ .clone = 0x501, .eq = 0x502, .drop = 0x503 };
     const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x90), cap, ops);
 
-    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x2090)), try registry.getWithSplit(value, @ptrFromInt(0x500), ops));
-    try std.testing.expectError(Error.CapabilityMismatch, registry.getWithSplit(value, @ptrFromInt(0x501), ops));
+    try std.testing.expectError(Error.InactiveCapability, registry.getWithSplit(value, @ptrFromInt(0x510), ops));
+    ops.active_capability = cap;
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x2090)), try registry.getWithSplit(value, @ptrFromInt(0x510), ops));
+}
+
+test "host value registry rejects malformed capability clone results" {
+    var registry: Registry(TestCapability) = .{};
+    defer registry.deinit(std.testing.allocator);
+
+    var retained: u64 = 0;
+    var released: u64 = 0;
+    var splits: u64 = 0;
+    const cap = TestCapability{ .clone = 0x581, .eq = 0x582, .drop = 0x583 };
+
+    var source_ops = testOps(&registry, &retained, &released, &splits);
+    source_ops.clone_returns_source = true;
+    const source_value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0x98), cap, source_ops);
+    try std.testing.expectError(Error.CloneReturnedSource, registry.clone(std.testing.allocator, source_value, source_ops));
+
+    var wrong_cap_ops = testOps(&registry, &retained, &released, &splits);
+    wrong_cap_ops.clone_uses_wrong_capability = true;
+    const wrong_cap_value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0xa8), cap, wrong_cap_ops);
+    try std.testing.expectError(Error.CloneCapabilityMismatch, registry.clone(std.testing.allocator, wrong_cap_value, wrong_cap_ops));
 }
 
 test "host value registry consuming operations release capabilities exactly once" {
@@ -425,8 +461,8 @@ test "host value registry consuming operations release capabilities exactly once
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
-    const cap = TestCapability{ .split = 0x600, .eq = 0x601, .drop = 0x602 };
+    const ops = testOps(&registry, &retained, &released, &splits);
+    const cap = TestCapability{ .clone = 0x601, .eq = 0x602, .drop = 0x603 };
     const value = try registry.storeRetainedCapability(std.testing.allocator, @ptrFromInt(0xa0), cap, ops);
     try std.testing.expectEqual(@as(u64, 1), retained);
 
@@ -445,12 +481,12 @@ test "host value registry rejects reads before a capability is assigned" {
     var retained: u64 = 0;
     var released: u64 = 0;
     var splits: u64 = 0;
-    const ops = testOps(&retained, &released, &splits);
-    const cap = TestCapability{ .split = 0x700, .eq = 0x701, .drop = 0x702 };
+    const ops = testOps(&registry, &retained, &released, &splits);
+    const cap = TestCapability{ .clone = 0x701, .eq = 0x702, .drop = 0x703 };
     const value = try registry.storeOwnedCapability(std.testing.allocator, @ptrFromInt(0xb0), null, ops);
 
-    try std.testing.expectError(Error.MissingCapability, registry.getWithCapability(value, cap, ops));
+    try std.testing.expectError(Error.MissingCapability, registry.getWithCapability(std.testing.allocator, value, cap, ops));
     try registry.setCapability(value, cap, ops);
     try std.testing.expectEqual(@as(u64, 1), retained);
-    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x20b0)), try registry.getWithCapability(value, cap, ops));
+    try std.testing.expectEqual(@as(abi.RocBox, @ptrFromInt(0x4000 + value)), try registry.getWithCapability(std.testing.allocator, value, cap, ops));
 }

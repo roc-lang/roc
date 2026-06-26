@@ -64,6 +64,14 @@ const WasmCtx = struct {
     pub fn debugPhase(_: Handle, phase: u32) void {
         roc_allocation_phase = phase;
     }
+
+    pub fn pushHostValueCapabilities(_: Handle, caps: []const HostValueCapability) void {
+        active_capabilities.push(caps);
+    }
+
+    pub fn popHostValueCapabilities(_: Handle) void {
+        active_capabilities.pop();
+    }
 };
 
 // The engine threads a zero-sized `WasmCtx{}` value through every
@@ -193,6 +201,7 @@ var recent_freed_roc_allocations: [recent_freed_roc_allocation_capacity]FreedRoc
 var recent_freed_roc_allocation_len: usize = 0;
 var recent_freed_roc_allocation_next: usize = 0;
 var roc_allocation_phase: u32 = 0;
+var active_capabilities: hv.ActiveCapabilityStack = .{};
 var roc_host_env: u8 = 0;
 var roc_host = abi.RocHost{
     .env = @ptrCast(&roc_host_env),
@@ -265,10 +274,35 @@ const callErasedHostValueToHostValue = erased_calls.callErasedHostValueToHostVal
 const callErasedHostValueHostValueToHostValue = erased_calls.callErasedHostValueHostValueToHostValue;
 const callErasedHostValueToUnit = erased_calls.callErasedHostValueToUnit;
 
+fn callHostValueToUnitWithCapability(cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) void {
+    const caps = [_]HostValueCapability{cap};
+    active_capabilities.push(&caps);
+    defer active_capabilities.pop();
+    callErasedHostValueToUnit(&roc_host, callable, value);
+}
+
+fn callHostValueToHostValueWithCapability(cap: HostValueCapability, callable: abi.RocErasedCallable, value: HostValue) HostValue {
+    const caps = [_]HostValueCapability{cap};
+    active_capabilities.push(&caps);
+    defer active_capabilities.pop();
+    return callErasedHostValueToHostValue(&roc_host, callable, value);
+}
+
+fn callHostValueHostValueToHostValueWithCapabilities(left_cap: HostValueCapability, right_cap: HostValueCapability, callable: abi.RocErasedCallable, left: HostValue, right: HostValue) HostValue {
+    const caps = [_]HostValueCapability{ left_cap, right_cap };
+    active_capabilities.push(&caps);
+    defer active_capabilities.pop();
+    return callErasedHostValueHostValueToHostValue(&roc_host, callable, left, right);
+}
+
 // --- Host value registry glue (all routed through the engine's registry) ---
 
 fn registryOps() hv.RegistryOps() {
-    return .{ .roc_host = &roc_host };
+    return .{
+        .roc_host = &roc_host,
+        .active_capabilities = &active_capabilities,
+        .debug_phase = &roc_allocation_phase,
+    };
 }
 
 fn failHostValueRegistryError(err: host_value_registry.Error) noreturn {
@@ -279,6 +313,9 @@ fn failHostValueRegistryError(err: host_value_registry.Error) noreturn {
         error.MissingCapability => failHostWith("HostValue operation crossed erasure boundary without an owning capability"),
         error.CapabilityMismatch => failHostWith("HostValue operation used a capability that does not own the retained value"),
         error.ConflictingCapability => failHostWith("HostValue was assigned a conflicting capability"),
+        error.InactiveCapability => failHostWith("HostValue split operation ran without an active owning capability"),
+        error.CloneCapabilityMismatch => failHostWith("HostValue capability clone returned a value owned by a different capability"),
+        error.CloneReturnedSource => failHostWith("HostValue capability clone returned the source handle"),
         error.OutOfMemory => failHostWith("HostValue registry allocation failed"),
     }
 }
@@ -351,11 +388,12 @@ fn currentStateValue(node_id: u64) HostValue {
 fn updateStateValue(node_id: u64, value: HostValue) bool {
     const state_index = shared_engine.stateIndexByNodeId(node_id) orelse failHost();
     const state = &shared_engine.states.items[state_index];
-    if (state.cell.valueEquals(&roc_host, value)) {
-        state.cell.dropIncoming(&roc_host, value);
+    const ctx = WasmCtx{};
+    if (state.cell.valueEquals(ctx, &roc_host, value)) {
+        state.cell.dropIncoming(ctx, &roc_host, value);
         return false;
     }
-    state.cell.replaceValue(&roc_host, value);
+    state.cell.replaceValue(ctx, &roc_host, value);
     state.version += 1;
     return true;
 }
@@ -382,7 +420,7 @@ fn renderActiveRoot(dirty_source_node_ids: []const u64) void {
     }
 
     shared_engine.rebuildActiveEventsFromStream(ctx, &next_stream);
-    shared_engine.active_stream.deinit(allocator(), &roc_host, &shared_engine.pending_roc_metrics);
+    shared_engine.active_stream.deinit(allocator(), ctx, &roc_host, &shared_engine.pending_roc_metrics);
     shared_engine.active_stream = next_stream;
     const mount_counts = shared_engine.runActiveMountCommands(ctx, &roc_host);
     shared_engine.render_metrics.addCommandCounts(mount_counts);
@@ -401,13 +439,14 @@ fn dispatchEvent(event_id: u32, payload_kind: EventPayloadKind, payload: HostVal
     const desc = hostEventById(event_id);
     if (desc.payload_kind != payload_kind) failHost();
     setHostValueCapability(payload, desc.payload_cap);
-    defer callErasedHostValueToUnit(&roc_host, hv.hostValueCapabilityDrop(desc.payload_cap), payload);
+    defer callHostValueToUnitWithCapability(desc.payload_cap, hv.hostValueCapabilityDrop(desc.payload_cap), payload);
 
     shared_engine.recordDispatch();
 
     const current = currentStateValue(desc.target_node_id);
-    defer callErasedHostValueToUnit(&roc_host, hv.hostValueCapabilityDrop(shared_engine.stateCapability(desc.target_node_id) catch failHost()), current);
-    const next = callErasedHostValueHostValueToHostValue(&roc_host, desc.transform, current, payload);
+    const state_cap = shared_engine.stateCapability(desc.target_node_id) catch failHost();
+    defer callHostValueToUnitWithCapability(state_cap, hv.hostValueCapabilityDrop(state_cap), current);
+    const next = callHostValueHostValueToHostValueWithCapabilities(state_cap, desc.payload_cap, desc.transform, current, payload);
     if (!updateStateValue(desc.target_node_id, next)) return;
 
     const dirty_source_node_ids = [_]u64{desc.target_node_id};
@@ -447,9 +486,9 @@ fn resolveTask(request_id: u64, payload_text: []const u8, failed: bool) void {
 
     roc_allocation_phase = 20;
     const next = if (failed)
-        callErasedHostValueToHostValue(&roc_host, task_payload.failed, payload)
+        callHostValueToHostValueWithCapability(task_payload.payload_cap, task_payload.failed, payload)
     else
-        callErasedHostValueToHostValue(&roc_host, task_payload.done, payload);
+        callHostValueToHostValueWithCapability(task_payload.payload_cap, task_payload.done, payload);
     assertHostValueTakenAfter(payload, payload_take_epoch);
     roc_allocation_phase = 30;
     _ = shared_engine.dispatchEffectSourceValue(ctx, &roc_host, record, next);
@@ -484,7 +523,7 @@ fn clearActiveRuntime() void {
     shared_engine.active_signal_graph.deinit(a);
     shared_engine.active_signal_graph = .empty;
 
-    shared_engine.active_stream.deinit(a, &roc_host, &shared_engine.pending_roc_metrics);
+    shared_engine.active_stream.deinit(a, ctx, &roc_host, &shared_engine.pending_roc_metrics);
     shared_engine.active_stream = .{};
 
     shared_engine.clearActiveEvents() catch failHost();
@@ -510,11 +549,11 @@ fn clearActiveRuntime() void {
         shared_engine.root_elem = null;
     }
 
-    shared_engine.clearStates() catch failHost();
+    shared_engine.clearStates(WasmCtx{}) catch failHost();
     shared_engine.states.deinit(a);
     shared_engine.states = .empty;
 
-    shared_engine.clearScopes() catch failHost();
+    shared_engine.clearScopes(WasmCtx{}) catch failHost();
     shared_engine.scopes.deinit(a);
     shared_engine.scopes = .empty;
 
@@ -919,7 +958,7 @@ export fn roc_host_value_get_with_capability(value: HostValue, cap: HostValueCap
     roc_allocation_phase = 108;
     defer roc_allocation_phase = previous_phase;
     defer hv.releaseHostValueCapability(cap, &roc_host);
-    return shared_engine.host_values.getWithCapability(value, cap, registryOps()) catch |err| {
+    return shared_engine.host_values.getWithCapability(std.heap.wasm_allocator, value, cap, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
@@ -938,8 +977,16 @@ export fn roc_host_value_store_with_capability(box: abi.RocBox, cap: HostValueCa
     const previous_phase = roc_allocation_phase;
     roc_allocation_phase = 109;
     defer roc_allocation_phase = previous_phase;
-    defer hv.releaseHostValueCapability(cap, &roc_host);
     return shared_engine.host_values.storeOwnedCapability(std.heap.wasm_allocator, box, cap, registryOps()) catch |err| {
+        failHostValueRegistryError(err);
+    };
+}
+
+export fn roc_host_value_store_with_existing_capability(box: abi.RocBox, source_value: HostValue) callconv(.c) HostValue {
+    const previous_phase = roc_allocation_phase;
+    roc_allocation_phase = 109;
+    defer roc_allocation_phase = previous_phase;
+    return shared_engine.host_values.storeRetainedExistingCapability(std.heap.wasm_allocator, box, source_value, registryOps()) catch |err| {
         failHostValueRegistryError(err);
     };
 }
