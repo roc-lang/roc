@@ -566,7 +566,7 @@ direct-list source.
 - [x] No post-check IR expression has an `iter_plan` case.
 - [x] Source `for` lowering uses ordinary checked `.iter` and `.next`.
 - [ ] Shape specialization handles direct-call results in demanded contexts.
-- [ ] Shape specialization handles `if` and `match` joins.
+- [x] Shape specialization handles `if` and `match` joins.
 - [ ] Loop-state splitting handles iterator records and step callables.
 - [ ] Lambda solving keeps known step callables finite where bodies are
       available.

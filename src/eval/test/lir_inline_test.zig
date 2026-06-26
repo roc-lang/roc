@@ -1242,6 +1242,20 @@ fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.jump_count >= 2;
 }
 
+fn branchJoinedRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 2 and
+        shape.jump_count >= 2;
+}
+
+fn branchJoinedRecordStateWorkerIsGeneric(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 1 and
+        shape.jump_count >= 2;
+}
+
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
         shape.self_call_count == 0 and
@@ -2228,6 +2242,91 @@ test "spec constr specializes record state carried by while loop" {
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr specializes if-joined record state carried by while loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : Start, Bool -> I64
+        \\sum_from = |seed, flag| {
+        \\    start =
+        \\        if flag {
+        \\            { n: seed.n, acc: 0 }
+        \\        } else {
+        \\            { n: seed.n - 1, acc: 1 }
+        \\        }
+        \\
+        \\    var $state = start
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from({ n: 4 }, True)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+}
+
+test "spec constr specializes match-joined record state carried by while loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : Start, Bool -> I64
+        \\sum_from = |seed, flag| {
+        \\    start =
+        \\        match flag {
+        \\            True => { n: seed.n, acc: 0 }
+        \\            False => { n: seed.n - 1, acc: 1 }
+        \\        }
+        \\
+        \\    var $state = start
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from({ n: 4 }, True)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 }
 
 test "spec constr specializes recursive tuple state" {
