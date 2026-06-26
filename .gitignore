@@ -25,6 +25,7 @@
 target
 !src/target
 generated-docs
+plan.md
 
 zig-out
 zig-pkg
