@@ -2612,30 +2612,30 @@ const Builder = struct {
             };
             const capture_type: CaptureType = switch (capture_value) {
                 .fn_value => |captured_fn_id| blk: {
+                    const checked_ty = checkedBinderType(fn_view, binder);
+                    const context_ty = try fn_ctx.lowerType(checked_ty);
                     const captured_fn = store_view.const_store.getFn(captured_fn_id);
-                    switch (captured_fn.fn_def) {
+                    // Function-valued captures have two pieces of type evidence:
+                    // the capture-site binder type, and the stored function value's
+                    // own source type. The stored value can preserve type variables
+                    // hidden by a public wrapper closure, while the capture-site
+                    // graph keeps generic parameters tied to the restored function.
+                    const restored_ty = switch (captured_fn.fn_def) {
+                        .nested => (try self.constNodeIntrinsicMonoType(store_view, capture.value)) orelse
+                            Common.invariant("stored function capture had no function monotype"),
                         .parser_runtime,
                         .encode_to_runtime,
-                        => {
-                            const checked_ty = checkedBinderType(fn_view, binder);
-                            break :blk .{
-                                .view = fn_view,
-                                .checked_ty = checked_ty,
-                                .static_data_checked_ty = null,
-                                .context_ty = true,
-                            };
-                        },
-                        else => {
-                            const intrinsic_ty = (try self.constNodeIntrinsicMonoType(store_view, capture.value)) orelse
-                                Common.invariant("stored function capture had no function monotype");
-                            break :blk .{
-                                .view = store_view,
-                                .checked_ty = undefined,
-                                .static_data_checked_ty = null,
-                                .intrinsic_ty = intrinsic_ty,
-                            };
-                        },
-                    }
+                        => context_ty,
+                        else => (try self.constNodeIntrinsicMonoType(store_view, capture.value)) orelse
+                            Common.invariant("stored function capture had no function monotype"),
+                    };
+                    try fn_ctx.constrainTypeToMono(checked_ty, restored_ty);
+                    break :blk .{
+                        .view = fn_view,
+                        .checked_ty = undefined,
+                        .static_data_checked_ty = null,
+                        .intrinsic_ty = try fn_ctx.lowerType(checked_ty),
+                    };
                 },
                 else => blk: {
                     if (try self.constNodeIntrinsicMonoType(store_view, capture.value)) |intrinsic_ty| {
