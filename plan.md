@@ -146,6 +146,8 @@ Current branch status:
 - direct private `ListIter` state can cross an immutable local when the local's
   only later observations are exact `for` iterable uses in the same lowering
   scope. Other uses still keep the public iterator value.
+- direct private `Iter.iter` forwards known iterator state through direct and
+  local optimized `for` consumers.
 - direct private `ListIter` state can feed a private `.append(...)` local when
   that produced local is itself only observed by private iterator consumers; the
   appended item is evaluated at the append declaration site.
@@ -600,9 +602,11 @@ Tasks:
   lowering.
 - [ ] Iterator-aware lowering preserves producer-site evaluation order.
 - [ ] Iterator-aware lowering never replays checked expressions.
-- [ ] Private plan state can cross locals.
+- [x] Private plan state can cross locals.
   - [x] Direct `ListIter` private state can cross an immutable local when every
     later use is the exact iterable in a `for`.
+  - [x] Direct `Iter.iter` over known iterator state forwards that state through
+    an immutable local when every later use is the exact iterable in a `for`.
   - [x] Direct `Single` private state can cross an immutable local when every
     later use is the exact iterable in a `for`.
   - [x] Direct finite `Range` private state can cross an immutable local when
@@ -653,9 +657,11 @@ Tasks:
 - [x] Raw plan expressions cannot reach Lambda-to-LIR lowering.
 - [x] Raw plan expressions cannot reach LIR.
 - [ ] Optimized `for` consumes plan values directly.
-- [ ] Optimized `for` through locals avoids public step values.
+- [x] Optimized `for` through locals avoids public step values.
   - [x] Direct local `List.iter` avoids public step values when all uses are
     private `for` consumers.
+  - [x] Direct local `Iter.iter` over known iterator state avoids public step
+    values when all uses are private `for` consumers.
   - [x] Direct local `Iter.single` avoids public step values when all uses are
     private `for` consumers.
   - [x] Direct local finite ranges avoid public step values when all uses are
@@ -686,6 +692,8 @@ Tasks:
   - [x] Direct `for` over a `match` whose branches are known `ListIter` /
     `Append(ListIter, item...)` plans avoids public iterator step tags.
 - [x] Optimized `for` over direct `ListIter` consumes the plan value.
+- [x] Optimized `for` over direct `Iter.iter` forwards and consumes the known
+  plan value.
 - [x] Optimized `for` over direct `Single` consumes the plan value.
 - [x] Optimized `for` over direct `Append(ListIter, item...)` consumes plan
   values.

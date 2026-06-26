@@ -1577,6 +1577,81 @@ test "optimized for over local list.iter uses private iterator cursor" {
     try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
 }
 
+test "optimized for over direct Iter.iter forwards private iterator cursor" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in [1.I64, 2.I64, 3.I64].iter().iter() {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
+test "optimized for over local Iter.iter forwards private iterator cursor" {
+    const source =
+        \\module [main]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    base = [tap(1.I64), tap(2.I64)].iter()
+        \\    iter = base.iter()
+        \\    dbg 3.I64
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{ "1", "2", "3", "3" });
+
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = {
+        \\    base = [1.I64, 2.I64].iter()
+        \\    iter = base.iter()
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.tag_assign_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.store_tag_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.list_get_unsafe_count);
+}
+
 test "optimized for over local Iter.single uses private emitted cursor" {
     const source =
         \\module [main]

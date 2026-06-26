@@ -13875,6 +13875,7 @@ const BodyContext = struct {
         lowered: *LoweredStatements,
     ) Allocator.Error!?Ast.IterPlanId {
         if (try self.listIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
+        if (try self.identityIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.singleIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.rangeIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
         if (try self.appendIteratorPlanForPrivateLocal(expr_id, iterator_ty, lowered)) |plan_id| return plan_id;
@@ -13942,6 +13943,36 @@ const BodyContext = struct {
                 .len = len_expr,
             } },
         });
+    }
+
+    fn identityIteratorPlanForPrivateLocal(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!?Ast.IterPlanId {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan = self.dispatchPlanForIteratorProducerExpr(expr) orelse return null;
+        if (!self.methodNameIs(plan.method, "iter")) return null;
+        switch (plan.result_mode) {
+            .value => {},
+            else => return null,
+        }
+
+        const dispatcher_ty = try self.lowerType(plan.dispatcher_ty);
+        if (self.typeHasBuiltinOwner(dispatcher_ty, .list)) return null;
+        if (!try self.dispatchPlanOwnerMatchesResult(plan, iterator_ty)) return null;
+
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const receiver_index = switch (plan.dispatcher) {
+            .arg => |index| index,
+            .type_only => Common.invariant("checked Iter.iter dispatch did not have an argument receiver"),
+        };
+        if (plan_args.len != 1 or receiver_index >= plan_args.len) {
+            Common.invariant("checked Iter.iter dispatch plan had an unexpected argument shape");
+        }
+
+        return try self.iteratorPlanForPrivateProducerOperand(plan_args[receiver_index], dispatcher_ty, lowered);
     }
 
     fn appendIteratorPlanForPrivateLocal(
@@ -14817,7 +14848,8 @@ const BodyContext = struct {
             self.methodNameIs(plan.method, "concat") or
             self.methodNameIs(plan.method, "map") or
             self.methodNameIs(plan.method, "keep_if") or
-            self.methodNameIs(plan.method, "drop_if");
+            self.methodNameIs(plan.method, "drop_if") or
+            self.methodNameIs(plan.method, "iter");
         if (!method_is_private_receiver_producer) return null;
         switch (plan.result_mode) {
             .value => {},
@@ -16101,6 +16133,10 @@ const BodyContext = struct {
             return local_for;
         }
 
+        if (try self.identityIteratorPlanForPlanValue(for_, result_ty, carries, plan)) |identity_for| {
+            return identity_for;
+        }
+
         if (try self.customIteratorForPlan(for_, result_ty, carries, plan)) |custom_for| {
             return custom_for;
         }
@@ -16285,6 +16321,7 @@ const BodyContext = struct {
         if (try self.matchIteratorFor(for_, result_ty, carries, for_plan)) |match_for| return match_for;
         if (try self.localIteratorPlanFor(for_, result_ty, carries, for_plan)) |local_for| return local_for;
         if (try self.iteratorPlanExprFor(for_, result_ty, carries, for_plan)) |plan_for| return plan_for;
+        if (try self.identityIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |identity_for| return identity_for;
         if (try self.customIteratorForPlan(for_, result_ty, carries, for_plan)) |custom_for| return custom_for;
         if (try self.rangeIteratorForPlan(for_, result_ty, carries, for_plan)) |range_for| return range_for;
         if (try self.listIteratorPlanForPlanValue(for_, result_ty, carries, for_plan)) |list_for| return list_for;
@@ -16470,6 +16507,42 @@ const BodyContext = struct {
         try self.constrainTypeToMono(for_plan.item_ty, iter_plan_value.item_ty);
 
         return try self.iteratorPlanIdFor(plan_id, for_, result_ty, carries, for_plan);
+    }
+
+    fn identityIteratorPlanForPlanValue(
+        self: *BodyContext,
+        for_: anytype,
+        result_ty: Type.TypeId,
+        carries: []const LoopCarry,
+        plan: static_dispatch.IteratorForPlan,
+    ) Allocator.Error!?Ast.ExprData {
+        if (!self.iteratorProducerPlansEnabled()) return null;
+
+        const iterator_ty = try self.lowerType(plan.iterator_ty);
+        if (!try self.checkedExprCanProduceIdentityIteratorPlan(for_.expr, iterator_ty)) return null;
+
+        const iterable = try self.lowerExprAtType(for_.expr, iterator_ty);
+        const plan_id = switch (self.builder.program.exprs.items[@intFromEnum(iterable)].data) {
+            .iter_plan => |lowered_plan_id| lowered_plan_id,
+            else => Common.invariant("checked Iter.iter expression did not lower to an iterator plan"),
+        };
+        return try self.iteratorPlanIdFor(plan_id, for_, result_ty, carries, plan);
+    }
+
+    fn checkedExprCanProduceIdentityIteratorPlan(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        iterator_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const expr = self.view.bodies.expr(expr_id);
+        const expr_ty = try self.lowerType(expr.ty);
+        if (!self.sameType(expr_ty, iterator_ty)) return false;
+
+        const producer = self.dispatchPlanForIteratorProducerExpr(expr) orelse return false;
+        if (!self.methodNameIs(producer.method, "iter")) return false;
+        const dispatcher_ty = try self.lowerType(producer.dispatcher_ty);
+        if (self.typeHasBuiltinOwner(dispatcher_ty, .list)) return false;
+        return try self.dispatchPlanOwnerMatchesResult(producer, iterator_ty);
     }
 
     fn listIteratorSourceFromPlan(
