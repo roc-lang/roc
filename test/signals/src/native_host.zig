@@ -333,6 +333,7 @@ const SpecCommandType = enum {
     expect_interval,
     mark_metrics,
     expect_metric_delta,
+    expect_metric_delta_at_most,
 };
 
 const LocatorKind = enum {
@@ -620,6 +621,12 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
             const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
             try appendSpecCommand(&commands, allocator, .expect_interval, emptyLocator(), null, expected_count, null, line_num);
             commands.items[commands.items.len - 1].interval_ms = period_ms;
+        } else if (std.mem.startsWith(u8, trimmed, "expect_metric_delta_at_most ")) {
+            const split = try splitTrailingToken(trimmed["expect_metric_delta_at_most ".len..]);
+            const metric_name = allocator.dupe(u8, split.head) catch return ParseError.OutOfMemory;
+            const expected_delta = std.fmt.parseInt(i64, split.token, 10) catch return ParseError.InvalidFormat;
+            try appendSpecCommand(&commands, allocator, .expect_metric_delta_at_most, emptyLocator(), metric_name, null, null, line_num);
+            commands.items[commands.items.len - 1].expected_metric_delta = expected_delta;
         } else if (std.mem.startsWith(u8, trimmed, "expect_metric_delta ")) {
             const split = try splitTrailingToken(trimmed[20..]);
             const metric_name = allocator.dupe(u8, split.head) catch return ParseError.OutOfMemory;
@@ -2981,6 +2988,28 @@ fn platform_main(spec_file: []const u8, verbose: bool) error{}!c_int {
                     return 1;
                 }
             },
+
+            .expect_metric_delta_at_most => {
+                const metric_name = cmd.expected_text orelse "";
+                const expected = cmd.expected_metric_delta orelse 0;
+                const marked = host_env.test_state.metrics_mark orelse {
+                    writeMetricFailure(cmd.line_num, "mark_metrics must run before expect_metric_delta_at_most");
+                    return 1;
+                };
+                const start = runtimeMetricValue(marked, metric_name) orelse {
+                    writeUnknownMetric(cmd.line_num, metric_name);
+                    return 1;
+                };
+                const current = runtimeMetricValue(host_env.engine.last_runtime_metrics, metric_name) orelse {
+                    writeUnknownMetric(cmd.line_num, metric_name);
+                    return 1;
+                };
+                const actual = current - start;
+                if (actual > expected) {
+                    writeMetricDeltaExceeded(cmd.line_num, metric_name, expected, actual);
+                    return 1;
+                }
+            },
         }
     }
 
@@ -3030,6 +3059,12 @@ fn writeUnknownMetric(line_num: usize, metric_name: []const u8) void {
 fn writeMetricDeltaMismatch(line_num: usize, metric_name: []const u8, expected: i64, actual: i64) void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected {s} delta: {d}\n  Got {s} delta:      {d}\n", .{ line_num, metric_name, expected, metric_name, actual }) catch "TEST FAILED\n";
+    writeStderr(msg);
+}
+
+fn writeMetricDeltaExceeded(line_num: usize, metric_name: []const u8, expected: i64, actual: i64) void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected {s} delta at most: {d}\n  Got {s} delta:             {d}\n", .{ line_num, metric_name, expected, metric_name, actual }) catch "TEST FAILED\n";
     writeStderr(msg);
 }
 

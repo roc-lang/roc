@@ -287,13 +287,13 @@ Baseline review outcome:
   actions; identity stress produced 75720 key compares over 180 actions. That is
   enough evidence to promote large-N keyed-list gates, incremental splice graph
   maintenance, and O(1) identity/key lookup ahead of discretionary tuning.
-- Current fixtures still hide scaling shape because their live row counts are
-  small. Add the generated large-N `Ui.each` scaling app first so the next
-  structural fixes are guarded by N-sensitive assertions, not just these
-  aggregate six-app samples.
+- The generated large-N `Ui.each` app is now in the native spec/bench surface at
+  N = 8 and N = 64, so the next structural fixes are guarded by N-sensitive
+  assertions, not just aggregate six-app samples.
 - `stream_nodes_scanned` is nonzero but not yet the dominant measured cost in
-  the six-app baseline. Treat it as a required large-N budget assertion rather
-  than a standalone first implementation target.
+  the six-app baseline. It is now gated in the large-N app; filter/re-expand
+  transitions intentionally record the current higher scan ceiling and should be
+  tightened by the sink-route and lookup work below.
 - Per-event allocations are high, especially in kanban, but they are currently
   mixed with whole-site structural work and retained-value churn. Address
   algorithmic structural gaps before arena/scratch tuning so allocation wins are
@@ -325,14 +325,13 @@ evidence-gated.
 
 Current priority after the Phase 4 review:
 
-1. Generated large-N `Ui.each` scaling app and budget gates.
-2. Incremental sink-route maintenance on splice.
-3. O(1) identity/descriptor lookup, including keyed diff lookup discipline.
-4. Moves-only reorder proof at large N.
-5. Persistent rank-ordered propagation queue.
-6. Per-cycle scratch/arena allocation cleanup.
-7. Long-session leak experiment and slot reclamation.
-8. `key.hash` / `Hasher` API cleanup once the Roc API exists.
+1. Incremental sink-route maintenance on splice.
+2. O(1) identity/descriptor lookup, including keyed diff lookup discipline.
+3. Moves-only reorder proof at large N.
+4. Persistent rank-ordered propagation queue.
+5. Per-cycle scratch/arena allocation cleanup.
+6. Long-session leak experiment and slot reclamation.
+7. `key.hash` / `Hasher` API cleanup once the Roc API exists.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
 
@@ -421,6 +420,10 @@ Current priority after the Phase 4 review:
 
 ### Generated large-N `Ui.each` scaling app
 
+- **Status:** implemented by `test/signals/apps/generate_large_each.py`, with
+  generated N = 8 and N = 64 fixtures in the native spec suite and the N = 64
+  fixture in the benchmark surface. Future structural scaling work should
+  tighten these budgets; do not weaken them without measured evidence.
 - **Hypothesis:** a generated large-N each app (N a build parameter, generated
   systematically — never a handwritten catalog) is the primary proof that the
   scaling budgets hold across N, extending the active-graph canary from host unit

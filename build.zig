@@ -2798,6 +2798,18 @@ pub fn build(b: *std.Build) void {
             .spec = "test/signals/apps/async_effects.txt",
             .bench = true,
         },
+        .{
+            .exe_name = "signals-large-each-08",
+            .source = "test/signals/apps/large_each_08.roc",
+            .spec = "test/signals/apps/large_each_08.txt",
+            .bench = false,
+        },
+        .{
+            .exe_name = "signals-large-each-64",
+            .source = "test/signals/apps/large_each_64.roc",
+            .spec = "test/signals/apps/large_each_64.txt",
+            .bench = true,
+        },
     };
 
     for (signals_apps) |signals_app| {
