@@ -348,6 +348,9 @@ pub const UnresolvedDispatcher = struct {
     is_binop: bool,
     /// For desugared equality (`==`/`!=`), whether the source operator was `!=`.
     binop_negated: bool,
+    /// True when checking inserted an explicit runtime-error node for this
+    /// diagnostic, so post-check lowering can safely continue through it.
+    runtime_error_inserted: bool,
 };
 
 /// Error when you try to static dispatch on something that's not a nominal type

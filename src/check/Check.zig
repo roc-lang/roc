@@ -209,6 +209,11 @@ checking_call_arg: bool = false,
 checking_binding_rhs: bool = false,
 /// Pattern for the immediate binding RHS being checked.
 checking_binding_rhs_pattern: ?CIR.Pattern.Idx = null,
+/// The outer RHS expression of the currently checked `_ = ...` discard binding,
+/// if any. Nested instantiations inside that RHS use this as their error target:
+/// the value is explicitly discarded, so no caller can later pin return-only
+/// where-clause obligations created by the RHS.
+discarded_binding_rhs_expr: ?CIR.Expr.Idx = null,
 /// Nonzero while checking source that constructs a compile-time value. Static
 /// exhaustiveness diagnostics under this depth are empirical candidates: the
 /// compile-time finalizer either observes them executing, reports their generated
@@ -379,6 +384,11 @@ const InstantiationDispatcher = struct {
     /// left unpinnable is reported and marked a runtime error at exactly this
     /// expression. Null only if the dispatcher was created outside `checkExpr`.
     instantiation_expr: ?CIR.Expr.Idx,
+    /// True when `instantiation_expr` came from the RHS of an explicit discard
+    /// binding (`_ = ...`). A generalized, body-required where-clause created
+    /// there is not an exposed polymorphic obligation; the value has been thrown
+    /// away, so the obligation must be reported and poisoned.
+    discarded_binding_rhs: bool,
 };
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
@@ -3136,7 +3146,8 @@ fn instantiateVarHelp(
                         try self.instantiation_dispatchers.append(self.gpa, .{
                             .dispatcher_var = fresh_var,
                             .constraints = flex.constraints,
-                            .instantiation_expr = self.instantiation_source_expr,
+                            .instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
+                            .discarded_binding_rhs = self.discarded_binding_rhs_expr != null,
                         });
                     }
                 }
@@ -6093,13 +6104,17 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // skipped here either.
         if (resolved.desc.rank == .generalized) {
             var all_where_clause = true;
+            var any_body_required_where_clause = false;
             for (self.types.sliceStaticDispatchConstraints(constraints_range)) |c| {
                 if (c.origin != .where_clause) {
                     all_where_clause = false;
                     break;
                 }
+                if (c.origin.where_clause.body_required) {
+                    any_body_required_where_clause = true;
+                }
             }
-            if (all_where_clause) continue;
+            if (all_where_clause and !(dispatcher.discarded_binding_rhs and any_body_required_where_clause)) continue;
         }
 
         // Pick the constraint to report. Instantiated where-clause contracts get
@@ -6212,9 +6227,11 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // corpus case, is caught by the def-site sweep instead.
         var primary: ?Region = null;
         var secondary: ?Region = null;
+        var runtime_error_inserted = false;
         if (is_instantiated_where_clause and where_dispatch_use != null) {
             const dispatch_use = where_dispatch_use.?;
             primary = dispatch_use.region;
+            runtime_error_inserted = true;
 
             if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
                 const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
@@ -6231,6 +6248,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             // then emits a crash instead of reaching the ownerless dispatch.
             if (dispatcher.instantiation_expr) |inst_expr| {
                 primary = self.cir.store.getExprRegion(inst_expr);
+                runtime_error_inserted = true;
                 if (self.cir.store.getExpr(inst_expr) != .e_runtime_error) {
                     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
                         .region = primary.?,
@@ -6239,9 +6257,9 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                 }
             } else {
                 // A dispatcher created outside `checkExpr` has no recorded source
-                // expression to mark. Reporting still suffices: `unresolved_dispatcher`
-                // is `runtime_error` severity, so `hasUserErrors` blocks all lowering —
-                // the ownerless dispatch is never reached even without a per-expr mark.
+                // expression to mark. This report must remain artifact-blocking for
+                // run paths because there is no explicit runtime-error node for
+                // post-check lowering to consume.
                 primary = self.getRegionAt(dispatcher.dispatcher_var);
             }
         } else {
@@ -6277,6 +6295,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
                     .region = self.cir.store.getExprRegion(expr_idx),
                 } });
                 self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+                runtime_error_inserted = true;
             }
         }
 
@@ -6298,6 +6317,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             .method_name = constraint.fn_name,
             .is_binop = is_binop,
             .binop_negated = constraint.origin.binopNegated(),
+            .runtime_error_inserted = runtime_error_inserted,
         } } });
     }
 }
@@ -6432,6 +6452,7 @@ fn reportAmbiguousStaticDispatch(
             .method_name = constraint.fn_name,
             .is_binop = is_binop,
             .binop_negated = constraint.origin.binopNegated(),
+            .runtime_error_inserted = true,
         } } });
 
         // Mark the expression a runtime error so lowering skips it and never
@@ -9345,6 +9366,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const binding_rhs_pattern = self.checking_binding_rhs_pattern;
     self.checking_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
+
+    const prev_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
+    if (is_binding_rhs) {
+        if (binding_rhs_pattern) |pattern_idx| {
+            if (self.cir.store.getPattern(pattern_idx) == .underscore) {
+                self.discarded_binding_rhs_expr = expr_idx;
+            }
+        }
+    }
+    defer self.discarded_binding_rhs_expr = prev_discarded_binding_rhs_expr;
 
     // Decide whether this binding generalizes — see `shouldGeneralize` for the
     // three qualifying paths and why each is sound.
