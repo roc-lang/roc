@@ -257,7 +257,7 @@ Validation completed for this phase:
       `patches_emitted`, `active_graph_records_rebuilt`, `stream_nodes_scanned`,
       `each_key_compares`, per-event allocation deltas) for the representative
       events of each app.
-- [ ] Review the baselines together: which paths are actually expensive, and on
+- [x] Review the baselines together: which paths are actually expensive, and on
       what inputs? This review is what turns the optimisation hypotheses below
       from suspicion into prioritised, evidence-backed work.
 - [x] Wire the foundation counters into `expect_metric_delta` budget assertions
@@ -280,6 +280,32 @@ Fresh `zig build run-signals-bench` single-sample baselines captured on
 | signals-identity-stress | 180 | 180 | 4000 | 300 | 700 | 75720 | 25380 | 20340 | 5000 |
 | signals-checkout-wizard | 180 | 180 | 4280 | 320 | 780 | 16120 | 17840 | 13180 | 4620 |
 
+Baseline review outcome:
+
+- Structural `Ui.each` work is the clear first target. The kanban run produced
+  361240 `each_key_compares` and 3500 `active_graph_records_rebuilt` over 300
+  actions; identity stress produced 75720 key compares over 180 actions. That is
+  enough evidence to promote large-N keyed-list gates, incremental splice graph
+  maintenance, and O(1) identity/key lookup ahead of discretionary tuning.
+- Current fixtures still hide scaling shape because their live row counts are
+  small. Add the generated large-N `Ui.each` scaling app first so the next
+  structural fixes are guarded by N-sensitive assertions, not just these
+  aggregate six-app samples.
+- `stream_nodes_scanned` is nonzero but not yet the dominant measured cost in
+  the six-app baseline. Treat it as a required large-N budget assertion rather
+  than a standalone first implementation target.
+- Per-event allocations are high, especially in kanban, but they are currently
+  mixed with whole-site structural work and retained-value churn. Address
+  algorithmic structural gaps before arena/scratch tuning so allocation wins are
+  attributable.
+- The persistent rank-ordered queue remains a design gap, but the present
+  `nodes_recomputed` counts mostly track event count. Prioritise it after the
+  structural scaling gates unless implementation work in the structural path
+  touches the same dirty-worklist ownership.
+- Slot reclamation requires a long-session experiment; the single-sample
+  `retained_alloc_delta` table cannot prove or disprove plateau behaviour.
+- `key.hash` / `Hasher` API cleanup remains blocked on a public hash finalizer.
+
 ## Phase 5 — Re-prioritise the optimisation backlog
 
 After the capability-bundling phase and baseline review, re-prioritise the items
@@ -296,6 +322,17 @@ the Phase 4 baselines, but they may be promoted ahead of the discretionary items
 when the baseline confirms the budget is being violated rather than merely
 suboptimal. The remaining items are genuine optimisations and stay strictly
 evidence-gated.
+
+Current priority after the Phase 4 review:
+
+1. Generated large-N `Ui.each` scaling app and budget gates.
+2. Incremental sink-route maintenance on splice.
+3. O(1) identity/descriptor lookup, including keyed diff lookup discipline.
+4. Moves-only reorder proof at large N.
+5. Persistent rank-ordered propagation queue.
+6. Per-cycle scratch/arena allocation cleanup.
+7. Long-session leak experiment and slot reclamation.
+8. `key.hash` / `Hasher` API cleanup once the Roc API exists.
 
 ### Persistent rank-ordered propagation queue (design gap, not optimisation)
 
